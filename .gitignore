@@ -36,6 +36,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# OPSEC — private intelligence directory
+brain/
+!brain.example/
+
 # Local data stores
 .chroma_db/
 jarvis.log
