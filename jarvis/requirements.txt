@@ -1,0 +1,89 @@
+# ── Audio capture ──────────────────────────────────────────────
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# ── STT ────────────────────────────────────────────────────────
+faster-whisper>=1.0.0
+
+# ── LLM (Ollama — OpenAI-compatible REST) ──────────────────────
+openai>=1.0.0             # AsyncOpenAI → http://localhost:11434/v1
+
+# ── TTS (100% local) ───────────────────────────────────────────
+pyttsx3>=2.90             # síntesis de voz offline, cross-platform
+
+# ── Lectura de archivos ────────────────────────────────────────
+pdfplumber>=0.10.0        # PDF (texto + tablas)
+python-docx>=1.1.0        # DOCX / Word
+openpyxl>=3.1.0           # XLSX / Excel
+pandas>=2.0.0             # CSV / XLSX (leer_archivo_universal — primeras 50 filas)
+python-pptx>=0.6.23       # PPTX / PowerPoint
+Pillow>=10.0.0            # Imágenes + OCR base
+pytesseract>=0.3.10       # OCR (requiere tesseract instalado en el OS)
+easyocr>=1.7.0            # OCR alternativo sin dependencias del OS
+striprtf>=0.0.26          # RTF
+markdown>=3.5.0           # Render de Markdown
+
+# ── Web ────────────────────────────────────────────────────────
+duckduckgo-search>=6.0    # Búsqueda web sin API key
+beautifulsoup4>=4.12.0    # Scraping / parseo HTML
+lxml>=5.0.0
+
+# ── Sistema ────────────────────────────────────────────────────
+psutil>=5.9.0             # CPU, RAM, disco, procesos
+pyautogui>=0.9.54         # GUI automation + screenshots
+pyperclip>=1.8.0          # Clipboard
+keyboard>=0.13.5          # Hotkeys globales
+
+# ── Packet Tracer / Networking ─────────────────────────────────
+paramiko>=3.4.0           # SSH
+scapy>=2.5.0              # Manipulación de paquetes
+
+# ── Config / Validación ────────────────────────────────────────
+pydantic>=2.0.0           # Modelos de datos con validación de tipos
+pydantic-settings>=2.0.0  # Lectura segura de .env con Pydantic
+
+# ── Utilities ──────────────────────────────────────────────────
+python-dotenv>=1.0.0
+requests>=2.31.0
+loguru>=0.7.0
+rich>=13.0.0              # Output bonito en terminal
+schedule>=1.2.0           # Rutinas programadas
+
+# ── MCP (Model Context Protocol) ──────────────────────────────
+mcp>=1.0.0                # Cliente/servidor MCP — integración Packet Tracer bridge
+
+# ── Memoria Vectorial (RAG local) ──────────────────────────────
+chromadb>=0.5.0           # Vector store persistente (guarda en .chroma_db/)
+sentence-transformers>=3.0.0  # Embeddings locales — modelo all-MiniLM-L6-v2
+
+# ── AURA UI (WebSocket telemetry pipeline) ─────────────────────
+fastapi>=0.111.0          # ASGI framework + WebSocket support
+uvicorn[standard]>=0.29.0 # ASGI server — runs as asyncio.create_task()
+websockets>=12.0          # WebSocket protocol (starlette dependency)
+
+# ── Forensics ──────────────────────────────────────────────────
+piexif>=1.1.3             # EXIF metadata extraction (GPS→Cartesian forensics)
+
+# ── Active Defense (SOC suite) ─────────────────────────────────
+yara-python>=4.5.0        # YARA rule engine — Layer 0 command scanner
+
+# ── Multimodal Engines ─────────────────────────────────────────
+torch-directml>=0.1.0     # DirectML backend for PyTorch (Windows AMD/Intel GPU)
+trimesh>=4.0.0            # 3D mesh I/O and processing (mesh_generator output)
+schemdraw>=0.15           # Circuit schematic drawing (schematic_compiler)
+matplotlib>=3.8.0         # Headless rendering backend required by schemdraw SVG export
+
+# ── Binary Triage (RE engine) ──────────────────────────────────
+pefile>=2023.2.7              # PE parsing — IAT, sections, overlay detection
+capstone>=5.0.1               # Capstone disassembly — XOR loops, GPA chains, JMP-reg
+
+# ── RF/RFID Bridge ─────────────────────────────────────────────
+pyserial-asyncio>=0.6         # async serial I/O (pyserial is a transitive dep)
+
+# ── AD Attack Graph Engine ─────────────────────────────────────
+ijson>=3.2.3                  # streaming JSON parser — O(1) memory for >500MB BloodHound exports
+igraph>=0.11.0                # fast C-backed graph library for Dijkstra pathfinding
+
+# ── Testing ────────────────────────────────────────────────────
+pytest>=8.0.0

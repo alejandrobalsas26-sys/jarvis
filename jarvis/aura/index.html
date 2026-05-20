@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AURA — Pipeline Monitor v15.2</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #07090f;
+      color: #c0ffd8;
+      font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 16px;
+      background: #0c1018;
+      border-bottom: 1px solid #1a2e1a;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 15px; color: #00ff88; letter-spacing: 3px; }
+    #status-badge {
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      transition: all 0.3s;
+    }
+    .badge-connected    { background: #003820; border: 1px solid #00ff88; color: #00ff88; }
+    .badge-disconnected { background: #2a0a0a; border: 1px solid #ff4444; color: #ff4444; }
+    #client-url { color: #3a5a3a; font-size: 11px; margin-left: auto; }
+    #event-count { color: #446644; font-size: 11px; }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 6px 16px;
+      background: #0a0e16;
+      border-bottom: 1px solid #141e14;
+      flex-shrink: 0;
+    }
+    button {
+      background: #141e14;
+      border: 1px solid #1e321e;
+      color: #88cc88;
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    button:hover { background: #1a2a1a; border-color: #00ff88; color: #00ff88; }
+    #filter-input {
+      background: #0a0e16;
+      border: 1px solid #1e321e;
+      color: #c0ffd8;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+      width: 160px;
+    }
+    #filter-input::placeholder { color: #2a4a2a; }
+
+    /* ── Main area ── */
+    #main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Event log ── */
+    #log {
+      flex: 3;
+      overflow-y: auto;
+      padding: 8px 16px;
+      scroll-behavior: smooth;
+      border-right: 1px solid #141e14;
+    }
+    #log::-webkit-scrollbar { width: 6px; }
+    #log::-webkit-scrollbar-track { background: #0c1018; }
+    #log::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 3px; }
+
+    .event {
+      display: flex;
+      gap: 10px;
+      padding: 6px 0;
+      border-bottom: 1px solid #0e1a0e;
+      animation: fadeIn 0.2s ease-out;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+
+    .event-ts   { color: #2a4a2a; min-width: 90px; flex-shrink: 0; padding-top: 1px; }
+    .event-body { flex: 1; }
+
+    .event-type {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 0.5px;
+      margin-bottom: 3px;
+    }
+    .type-system       { background: #0a2040; border: 1px solid #1a4080; color: #6699cc; }
+    .type-tool_invoked { background: #1a3010; border: 1px solid #2a5020; color: #88dd44; }
+    .type-tool_result  { background: #203010; border: 1px solid #304020; color: #aaee66; }
+    .type-auth_denied  { background: #3a0a0a; border: 1px solid #5a1010; color: #ff6666; }
+    .type-challenge    { background: #302010; border: 1px solid #503010; color: #ffaa44; }
+    .type-error        { background: #2a0a0a; border: 1px solid #4a1010; color: #ff4444; }
+    .type-default          { background: #141e14; border: 1px solid #1e2e1e; color: #88aa88; }
+    .type-canary_intrusion { background: #2a1505; border: 1px solid #cc4400; color: #ff7733; }
+    .type-firewall_block   { background: #2a0505; border: 1px solid #ff2200; color: #ff4444; }
+    .type-mesh_generating  { background: #051520; border: 1px solid #0077cc; color: #44aaff; }
+    .type-mesh_ready       { background: #051520; border: 1px solid #00aaff; color: #88ccff; }
+    .type-schematic_render        { background: #101505; border: 1px solid #44aa00; color: #88ff44; }
+    .type-rf_frame                { background: #151005; border: 1px solid #cc7700; color: #ffaa33; }
+    .type-attack_path_computed    { background: #1a0505; border: 1px solid #ff4400; color: #ff7744; }
+    .type-ad_graph_computing      { background: #180818; border: 1px solid #9944cc; color: #cc77ff; }
+    .type-kernel_anomaly_detected { background: #200505; border: 1px solid #ff2200; color: #ff5533; }
+    .type-forensic_capture_start  { background: #050a1a; border: 1px solid #3377ff; color: #66aaff; }
+    .type-etw_threat_event        { background: #1a0800; border: 1px solid #ff4400; color: #ff8855; }
+    .type-binary_inversion_start  { background: #0a0a0a; border: 1px solid #666666; color: #aaaaaa; }
+    .type-binary_inversion_complete { background: #100a00; border: 1px solid #ffaa00; color: #ffcc55; }
+    .type-deception_tripped       { background: #200000; border: 1px solid #ff0000; color: #ff4444; }
+    .type-deception_planting      { background: #001008; border: 1px solid #00aa44; color: #44dd88; }
+    .type-deception_planted       { background: #001008; border: 1px solid #00cc55; color: #55ff99; }
+
+    /* ── Binary inversion HUD overlay ── */
+    #binary-overlay {
+      display: none;
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(7, 9, 15, 0.90);
+      border: 1px solid #666666;
+      border-radius: 4px;
+      padding: 8px 18px;
+      color: #aaaaaa;
+      font-size: 11px;
+      letter-spacing: 2px;
+      z-index: 115;
+      pointer-events: none;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    /* ── Forensics dashboard panel ── */
+    #forensics-panel {
+      display: none;
+      position: absolute;
+      top: 60px;
+      left: 16px;
+      width: 300px;
+      max-height: 380px;
+      overflow-y: auto;
+      background: rgba(7, 9, 15, 0.94);
+      border: 1px solid #664400;
+      border-radius: 6px;
+      padding: 10px 12px;
+      z-index: 112;
+      font-size: 11px;
+    }
+    #forensics-panel::-webkit-scrollbar { width: 4px; }
+    #forensics-panel::-webkit-scrollbar-thumb { background: #664400; border-radius: 2px; }
+    .fp-title  { color: #ffaa00; font-size: 10px; font-weight: bold; letter-spacing: 3px; margin-bottom: 6px; border-bottom: 1px solid #442200; padding-bottom: 3px; }
+    .fp-row    { display: flex; justify-content: space-between; margin: 3px 0; color: #cc9955; }
+    .fp-key    { color: #ff8822; font-weight: bold; }
+    .fp-packed { color: #ff4400; font-weight: bold; letter-spacing: 1px; }
+    .fp-bar-wrap { margin: 6px 0; }
+    .fp-bar-label { color: #997744; font-size: 10px; margin-bottom: 2px; }
+    .fp-bar-bg   { background: #1a0a00; border-radius: 2px; height: 8px; width: 100%; }
+    .fp-bar-fill { height: 8px; border-radius: 2px; transition: width 0.4s; }
+    .fp-import  { color: #ff6633; margin: 1px 0; }
+    .fp-string  { color: #ffaa44; margin: 1px 0; word-break: break-all; }
+    .fp-note    { color: #ffcc00; margin: 2px 0; }
+
+    /* ── Deception tripped alert overlay ── */
+    #deception-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.88);
+      z-index: 210;
+      align-items: center;
+      justify-content: center;
+    }
+    .deception-box {
+      background: #0d0000;
+      border: 2px solid #ff0000;
+      border-radius: 8px;
+      padding: 24px 30px;
+      max-width: 500px;
+      width: 90%;
+      box-shadow: 0 0 60px rgba(255, 0, 0, 0.5);
+    }
+    .deception-title { color: #ff0000; font-size: 13px; font-weight: bold; letter-spacing: 3px; text-align: center; margin-bottom: 16px; }
+    .deception-field { margin: 8px 0; font-size: 11px; color: #cc6666; line-height: 1.6; }
+    .deception-key   { color: #ff4444; font-weight: bold; letter-spacing: 1px; margin-right: 8px; }
+    .sev-critical { color: #ff0000; }
+    .sev-high     { color: #ffaa00; }
+    #deception-dismiss {
+      display: block; margin: 20px auto 0; padding: 6px 20px;
+      background: #200000; border: 1px solid #ff0000; color: #ff0000;
+      cursor: pointer; font-family: inherit; font-size: 11px;
+      border-radius: 4px; letter-spacing: 2px;
+    }
+    #deception-dismiss:hover { background: #3a0000; }
+
+    /* ── Kernel anomaly sidebar panel ── */
+    #kernel-panel {
+      display: none;
+      position: absolute;
+      top: 60px;
+      right: 16px;
+      width: 260px;
+      max-height: 280px;
+      overflow-y: auto;
+      background: rgba(7, 9, 15, 0.93);
+      border: 1px solid #440000;
+      border-radius: 6px;
+      padding: 10px;
+      z-index: 110;
+    }
+    #kernel-panel::-webkit-scrollbar { width: 4px; }
+    #kernel-panel::-webkit-scrollbar-thumb { background: #440000; border-radius: 2px; }
+    #kernel-panel-title {
+      color: #ff4444;
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 3px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #440000;
+      padding-bottom: 4px;
+    }
+    .kernel-entry {
+      font-size: 11px;
+      color: #cc8888;
+      margin: 4px 0;
+      padding: 4px 6px;
+      border: 1px solid #330000;
+      border-radius: 3px;
+      line-height: 1.5;
+    }
+    .ke-pid  { color: #ff6666; font-weight: bold; }
+    .ke-tech { color: #ff9944; }
+    .ke-off  { color: #888888; }
+
+    /* ── AD graph computing status overlay ── */
+    #ad-graph-overlay {
+      display: none;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(7, 9, 15, 0.88);
+      border: 1px solid #ff4400;
+      border-radius: 6px;
+      padding: 12px 22px;
+      color: #ff6600;
+      font-size: 12px;
+      letter-spacing: 3px;
+      z-index: 120;
+      pointer-events: none;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    pre.payload {
+      color: #7aaa8a;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0;
+    }
+    pre.payload .key   { color: #44bb88; }
+    pre.payload .str   { color: #aaddcc; }
+    pre.payload .num   { color: #88ccff; }
+    pre.payload .bool  { color: #ffaa44; }
+    pre.payload .null  { color: #885588; }
+
+    /* ── Empty state ── */
+    #empty {
+      text-align: center;
+      color: #1a3a1a;
+      padding-top: 60px;
+      font-size: 14px;
+      letter-spacing: 2px;
+    }
+
+    /* ── Viz panel ── */
+    #viz-panel {
+      flex: 2;
+      position: relative;
+      background: #050709;
+      overflow: hidden;
+      min-width: 260px;
+    }
+
+    #webgl-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* ── Telemetry HUD (overlay on canvas) ── */
+    #telemetry-hud {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .hud-block {
+      background: rgba(7, 9, 15, 0.78);
+      border: 1px solid #1a3a1a;
+      border-radius: 6px;
+      padding: 8px 14px;
+      min-width: 110px;
+    }
+    .hud-label {
+      font-size: 10px;
+      color: #446644;
+      letter-spacing: 2px;
+      margin-bottom: 3px;
+    }
+    .hud-value {
+      font-size: 22px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      line-height: 1;
+    }
+    .hud-sub {
+      font-size: 10px;
+      color: #2a5a2a;
+      margin-top: 4px;
+    }
+    #cpu-val     { color: #00ff88; }
+    #ram-pct-val { color: #00ffcc; }
+
+    /* ── Globe OSINT inset (bottom-right) ── */
+    #globe-inset {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 240px;
+      height: 240px;
+      border: 1px solid #1a3a1a;
+      border-radius: 8px;
+      background: #050709;
+      overflow: hidden;
+      opacity: 0.82;
+      transition: opacity 0.3s;
+      z-index: 100;
+    }
+    #globe-inset:hover { opacity: 1; }
+    #globe-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* ── Neutralized alarm overlay ── */
+    #alarm-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.84);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .alarm-box {
+      background: #0d0507;
+      border: 2px solid #ff3333;
+      border-radius: 8px;
+      padding: 24px 30px;
+      max-width: 560px;
+      width: 90%;
+      box-shadow: 0 0 40px rgba(255, 51, 51, 0.35);
+    }
+    .alarm-title {
+      color: #ff3333;
+      font-size: 13px;
+      font-weight: bold;
+      letter-spacing: 3px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    .alarm-field {
+      margin: 8px 0;
+      font-size: 11px;
+      color: #cc8888;
+      word-break: break-all;
+      line-height: 1.6;
+    }
+    .alarm-key {
+      color: #ff6666;
+      font-weight: bold;
+      letter-spacing: 1px;
+      margin-right: 8px;
+    }
+    #alarm-dismiss {
+      display: block;
+      margin: 20px auto 0;
+      padding: 6px 20px;
+      background: #2a0a0a;
+      border: 1px solid #ff3333;
+      color: #ff3333;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      border-radius: 4px;
+      letter-spacing: 2px;
+    }
+    #alarm-dismiss:hover { background: #3a1010; }
+
+    /* ── Schematic sidebar panel ── */
+    #schematic-panel {
+      display: none;
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      max-width: 340px;
+      max-height: 320px;
+      overflow: auto;
+      background: rgba(7, 9, 15, 0.90);
+      border: 1px solid #1a3a1a;
+      border-radius: 6px;
+      padding: 10px;
+      z-index: 110;
+    }
+    #schematic-panel svg { width: 100%; height: auto; }
+
+    /* ── Mesh loading overlay ── */
+    #loading-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 9, 15, 0.72);
+      z-index: 150;
+      font-size: 12px;
+      color: #00ff88;
+      letter-spacing: 3px;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1.0; } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>◈ AURA</h1>
+  <span id="status-badge" class="badge-disconnected">● DISCONNECTED</span>
+  <span id="client-url"></span>
+  <span id="event-count">0 events</span>
+</header>
+
+<div id="toolbar">
+  <button id="btn-clear">Clear</button>
+  <button id="btn-pause">Pause</button>
+  <input id="filter-input" type="text" placeholder="filter by type or tool…">
+</div>
+
+<div id="main">
+  <div id="log">
+    <div id="empty">[ Awaiting AURA telemetry… ]</div>
+  </div>
+
+  <div id="viz-panel">
+    <canvas id="webgl-canvas"></canvas>
+    <div id="schematic-panel"></div>
+    <div id="loading-overlay">[ GENERATING MESH… ]</div>
+    <div id="ad-graph-overlay">COMPUTING ATTACK PATHS…</div>
+    <div id="binary-overlay">[ INVERTING BINARY… ]</div>
+    <div id="forensics-panel"></div>
+    <div id="kernel-panel">
+      <div id="kernel-panel-title">KERNEL ANOMALIES</div>
+      <div id="kernel-panel-body"></div>
+    </div>
+    <div id="telemetry-hud">
+      <div class="hud-block">
+        <div class="hud-label">CPU</div>
+        <div class="hud-value" id="cpu-val">--.-</div>
+        <div class="hud-sub">percent</div>
+      </div>
+      <div class="hud-block">
+        <div class="hud-label">RAM</div>
+        <div class="hud-value" id="ram-pct-val">--.-</div>
+        <div class="hud-sub" id="ram-gb-val">-- / -- GB</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Globe OSINT inset — dynamically updated with EXIF targets -->
+<div id="globe-inset">
+  <canvas id="globe-canvas"></canvas>
+</div>
+
+<!-- Neutralized alarm overlay -->
+<div id="alarm-overlay">
+  <div class="alarm-box">
+    <div class="alarm-title">⚠ COMMAND NEUTRALIZED</div>
+    <div id="alarm-body"></div>
+    <button id="alarm-dismiss">DISMISS</button>
+  </div>
+</div>
+
+<!-- Deception tripwire alert overlay -->
+<div id="deception-overlay">
+  <div class="deception-box">
+    <div class="deception-title">◈ HONEY-TOKEN ACCESSED — ACTIVE INTRUSION</div>
+    <div id="deception-body"></div>
+    <button id="deception-dismiss">ACKNOWLEDGE</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":         "https://unpkg.com/three@0.155.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+  // === Event log ===
+  const logEl    = document.getElementById('log');
+  const badge    = document.getElementById('status-badge');
+  const countEl  = document.getElementById('event-count');
+  const filterEl = document.getElementById('filter-input');
+  const btnClear = document.getElementById('btn-clear');
+  const btnPause = document.getElementById('btn-pause');
+  const emptyEl  = document.getElementById('empty');
+
+  let total  = 0;
+  let paused = false;
+  let filter = '';
+
+  filterEl.addEventListener('input', () => { filter = filterEl.value.toLowerCase(); });
+
+  btnClear.addEventListener('click', () => {
+    logEl.innerHTML = '';
+    logEl.appendChild(emptyEl);
+    total = 0;
+    countEl.textContent = '0 events';
+  });
+
+  btnPause.addEventListener('click', () => {
+    paused = !paused;
+    btnPause.textContent = paused ? 'Resume' : 'Pause';
+    btnPause.style.color = paused ? '#ffaa44' : '';
+  });
+
+  /* ── Syntax-highlight JSON ── */
+  function highlight(obj) {
+    const raw = JSON.stringify(obj, null, 2);
+    return raw.replace(
+      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      (match) => {
+        let cls = 'num';
+        if (/^"/.test(match)) {
+          cls = /:$/.test(match) ? 'key' : 'str';
+        } else if (/true|false/.test(match)) {
+          cls = 'bool';
+        } else if (/null/.test(match)) {
+          cls = 'null';
+        }
+        return `<span class="${cls}">${match}</span>`;
+      }
+    );
+  }
+
+  function typeClass(t) {
+    const map = {
+      system:            'type-system',
+      tool_invoked:      'type-tool_invoked',
+      tool_result:       'type-tool_result',
+      challenge:         'type-challenge',
+      auth_denied:       'type-auth_denied',
+      error:             'type-error',
+      canary_intrusion:  'type-canary_intrusion',
+      firewall_block:    'type-firewall_block',
+      mesh_generating:   'type-mesh_generating',
+      mesh_ready:        'type-mesh_ready',
+      schematic_render:        'type-schematic_render',
+      rf_frame:                'type-rf_frame',
+      attack_path_computed:    'type-attack_path_computed',
+      ad_graph_computing:      'type-ad_graph_computing',
+      kernel_anomaly_detected: 'type-kernel_anomaly_detected',
+      forensic_capture_start:      'type-forensic_capture_start',
+      etw_threat_event:            'type-etw_threat_event',
+      binary_inversion_start:      'type-binary_inversion_start',
+      binary_inversion_complete:   'type-binary_inversion_complete',
+      deception_tripped:           'type-deception_tripped',
+      deception_planting:          'type-deception_planting',
+      deception_planted:           'type-deception_planted',
+    };
+    return map[t] || 'type-default';
+  }
+
+  function append(rawText) {
+    let obj;
+    try { obj = JSON.parse(rawText); } catch { obj = { type: 'raw', data: rawText }; }
+
+    if (filter) {
+      const haystack = (obj.type || '') + ' ' + (obj.tool || '') + ' ' + rawText;
+      if (!haystack.toLowerCase().includes(filter)) return;
+    }
+
+    if (emptyEl.parentNode) emptyEl.remove();
+
+    const ts  = new Date().toISOString().slice(11, 23);
+    const div = document.createElement('div');
+    div.className = 'event';
+    div.innerHTML = `
+      <span class="event-ts">${ts}</span>
+      <div class="event-body">
+        <span class="event-type ${typeClass(obj.type)}">${(obj.type || 'unknown').toUpperCase()}</span>
+        <pre class="payload">${highlight(obj)}</pre>
+      </div>`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+
+    total++;
+    countEl.textContent = `${total} event${total !== 1 ? 's' : ''}`;
+  }
+
+  // === Three.js WebGL Scene ===
+  const glCanvas = document.getElementById('webgl-canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  camera.position.set(0, 5, 9);
+  camera.lookAt(0, 0, 0);
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0x112211, 1.0));
+
+  // CPU PointLight — intensity driven by telemetry
+  const cpuLight = new THREE.PointLight(0x00ff88, 1.0, 12);
+  scene.add(cpuLight);
+
+  // Root node (core sphere)
+  const coreMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.35, 32, 32),
+    new THREE.MeshPhongMaterial({
+      color: 0x00ff88,
+      emissive: 0x003311,
+      specular: 0x00ffaa,
+      shininess: 80,
+    })
+  );
+  scene.add(coreMesh);
+  cpuLight.position.copy(coreMesh.position);
+
+  // RAM orbital ring — custom ShaderMaterial (WebGL vertex + fragment)
+  const RING_N  = 2048;
+  const aAngles = new Float32Array(RING_N);
+  const aSpeeds = new Float32Array(RING_N);
+  for (let i = 0; i < RING_N; i++) {
+    aAngles[i] = (i / RING_N) * Math.PI * 2 + (Math.random() - 0.5) * 0.04;
+    aSpeeds[i] = 0.4 + Math.random() * 1.2;
+  }
+
+  const ringGeo = new THREE.BufferGeometry();
+  ringGeo.setAttribute('aAngle',   new THREE.BufferAttribute(aAngles, 1));
+  ringGeo.setAttribute('aSpeed',   new THREE.BufferAttribute(aSpeeds, 1));
+  // Dummy position buffer — frustum culling disabled below
+  ringGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RING_N * 3), 3));
+
+  const ringMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:       { value: 0.0 },
+      uSaturation: { value: 0.3 },
+      uRadius:     { value: 2.8 },
+    },
+    vertexShader: `
+      attribute float aAngle;
+      attribute float aSpeed;
+      uniform float uTime;
+      uniform float uSaturation;
+      uniform float uRadius;
+
+      void main() {
+        float angle = aAngle + uTime * 0.3 * aSpeed;
+        vec3 pos = vec3(cos(angle) * uRadius, (aSpeed - 1.0) * 0.18, sin(angle) * uRadius);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        gl_PointSize = 2.5 + uSaturation * 5.5;
+      }
+    `,
+    fragmentShader: `
+      uniform float uSaturation;
+
+      void main() {
+        float dist = length(gl_PointCoord - vec2(0.5));
+        if (dist > 0.5) discard;
+
+        vec3 teal  = vec3(0.0,  1.0,  0.8);
+        vec3 amber = vec3(1.0,  0.667, 0.0);
+        vec3 red   = vec3(1.0,  0.2,   0.2);
+
+        vec3 color;
+        if (uSaturation < 0.5) {
+          color = mix(teal, amber, uSaturation * 2.0);
+        } else {
+          color = mix(amber, red, (uSaturation - 0.5) * 2.0);
+        }
+
+        gl_FragColor = vec4(color, 1.0 - dist * 1.6);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+  });
+
+  const ramRing = new THREE.Points(ringGeo, ringMat);
+  ramRing.frustumCulled = false;
+  scene.add(ramRing);
+
+  function resizeRenderer() {
+    const w = glCanvas.clientWidth;
+    const h = glCanvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+
+  const clock = new THREE.Clock();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    ringMat.uniforms.uTime.value = clock.getElapsedTime();
+    renderer.render(scene, camera);
+  }
+
+  resizeRenderer();
+  animate();
+  window.addEventListener('resize', resizeRenderer);
+
+  // === Globe OSINT Inset (secondary WebGL renderer) ===
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  const globeCanvas   = document.getElementById('globe-canvas');
+  const globeRenderer = new THREE.WebGLRenderer({ canvas: globeCanvas, antialias: true, alpha: true });
+  globeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  const globeCamera = new THREE.PerspectiveCamera(50, 1, 1, 1000);
+  globeCamera.position.set(0, 0, 340);
+  globeCamera.lookAt(0, 0, 0);
+
+  const globeScene = new THREE.Scene();
+  globeScene.add(new THREE.AmbientLight(0x112211, 1.0));
+
+  // Icosahedron wireframe sphere (R=200)
+  const icoGeo  = new THREE.IcosahedronGeometry(200, 3);
+  const wireGeo = new THREE.WireframeGeometry(icoGeo);
+  const wireMat = new THREE.LineBasicMaterial({ color: 0x00ffcc, opacity: 0.35, transparent: true });
+  const globeMesh = new THREE.LineSegments(wireGeo, wireMat);
+  globeScene.add(globeMesh);
+
+  function resizeGlobe() {
+    const el = document.getElementById('globe-inset');
+    const w = el.clientWidth, h = el.clientHeight;
+    if (w && h) {
+      globeRenderer.setSize(w, h, false);
+      globeCamera.aspect = w / h;
+      globeCamera.updateProjectionMatrix();
+    }
+  }
+
+  const globeClock = new THREE.Clock();
+  function animateGlobe() {
+    requestAnimationFrame(animateGlobe);
+    const t = globeClock.getElapsedTime();
+    globeMesh.rotation.y = t * 0.12;
+    globeMesh.rotation.x = Math.sin(t * 0.05) * 0.1;
+    globeRenderer.render(globeScene, globeCamera);
+  }
+
+  resizeGlobe();
+  animateGlobe();
+  window.addEventListener('resize', resizeGlobe);
+
+  // Inject a glowing red sphere marker onto the globe at Cartesian surface coords
+  function plotExifTarget(x, y, z) {
+    const geo  = new THREE.SphereGeometry(5, 12, 12);
+    const mat  = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+    const mark = new THREE.Mesh(geo, mat);
+    mark.position.set(x, y, z);
+    globeScene.add(mark);
+    document.getElementById('globe-inset').style.opacity = '1';
+  }
+
+  // === v17.0 Active Defense Visualizers ===
+
+  // Canary intrusion: hostile peripheral node + illuminated attack vector line
+  function triggerCanaryIntrusion(msg) {
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 5.5 + Math.random() * 1.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 1.5;
+
+    // Glowing hostile node
+    const nodeGeo = new THREE.SphereGeometry(0.18, 10, 10);
+    const nodeMat = new THREE.MeshPhongMaterial({
+      color: 0xff2200, emissive: 0x881100, specular: 0xff6644, shininess: 60,
+    });
+    const hostileNode = new THREE.Mesh(nodeGeo, nodeMat);
+    hostileNode.position.set(x, y, z);
+    scene.add(hostileNode);
+
+    // Attack vector line from hostile node → JARVIS core
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(x, y, z),
+      coreMesh.position.clone(),
+    ]);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xff4400, opacity: 0.85, transparent: true });
+    const attackLine = new THREE.Line(lineGeo, lineMat);
+    scene.add(attackLine);
+
+    // Brief point-light flash at the hostile node position
+    const intruderLight = new THREE.PointLight(0xff3300, 3.0, 6);
+    intruderLight.position.set(x, y, z);
+    scene.add(intruderLight);
+
+    // Fade and remove after 8 seconds
+    setTimeout(() => {
+      scene.remove(hostileNode);
+      scene.remove(attackLine);
+      scene.remove(intruderLight);
+    }, 8000);
+  }
+
+  // Firewall block: semi-transparent red wireframe kinetic shield around core
+  let shieldMesh = null;
+  function triggerFirewallBlock(msg) {
+    if (shieldMesh) scene.remove(shieldMesh);
+    const shieldGeo = new THREE.SphereGeometry(0.72, 14, 14);
+    const shieldMat = new THREE.MeshBasicMaterial({
+      color: 0xff1111, wireframe: true, transparent: true, opacity: 0.55,
+    });
+    shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
+    shieldMesh.position.copy(coreMesh.position);
+    scene.add(shieldMesh);
+  }
+
+  // High-intensity red alarm strobe + tactical warning overlay
+  function triggerNeutralizedAlarm(msg) {
+    const origColor     = cpuLight.color.clone();
+    const origIntensity = cpuLight.intensity;
+    let tick = 0;
+    const iv = setInterval(() => {
+      if (++tick > 12) {
+        clearInterval(iv);
+        cpuLight.color.copy(origColor);
+        cpuLight.intensity = origIntensity;
+        return;
+      }
+      cpuLight.color.set(tick % 2 === 0 ? 0xff3333 : 0x000000);
+      cpuLight.intensity = tick % 2 === 0 ? 6.5 : 0.0;
+    }, 150);
+
+    const triage     = msg.triage || {};
+    const detections = (triage.mitre_detections || []).map(d => d.technique).join(', ') || 'none';
+    const yaraRules  = (triage.yara_hits || []).map(h => h.rule).join(', ') || 'none';
+    document.getElementById('alarm-body').innerHTML = `
+      <div class="alarm-field"><span class="alarm-key">BLOCKED</span>${escapeHtml(String(msg.command || '').slice(0, 120))}</div>
+      <div class="alarm-field"><span class="alarm-key">SHANNON</span>${triage.entropy || '?'}${triage.high_entropy ? '  ⚠ HIGH' : ''}</div>
+      <div class="alarm-field"><span class="alarm-key">MITRE</span>${escapeHtml(detections)}</div>
+      <div class="alarm-field"><span class="alarm-key">YARA</span>${escapeHtml(yaraRules)}</div>
+      <div class="alarm-field"><span class="alarm-key">MANIFEST</span>${escapeHtml(msg.manifest_file || '?')}</div>
+    `;
+    document.getElementById('alarm-overlay').style.display = 'flex';
+  }
+
+  document.getElementById('alarm-dismiss').addEventListener('click', () => {
+    document.getElementById('alarm-overlay').style.display = 'none';
+  });
+
+  // === v19.0 RF, AD Graph, and Kernel Forensics Visualizers ===
+
+  // ── RF peripheral node spawner ──────────────────────────────────────────────
+  // Color map: proxmark3=amber, tshark=cyan, bettercap=red
+  const _RF_COLORS = { proxmark3: 0xffaa00, tshark: 0x00ccff, bettercap: 0xff2244 };
+
+  function spawnRfPeripheralNode(msg) {
+    const color = _RF_COLORS[msg.hw_source] || 0xffaa00;
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 6.5 + Math.random() * 1.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 2.0;
+
+    const geo = new THREE.SphereGeometry(0.14, 8, 8);
+    const mat = new THREE.MeshPhongMaterial({
+      color, emissive: color, emissiveIntensity: 0.4, shininess: 60,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    // Brief point-flash
+    const fl = new THREE.PointLight(color, 2.0, 4);
+    fl.position.copy(node.position);
+    scene.add(fl);
+
+    // Sprite label showing UID
+    const label = _makeTextSprite((msg.uid || '').slice(0, 18), color);
+    label.position.set(x, y + 0.28, z);
+    scene.add(label);
+
+    // Auto-remove after 12 seconds
+    setTimeout(() => {
+      scene.remove(node);
+      scene.remove(fl);
+      scene.remove(label);
+    }, 12000);
+  }
+
+  // Canvas-based sprite label helper
+  function _makeTextSprite(text, hexColor) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+    const r = (hexColor >> 16) & 0xff;
+    const g = (hexColor >> 8)  & 0xff;
+    const b =  hexColor        & 0xff;
+    ctx.fillStyle = `rgba(${r},${g},${b},0.9)`;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 24);
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.92 });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(1.6, 0.3, 1);
+    return sprite;
+  }
+
+  // ── AD attack-path highlighter ───────────────────────────────────────────────
+  const _pathMeshes  = [];   // active attack-path node meshes
+  const _pathLines   = [];   // active attack-path edge lines
+  const _pathLabels  = [];   // active attack-path label sprites
+
+  function highlightAttackPath(msg) {
+    // Remove previous path visualisation
+    _pathMeshes.forEach(m => scene.remove(m));
+    _pathLines.forEach(l => scene.remove(l));
+    _pathLabels.forEach(s => scene.remove(s));
+    _pathMeshes.length = 0;
+    _pathLines.length  = 0;
+    _pathLabels.length = 0;
+
+    const path = msg.path || [];
+    const n = path.length;
+    if (!n) return;
+
+    const positions = [];
+
+    for (let i = 0; i < n; i++) {
+      // Converge from outer radius → core along an arc
+      const t      = n > 1 ? i / (n - 1) : 0;
+      const radius = 5.2 * (1 - t) + 0.65 * t;
+      const angle  = (i / n) * Math.PI * 2;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const y = Math.sin(i * 1.1) * 0.6;
+
+      const geo = new THREE.SphereGeometry(0.22, 14, 14);
+      const mat = new THREE.MeshPhongMaterial({
+        color: 0xff4400, emissive: 0x441100, specular: 0xff7733, shininess: 90,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      scene.add(mesh);
+      _pathMeshes.push(mesh);
+
+      const label = _makeTextSprite((path[i] || '').slice(0, 20), 0xff7744);
+      label.position.set(x, y + 0.35, z);
+      scene.add(label);
+      _pathLabels.push(label);
+
+      positions.push(new THREE.Vector3(x, y, z));
+    }
+
+    // Glowing edges between consecutive path nodes
+    for (let i = 0; i < positions.length - 1; i++) {
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([positions[i], positions[i + 1]]);
+      const lineMat = new THREE.LineBasicMaterial({
+        color: 0xff4400, opacity: 0.88, transparent: true,
+      });
+      const line = new THREE.Line(lineGeo, lineMat);
+      scene.add(line);
+      _pathLines.push(line);
+    }
+  }
+
+  // ── Kernel anomaly panel + flash ─────────────────────────────────────────────
+  function appendKernelAnomaly(msg) {
+    const panel = document.getElementById('kernel-panel');
+    const body  = document.getElementById('kernel-panel-body');
+    panel.style.display = 'block';
+
+    const entry = document.createElement('div');
+    entry.className = 'kernel-entry';
+    entry.innerHTML =
+      `<span class="ke-pid">PID ${escapeHtml(String(msg.pid))}</span>` +
+      ` <span class="ke-off">${escapeHtml(msg.offset || '0x0')}</span>` +
+      ` <span class="ke-tech">[${escapeHtml(msg.technique || '?')}]</span>`;
+    body.appendChild(entry);
+    panel.scrollTop = panel.scrollHeight;
+
+    // Flash cpuLight red × 3
+    const origColor     = cpuLight.color.clone();
+    const origIntensity = cpuLight.intensity;
+    let tick = 0;
+    const iv = setInterval(() => {
+      if (++tick > 6) {
+        clearInterval(iv);
+        cpuLight.color.copy(origColor);
+        cpuLight.intensity = origIntensity;
+        return;
+      }
+      cpuLight.color.set(tick % 2 === 0 ? 0xff0000 : 0x000000);
+      cpuLight.intensity = tick % 2 === 0 ? 5.5 : 0.0;
+    }, 200);
+
+    // Hollow / Inject techniques also trigger the firewall shield wireframe
+    const tech = (msg.technique || '').toLowerCase();
+    if (tech.includes('hollow') || tech.includes('inject')) {
+      triggerFirewallBlock(msg);
+    }
+  }
+
+  // === v20.0 ETW, Binary Inversion & Deception Visualizers ===
+
+  // ── ETW threat event: strobe + floating process widget ────────────────────
+  const _etwWidgets = [];   // auto-cleanup handles
+
+  function pulseEtwNode(msg) {
+    // High-frequency strobe on cpuLight (threat orange)
+    const origColor     = cpuLight.color.clone();
+    const origIntensity = cpuLight.intensity;
+    let tick = 0;
+    const iv = setInterval(() => {
+      if (++tick > 8) {
+        clearInterval(iv);
+        cpuLight.color.copy(origColor);
+        cpuLight.intensity = origIntensity;
+        return;
+      }
+      cpuLight.color.set(tick % 2 === 0 ? 0xff4400 : 0x000000);
+      cpuLight.intensity = tick % 2 === 0 ? 6.0 : 0.0;
+    }, 100);
+
+    // Floating node at a random orbital position
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 3.2 + Math.random() * 0.8;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 1.2;
+
+    const geo = new THREE.SphereGeometry(0.16, 10, 10);
+    const mat = new THREE.MeshPhongMaterial({
+      color: 0xff4400, emissive: 0x661100, shininess: 80,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    // Widget sprite: PID + description
+    const label = _makeTextSprite(
+      `PID:${msg.pid} EID:${msg.event_id}`,
+      0xff6633
+    );
+    label.position.set(x, y + 0.30, z);
+    scene.add(label);
+
+    // Offset sprite: kernel description
+    const desc = _makeTextSprite(
+      (msg.description || '').slice(0, 24),
+      0xff9966
+    );
+    desc.position.set(x, y + 0.55, z);
+    scene.add(desc);
+
+    // Point-light flash
+    const fl = new THREE.PointLight(0xff4400, 3.0, 5);
+    fl.position.set(x, y, z);
+    scene.add(fl);
+
+    setTimeout(() => {
+      scene.remove(node);
+      scene.remove(label);
+      scene.remove(desc);
+      scene.remove(fl);
+    }, 10000);
+  }
+
+  // ── Binary inversion: overlay + forensics dashboard ─────────────────────
+  function showBinaryInversionOverlay(filename) {
+    const el = document.getElementById('binary-overlay');
+    el.textContent = `[ INVERTING BINARY: ${escapeHtml(filename)} ]`;
+    el.style.display = 'block';
+  }
+
+  function renderForensicsDashboard(msg) {
+    document.getElementById('binary-overlay').style.display = 'none';
+    const panel = document.getElementById('forensics-panel');
+    panel.style.display = 'block';
+
+    const entropyPct = Math.min((msg.entropy / 8.0) * 100, 100).toFixed(0);
+    const entropyColor = msg.entropy > 7.0 ? '#ff4400' :
+                         msg.entropy > 5.5 ? '#ffaa00' : '#00ff88';
+
+    // Build section entropy bars
+    const secEntropy = msg.section_entropy || {};
+    let secBars = '';
+    for (const [sec, ent] of Object.entries(secEntropy)) {
+      const pct = Math.min((ent / 8.0) * 100, 100).toFixed(0);
+      const col = ent > 7.0 ? '#ff4400' : ent > 5.5 ? '#ffaa00' : '#44cc88';
+      secBars += `
+        <div class="fp-bar-wrap">
+          <div class="fp-bar-label">${escapeHtml(sec)} — ${ent} bits</div>
+          <div class="fp-bar-bg">
+            <div class="fp-bar-fill" style="width:${pct}%;background:${col}"></div>
+          </div>
+        </div>`;
+    }
+
+    const imports = (msg.suspicious_imports || [])
+      .map(i => `<div class="fp-import">⚠ ${escapeHtml(i)}</div>`).join('');
+
+    const strings = (msg.recovered_strings || []).slice(0, 12)
+      .map(s => `<div class="fp-string">» ${escapeHtml(s.slice(0, 60))}</div>`).join('');
+
+    const notes = (msg.disasm_notes || [])
+      .map(n => `<div class="fp-note">↯ ${escapeHtml(n)}</div>`).join('');
+
+    panel.innerHTML = `
+      <div class="fp-title">BINARY TRIAGE: ${escapeHtml(msg.file_name || '?')}</div>
+      <div class="fp-row">
+        <span class="fp-key">ENTROPY</span>
+        <span style="color:${entropyColor}">${msg.entropy} bits</span>
+      </div>
+      ${msg.packed ? '<div class="fp-packed">⚠ PACKER DETECTED (entropy &gt; 7.0)</div>' : ''}
+      <div class="fp-bar-wrap">
+        <div class="fp-bar-label">Overall entropy — ${msg.entropy} bits</div>
+        <div class="fp-bar-bg">
+          <div class="fp-bar-fill" style="width:${entropyPct}%;background:${entropyColor}"></div>
+        </div>
+      </div>
+      ${secBars}
+      ${notes ? `<div class="fp-title" style="margin-top:8px">DISASM NOTES</div>${notes}` : ''}
+      ${imports ? `<div class="fp-title" style="margin-top:8px">SUSPICIOUS IMPORTS</div>${imports}` : ''}
+      ${strings ? `<div class="fp-title" style="margin-top:8px">RECOVERED STRINGS</div>${strings}` : ''}
+    `;
+  }
+
+  // ── Deception tripwire: crimson strobe + containment shell + alert ────────
+  let _containmentMesh = null;
+
+  function triggerDeceptionAlarm(msg) {
+    // Crimson strobe — more intense than kernel anomaly
+    const origColor     = cpuLight.color.clone();
+    const origIntensity = cpuLight.intensity;
+    let tick = 0;
+    const iv = setInterval(() => {
+      if (++tick > 16) {
+        clearInterval(iv);
+        cpuLight.color.copy(origColor);
+        cpuLight.intensity = origIntensity;
+        return;
+      }
+      cpuLight.color.set(tick % 2 === 0 ? 0xcc0000 : 0x000000);
+      cpuLight.intensity = tick % 2 === 0 ? 8.0 : 0.0;
+    }, 120);
+
+    // Wireframe containment shell around core (larger than firewall shield)
+    if (_containmentMesh) scene.remove(_containmentMesh);
+    const shellGeo = new THREE.IcosahedronGeometry(1.1, 1);
+    const shellMat = new THREE.MeshBasicMaterial({
+      color: 0xff0000, wireframe: true, transparent: true, opacity: 0.65,
+    });
+    _containmentMesh = new THREE.Mesh(shellGeo, shellMat);
+    _containmentMesh.position.copy(coreMesh.position);
+    scene.add(_containmentMesh);
+
+    // Alert overlay
+    const sev = (msg.severity || 'HIGH');
+    const sevClass = sev === 'CRITICAL' ? 'sev-critical' : 'sev-high';
+    document.getElementById('deception-body').innerHTML = `
+      <div class="deception-field">
+        <span class="deception-key">SEVERITY</span>
+        <span class="${sevClass}">${escapeHtml(sev)}</span>
+      </div>
+      <div class="deception-field">
+        <span class="deception-key">SOURCE PID</span>${escapeHtml(String(msg.source_pid || '?'))}
+      </div>
+      <div class="deception-field">
+        <span class="deception-key">TOKEN ACCESSED</span>${escapeHtml(msg.target_token || '?')}
+      </div>
+      <div class="deception-field">
+        <span class="deception-key">TIME</span>${escapeHtml(msg.timestamp || '')}
+      </div>
+    `;
+    document.getElementById('deception-overlay').style.display = 'flex';
+  }
+
+  document.getElementById('deception-dismiss').addEventListener('click', () => {
+    document.getElementById('deception-overlay').style.display = 'none';
+  });
+
+  // === WebSocket with auto-reconnect ===
+  function connect() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//${window.location.host}/ws`;
+    document.getElementById('client-url').textContent = wsUrl;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      badge.className   = 'badge-connected';
+      badge.textContent = '● CONNECTED';
+    };
+
+    ws.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { msg = null; }
+
+      if (msg && msg.type === 'telemetry') {
+        // CPU → PointLight intensity (updated only on incoming telemetry message)
+        cpuLight.intensity = 0.4 + (msg.cpu_pct / 100) * 3.5;
+        // RAM → uSaturation drives ring color + point size
+        ringMat.uniforms.uSaturation.value = msg.ram_pct / 100;
+        // Sidebar DOM updates
+        document.getElementById('cpu-val').textContent     = msg.cpu_pct.toFixed(1) + '%';
+        document.getElementById('ram-pct-val').textContent = msg.ram_pct.toFixed(1) + '%';
+        document.getElementById('ram-gb-val').textContent  =
+          msg.ram_used_gb.toFixed(1) + ' / ' + msg.ram_total_gb.toFixed(1) + ' GB';
+        return;
+      }
+
+      if (msg && msg.type === 'neutralized') {
+        triggerNeutralizedAlarm(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'canary_intrusion') {
+        triggerCanaryIntrusion(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'firewall_block') {
+        triggerFirewallBlock(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'forensics') {
+        const c = msg.cartesian;
+        if (c) plotExifTarget(c.x, c.y, c.z);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'mesh_generating') {
+        document.getElementById('loading-overlay').style.display = 'flex';
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'mesh_ready') {
+        document.getElementById('loading-overlay').style.display = 'none';
+        const loader = new GLTFLoader();
+        loader.load(msg.file_url, (gltf) => {
+          // Position outside the RAM orbital ring (radius 2.8) but within camera frustum
+          gltf.scene.position.set(4.5, 0, 0);
+          scene.add(gltf.scene);
+        });
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'schematic_render') {
+        const panel = document.getElementById('schematic-panel');
+        panel.style.display = 'block';
+        // SVG arrives as a sanitised string from the Python compiler
+        panel.innerHTML = msg.svg || '';
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'etw_threat_event') {
+        pulseEtwNode(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'binary_inversion_start') {
+        showBinaryInversionOverlay(msg.file_name || '');
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'binary_inversion_complete') {
+        renderForensicsDashboard(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'deception_tripped') {
+        triggerDeceptionAlarm(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'rf_frame') {
+        spawnRfPeripheralNode(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'ad_graph_computing') {
+        document.getElementById('ad-graph-overlay').style.display =
+          msg.status === 'start' ? 'block' : 'none';
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'attack_path_computed') {
+        document.getElementById('ad-graph-overlay').style.display = 'none';
+        highlightAttackPath(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'kernel_anomaly_detected') {
+        appendKernelAnomaly(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // Catch tool_result payloads that carry GPS Cartesian data from forensics
+      if (msg && msg.type === 'tool_result') {
+        const c = msg.result && msg.result.cartesian;
+        if (c) plotExifTarget(c.x, c.y, c.z);
+      }
+
+      if (!paused) append(e.data);
+    };
+
+    ws.onclose = () => {
+      badge.className   = 'badge-disconnected';
+      badge.textContent = '● DISCONNECTED — retrying in 3s…';
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  connect();
+</script>
+</body>
+</html>
