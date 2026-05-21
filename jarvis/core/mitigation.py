@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
+from core.config import settings
+from core.events import make_event
+
 _PRIVATE_NETWORKS: list[ipaddress.IPv4Network] = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -17,8 +20,6 @@ _PRIVATE_NETWORKS: list[ipaddress.IPv4Network] = [
     ipaddress.ip_network("127.0.0.0/8"),
 ]
 
-# AND-gate: both conditions must hold before isolation is triggered
-_ENTROPY_THRESHOLD = 5.0
 _CRITICAL_TECHNIQUES: frozenset[str] = frozenset({
     "T1059.001",  # PowerShell / Script Execution
     "T1055",      # Process Injection
@@ -36,16 +37,12 @@ def _is_public_ip(ip_str: str) -> bool:
 
 
 def should_isolate(triage: dict) -> list[str]:
-    """Return public IPs to isolate, or [] if AND-gate conditions are not met.
-
-    Gate: entropy >= 5.0 AND at least one critical MITRE technique matched.
-    Private/loopback IPs are always excluded from the returned list.
-    """
+    """Return public IPs to isolate, or [] if AND-gate conditions are not met."""
     entropy = triage.get("entropy", 0.0)
-    if entropy < _ENTROPY_THRESHOLD:
+    if entropy < settings.entropy_threshold:
         return []
 
-    detections = triage.get("mitre_detections", [])
+    detections   = triage.get("mitre_detections", [])
     detected_ids = {d.get("technique", "") for d in detections}
     if not detected_ids & _CRITICAL_TECHNIQUES:
         return []
@@ -54,24 +51,14 @@ def should_isolate(triage: dict) -> list[str]:
 
 
 async def isolate_ip(ip: str, broadcast_fn, ttl_minutes: int = 60) -> None:
-    """Block outbound traffic to ip via Windows Defender Firewall, auto-expiring after ttl_minutes.
-
-    Uses asyncio.create_subprocess_exec (shell=False equivalent) to invoke PowerShell
-    without spawning a shell interpreter. The IP is validated by should_isolate() before
-    this function is called, so only well-formed IP addresses reach this point.
-
-    The TTL removal is scheduled via Start-Job so it outlives the PowerShell invocation.
-    Note: Start-Job jobs are tied to the PowerShell session — for production use, prefer
-    Register-ScheduledTask for guaranteed TTL execution across session boundaries.
-    """
-    # Validate IP format one final time before interpolating into PowerShell
+    """Block outbound traffic to ip via Windows Defender Firewall with TTL auto-expiry."""
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         logger.warning(f"mitigation: invalid IP '{ip}' — isolation aborted")
         return
 
-    rule_name = f"JARVIS_BLOCK_{ip}"
+    rule_name     = f"JARVIS_BLOCK_{ip}"
     sleep_seconds = ttl_minutes * 60
     ps_cmd = (
         f"New-NetFirewallRule -DisplayName '{rule_name}' "
@@ -94,13 +81,12 @@ async def isolate_ip(ip: str, broadcast_fn, ttl_minutes: int = 60) -> None:
 
         if proc.returncode == 0:
             logger.info(f"mitigation: firewall rule added — BLOCK {ip} (TTL={ttl_minutes}m)")
-            await broadcast_fn({
-                "type":        "firewall_block",
-                "isolated_ip": ip,
-                "ttl_minutes": ttl_minutes,
-                "rule_name":   rule_name,
-                "timestamp":   datetime.now(timezone.utc).isoformat(),
-            })
+            await broadcast_fn(make_event(
+                "firewall_block",
+                isolated_ip=ip,
+                ttl_minutes=ttl_minutes,
+                rule_name=rule_name,
+            ))
         else:
             err = stderr.decode("utf-8", errors="replace").strip()
             logger.warning(

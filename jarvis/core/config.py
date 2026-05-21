@@ -1,9 +1,8 @@
 """
-core/config.py — Configuración centralizada con validación de tipos via Pydantic.
+core/config.py — Single source of truth for all JARVIS configuration.
 
-Entorno air-gapped: sin API keys externas. El LLM corre en Ollama local.
-Todas las variables de entorno pasan por aquí — nunca os.getenv() directo
-en otros módulos.
+All environment variables pass through here — never os.getenv() directly in
+other modules.  Pydantic BaseSettings validates types at startup.
 """
 
 import re
@@ -11,7 +10,6 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Busca .env en el directorio jarvis/ (padre de core/)
 _ENV_FILE = str(Path(__file__).parent.parent / ".env")
 
 
@@ -25,23 +23,57 @@ class Settings(BaseSettings):
 
     # ── Persona ───────────────────────────────────────────────────────────────
     assistant_name: str = "Alicia"
-    user_name: str = "Alejandro"
-    city: str = "Panama"
+    user_name:      str = "Alejandro"
+    city:           str = "Panama"
 
     # ── LLM (Ollama local) ────────────────────────────────────────────────────
-    llm_model: str = "qwen2.5-coder"
+    llm_model:      str = "qwen2.5-coder"
     llm_max_tokens: int = 2048
 
     # ── Whisper STT ───────────────────────────────────────────────────────────
-    whisper_model: str = "small"
+    whisper_model:    str = "small"
     whisper_language: str = "es"
-    record_seconds: int = 5
-    sample_rate: int = 16000
+    record_seconds:   int = 5
+    sample_rate:      int = 16000
 
-    # ── Forensics ─────────────────────────────────────────────────────────────
-    # Absolute path to the .vmx file used for live forensic capture.
-    # Leave empty to disable the canary → vmrun trigger.
+    # ── VMware / Forensics ────────────────────────────────────────────────────
+    # Path to the .vmx file used for live forensic capture (canary trigger).
     vmx_target_path: str = ""
+    # Path to the vmrun.exe binary (used by forensic_volatility, resource_sentinel,
+    # deception_orchestrator).
+    vmrun_path: str = r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"
+    # Comma-separated list of secondary .vmx paths to suspend on resource pressure.
+    secondary_vms: str = ""
+
+    # ── Offensive RPC (Metasploit) ────────────────────────────────────────────
+    msf_host:     str = "192.168.1.100"
+    msf_port:     int = 55553
+    msf_password: str = "msf"
+
+    # ── Zeek DPI ──────────────────────────────────────────────────────────────
+    zeek_log_dir:              str = "/mnt/zeek/logs/current"
+    dns_query_len_threshold:   int = 52
+    dns_query_rate_threshold:  int = 100
+
+    # ── Environmental Intel ───────────────────────────────────────────────────
+    default_lat:         float = 9.3592    # Colón, Panama
+    default_lon:         float = -79.9014
+    env_poll_interval:   int   = 900       # seconds (15 min floor — rate-limit OPSEC)
+
+    # ── Threat Feed ───────────────────────────────────────────────────────────
+    threat_feed_sync_interval: int = 86400  # 24 h
+
+    # ── Resource Sentinel ─────────────────────────────────────────────────────
+    ram_free_floor:    float = 8.0    # % free RAM threshold
+    cpu_temp_ceil:     float = 85.0   # °C threshold
+    suspend_cooldown:  int   = 120    # seconds — hysteresis to prevent flapping
+
+    # ── Mitigation (SOAR) ────────────────────────────────────────────────────
+    entropy_threshold: float = 5.0    # AND-gate threshold for IP isolation
+
+    # ── Agentic Loop ─────────────────────────────────────────────────────────
+    agentic_max_cycles:   int = 8
+    agentic_loop_timeout: int = 120   # seconds
 
     # ── Validators ────────────────────────────────────────────────────────────
 
@@ -50,7 +82,7 @@ class Settings(BaseSettings):
     def validate_whisper_model(cls, v: str) -> str:
         allowed = {"tiny", "base", "small", "medium", "large", "large-v2", "large-v3"}
         if v not in allowed:
-            raise ValueError(f"whisper_model debe ser uno de: {allowed}")
+            raise ValueError(f"whisper_model must be one of: {allowed}")
         return v
 
     @field_validator("whisper_language")
@@ -58,7 +90,7 @@ class Settings(BaseSettings):
     def validate_language(cls, v: str) -> str:
         if not re.match(r'^[a-z]{2,3}(-[A-Z]{2})?$|^auto$', v):
             raise ValueError(
-                "Código de idioma inválido. Usa ISO 639-1 (ej: 'es', 'en') o 'auto'."
+                "Invalid language code. Use ISO 639-1 (e.g. 'es', 'en') or 'auto'."
             )
         return v
 
@@ -66,7 +98,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_record_seconds(cls, v: int) -> int:
         if not 1 <= v <= 60:
-            raise ValueError("record_seconds debe estar entre 1 y 60.")
+            raise ValueError("record_seconds must be between 1 and 60.")
         return v
 
     @field_validator("sample_rate")
@@ -74,7 +106,7 @@ class Settings(BaseSettings):
     def validate_sample_rate(cls, v: int) -> int:
         if v not in {8000, 16000, 22050, 44100, 48000}:
             raise ValueError(
-                "sample_rate inválido. Valores permitidos: 8000, 16000, 22050, 44100, 48000."
+                "Invalid sample_rate. Allowed: 8000, 16000, 22050, 44100, 48000."
             )
         return v
 
@@ -82,9 +114,13 @@ class Settings(BaseSettings):
     @classmethod
     def validate_max_tokens(cls, v: int) -> int:
         if not 256 <= v <= 8192:
-            raise ValueError("llm_max_tokens debe estar entre 256 y 8192.")
+            raise ValueError("llm_max_tokens must be between 256 and 8192.")
         return v
 
+    def get_secondary_vms(self) -> list[str]:
+        """Parse the comma-separated secondary_vms string into a list."""
+        return [v.strip() for v in self.secondary_vms.split(",") if v.strip()]
 
-# Singleton — importar desde aquí en todo el proyecto
+
+# Singleton — import from here throughout the project
 settings = Settings()

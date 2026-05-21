@@ -560,6 +560,41 @@
     .type-rf_device_connected    { background: #001a0a; border: 1px solid #00cc66; color: #44ff99; }
     .type-rf_device_disconnected { background: #0d0d0d; border: 1px solid #555555; color: #999999; }
 
+    /* ── v24.0 startup diagnostic badge ── */
+    .type-startup_diagnostic { background: #001a0a; border: 1px solid #00ff88; color: #44ff99; }
+
+    /* ── v24.0 startup diagnostic panel ── */
+    #startup-diag-panel {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(7, 9, 15, 0.96);
+      border: 1px solid #1a3a1a;
+      border-radius: 8px;
+      padding: 16px 22px;
+      min-width: 320px;
+      max-width: 480px;
+      max-height: 420px;
+      overflow-y: auto;
+      z-index: 300;
+      font-size: 11px;
+    }
+    #startup-diag-panel::-webkit-scrollbar { width: 4px; }
+    #startup-diag-panel::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 2px; }
+    .sdp-title { color: #00ff88; font-size: 11px; font-weight: bold; letter-spacing: 3px; margin-bottom: 10px; border-bottom: 1px solid #1a3a1a; padding-bottom: 6px; }
+    .sdp-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+    .sdp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .sdp-ok      { background: #00ff88; }
+    .sdp-missing { background: #ffaa00; }
+    .sdp-broken  { background: #ff3333; box-shadow: 0 0 4px #ff3333; }
+    .sdp-name { color: #88aa88; min-width: 170px; }
+    .sdp-detail { color: #446644; font-size: 10px; word-break: break-all; max-width: 200px; }
+    .sdp-summary { color: #2a5a2a; font-size: 10px; margin-top: 10px; border-top: 1px solid #1a3a1a; padding-top: 6px; letter-spacing: 1px; }
+    #sdp-dismiss { color: #2a4a2a; font-size: 10px; text-align: center; margin-top: 8px; cursor: pointer; letter-spacing: 2px; }
+    #sdp-dismiss:hover { color: #44ff88; }
+
     /* ── v22.0 event type badges ── */
     .type-emulation_start      { background: #200005; border: 1px solid #cc0044; color: #ff4488; }
     .type-emulation_complete   { background: #002000; border: 1px solid #00cc44; color: #44ff88; }
@@ -693,6 +728,14 @@
   <div id="agentic-hud-text">[ AGENTIC SOC ACTIVE ]</div>
 </div>
 
+<!-- v24.0 startup diagnostic panel -->
+<div id="startup-diag-panel">
+  <div class="sdp-title">◈ STARTUP DIAGNOSTIC</div>
+  <div id="sdp-body"></div>
+  <div class="sdp-summary" id="sdp-summary"></div>
+  <div id="sdp-dismiss">[ DISMISS ]</div>
+</div>
+
 <script type="importmap">
 {
   "imports": {
@@ -788,6 +831,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       agentic_resolved:            'type-agentic_resolved',
       agentic_summary:             'type-agentic_summary',
       agentic_loop_timeout:        'type-agentic_loop_timeout',
+      startup_diagnostic:          'type-startup_diagnostic',
     };
     return map[t] || 'type-default';
   }
@@ -1730,6 +1774,44 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     _showAgenticHud('LOOP TIMEOUT — MANUAL REVIEW REQUIRED', '#ffaa00', '#ffcc44');
   }
 
+  // === v24.0 Startup Diagnostic Panel ===
+
+  let _diagDismissTimer = null;
+
+  function handleStartupDiagnostic(msg) {
+    const panel   = document.getElementById('startup-diag-panel');
+    const body    = document.getElementById('sdp-body');
+    const summary = document.getElementById('sdp-summary');
+    const subsys  = msg.subsystems || {};
+    const s       = msg.summary || {};
+
+    body.innerHTML = Object.entries(subsys).map(([name, info]) => {
+      const dotCls = info.status === 'OK'          ? 'sdp-ok'      :
+                     info.status === 'MISSING_DEP' ? 'sdp-missing' : 'sdp-broken';
+      const detail = info.status !== 'OK'
+        ? `<span class="sdp-detail">${escapeHtml((info.detail || '').slice(0, 60))}</span>`
+        : '';
+      return `<div class="sdp-row">
+        <div class="sdp-dot ${dotCls}"></div>
+        <span class="sdp-name">${escapeHtml(name)}</span>
+        ${detail}
+      </div>`;
+    }).join('');
+
+    summary.textContent =
+      `OK: ${s.ok || 0}  MISSING: ${s.missing || 0}  BROKEN: ${s.broken || 0}`;
+
+    panel.style.display = 'block';
+
+    if (_diagDismissTimer) clearTimeout(_diagDismissTimer);
+    _diagDismissTimer = setTimeout(() => { panel.style.display = 'none'; }, 12000);
+
+    document.getElementById('sdp-dismiss').onclick = () => {
+      clearTimeout(_diagDismissTimer);
+      panel.style.display = 'none';
+    };
+  }
+
   function handleAgenticSummary(msg) {
     _agenticHud.style.display = 'none';
     const panel = document.getElementById('forensics-panel');
@@ -1960,6 +2042,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'agentic_summary') {
         handleAgenticSummary(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'startup_diagnostic') {
+        handleStartupDiagnostic(msg);
         if (!paused) append(e.data);
         return;
       }

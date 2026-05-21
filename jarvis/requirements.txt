@@ -79,7 +79,8 @@ pefile>=2023.2.7              # PE parsing — IAT, sections, overlay detection
 capstone>=5.0.1               # Capstone disassembly — XOR loops, GPA chains, JMP-reg
 
 # ── RF/RFID Bridge ─────────────────────────────────────────────
-pyserial-asyncio>=0.6         # async serial I/O (pyserial is a transitive dep)
+pyserial>=3.5                 # serial port enumeration (rf_bridge COM port detection)
+pyserial-asyncio>=0.6         # async serial I/O
 
 # ── AD Attack Graph Engine ─────────────────────────────────────
 ijson>=3.2.3                  # streaming JSON parser — O(1) memory for >500MB BloodHound exports

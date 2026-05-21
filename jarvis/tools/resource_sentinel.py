@@ -6,11 +6,8 @@ import time
 import psutil
 from loguru import logger
 
-VMRUN_PATH       = r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"
-SECONDARY_VMS: list[str] = []   # operator fills: [r"C:\path\to\secondary.vmx", ...]
-RAM_FREE_FLOOR   = 8.0    # % free RAM threshold
-CPU_TEMP_CEIL    = 85.0   # °C threshold
-SUSPEND_COOLDOWN = 120    # seconds — hysteresis to prevent flapping
+from core.config import settings
+from core.events import make_event
 
 _last_suspend: float = 0.0
 
@@ -33,7 +30,6 @@ def _read_cpu_temp() -> float | None:
                 return float(sensor.Value)
     except Exception:
         pass
-    # Tier 3 — unavailable
     return None
 
 
@@ -46,27 +42,27 @@ async def start_resource_sentinel(broadcast_fn) -> None:
         ram_free_pct = 100.0 - vm.percent
 
         if cpu_temp is None and not temp_warned:
-            await broadcast_fn({
-                "type":  "error",
-                "error": "Thermal monitoring unavailable (no LibreHardwareMonitor). RAM-only mode.",
-            })
+            await broadcast_fn(make_event(
+                "error",
+                error="Thermal monitoring unavailable (no LibreHardwareMonitor). RAM-only mode.",
+            ))
             logger.warning("resource_sentinel: thermal monitoring unavailable — RAM-only mode")
             temp_warned = True
 
-        critical = ram_free_pct < RAM_FREE_FLOOR or (
-            cpu_temp is not None and cpu_temp > CPU_TEMP_CEIL
+        critical = ram_free_pct < settings.ram_free_floor or (
+            cpu_temp is not None and cpu_temp > settings.cpu_temp_ceil
         )
 
-        if critical and (time.monotonic() - _last_suspend) > SUSPEND_COOLDOWN:
+        if critical and (time.monotonic() - _last_suspend) > settings.suspend_cooldown:
             _last_suspend = time.monotonic()
-            await broadcast_fn({
-                "type":         "resource_critical_alert",
-                "cpu_temp":     cpu_temp,
-                "ram_free_pct": round(ram_free_pct, 1),
-            })
-            for vmx in SECONDARY_VMS:
+            await broadcast_fn(make_event(
+                "resource_critical_alert",
+                cpu_temp=cpu_temp,
+                ram_free_pct=round(ram_free_pct, 1),
+            ))
+            for vmx in settings.get_secondary_vms():
                 proc = await asyncio.create_subprocess_exec(
-                    VMRUN_PATH, "-T", "ws", "suspend", vmx,
+                    settings.vmrun_path, "-T", "ws", "suspend", vmx,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

@@ -1,23 +1,19 @@
 """
-tools/deception_orchestrator.py — Active Deception Orchestrator (v20.0).
+tools/deception_orchestrator.py — Active Deception Orchestrator (v24.0).
 
 Honey-tokens are planted inside VMware guest environments only — never on the
 Windows host.  VM interactions use asyncio.create_subprocess_exec with
 shell=False and discrete argument lists (no user input interpolated).
-
-ETW tripwire integration: when handle_tripwire() is called by etw_monitor,
-it broadcasts the deception_tripped event and wires into the existing
-core/mitigation.py SOAR pipeline for automatic IP isolation.
 """
 
 import asyncio
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 
-VMRUN_PATH = r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"
+from core.config import settings
+from core.events import make_event
 
 HONEY_TOKENS: dict[str, str] = {
     "fake_admin_cred": "Administrator:Honey$2024!",
@@ -25,54 +21,35 @@ HONEY_TOKENS: dict[str, str] = {
     "fake_db_conn":    "Server=10.0.0.1;Database=HR;User=sa;Password=fake",
 }
 
-# Registry canary key — read access by any process triggers the tripwire
 _CANARY_REG_KEY   = r"HKLM\SOFTWARE\JARVIS\HoneyCredentials"
 _CANARY_REG_VALUE = "AdminPassword"
-
-# Guest paths for planted lures (inside the VM)
 _GUEST_CRED_FILE  = r"C:\ProgramData\Microsoft\Vault\credentials.txt"
 _GUEST_HONEY_PROC = "svchost_honey.exe"
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 async def _vmrun(vmx_path: str, *args: str) -> tuple[int, str]:
-    """
-    Run a vmrun.exe command and return (returncode, stderr_text).
-    shell=False always — args are a discrete list, never interpolated.
-    """
+    """Run a vmrun command — shell=False always."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            VMRUN_PATH, "-T", "ws", *args, vmx_path,
+            settings.vmrun_path, "-T", "ws", *args, vmx_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         return proc.returncode or 0, stderr.decode("utf-8", errors="replace").strip()
     except FileNotFoundError:
-        return -1, f"vmrun.exe not found at {VMRUN_PATH!r}"
+        return -1, f"vmrun.exe not found at {settings.vmrun_path!r}"
     except Exception as exc:
         return -1, str(exc)
 
 
 async def plant_deception_lures(vmx_path: str, broadcast_fn) -> None:
-    """
-    Plant honey-tokens inside the VMware guest:
-      1. Copy a fake credential file into the guest via copyFileFromHostToGuest.
-      2. Write a registry canary key via runProgramInGuest + reg.exe.
-      3. Drop fake API key file in a well-known exfil staging path.
-
-    All file content is created on the host as temp files, then copied
-    to avoid any shell-metacharacter issues with vmrun's argument passing.
-    """
-    await broadcast_fn({
-        "type":      "deception_planting",
-        "vmx":       vmx_path,
-        "tokens":    list(HONEY_TOKENS.keys()),
-        "timestamp": _now_iso(),
-    })
+    """Plant honey-tokens inside the VMware guest."""
+    await broadcast_fn(make_event(
+        "deception_planting",
+        vmx=vmx_path,
+        tokens=list(HONEY_TOKENS.keys()),
+    ))
 
     planted: list[str] = []
     errors:  list[str] = []
@@ -87,7 +64,7 @@ async def plant_deception_lures(vmx_path: str, broadcast_fn) -> None:
             host_cred_path = tmp.name
 
         proc = await asyncio.create_subprocess_exec(
-            VMRUN_PATH, "-T", "ws",
+            settings.vmrun_path, "-T", "ws",
             "copyFileFromHostToGuest", vmx_path,
             host_cred_path, _GUEST_CRED_FILE,
             stdout=asyncio.subprocess.PIPE,
@@ -104,10 +81,9 @@ async def plant_deception_lures(vmx_path: str, broadcast_fn) -> None:
         errors.append(f"cred_file: {exc}")
 
     # ── Lure 2: Registry canary key via reg.exe in guest ─────────────────────
-    # Args are discrete list elements — no shell interpolation. shell=False.
     try:
         proc = await asyncio.create_subprocess_exec(
-            VMRUN_PATH, "-T", "ws",
+            settings.vmrun_path, "-T", "ws",
             "runProgramInGuest", vmx_path,
             "reg.exe", "add", _CANARY_REG_KEY,
             "/v", _CANARY_REG_VALUE,
@@ -135,7 +111,7 @@ async def plant_deception_lures(vmx_path: str, broadcast_fn) -> None:
             host_api_path = tmp.name
 
         proc = await asyncio.create_subprocess_exec(
-            VMRUN_PATH, "-T", "ws",
+            settings.vmrun_path, "-T", "ws",
             "copyFileFromHostToGuest", vmx_path,
             host_api_path, r"C:\Users\Administrator\.aws\credentials",
             stdout=asyncio.subprocess.PIPE,
@@ -151,13 +127,12 @@ async def plant_deception_lures(vmx_path: str, broadcast_fn) -> None:
     except Exception as exc:
         errors.append(f"api_key: {exc}")
 
-    await broadcast_fn({
-        "type":      "deception_planted",
-        "vmx":       vmx_path,
-        "planted":   planted,
-        "errors":    errors,
-        "timestamp": _now_iso(),
-    })
+    await broadcast_fn(make_event(
+        "deception_planted",
+        vmx=vmx_path,
+        planted=planted,
+        errors=errors,
+    ))
 
     if planted:
         logger.info(f"DECEPTION: planted {len(planted)} lure(s) in {Path(vmx_path).name}")
@@ -170,27 +145,18 @@ async def handle_tripwire(
     resource_id: str,
     broadcast_fn,
 ) -> None:
-    """
-    Called by the ETW monitor when a deception resource is accessed.
-
-    1. Broadcasts deception_tripped event to the HUD.
-    2. Resolves network connections from source_pid via psutil.
-    3. Feeds public remote IPs through the mitigation SOAR pipeline
-       (should_isolate AND-gate → isolate_ip firewall rule).
-    """
-    await broadcast_fn({
-        "type":         "deception_tripped",
-        "source_pid":   source_pid,
-        "target_token": resource_id,
-        "severity":     "CRITICAL",
-        "timestamp":    _now_iso(),
-    })
+    """Called by ETW monitor when a deception resource is accessed."""
+    await broadcast_fn(make_event(
+        "deception_tripped",
+        source_pid=source_pid,
+        target_token=resource_id,
+        severity="CRITICAL",
+    ))
 
     logger.warning(
         f"DECEPTION: tripwire triggered — PID={source_pid} accessed '{resource_id}'"
     )
 
-    # ── SOAR: attempt IP isolation ────────────────────────────────────────────
     remote_ips: list[str] = []
     try:
         import psutil
@@ -207,9 +173,6 @@ async def handle_tripwire(
     try:
         from core.mitigation import should_isolate, isolate_ip
 
-        # Construct a triage dict that passes the AND-gate:
-        # entropy >= 5.0  AND  a critical MITRE technique present.
-        # Deception tripwire is a high-confidence signal → use T1055 (Process Injection).
         triage = {
             "entropy":           6.5,
             "extracted_ips":     list(set(remote_ips)),

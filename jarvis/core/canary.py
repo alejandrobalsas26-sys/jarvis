@@ -8,9 +8,10 @@ Port selection avoids kernel-locked Windows services:
 
 import asyncio
 import socket
-from datetime import datetime, timezone
 
 from loguru import logger
+
+from core.events import make_event
 
 _CANARY_PORTS: dict[int, str] = {
     21:   "FTP",
@@ -59,14 +60,13 @@ async def canary_handler(
         f"CANARY HIT: port={port} ({service}) src={attacker_ip} "
         f"banner={banner[:48]!r}"
     )
-    asyncio.create_task(broadcast_fn({
-        "type":           "canary_intrusion",
-        "port":           port,
-        "service":        service,
-        "attacker_ip":    attacker_ip,
-        "banner_preview": banner[:64].decode("utf-8", errors="replace"),
-        "timestamp":      datetime.now(timezone.utc).isoformat(),
-    }))
+    asyncio.create_task(broadcast_fn(make_event(
+        "canary_intrusion",
+        port=port,
+        service=service,
+        attacker_ip=attacker_ip,
+        banner_preview=banner[:64].decode("utf-8", errors="replace"),
+    )))
 
     # High-confidence detection: attacker sent a meaningful banner (>16 bytes).
     # Trigger live forensic capture + agentic SOC loop to freeze malicious state

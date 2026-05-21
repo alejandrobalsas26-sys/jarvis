@@ -6,13 +6,13 @@ import ntplib
 import aiohttp
 from datetime import datetime, timezone
 
-DEFAULT_LAT = 9.3592    # Colón, Panama — operator-overridable
-DEFAULT_LON = -79.9014
-POLL_INTERVAL = 900     # 15 min — hard floor (rate-limit OPSEC)
+from core.config import settings
+from core.events import make_event
+
 NTP_SERVERS = ["pool.ntp.org", "time.google.com"]
 
 _cache: dict = {"data": None, "fetched_at": 0.0}
-_clock_offset: float = 0.0   # NTP drift correction for forensic timestamps
+_clock_offset: float = 0.0
 
 
 async def _sync_ntp() -> None:
@@ -35,9 +35,14 @@ def forensic_now() -> str:
     return datetime.fromtimestamp(time.time() + _clock_offset, timezone.utc).isoformat()
 
 
-async def start_environmental_polling(broadcast_fn,
-                                      lat: float = DEFAULT_LAT,
-                                      lon: float = DEFAULT_LON) -> None:
+async def start_environmental_polling(
+    broadcast_fn,
+    lat: float | None = None,
+    lon: float | None = None,
+) -> None:
+    lat = lat if lat is not None else settings.default_lat
+    lon = lon if lon is not None else settings.default_lon
+
     await _sync_ntp()
     ntp_counter = 0
     async with aiohttp.ClientSession() as session:
@@ -51,20 +56,20 @@ async def start_environmental_polling(broadcast_fn,
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
                     j = await r.json()
                 cur = j.get("current", {})
-                _cache["data"] = cur
+                _cache["data"]       = cur
                 _cache["fetched_at"] = time.time()
-                await broadcast_fn({
-                    "type":             "environmental_telemetry",
-                    "temperature":      cur.get("temperature_2m"),
-                    "humidity":         cur.get("relative_humidity_2m"),
-                    "rain_probability": cur.get("precipitation_probability", 0),
-                    "timestamp":        forensic_now(),
-                })
+                await broadcast_fn(make_event(
+                    "environmental_telemetry",
+                    temperature=cur.get("temperature_2m"),
+                    humidity=cur.get("relative_humidity_2m"),
+                    rain_probability=cur.get("precipitation_probability", 0),
+                    timestamp=forensic_now(),
+                ))
             except Exception as e:
-                await broadcast_fn({"type": "error", "error": f"Weather fetch failed: {e}"})
+                await broadcast_fn(make_event("error", error=f"Weather fetch failed: {e}"))
 
             ntp_counter += 1
-            if ntp_counter * POLL_INTERVAL >= 21600:   # re-sync NTP every 6h
+            if ntp_counter * settings.env_poll_interval >= 21600:
                 await _sync_ntp()
                 ntp_counter = 0
-            await asyncio.sleep(POLL_INTERVAL)
+            await asyncio.sleep(settings.env_poll_interval)

@@ -10,9 +10,11 @@ import aiohttp
 import feedparser
 import yara
 
+from core.config import settings
+from core.events import make_event
+
 _SIG_DIR     = Path(__file__).parent.parent / "core" / "signatures"
 _DYNAMIC_YAR = _SIG_DIR / "threatfeed_dynamic.yar"
-SYNC_INTERVAL = 86400   # 24h
 
 
 def _valid_ip(s: str) -> bool:
@@ -24,7 +26,6 @@ def _valid_ip(s: str) -> bool:
 
 
 def _build_yara_rule(ips: list[str]) -> str:
-    """Generate a syntactically valid YARA rule from validated IPs."""
     conditions = " or ".join(f"$ip{i}" for i in range(len(ips)))
     strings    = "\n    ".join(f'$ip{i} = "{ip}"' for i, ip in enumerate(ips))
     return (
@@ -52,11 +53,11 @@ async def start_threat_feed_sync(broadcast_fn) -> None:
                     if _valid_ip(e.get("ip_address", ""))
                 ][:500]
 
-                # 2. Build + test-compile candidate rule in isolation
+                # 2. Test-compile candidate rule in isolation
                 rule_src = _build_yara_rule(malicious_ips)
                 tmp = Path(tempfile.gettempdir()) / "candidate_threatfeed.yar"
                 tmp.write_text(rule_src, encoding="utf-8")
-                yara.compile(filepath=str(tmp))   # raises if malformed
+                yara.compile(filepath=str(tmp))
 
                 # 3. Atomic swap + cache clear
                 shutil.move(str(tmp), str(_DYNAMIC_YAR))
@@ -66,28 +67,30 @@ async def start_threat_feed_sync(broadcast_fn) -> None:
                 except Exception:
                     pass
 
-                await broadcast_fn({
-                    "type":      "threat_feed_update",
-                    "source":    "Abuse.ch Feodo",
-                    "ioc_count": len(malicious_ips),
-                    "severity":  "INFO",
-                })
+                await broadcast_fn(make_event(
+                    "threat_feed_update",
+                    source="Abuse.ch Feodo",
+                    ioc_count=len(malicious_ips),
+                    severity="INFO",
+                ))
 
                 # 4. CISA RSS headlines
                 loop = asyncio.get_running_loop()
                 feed = await loop.run_in_executor(
                     None,
-                    lambda: feedparser.parse("https://www.cisa.gov/cybersecurity-advisories/all.xml"),
+                    lambda: feedparser.parse(
+                        "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+                    ),
                 )
                 for entry in feed.entries[:5]:
-                    await broadcast_fn({
-                        "type":        "threat_feed_update",
-                        "source":      "CISA",
-                        "alert_title": entry.get("title", "")[:120],
-                        "severity":    "ALERT",
-                    })
+                    await broadcast_fn(make_event(
+                        "threat_feed_update",
+                        source="CISA",
+                        alert_title=entry.get("title", "")[:120],
+                        severity="ALERT",
+                    ))
 
             except Exception as e:
-                await broadcast_fn({"type": "error", "error": f"Threat feed sync failed: {e}"})
+                await broadcast_fn(make_event("error", error=f"Threat feed sync failed: {e}"))
 
-            await asyncio.sleep(SYNC_INTERVAL)
+            await asyncio.sleep(settings.threat_feed_sync_interval)

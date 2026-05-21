@@ -1,5 +1,5 @@
 """
-tools/rf_bridge.py — RF/RFID Hardware Hotplug State Machine (v23.0).
+tools/rf_bridge.py — RF/RFID Hardware Hotplug State Machine (v24.0).
 
 Silent by default. Produces ZERO output until a physical device connects.
 State transitions are the only thing that produces log output.
@@ -9,12 +9,13 @@ shell=False on all subprocess calls — no exceptions.
 import asyncio
 import shutil
 from contextlib import suppress
-from datetime import datetime, timezone
 from enum import Enum
 
 import psutil
 import serial.tools.list_ports
 from loguru import logger
+
+from core.events import make_event
 
 
 class DeviceState(Enum):
@@ -34,10 +35,6 @@ _warned_missing:   set[str] = set()
 
 _WIFI_TOKENS = ("wi-fi", "wireless", "wlan", "alfa", "802.11")
 _PM3_VID_PID = (0x9AC4, 0x4B8F)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 async def _resolve_tshark_interface(hint_name: str) -> str | None:
@@ -76,13 +73,12 @@ async def _capture_tshark(interface: str, broadcast_fn) -> None:
             text = line.decode(errors="replace").strip()
             if not text or text.startswith('{"index"'):
                 continue
-            await broadcast_fn({
-                "type":      "rf_frame",
-                "hw_source": "alfa",
-                "interface": interface,
-                "raw":       text[:200],
-                "timestamp": _now_iso(),
-            })
+            await broadcast_fn(make_event(
+                "rf_frame",
+                hw_source="alfa",
+                interface=interface,
+                raw=text[:200],
+            ))
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
             proc.terminate()
@@ -107,13 +103,12 @@ async def _capture_proxmark(pm3_exe: str, port: str, broadcast_fn) -> None:
             if not text:
                 continue
             if "UID" in text or "ATQA" in text or "SAK" in text:
-                await broadcast_fn({
-                    "type":      "rf_frame",
-                    "hw_source": "proxmark3",
-                    "port":      port,
-                    "raw":       text[:200],
-                    "timestamp": _now_iso(),
-                })
+                await broadcast_fn(make_event(
+                    "rf_frame",
+                    hw_source="proxmark3",
+                    port=port,
+                    raw=text[:200],
+                ))
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
             proc.terminate()
@@ -129,7 +124,7 @@ async def _teardown_device(device: str, broadcast_fn) -> None:
         return
     _device_state[device] = DeviceState.ABSENT
     logger.warning(f"RF_BRIDGE: {device} disconnected")
-    await broadcast_fn({"type": "rf_device_disconnected", "device": device})
+    await broadcast_fn(make_event("rf_device_disconnected", device=device))
 
     task = _capture_tasks.pop(device, None)
     if task and not task.done():
@@ -144,7 +139,7 @@ async def _poll_alfa(broadcast_fn) -> None:
 
     while True:
         try:
-            current = set(psutil.net_if_stats().keys())
+            current    = set(psutil.net_if_stats().keys())
             new_ifaces = current - _known_interfaces
 
             alfa_iface = next(
@@ -157,16 +152,20 @@ async def _poll_alfa(broadcast_fn) -> None:
                 tshark_iface = await _resolve_tshark_interface(alfa_iface)
                 if tshark_iface is None:
                     if "tshark" not in _warned_missing:
-                        logger.warning("RF_BRIDGE: tshark not found — install Wireshark/Npcap to capture")
+                        logger.warning(
+                            "RF_BRIDGE: tshark not found — install Wireshark/Npcap to capture"
+                        )
                         _warned_missing.add("tshark")
                 else:
                     _device_state["alfa"] = DeviceState.CONNECTED
-                    logger.info(f"RF_BRIDGE: ALFA detected → {alfa_iface} (tshark: {tshark_iface})")
-                    await broadcast_fn({
-                        "type":      "rf_device_connected",
-                        "device":    "alfa",
-                        "interface": alfa_iface,
-                    })
+                    logger.info(
+                        f"RF_BRIDGE: ALFA detected → {alfa_iface} (tshark: {tshark_iface})"
+                    )
+                    await broadcast_fn(make_event(
+                        "rf_device_connected",
+                        device="alfa",
+                        interface=alfa_iface,
+                    ))
                     _capture_tasks["alfa"] = asyncio.create_task(
                         _capture_tshark(tshark_iface, broadcast_fn),
                         name="rf-alfa-capture",
@@ -194,10 +193,10 @@ async def _poll_proxmark(broadcast_fn) -> None:
 
     while True:
         try:
-            ports = await loop.run_in_executor(
+            ports   = await loop.run_in_executor(
                 None, lambda: list(serial.tools.list_ports.comports())
             )
-            current = {p.device for p in ports}
+            current  = {p.device for p in ports}
             new_ports = current - _known_com_ports
 
             pm3_port = None
@@ -216,16 +215,18 @@ async def _poll_proxmark(broadcast_fn) -> None:
                 pm3_exe = shutil.which("pm3") or shutil.which("proxmark3")
                 if pm3_exe is None:
                     if "pm3" not in _warned_missing:
-                        logger.warning("RF_BRIDGE: pm3.exe not found — install Proxmark3 client to enable")
+                        logger.warning(
+                            "RF_BRIDGE: pm3.exe not found — install Proxmark3 client to enable"
+                        )
                         _warned_missing.add("pm3")
                 else:
                     _device_state["proxmark3"] = DeviceState.CONNECTED
                     logger.info(f"RF_BRIDGE: Proxmark3 detected → {pm3_port}")
-                    await broadcast_fn({
-                        "type":   "rf_device_connected",
-                        "device": "proxmark3",
-                        "port":   pm3_port,
-                    })
+                    await broadcast_fn(make_event(
+                        "rf_device_connected",
+                        device="proxmark3",
+                        port=pm3_port,
+                    ))
                     _capture_tasks["proxmark3"] = asyncio.create_task(
                         _capture_proxmark(pm3_exe, pm3_port, broadcast_fn),
                         name="rf-pm3-capture",

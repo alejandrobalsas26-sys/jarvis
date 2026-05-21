@@ -161,6 +161,8 @@ async def _main_async() -> None:
     from core.tts import TTS
     from core.config import settings
     from core.audio import HighPrioritySTTListener
+    from core.events import make_event
+    from core.healthcheck import run_startup_diagnostic
 
     # Async bridge queue: STT threads push (text, confidence) here via
     # loop.call_soon_threadsafe; the executor's _challenge() awaits from it.
@@ -177,6 +179,14 @@ async def _main_async() -> None:
     # In voice mode, reuse the already-loaded HighPrioritySTTListener
     # to avoid loading Whisper a second time.
     stt = audio_listener if args.voice else None
+
+    # ── Startup diagnostic ────────────────────────────────────────────────────
+    diag = await run_startup_diagnostic()
+    s    = diag["summary"]
+    logger.info(f"STARTUP DIAGNOSTIC — OK:{s['ok']} MISSING:{s['missing']} BROKEN:{s['broken']}")
+    for name, info in diag["subsystems"].items():
+        if info["status"] != "OK":
+            logger.warning(f"  [{info['status']}] {name}: {info['detail'][:100]}")
 
     # ── AURA WebSocket server ─────────────────────────────────────────────────
     # Runs as an asyncio task alongside the LLM/STT pipeline in the same event
@@ -259,6 +269,12 @@ async def _main_async() -> None:
                 logger.info("RESOURCE_SENTINEL: hardware watchdog initializing…")
             except ImportError:
                 logger.warning("RESOURCE_SENTINEL: tools.resource_sentinel unavailable — watchdog disabled")
+
+            # Broadcast startup diagnostic so AURA HUD can show subsystem health
+            asyncio.create_task(
+                _aura_broadcast(make_event("startup_diagnostic", **diag)),
+                name="startup-diag-broadcast",
+            )
         except ImportError:
             logger.warning("AURA: fastapi/uvicorn not installed — UI disabled. pip install fastapi uvicorn[standard]")
 

@@ -1,14 +1,9 @@
 """
-tools/ad_graph_analyzer.py — Active Directory Attack Path Graph Engine (v19.0).
+tools/ad_graph_analyzer.py — Active Directory Attack Path Graph Engine (v24.0).
 
 BloodHound JSON → igraph directed graph → Dijkstra shortest path.
-
-ijson streams the JSON file in two passes for O(1) memory footprint — safe for
-files exceeding 500 MB.  All graph construction and pathfinding runs inside
-_graph_pool (ProcessPoolExecutor, max_workers=1).  Only the computed path (a
-small list) crosses the process boundary; the full igraph object never does.
-
-Do NOT share _graph_pool with _mesh_pool or _vol_pool.
+ijson streams JSON in two passes for O(1) memory footprint.
+All graph work runs in _graph_pool (ProcessPoolExecutor, max_workers=1).
 """
 
 import asyncio
@@ -16,27 +11,19 @@ from concurrent.futures import ProcessPoolExecutor
 
 from loguru import logger
 
+from core.events import make_event
+
 _graph_pool = ProcessPoolExecutor(max_workers=1)
 
 
 def _compute_attack_paths(json_path: str) -> dict:
-    """
-    Runs in worker process.
-
-    1. Stream-parse BloodHound JSON with ijson (two-pass, O(1) memory).
-    2. Construct igraph.Graph from the edge list.
-    3. Identify source nodes (low-privilege users) and target nodes (Domain Admins).
-    4. Dijkstra shortest path from source → target via igraph.
-    5. Return {"path": [node_names], "weights": [edge_weights]}.
-    The igraph object is never returned — only the path list.
-    """
+    """Runs in worker process — two-pass ijson parse → igraph Dijkstra."""
     try:
         import ijson
         import igraph
     except ImportError as exc:
         return {"path": [], "weights": [], "error": f"Missing dependency: {exc}"}
 
-    # ── Pass 1: collect nodes ─────────────────────────────────────────────────
     node_id_to_name: dict[str, str] = {}
     node_id_to_type: dict[str, str] = {}
 
@@ -47,17 +34,15 @@ def _compute_attack_paths(json_path: str) -> dict:
                 if not nid:
                     continue
                 props = node.get("properties") or {}
-                name = props.get("name") or nid
+                name  = props.get("name") or nid
                 labels = node.get("labels") or ["Unknown"]
-                ntype = labels[0] if labels else "Unknown"
+                ntype  = labels[0] if labels else "Unknown"
                 node_id_to_name[nid] = name
                 node_id_to_type[nid] = ntype
     except Exception as exc:
         return {"path": [], "weights": [], "error": f"JSON nodes parse error: {exc}"}
 
-    # ── Pass 2: collect relationships ─────────────────────────────────────────
     edge_list: list[tuple[str, str, str]] = []
-
     try:
         with open(json_path, "rb") as f:
             for rel in ijson.items(f, "relationships.item", use_float=True):
@@ -71,9 +56,8 @@ def _compute_attack_paths(json_path: str) -> dict:
     if not edge_list:
         return {"path": [], "weights": [], "error": "No edges found in BloodHound JSON"}
 
-    # ── Build unified integer index ───────────────────────────────────────────
-    all_ids = list(node_id_to_name.keys())
-    id_to_idx: dict[str, int] = {nid: i for i, nid in enumerate(all_ids)}
+    all_ids   = list(node_id_to_name.keys())
+    id_to_idx = {nid: i for i, nid in enumerate(all_ids)}
 
     extra = len(all_ids)
     for src, dst, _ in edge_list:
@@ -83,19 +67,14 @@ def _compute_attack_paths(json_path: str) -> dict:
                 extra += 1
 
     n = extra
-    edges_int = [
-        (id_to_idx[s], id_to_idx[d])
-        for s, d, _ in edge_list
-    ]
+    edges_int = [(id_to_idx[s], id_to_idx[d]) for s, d, _ in edge_list]
 
-    # ── Build igraph ──────────────────────────────────────────────────────────
     g = igraph.Graph(n=n, edges=edges_int, directed=True)
     g.vs["name"] = [
         node_id_to_name.get(nid, nid)
         for nid, _ in sorted(id_to_idx.items(), key=lambda kv: kv[1])
     ]
 
-    # ── Identify sources (users) and targets (Domain Admins) ─────────────────
     sources = [
         id_to_idx[nid]
         for nid, t in node_id_to_type.items()
@@ -112,7 +91,6 @@ def _compute_attack_paths(json_path: str) -> dict:
     if not targets:
         targets = [n - 1] if n > 1 else [0]
 
-    # ── Dijkstra shortest path ────────────────────────────────────────────────
     best_path: list[str] = []
     best_weights: list[float] = []
 
@@ -123,8 +101,8 @@ def _compute_attack_paths(json_path: str) -> dict:
             try:
                 paths = g.get_shortest_paths(src, to=tgt, output="vpath")
                 if paths and paths[0] and len(paths[0]) > len(best_path):
-                    vpath = paths[0]
-                    best_path = [g.vs[v]["name"] for v in vpath]
+                    vpath        = paths[0]
+                    best_path    = [g.vs[v]["name"] for v in vpath]
                     best_weights = [1.0] * (len(vpath) - 1)
             except Exception:
                 continue
@@ -135,17 +113,17 @@ def _compute_attack_paths(json_path: str) -> dict:
 async def analyze_ad_graph(json_path: str, broadcast_fn) -> None:
     """Load a BloodHound JSON export and compute attack paths asynchronously."""
     loop = asyncio.get_running_loop()
-    await broadcast_fn({"type": "ad_graph_computing", "status": "start"})
+    await broadcast_fn(make_event("ad_graph_computing", status="start"))
     try:
         result = await loop.run_in_executor(_graph_pool, _compute_attack_paths, json_path)
         if "error" in result and not result["path"]:
-            await broadcast_fn({"type": "error", "error": f"AD graph failed: {result['error']}"})
+            await broadcast_fn(make_event("error", error=f"AD graph failed: {result['error']}"))
             return
-        await broadcast_fn({
-            "type":    "attack_path_computed",
-            "path":    result["path"],
-            "weights": result["weights"],
-        })
+        await broadcast_fn(make_event(
+            "attack_path_computed",
+            path=result["path"],
+            weights=result["weights"],
+        ))
     except Exception as exc:
         logger.error(f"AD graph analysis failed: {exc}")
-        await broadcast_fn({"type": "error", "error": f"AD graph failed: {exc}"})
+        await broadcast_fn(make_event("error", error=f"AD graph failed: {exc}"))
