@@ -1062,6 +1062,54 @@ class LLM:
                 })
             # Continúa el loop: el LLM responde al resultado de las tools
 
+    async def decide_next_action(self, context: list[dict]) -> dict:
+        """
+        Agentic SOC reasoning — given accumulated incident context, return the
+        next tool to invoke or declare the incident RESOLVED.
+
+        Returns a dict with keys: tool, input, reasoning.
+        Special tool name "RESOLVED" signals end of the ReAct loop.
+        """
+        context_summary = json.dumps(context, ensure_ascii=False, default=str)[:4000]
+
+        system = (
+            "You are an autonomous SOC analyst inside a ReAct incident response loop. "
+            "Given the incident context, decide the next single action to take.\n\n"
+            "Respond ONLY with valid JSON in this exact format (no markdown fences):\n"
+            '{"tool": "<tool_name_or_RESOLVED>", "input": {}, "reasoning": "<brief>"}\n\n'
+            "Available tools: network_scan, whois_lookup, check_connectivity, "
+            "forensic_capture, run_shell_command, offensive_rpc.\n"
+            "Use RESOLVED when the incident is fully assessed or contained. "
+            "Prefer information gathering before active response. "
+            "Minimize tool calls — one action per cycle."
+        )
+
+        response = await self.client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": f"Incident context:\n{context_summary}"},
+            ],
+            stream=False,
+        )
+
+        raw = (response.choices[0].message.content or "").strip()
+        # Strip markdown code fences if the model emits them
+        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.MULTILINE).strip()
+
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m:
+                try:
+                    return json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    pass
+        return {"tool": "RESOLVED",
+                "input": {},
+                "reasoning": f"LLM response not parseable: {raw[:100]}"}
+
     async def chat(self, user_message: str) -> str:
         """Wrapper no-streaming: acumula el stream completo y retorna el string."""
         chunks: list[str] = []

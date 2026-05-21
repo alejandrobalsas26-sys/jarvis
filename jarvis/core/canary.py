@@ -37,6 +37,8 @@ async def canary_handler(
     writer: asyncio.StreamWriter,
     port: int,
     broadcast_fn,
+    tool_executor_ref=None,
+    llm_client_ref=None,
 ) -> None:
     peer = writer.get_extra_info("peername")
     attacker_ip = peer[0] if peer else "unknown"
@@ -67,7 +69,7 @@ async def canary_handler(
     }))
 
     # High-confidence detection: attacker sent a meaningful banner (>16 bytes).
-    # Trigger live forensic capture of the target VM to freeze malicious state
+    # Trigger live forensic capture + agentic SOC loop to freeze malicious state
     # before any anti-forensic cleanup can occur.
     banner_hex = banner.hex()
     if banner_hex and len(banner_hex) > 32:
@@ -82,8 +84,32 @@ async def canary_handler(
         except ImportError:
             pass
 
+        if tool_executor_ref is not None and llm_client_ref is not None:
+            try:
+                from core.agentic_loop import run_agentic_incident
+                asyncio.create_task(
+                    run_agentic_incident(
+                        trigger_event={
+                            "type":        "canary_intrusion",
+                            "attacker_ip": attacker_ip,
+                            "port":        port,
+                            "banner_hex":  banner.hex(),
+                        },
+                        tool_executor=tool_executor_ref,
+                        broadcast_fn=broadcast_fn,
+                        llm_client=llm_client_ref,
+                    ),
+                    name="agentic-incident",
+                )
+            except ImportError:
+                pass
 
-async def start_canaries(broadcast_fn) -> None:
+
+async def start_canaries(
+    broadcast_fn,
+    tool_executor_ref=None,
+    llm_client_ref=None,
+) -> None:
     """Bind honeypot listeners on all available ports and serve indefinitely."""
     servers = []
 
@@ -92,9 +118,11 @@ async def start_canaries(broadcast_fn) -> None:
             logger.info(f"CANARY: port {port} ({service}) unavailable — skipped")
             continue
         try:
-            # CRITICAL CLOSURE FIX: freeze port into lambda via default keyword arg
+            # CRITICAL CLOSURE FIX: freeze port + refs into lambda via default keyword args
             server = await asyncio.start_server(
-                lambda r, w, p=port: canary_handler(r, w, p, broadcast_fn),
+                lambda r, w, p=port, te=tool_executor_ref, lc=llm_client_ref: (
+                    canary_handler(r, w, p, broadcast_fn, te, lc)
+                ),
                 "0.0.0.0",
                 port,
             )

@@ -201,10 +201,21 @@ async def _main_async() -> None:
             aura_task = asyncio.create_task(aura_server.serve(), name="aura-server")
             logger.info("AURA: ws://127.0.0.1:8765/ws  |  open aura/index.html to monitor")
 
-            # Honeypot matrix — runs alongside AURA, shares the broadcast channel
+            # Zeek L7 DPI log streamer — I/O-only, no executor needed
+            try:
+                from tools.zeek_dpi import start_zeek_dpi
+                asyncio.create_task(start_zeek_dpi(_aura_broadcast), name="zeek-dpi")
+                logger.info("ZEEK_DPI: L7 deep packet inspection streamer initializing…")
+            except ImportError:
+                logger.warning("ZEEK_DPI: tools.zeek_dpi unavailable — DPI monitoring disabled")
+
+            # Honeypot matrix — passes executor/llm refs so canary can trigger agentic loop
             try:
                 from core.canary import start_canaries
-                asyncio.create_task(start_canaries(_aura_broadcast), name="canary-matrix")
+                asyncio.create_task(
+                    start_canaries(_aura_broadcast, executor, llm),
+                    name="canary-matrix",
+                )
                 logger.info("CANARY: honeypot matrix initializing…")
             except ImportError:
                 logger.warning("CANARY: core.canary unavailable — honeypot matrix disabled")

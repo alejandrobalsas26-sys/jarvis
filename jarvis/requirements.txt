@@ -88,7 +88,11 @@ igraph>=0.11.0                # fast C-backed graph library for Dijkstra pathfin
 # ── Environmental Intel & Threat Feeds (v21.0) ─────────────────
 aiohttp>=3.9.3                # async HTTP — weather + threat feeds, no blocking requests
 ntplib>=0.4.0                 # NTP forensic chrono-sync
-feedparser>=6.0.11            # CISA RSS feed parser
+feedparser>=6.0.12            # CISA RSS feed parser
+
+# ── Adversary Emulation & Packet Inspection (v22.0) ────────────────────────────
+pymetasploit3>=1.0.3     # Metasploit RPC client
+aiofiles>=23.2.1         # async file tail for Zeek logs
 
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0
