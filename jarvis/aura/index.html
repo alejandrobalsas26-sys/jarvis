@@ -357,7 +357,7 @@
     /* ── Globe OSINT inset (bottom-right) ── */
     #globe-inset {
       position: fixed;
-      bottom: 16px;
+      bottom: 34px;   /* 26px ticker + 8px gap */
       right: 16px;
       width: 240px;
       height: 240px;
@@ -465,6 +465,96 @@
       animation: pulse 1.2s ease-in-out infinite;
     }
     @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1.0; } }
+
+    /* ── Environmental telemetry widget (header) ── */
+    #env-display-widget {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      font-size: 11px;
+      color: #44bb88;
+      border: 1px solid #1a3a1a;
+      border-radius: 4px;
+      padding: 3px 12px;
+      background: rgba(0, 20, 10, 0.45);
+    }
+    .env-item { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+    .env-label { color: #2a5a2a; font-size: 9px; letter-spacing: 1.5px; }
+    .env-value { font-weight: bold; letter-spacing: 0.5px; }
+    #env-rain.rain-active { color: #4488ff; }
+
+    /* ── Threat feed ticker (bottom-edge HUD bar) ── */
+    #threat-ticker {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 26px;
+      background: rgba(7, 9, 15, 0.92);
+      border-top: 1px solid #141e14;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      z-index: 105;
+    }
+    #ticker-inner {
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+      animation: ticker-scroll 60s linear infinite;
+    }
+    @keyframes ticker-scroll {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
+    }
+    .ticker-item {
+      padding: 0 20px;
+      font-size: 11px;
+      flex-shrink: 0;
+      border-right: 1px solid #1a2a1a;
+    }
+    .ticker-alert { color: #ffaa44; }
+    .ticker-info  { color: #44dd88; }
+
+    /* ── Resource contraction overlay ── */
+    #resource-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.82);
+      z-index: 220;
+      align-items: center;
+      justify-content: center;
+    }
+    .resource-box {
+      background: #0a0800;
+      border: 2px solid #ffaa00;
+      border-radius: 8px;
+      padding: 24px 36px;
+      max-width: 440px;
+      width: 90%;
+      box-shadow: 0 0 50px rgba(255, 170, 0, 0.35);
+      text-align: center;
+    }
+    .resource-title {
+      color: #ffaa00;
+      font-size: 13px;
+      font-weight: bold;
+      letter-spacing: 3px;
+      margin-bottom: 16px;
+    }
+    .resource-stat { font-size: 12px; color: #cc9944; margin: 6px 0; }
+    .resource-key  { color: #ffcc44; font-weight: bold; margin-right: 8px; letter-spacing: 1px; }
+    #resource-dismiss {
+      display: block; margin: 18px auto 0; padding: 6px 20px;
+      background: #1a1000; border: 1px solid #ffaa00; color: #ffaa00;
+      cursor: pointer; font-family: inherit; font-size: 11px;
+      border-radius: 4px; letter-spacing: 2px;
+    }
+    #resource-dismiss:hover { background: #2a1a00; }
+
+    /* ── v21.0 event type badges ── */
+    .type-environmental_telemetry { background: #051a10; border: 1px solid #00aa55; color: #44ff99; }
+    .type-threat_feed_update      { background: #0a0a00; border: 1px solid #aaaa00; color: #ffff44; }
+    .type-resource_critical_alert { background: #1a0800; border: 1px solid #ffaa00; color: #ffcc44; }
   </style>
 </head>
 <body>
@@ -472,6 +562,20 @@
 <header>
   <h1>◈ AURA</h1>
   <span id="status-badge" class="badge-disconnected">● DISCONNECTED</span>
+  <div id="env-display-widget">
+    <div class="env-item">
+      <span class="env-label">TEMP</span>
+      <span class="env-value" id="env-temp">--°C</span>
+    </div>
+    <div class="env-item">
+      <span class="env-label">RH</span>
+      <span class="env-value" id="env-humidity">--%</span>
+    </div>
+    <div class="env-item">
+      <span class="env-label">RAIN</span>
+      <span class="env-value" id="env-rain">--%</span>
+    </div>
+  </div>
   <span id="client-url"></span>
   <span id="event-count">0 events</span>
 </header>
@@ -533,6 +637,20 @@
     <div class="deception-title">◈ HONEY-TOKEN ACCESSED — ACTIVE INTRUSION</div>
     <div id="deception-body"></div>
     <button id="deception-dismiss">ACKNOWLEDGE</button>
+  </div>
+</div>
+
+<!-- Threat feed ticker — bottom-edge HUD bar -->
+<div id="threat-ticker">
+  <div id="ticker-inner"></div>
+</div>
+
+<!-- Resource contraction overlay -->
+<div id="resource-overlay">
+  <div class="resource-box">
+    <div class="resource-title">⚠ RESOURCE CONTRACTION MODE ACTIVE</div>
+    <div id="resource-body"></div>
+    <button id="resource-dismiss">DISMISS</button>
   </div>
 </div>
 
@@ -618,6 +736,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       deception_tripped:           'type-deception_tripped',
       deception_planting:          'type-deception_planting',
       deception_planted:           'type-deception_planted',
+      environmental_telemetry:     'type-environmental_telemetry',
+      threat_feed_update:          'type-threat_feed_update',
+      resource_critical_alert:     'type-resource_critical_alert',
     };
     return map[t] || 'type-default';
   }
@@ -659,7 +780,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   camera.lookAt(0, 0, 0);
 
   const scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0x112211, 1.0));
+  const sceneAmbient = new THREE.AmbientLight(0x112211, 1.0);
+  scene.add(sceneAmbient);
 
   // CPU PointLight — intensity driven by telemetry
   const cpuLight = new THREE.PointLight(0x00ff88, 1.0, 12);
@@ -755,7 +877,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
   function animate() {
     requestAnimationFrame(animate);
-    ringMat.uniforms.uTime.value = clock.getElapsedTime();
+    const t = clock.getElapsedTime();
+    ringMat.uniforms.uTime.value = t;
+    if (_rainMat) _rainMat.uniforms.uTime.value = t;
     renderer.render(scene, camera);
   }
 
@@ -1241,6 +1365,142 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     document.getElementById('deception-overlay').style.display = 'none';
   });
 
+  // === v21.0 Environmental Intel, Threat Feed & Resource Sentinel ===
+
+  // ── Rain particle system (spawned on rain_probability > 75) ──────────────
+  let _rainSystem = null;
+  let _rainMat    = null;
+
+  function _buildRainSystem() {
+    const N   = 1500;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(N * 3);
+    const vel = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      pos[i * 3]     = (Math.random() - 0.5) * 16;
+      pos[i * 3 + 1] = Math.random() * 14 - 2;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 16;
+      vel[i] = 0.6 + Math.random() * 1.0;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aVel',     new THREE.BufferAttribute(vel, 1));
+
+    _rainMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0.0 } },
+      vertexShader: `
+        attribute float aVel;
+        uniform float uTime;
+        void main() {
+          vec3 p = position;
+          p.y = mod(p.y - uTime * aVel, 16.0) - 8.0;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+          gl_PointSize = 1.8;
+        }
+      `,
+      fragmentShader: `
+        void main() {
+          float d = length(gl_PointCoord - vec2(0.5));
+          if (d > 0.5) discard;
+          gl_FragColor = vec4(0.35, 0.55, 1.0, 0.75);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+    });
+
+    const pts = new THREE.Points(geo, _rainMat);
+    pts.frustumCulled = false;
+    return pts;
+  }
+
+  // ── Environmental telemetry handler ──────────────────────────────────────
+  function handleEnvTelemetry(msg) {
+    const temp = msg.temperature    != null ? msg.temperature.toFixed(1) + '°C' : '--°C';
+    const hum  = msg.humidity       != null ? msg.humidity.toFixed(0) + '%'     : '--%';
+    const rain = msg.rain_probability != null ? msg.rain_probability + '%'       : '--%';
+
+    document.getElementById('env-temp').textContent     = temp;
+    document.getElementById('env-humidity').textContent  = hum;
+
+    const rainEl  = document.getElementById('env-rain');
+    rainEl.textContent = rain;
+    const rainPct = msg.rain_probability || 0;
+
+    if (rainPct > 75) {
+      rainEl.classList.add('rain-active');
+      if (!_rainSystem) {
+        _rainSystem = _buildRainSystem();
+        scene.add(_rainSystem);
+      }
+      sceneAmbient.color.set(0x111833);   // storm-blue shift
+    } else {
+      rainEl.classList.remove('rain-active');
+      if (_rainSystem) {
+        scene.remove(_rainSystem);
+        _rainSystem = null;
+        _rainMat    = null;
+      }
+      sceneAmbient.color.set(0x112211);   // restore base green tint
+    }
+  }
+
+  // ── Threat feed ticker ───────────────────────────────────────────────────
+  const _tickerStore = [];
+  const _MAX_TICKER  = 20;
+
+  function _rebuildTicker() {
+    const inner = document.getElementById('ticker-inner');
+    // Duplicate items for seamless CSS infinite scroll
+    const doubled = [..._tickerStore, ..._tickerStore];
+    inner.innerHTML = doubled.map(it =>
+      `<span class="ticker-item ${it.cls}">${escapeHtml(it.label)}</span>`
+    ).join('');
+  }
+
+  function handleThreatFeedUpdate(msg) {
+    const cls   = msg.severity === 'ALERT' ? 'ticker-alert' : 'ticker-info';
+    const label = msg.alert_title
+      ? `${msg.source}: ${msg.alert_title}`
+      : `${msg.source}: ${msg.ioc_count} malicious IPs updated`;
+
+    _tickerStore.push({ cls, label });
+    if (_tickerStore.length > _MAX_TICKER) _tickerStore.shift();
+    _rebuildTicker();
+  }
+
+  // ── Resource contraction overlay ─────────────────────────────────────────
+  let _resourceContracted = false;
+  const _origCoreMat = coreMesh.material;
+
+  function _restoreFromContraction() {
+    if (!_resourceContracted) return;
+    _resourceContracted = false;
+    renderer.setPixelRatio(window.devicePixelRatio);
+    coreMesh.material = _origCoreMat;
+    document.getElementById('resource-overlay').style.display = 'none';
+  }
+
+  function handleResourceCriticalAlert(msg) {
+    if (_resourceContracted) return;
+    _resourceContracted = true;
+
+    renderer.setPixelRatio(0.5);
+    coreMesh.material = new THREE.MeshBasicMaterial({ color: 0xffaa00, wireframe: true });
+
+    const temp = msg.cpu_temp    != null ? msg.cpu_temp.toFixed(1) + '°C'       : 'N/A';
+    const ram  = msg.ram_free_pct != null ? msg.ram_free_pct.toFixed(1) + '% free' : 'N/A';
+    document.getElementById('resource-body').innerHTML = `
+      <div class="resource-stat"><span class="resource-key">CPU TEMP</span>${escapeHtml(temp)}</div>
+      <div class="resource-stat"><span class="resource-key">RAM FREE</span>${escapeHtml(ram)}</div>
+      <div class="resource-stat" style="color:#776633;margin-top:10px;font-size:10px">
+        SECONDARY VMs SUSPENDED — RENDERING DOWNSAMPLED
+      </div>
+    `;
+    document.getElementById('resource-overlay').style.display = 'flex';
+  }
+
+  document.getElementById('resource-dismiss').addEventListener('click', _restoreFromContraction);
+
   // === WebSocket with auto-reconnect ===
   function connect() {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1267,6 +1527,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         document.getElementById('ram-pct-val').textContent = msg.ram_pct.toFixed(1) + '%';
         document.getElementById('ram-gb-val').textContent  =
           msg.ram_used_gb.toFixed(1) + ' / ' + msg.ram_total_gb.toFixed(1) + ' GB';
+        // Auto-restore resource contraction when RAM recovers above the floor
+        if (_resourceContracted && (100 - msg.ram_pct) > 8.0) {
+          _restoreFromContraction();
+        }
         return;
       }
 
@@ -1368,6 +1632,24 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'kernel_anomaly_detected') {
         appendKernelAnomaly(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'environmental_telemetry') {
+        handleEnvTelemetry(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'threat_feed_update') {
+        handleThreatFeedUpdate(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'resource_critical_alert') {
+        handleResourceCriticalAlert(msg);
         if (!paused) append(e.data);
         return;
       }

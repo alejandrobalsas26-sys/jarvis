@@ -224,6 +224,30 @@ async def _main_async() -> None:
                 logger.info("ETW: kernel telemetry monitor task queued…")
             except ImportError:
                 logger.warning("ETW: tools.etw_monitor unavailable — kernel telemetry disabled")
+
+            # Environmental Intel — weather telemetry + NTP chrono-sync
+            try:
+                from tools.environmental_intel import start_environmental_polling
+                asyncio.create_task(start_environmental_polling(_aura_broadcast), name="env-intel")
+                logger.info("ENV_INTEL: environmental polling + NTP chrono-sync initializing…")
+            except ImportError:
+                logger.warning("ENV_INTEL: tools.environmental_intel unavailable — env monitoring disabled")
+
+            # Live OSINT threat feed aggregator — Abuse.ch + CISA
+            try:
+                from tools.threat_feed_sync import start_threat_feed_sync
+                asyncio.create_task(start_threat_feed_sync(_aura_broadcast), name="threat-feed")
+                logger.info("THREAT_FEED: live OSINT feed sync initializing…")
+            except ImportError:
+                logger.warning("THREAT_FEED: tools.threat_feed_sync unavailable — feed sync disabled")
+
+            # Hardware resource watchdog sentinel — RAM/temp + VM auto-suspend
+            try:
+                from tools.resource_sentinel import start_resource_sentinel
+                asyncio.create_task(start_resource_sentinel(_aura_broadcast), name="resource-watchdog")
+                logger.info("RESOURCE_SENTINEL: hardware watchdog initializing…")
+            except ImportError:
+                logger.warning("RESOURCE_SENTINEL: tools.resource_sentinel unavailable — watchdog disabled")
         except ImportError:
             logger.warning("AURA: fastapi/uvicorn not installed — UI disabled. pip install fastapi uvicorn[standard]")
 

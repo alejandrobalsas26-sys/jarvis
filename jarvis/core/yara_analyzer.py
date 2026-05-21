@@ -34,6 +34,10 @@ def _compile_rules():
         return None
 
 
+# Public alias — allows threat_feed_sync to call cache_clear() without touching the private name
+get_compiled_rules = _compile_rules
+
+
 async def scan_command(command_parts: list[str]) -> list[dict]:
     """Scan a tokenized command against compiled YARA rules.
 
