@@ -556,6 +556,10 @@
     .type-threat_feed_update      { background: #0a0a00; border: 1px solid #aaaa00; color: #ffff44; }
     .type-resource_critical_alert { background: #1a0800; border: 1px solid #ffaa00; color: #ffcc44; }
 
+    /* ── v23.0 RF device lifecycle badges ── */
+    .type-rf_device_connected    { background: #001a0a; border: 1px solid #00cc66; color: #44ff99; }
+    .type-rf_device_disconnected { background: #0d0d0d; border: 1px solid #555555; color: #999999; }
+
     /* ── v22.0 event type badges ── */
     .type-emulation_start      { background: #200005; border: 1px solid #cc0044; color: #ff4488; }
     .type-emulation_complete   { background: #002000; border: 1px solid #00cc44; color: #44ff88; }
@@ -760,7 +764,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       mesh_generating:   'type-mesh_generating',
       mesh_ready:        'type-mesh_ready',
       schematic_render:        'type-schematic_render',
-      rf_frame:                'type-rf_frame',
+      rf_frame:                    'type-rf_frame',
+      rf_device_connected:         'type-rf_device_connected',
+      rf_device_disconnected:      'type-rf_device_disconnected',
       attack_path_computed:    'type-attack_path_computed',
       ad_graph_computing:      'type-ad_graph_computing',
       kernel_anomaly_detected: 'type-kernel_anomaly_detected',
@@ -1132,6 +1138,73 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     const sprite = new THREE.Sprite(mat);
     sprite.scale.set(1.6, 0.3, 1);
     return sprite;
+  }
+
+  // === v23.0 RF Device Node Lifecycle (hotplug state machine) ===
+
+  const _rfDeviceNodes = new Map();   // device → { node, mat, label }
+  const _RF_DEVICE_COLORS = { proxmark3: 0xffaa00, alfa: 0x00ccff };
+
+  function spawnRfDeviceNode(msg) {
+    const device = msg.device;
+    const color  = _RF_DEVICE_COLORS[device] || 0xffaa00;
+
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 7.5 + Math.random() * 0.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 1.0;
+
+    const geo = new THREE.SphereGeometry(0.22, 12, 12);
+    const mat = new THREE.MeshPhongMaterial({
+      color, emissive: color, emissiveIntensity: 0.6, transparent: true, opacity: 1.0, shininess: 80,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    const info  = (msg.interface || msg.port || '').slice(0, 12);
+    const label = _makeTextSprite(`${device.toUpperCase()} ${info}`.trimEnd(), color);
+    label.position.set(x, y + 0.38, z);
+    scene.add(label);
+
+    // Spawn flash
+    const fl = new THREE.PointLight(color, 5.0, 7);
+    fl.position.set(x, y, z);
+    scene.add(fl);
+    setTimeout(() => scene.remove(fl), 900);
+
+    _rfDeviceNodes.set(device, { node, mat, label });
+  }
+
+  function removeRfDeviceNode(msg) {
+    const handle = _rfDeviceNodes.get(msg.device);
+    if (!handle) return;
+    _rfDeviceNodes.delete(msg.device);
+
+    // Fade out over 500ms at ~60fps
+    const steps     = 30;
+    const stepDelay = Math.round(500 / steps);
+    let   tick      = 0;
+    const iv = setInterval(() => {
+      tick++;
+      const opacity = 1.0 - tick / steps;
+      handle.mat.opacity = opacity;
+      if (handle.label.material) handle.label.material.opacity = opacity;
+      if (tick >= steps) {
+        clearInterval(iv);
+        scene.remove(handle.node);
+        scene.remove(handle.label);
+      }
+    }, stepDelay);
+  }
+
+  function pulseRfDeviceNode(msg) {
+    const handle = _rfDeviceNodes.get(msg.hw_source);
+    if (!handle) return;
+    const orig = handle.mat.emissiveIntensity;
+    handle.mat.emissiveIntensity = 2.5;
+    setTimeout(() => { handle.mat.emissiveIntensity = orig; }, 140);
   }
 
   // ── AD attack-path highlighter ───────────────────────────────────────────────
@@ -1785,8 +1858,20 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         return;
       }
 
+      if (msg && msg.type === 'rf_device_connected') {
+        spawnRfDeviceNode(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'rf_device_disconnected') {
+        removeRfDeviceNode(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
       if (msg && msg.type === 'rf_frame') {
-        spawnRfPeripheralNode(msg);
+        pulseRfDeviceNode(msg);
         if (!paused) append(e.data);
         return;
       }
