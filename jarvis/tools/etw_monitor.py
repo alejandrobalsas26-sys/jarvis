@@ -449,6 +449,8 @@ async def start_etw_monitor(broadcast_fn) -> None:
     Waits up to 10s for _etw_ready before entering the consumer loop.
     Exits cleanly (no pending task) if init fails or times out.
     """
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "etw")
     loop  = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 

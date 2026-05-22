@@ -111,6 +111,9 @@ async def start_canaries(
     llm_client_ref=None,
 ) -> None:
     """Bind honeypot listeners on all available ports and serve indefinitely."""
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "canary")
+
     servers = []
 
     for port, service in _CANARY_PORTS.items():

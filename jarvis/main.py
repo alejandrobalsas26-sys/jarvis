@@ -174,6 +174,7 @@ async def _main_async() -> None:
     from tools.sysmon_bridge import start_sysmon_bridge
     from tools.ebpf_bridge import start_ebpf_bridge
     from tools.sliver_bridge import start_sliver_monitor
+    from core.severity_calibrator import start_calibration_loop
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -196,6 +197,13 @@ async def _main_async() -> None:
     executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
     llm = LLM(tool_executor=executor)
     tts = TTS()
+
+    # v27.0: store executor reference for HUD bidirectional command dispatch
+    try:
+        from aura.server import attach_executor
+        attach_executor(executor)
+    except ImportError:
+        pass
 
     # In voice mode, reuse the already-loaded HighPrioritySTTListener
     # to avoid loading Whisper a second time.
@@ -329,6 +337,14 @@ async def _main_async() -> None:
                 RestartPolicy.BACKOFF,
             )
             logger.info("SLIVER_MONITOR: Sliver C2 session monitor registered…")
+
+            # v27.0 severity calibration background loop
+            watchdog.register(
+                "severity-calibrator",
+                lambda: start_calibration_loop(_aura_broadcast),
+                RestartPolicy.BACKOFF,
+            )
+            logger.info("SEVERITY_CALIBRATOR: adaptive severity scoring registered…")
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")

@@ -100,5 +100,8 @@ grpcio>=1.62.0            # Sliver C2 gRPC transport
 grpcio-tools>=1.62.0      # Sliver protobuf compilation
 sliver-py>=0.0.19         # Sliver Python operator client
 
+# ── v27.0 Temporal Correlation ─────────────────────────────────────────────────
+mmh3>=4.1.0                   # MurmurHash3 — fast non-cryptographic hash for correlation buckets
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

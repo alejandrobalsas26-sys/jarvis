@@ -52,6 +52,8 @@ def should_isolate(triage: dict) -> list[str]:
 
 async def isolate_ip(ip: str, broadcast_fn, ttl_minutes: int = 60) -> None:
     """Block outbound traffic to ip via Windows Defender Firewall with TTL auto-expiry."""
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "mitigation")
     try:
         ipaddress.ip_address(ip)
     except ValueError:

@@ -32,6 +32,9 @@ _ssh_client = None   # module-level ref prevents GC killing connection
 
 
 async def start_ebpf_bridge(broadcast_fn) -> None:
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "ebpf")
+
     if not KALI_HOST or not KALI_KEY_PATH:
         return
 

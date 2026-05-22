@@ -121,6 +121,8 @@ async def interact_session(
 
 async def start_sliver_monitor(broadcast_fn) -> None:
     """Background session poller. Silent if config not set."""
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "sliver")
     if not SLIVER_CONFIG_PATH:
         return
     while True:

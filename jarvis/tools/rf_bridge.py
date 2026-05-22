@@ -250,6 +250,8 @@ async def _poll_proxmark(broadcast_fn) -> None:
 
 async def start_rf_bridge(broadcast_fn) -> None:
     """Silent hotplug monitor. Produces no output until a device connects."""
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "rf_bridge")
     await asyncio.gather(
         _poll_alfa(broadcast_fn),
         _poll_proxmark(broadcast_fn),

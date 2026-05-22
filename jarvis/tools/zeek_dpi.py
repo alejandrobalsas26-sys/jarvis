@@ -105,6 +105,8 @@ async def _parse_http(record: dict, broadcast_fn) -> None:
 
 
 async def start_zeek_dpi(broadcast_fn) -> None:
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "zeek")
     """Launch all Zeek log tailers as concurrent tasks."""
     base = Path(settings.zeek_log_dir)
     await broadcast_fn(make_event(

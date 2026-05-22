@@ -40,6 +40,9 @@ async def start_environmental_polling(
     lat: float | None = None,
     lon: float | None = None,
 ) -> None:
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "environmental")
+
     lat = lat if lat is not None else settings.default_lat
     lon = lon if lon is not None else settings.default_lon
 

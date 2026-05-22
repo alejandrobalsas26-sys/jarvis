@@ -22,6 +22,9 @@ TECHNIQUE_MAP = {
 
 
 async def start_sysmon_bridge(broadcast_fn) -> None:
+    from core.telemetry_auth import make_signed_broadcaster
+    broadcast_fn = make_signed_broadcaster(broadcast_fn, "sysmon")
+
     if not SYSMON_LOG_PATH:
         return   # total silence if not configured
 

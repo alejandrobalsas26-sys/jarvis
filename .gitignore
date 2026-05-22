@@ -44,3 +44,8 @@ brain/
 .chroma_db/
 jarvis.log
 *.log
+
+# v27.0 HMAC telemetry signing keys — NEVER commit
+jarvis/core/telemetry_keys.json
+jarvis/core/trust_profile.json
+jarvis/core/feed_hashes.json
