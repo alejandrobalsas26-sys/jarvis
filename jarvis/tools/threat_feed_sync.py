@@ -1,7 +1,7 @@
 """tools/threat_feed_sync.py — Live OSINT threat feed aggregator with safe hot YARA injection."""
 
 import asyncio
-import ipaddress
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -12,17 +12,16 @@ import yara
 
 from core.config import settings
 from core.events import make_event
+from core.feed_sanitizer import (
+    sanitize_ioc,
+    sanitize_alert_title,
+    check_content_hash,
+    MAX_IOCS_PER_CYCLE,
+    SanitizationError,
+)
 
 _SIG_DIR     = Path(__file__).parent.parent / "core" / "signatures"
 _DYNAMIC_YAR = _SIG_DIR / "threatfeed_dynamic.yar"
-
-
-def _valid_ip(s: str) -> bool:
-    try:
-        ipaddress.ip_address(s)
-        return True
-    except ValueError:
-        return False
 
 
 def _build_yara_rule(ips: list[str]) -> str:
@@ -42,16 +41,32 @@ async def start_threat_feed_sync(broadcast_fn) -> None:
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Abuse.ch Feodo malicious IPs
+                # 1. Abuse.ch Feodo malicious IPs — read raw bytes first for hash check
                 async with session.get(
                     "https://feodotracker.abuse.ch/downloads/ipblocklist.json",
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as r:
-                    ip_data = await r.json(content_type=None)
-                malicious_ips = [
-                    e["ip_address"] for e in ip_data
-                    if _valid_ip(e.get("ip_address", ""))
-                ][:500]
+                    raw_bytes = await r.read()
+
+                check_content_hash("feodo", raw_bytes)
+                ip_data = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+
+                # Sanitize IPs — reject injections, validate format, cap count
+                malicious_ips: list[str] = []
+                rejected = 0
+                for entry in ip_data:
+                    raw_ip = entry.get("ip_address", "")
+                    sanitized = sanitize_ioc("ip", raw_ip, source="feodo")
+                    if sanitized:
+                        malicious_ips.append(sanitized)
+                    else:
+                        rejected += 1
+                    if len(malicious_ips) >= MAX_IOCS_PER_CYCLE:
+                        break
+
+                if rejected:
+                    from loguru import logger
+                    logger.warning(f"THREAT_FEED: {rejected} IPs rejected by sanitizer (feodo)")
 
                 # 2. Test-compile candidate rule in isolation
                 rule_src = _build_yara_rule(malicious_ips)
@@ -74,7 +89,7 @@ async def start_threat_feed_sync(broadcast_fn) -> None:
                     severity="INFO",
                 ))
 
-                # 4. CISA RSS headlines
+                # 4. CISA RSS headlines — sanitize titles before broadcast
                 loop = asyncio.get_running_loop()
                 feed = await loop.run_in_executor(
                     None,
@@ -83,12 +98,15 @@ async def start_threat_feed_sync(broadcast_fn) -> None:
                     ),
                 )
                 for entry in feed.entries[:5]:
-                    await broadcast_fn(make_event(
-                        "threat_feed_update",
-                        source="CISA",
-                        alert_title=entry.get("title", "")[:120],
-                        severity="ALERT",
-                    ))
+                    raw_title = entry.get("title", "")
+                    title = sanitize_alert_title(raw_title, source="CISA")
+                    if title:
+                        await broadcast_fn(make_event(
+                            "threat_feed_update",
+                            source="CISA",
+                            alert_title=title,
+                            severity="ALERT",
+                        ))
 
             except Exception as e:
                 await broadcast_fn(make_event("error", error=f"Threat feed sync failed: {e}"))

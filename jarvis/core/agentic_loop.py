@@ -114,3 +114,15 @@ async def run_agentic_incident(
         cycles_run=min(cycle + 1, settings.agentic_max_cycles),
         action_log=action_log,
     ))
+
+    # Store incident in episodic memory for future RAG context injection
+    try:
+        from core.episodic_memory import store_episode
+        asyncio.create_task(store_episode(
+            str(action_log),
+            "agentic_incident",
+            severity="HIGH",
+            source="internal",
+        ))
+    except Exception:
+        pass

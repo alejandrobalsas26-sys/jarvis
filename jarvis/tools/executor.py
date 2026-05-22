@@ -927,6 +927,25 @@ class ToolExecutor:
 
                 triage_result  = analyze_neutralized(command, error_msg, yara_hits=yara_hits)
                 manifest_path  = write_manifest(triage_result, command)
+
+                # Episodic memory — store from executor thread via threadsafe bridge
+                _loop = getattr(self, "_loop", None)
+                if _loop and not _loop.is_closed():
+                    try:
+                        from core.episodic_memory import store_episode as _store_ep
+                        import json as _json_ep
+                        asyncio.run_coroutine_threadsafe(
+                            _store_ep(
+                                _json_ep.dumps(triage_result, ensure_ascii=False, default=str),
+                                "triage",
+                                severity="HIGH",
+                                mitre_tags=triage_result.get("mitre_match", []),
+                            ),
+                            _loop,
+                        )
+                    except Exception:
+                        pass
+
                 with open("tactic_audit.jsonl", "a", encoding="utf-8") as _af:
                     _af.write(json.dumps({
                         "status":    "neutralized",
@@ -1589,19 +1608,22 @@ class RedTeamShellExecutor:
     """Permissive shell executor for Red Team operator use.
 
     Sits alongside ToolExecutor without modifying it.
-    Authorization gate: NATO OTP via ToolExecutor._challenge().
+    Authorization gate: dynamic trust model + NATO OTP via ToolExecutor._challenge().
 
     Security layers:
       Layer 0 — YARA scan of the raw command string.
       Hard filter — _CRITICAL_BLOCK patterns are unconditional; no OTP override.
       Layer 1 — _classify(): binary must exist on OS; unlisted binaries escalate.
-      Layer 2 — NATO OTP challenge for any command that requires_challenge.
+      Layer 2 — Dynamic trust challenge (NONE / CONFIRM / FULL_NATO).
       Layer 3 — subprocess.run with shell=False always.
     Full audit trail via ToolExecutor._audit.log_action().
     """
 
     def __init__(self, tool_executor: "ToolExecutor") -> None:
         self._te = tool_executor  # borrow _challenge() and _audit from ToolExecutor
+        self._trust_profile: dict = {}
+        self._session_commands: list[str] = []
+        self._profile_loaded: bool = False
 
     def _classify(self, command: str, yara_hits: list) -> tuple[str, bool]:
         tokens = shlex.split(command, posix=False)
@@ -1633,6 +1655,12 @@ class RedTeamShellExecutor:
         binary_status = "unknown"
         auth_word     = ""
 
+        # Lazy-load trust profile on first execution
+        if not self._profile_loaded:
+            from core.trust_engine import load_profile
+            self._trust_profile = await load_profile()
+            self._profile_loaded = True
+
         try:
             # Layer 0 — YARA scan (scan_command expects list[str])
             from core.yara_analyzer import scan_command
@@ -1645,10 +1673,37 @@ class RedTeamShellExecutor:
                     raise ValueError(f"[HARD BLOCK] OS-destructive pattern: '{pattern}'")
 
             # Layer 1 — classify binary
-            binary_status, requires_challenge = self._classify(command, yara_hits)
+            binary_status, _ = self._classify(command, yara_hits)
+            tokens = shlex.split(command, posix=False)
+            binary = Path(tokens[0]).name.lower().removesuffix(".exe")
 
-            # Layer 2 — NATO OTP if required
-            if requires_challenge:
+            # Layer 2 — dynamic trust challenge
+            from core.trust_engine import (
+                get_challenge_level, ChallengeLevel, update_profile,
+            )
+            level, score = get_challenge_level(
+                binary, command, binary_status, yara_hits,
+                self._trust_profile, self._session_commands,
+            )
+
+            # Broadcast trust decision to AURA
+            await _aura_broadcast({
+                "type":      "trust_decision",
+                "binary":    binary,
+                "level":     level.value,
+                "score":     round(score, 2),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+            loop = asyncio.get_running_loop()
+            if level == ChallengeLevel.CONFIRM:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: input("[CONFIRM] Type 'yes' to proceed: ").strip().lower(),
+                )
+                if response not in ("yes", "y"):
+                    raise ValueError("[DENIED] Operator declined confirmation")
+            elif level == ChallengeLevel.FULL_NATO:
                 auth_ok, auth_word = await self._te._challenge(
                     tool_name="run_shell_command",
                     preview=command[:120],
@@ -1658,7 +1713,6 @@ class RedTeamShellExecutor:
 
             # Layer 3 — execute, shell=False always
             result["authorized"] = True
-            loop = asyncio.get_running_loop()
             proc = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(
@@ -1671,6 +1725,10 @@ class RedTeamShellExecutor:
             )
             result["stdout"] = proc.stdout
             result["stderr"] = proc.stderr
+
+            # Update trust profile on successful execution
+            asyncio.create_task(update_profile(binary, self._trust_profile))
+            self._session_commands.append(binary)
 
         except ValueError as e:
             result["error"] = str(e)

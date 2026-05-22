@@ -1,0 +1,70 @@
+"""tools/sysmon_bridge.py — VM Sysmon telemetry bridge (v25.0)."""
+
+import asyncio, os
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+import aiofiles
+from loguru import logger
+
+SYSMON_LOG_PATH = os.getenv("SYSMON_LOG_PATH", "")
+
+SENSITIVE_EVENT_IDS = {1, 3, 7, 8, 10, 11, 25}
+
+TECHNIQUE_MAP = {
+    1:  "T1059 — Process Create",
+    3:  "T1071 — Network Connection",
+    7:  "T1055.001 — DLL Injection",
+    8:  "T1055 — CreateRemoteThread",
+    10: "T1003.001 — LSASS Credential Access",
+    11: "T1105 — File Create",
+    25: "T1055.012 — Process Hollowing",
+}
+
+
+async def start_sysmon_bridge(broadcast_fn) -> None:
+    if not SYSMON_LOG_PATH:
+        return   # total silence if not configured
+
+    try:
+        async with aiofiles.open(SYSMON_LOG_PATH, mode="r",
+                                  encoding="utf-8", errors="replace") as f:
+            await f.seek(0, 2)
+            buffer = ""
+            while True:
+                chunk = await f.read(4096)
+                if not chunk:
+                    await asyncio.sleep(1.0)
+                    continue
+                buffer += chunk
+                while "<Event " in buffer and "</Event>" in buffer:
+                    start = buffer.find("<Event ")
+                    end   = buffer.find("</Event>") + len("</Event>")
+                    await _parse_event(buffer[start:end], broadcast_fn)
+                    buffer = buffer[end:]
+    except FileNotFoundError:
+        logger.warning("SYSMON_BRIDGE: log file not found — check SYSMON_LOG_PATH")
+    except Exception as e:
+        logger.error(f"SYSMON_BRIDGE: error: {e}")
+        raise
+
+
+async def _parse_event(xml_str: str, broadcast_fn) -> None:
+    try:
+        root = ET.fromstring(xml_str)
+        ns   = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+        eid  = int(root.find(".//e:EventID", ns).text)
+        if eid not in SENSITIVE_EVENT_IDS:
+            return
+        data = {d.get("Name"): d.text for d in root.findall(".//e:Data", ns)}
+        await broadcast_fn({
+            "type":        "sysmon_event",
+            "event_id":    eid,
+            "technique":   TECHNIQUE_MAP.get(eid, f"EventID {eid}"),
+            "process":     (data.get("Image", "") or "")[-60:],
+            "commandline": (data.get("CommandLine", "") or "")[:120],
+            "parent":      (data.get("ParentImage", "") or "")[-60:],
+            "target_ip":   data.get("DestinationIp", ""),
+            "timestamp":   datetime.now(timezone.utc).isoformat(),
+        })
+    except ET.ParseError:
+        pass

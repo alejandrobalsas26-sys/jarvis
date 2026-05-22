@@ -26,6 +26,17 @@ def _char_chunks(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERL
     return [c for c in chunks if c.strip()]
 
 
+_vault_singleton: "KnowledgeVault | None" = None
+
+
+def get_vault() -> "KnowledgeVault":
+    """Singleton accessor — lazy init, blocking (call from executor or startup)."""
+    global _vault_singleton
+    if _vault_singleton is None:
+        _vault_singleton = KnowledgeVault()
+    return _vault_singleton
+
+
 class KnowledgeVault:
     def __init__(self) -> None:
         import chromadb
@@ -39,6 +50,11 @@ class KnowledgeVault:
         )
         self._model = SentenceTransformer(_MODEL_NAME)
         logger.info(f"KnowledgeVault: DB en {_VAULT_PATH} | modelo {_MODEL_NAME}")
+
+    @property
+    def _client(self):
+        """Alias for _chroma — used by episodic_memory for cross-collection access."""
+        return self._chroma
 
     def _embed(self, text: str) -> list[float]:
         return self._model.encode([text]).tolist()[0]

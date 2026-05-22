@@ -942,9 +942,25 @@ class LLM:
 
         self.history.append({"role": "user", "content": user_message})
 
+        # Query past operational incidents for context injection (best-effort)
+        _incident_prefix = ""
+        try:
+            from core.episodic_memory import query_similar_episodes
+            _episodes = await query_similar_episodes(user_message, n_results=1)
+            if _episodes:
+                _incident_prefix = (
+                    f"[PAST INCIDENT CONTEXT]: {_episodes[0]['content']}\n---\n"
+                )
+        except Exception:
+            pass
+
         while True:
+            _sys_content = (
+                self.system_prompt + "\n\n" + _incident_prefix
+                if _incident_prefix else self.system_prompt
+            )
             messages_for_api = [
-                {"role": "system", "content": self.system_prompt},
+                {"role": "system", "content": _sys_content},
                 *self.history,
             ]
 

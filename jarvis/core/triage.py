@@ -1,5 +1,6 @@
 """core/triage.py — Static forensic triage engine for neutralized commands."""
 
+import asyncio
 import json
 import math
 import re
@@ -114,4 +115,20 @@ def write_manifest(triage_result: dict, command: str) -> Path:
 
     path = queue_dir / filename
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Schedule episodic memory storage — fire-and-forget, no block on failure
+    try:
+        from core.episodic_memory import store_episode
+        loop = asyncio.get_running_loop()
+        loop.create_task(store_episode(
+            json.dumps(manifest),
+            "triage",
+            severity="HIGH",
+            mitre_tags=triage_result.get("mitre_match", []),
+        ))
+    except RuntimeError:
+        pass  # called from executor thread — executor.py also schedules via run_coroutine_threadsafe
+    except Exception:
+        pass
+
     return path

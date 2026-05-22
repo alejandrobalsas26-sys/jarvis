@@ -163,6 +163,10 @@ async def _main_async() -> None:
     from core.audio import HighPrioritySTTListener
     from core.events import make_event
     from core.healthcheck import run_startup_diagnostic
+    from core.task_watchdog import TaskWatchdog, RestartPolicy
+    from core.episodic_memory import store_episode  # noqa: F401 — ensures module is warm
+    from core.trust_engine import load_profile      # noqa: F401 — ensures module is warm
+    from tools.sysmon_bridge import start_sysmon_bridge
 
     # Async bridge queue: STT threads push (text, confidence) here via
     # loop.call_soon_threadsafe; the executor's _challenge() awaits from it.
@@ -192,6 +196,8 @@ async def _main_async() -> None:
     # Runs as an asyncio task alongside the LLM/STT pipeline in the same event
     # loop.  uvicorn.Server.serve() is a native coroutine — no extra threads.
     # Signal handlers are disabled to avoid conflicts with the parent loop.
+    watchdog = TaskWatchdog()
+
     aura_server = None
     aura_task: asyncio.Task | None = None
     if not args.no_aura:
@@ -211,10 +217,10 @@ async def _main_async() -> None:
             aura_task = asyncio.create_task(aura_server.serve(), name="aura-server")
             logger.info("AURA: ws://127.0.0.1:8765/ws  |  open aura/index.html to monitor")
 
-            # Zeek L7 DPI log streamer — I/O-only, no executor needed
+            # Zeek L7 DPI log streamer
             try:
                 from tools.zeek_dpi import start_zeek_dpi
-                asyncio.create_task(start_zeek_dpi(_aura_broadcast), name="zeek-dpi")
+                watchdog.register("zeek-dpi", lambda: start_zeek_dpi(_aura_broadcast), RestartPolicy.BACKOFF)
                 logger.info("ZEEK_DPI: L7 deep packet inspection streamer initializing…")
             except ImportError:
                 logger.warning("ZEEK_DPI: tools.zeek_dpi unavailable — DPI monitoring disabled")
@@ -222,9 +228,10 @@ async def _main_async() -> None:
             # Honeypot matrix — passes executor/llm refs so canary can trigger agentic loop
             try:
                 from core.canary import start_canaries
-                asyncio.create_task(
-                    start_canaries(_aura_broadcast, executor, llm),
-                    name="canary-matrix",
+                watchdog.register(
+                    "canary-matrix",
+                    lambda: start_canaries(_aura_broadcast, executor, llm),
+                    RestartPolicy.ALWAYS,
                 )
                 logger.info("CANARY: honeypot matrix initializing…")
             except ImportError:
@@ -233,7 +240,7 @@ async def _main_async() -> None:
             # RF/RFID hardware abstraction layer
             try:
                 from tools.rf_bridge import start_rf_bridge
-                asyncio.create_task(start_rf_bridge(_aura_broadcast), name="rf-bridge")
+                watchdog.register("rf-bridge", lambda: start_rf_bridge(_aura_broadcast), RestartPolicy.BACKOFF)
                 logger.info("RF_BRIDGE: initializing hardware sources…")
             except ImportError:
                 logger.warning("RF_BRIDGE: tools.rf_bridge unavailable — RF monitoring disabled")
@@ -241,7 +248,7 @@ async def _main_async() -> None:
             # ETW kernel telemetry monitor
             try:
                 from tools.etw_monitor import start_etw_monitor
-                asyncio.create_task(start_etw_monitor(_aura_broadcast), name="etw-monitor")
+                watchdog.register("etw-monitor", lambda: start_etw_monitor(_aura_broadcast), RestartPolicy.BACKOFF)
                 logger.info("ETW: kernel telemetry monitor task queued…")
             except ImportError:
                 logger.warning("ETW: tools.etw_monitor unavailable — kernel telemetry disabled")
@@ -249,7 +256,11 @@ async def _main_async() -> None:
             # Environmental Intel — weather telemetry + NTP chrono-sync
             try:
                 from tools.environmental_intel import start_environmental_polling
-                asyncio.create_task(start_environmental_polling(_aura_broadcast), name="env-intel")
+                watchdog.register(
+                    "env-intel",
+                    lambda: start_environmental_polling(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
                 logger.info("ENV_INTEL: environmental polling + NTP chrono-sync initializing…")
             except ImportError:
                 logger.warning("ENV_INTEL: tools.environmental_intel unavailable — env monitoring disabled")
@@ -257,7 +268,11 @@ async def _main_async() -> None:
             # Live OSINT threat feed aggregator — Abuse.ch + CISA
             try:
                 from tools.threat_feed_sync import start_threat_feed_sync
-                asyncio.create_task(start_threat_feed_sync(_aura_broadcast), name="threat-feed")
+                watchdog.register(
+                    "threat-feed",
+                    lambda: start_threat_feed_sync(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
                 logger.info("THREAT_FEED: live OSINT feed sync initializing…")
             except ImportError:
                 logger.warning("THREAT_FEED: tools.threat_feed_sync unavailable — feed sync disabled")
@@ -265,10 +280,25 @@ async def _main_async() -> None:
             # Hardware resource watchdog sentinel — RAM/temp + VM auto-suspend
             try:
                 from tools.resource_sentinel import start_resource_sentinel
-                asyncio.create_task(start_resource_sentinel(_aura_broadcast), name="resource-watchdog")
+                watchdog.register(
+                    "resource-watchdog",
+                    lambda: start_resource_sentinel(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
                 logger.info("RESOURCE_SENTINEL: hardware watchdog initializing…")
             except ImportError:
                 logger.warning("RESOURCE_SENTINEL: tools.resource_sentinel unavailable — watchdog disabled")
+
+            # VM Sysmon telemetry bridge
+            watchdog.register(
+                "sysmon-bridge",
+                lambda: start_sysmon_bridge(_aura_broadcast),
+                RestartPolicy.BACKOFF,
+            )
+            logger.info("SYSMON_BRIDGE: VM telemetry bridge registered…")
+
+            # Start the task watchdog monitor
+            asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 
             # Broadcast startup diagnostic so AURA HUD can show subsystem health
             asyncio.create_task(
