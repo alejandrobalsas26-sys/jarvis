@@ -156,6 +156,11 @@ async def _main_async() -> None:
     parser.add_argument("--no-aura", action="store_true", help="Disable AURA WebSocket server")
     args = parser.parse_args()
 
+    from core.hardware_profile import detect_hardware
+    from core.model_router import (
+        check_model_availability, configure_ollama_for_hardware,
+        MODEL_FAST, MODEL_DEEP,
+    )
     from tools.executor import ToolExecutor, _aura_broadcast
     from core.llm import LLM
     from core.tts import TTS
@@ -167,6 +172,18 @@ async def _main_async() -> None:
     from core.episodic_memory import store_episode  # noqa: F401 — ensures module is warm
     from core.trust_engine import load_profile      # noqa: F401 — ensures module is warm
     from tools.sysmon_bridge import start_sysmon_bridge
+    from tools.ebpf_bridge import start_ebpf_bridge
+    from tools.sliver_bridge import start_sliver_monitor
+
+    # FIRST: detect hardware before any model loading or task registration
+    hw_profile = detect_hardware()
+    await configure_ollama_for_hardware(hw_profile)
+
+    # Check model availability and warn if not pulled
+    model_avail = await check_model_availability()
+    for model, avail in model_avail.items():
+        if not avail:
+            logger.warning(f"MODEL: {model} not pulled — run: ollama pull {model}")
 
     # Async bridge queue: STT threads push (text, confidence) here via
     # loop.call_soon_threadsafe; the executor's _challenge() awaits from it.
@@ -297,10 +314,36 @@ async def _main_async() -> None:
             )
             logger.info("SYSMON_BRIDGE: VM telemetry bridge registered…")
 
+            # eBPF kernel telemetry from Kali VM via Falco
+            watchdog.register(
+                "ebpf-bridge",
+                lambda: start_ebpf_bridge(_aura_broadcast),
+                RestartPolicy.BACKOFF,
+            )
+            logger.info("EBPF_BRIDGE: eBPF/Falco bridge registered…")
+
+            # Sliver C2 session monitor
+            watchdog.register(
+                "sliver-monitor",
+                lambda: start_sliver_monitor(_aura_broadcast),
+                RestartPolicy.BACKOFF,
+            )
+            logger.info("SLIVER_MONITOR: Sliver C2 session monitor registered…")
+
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 
-            # Broadcast startup diagnostic so AURA HUD can show subsystem health
+            # Broadcast hardware profile and startup diagnostic to AURA HUD
+            asyncio.create_task(
+                _aura_broadcast({
+                    "type":         "hardware_profile",
+                    "ram_gb":       hw_profile.total_ram_gb,
+                    "dual_channel": hw_profile.is_dual_channel,
+                    "pools":        hw_profile.recommended_pools,
+                    "ctx":          hw_profile.recommended_ctx,
+                }),
+                name="hardware-profile-broadcast",
+            )
             asyncio.create_task(
                 _aura_broadcast(make_event("startup_diagnostic", **diag)),
                 name="startup-diag-broadcast",

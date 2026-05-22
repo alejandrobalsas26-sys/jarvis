@@ -16,8 +16,9 @@ from pathlib import Path
 from loguru import logger
 
 from core.events import make_event
+from core.hardware_profile import recommended_pools as _hw_pools
 
-_re_pool = ProcessPoolExecutor(max_workers=1)
+_re_pool = ProcessPoolExecutor(max_workers=_hw_pools)
 
 _SUSPICIOUS_APIS: frozenset[str] = frozenset({
     "VirtualAlloc", "VirtualAllocEx", "VirtualProtect",

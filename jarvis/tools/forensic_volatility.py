@@ -21,8 +21,9 @@ from loguru import logger
 
 from core.config import settings
 from core.events import make_event
+from core.hardware_profile import recommended_pools as _hw_pools
 
-_vol_pool = ProcessPoolExecutor(max_workers=1)
+_vol_pool = ProcessPoolExecutor(max_workers=_hw_pools)
 
 
 def _derive_vmem_path(vmx_path: str) -> str:

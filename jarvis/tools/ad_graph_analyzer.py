@@ -12,8 +12,9 @@ from concurrent.futures import ProcessPoolExecutor
 from loguru import logger
 
 from core.events import make_event
+from core.hardware_profile import recommended_pools as _hw_pools
 
-_graph_pool = ProcessPoolExecutor(max_workers=1)
+_graph_pool = ProcessPoolExecutor(max_workers=_hw_pools)
 
 
 def _compute_attack_paths(json_path: str) -> dict:

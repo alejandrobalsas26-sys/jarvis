@@ -22,6 +22,7 @@ from openai import AsyncOpenAI
 from loguru import logger
 
 from core.config import settings
+from core.model_router import select_model, calculate_complexity
 
 # Ruta al servidor MCP (relativa al proyecto, no al módulo)
 _BRIDGE_SCRIPT = Path(__file__).parent.parent.parent / "mcp_servers" / "packet_tracer_bridge.py"
@@ -869,7 +870,7 @@ class LLM:
         )
 
         response = await self.client.chat.completions.create(
-            model=settings.llm_model,
+            model=select_model(compress_prompt),
             messages=[{"role": "user", "content": compress_prompt}],
             stream=False,
         )
@@ -964,8 +965,13 @@ class LLM:
                 *self.history,
             ]
 
+            _routed_model = select_model(user_message)
+            logger.debug(
+                f"LLM: {_routed_model} "
+                f"(score={calculate_complexity(user_message):.2f})"
+            )
             stream = await self.client.chat.completions.create(
-                model=settings.llm_model,
+                model=_routed_model,
                 messages=messages_for_api,
                 tools=TOOLS,
                 stream=True,

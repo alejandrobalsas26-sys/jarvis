@@ -1,5 +1,5 @@
 """
-tools/etw_monitor.py — Kernel Telemetry Ingestion Layer (v24.0).
+tools/etw_monitor.py — Kernel Telemetry Ingestion Layer (v26.0).
 
 ETW providers monitored:
   Microsoft-Windows-Kernel-Process  {22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}
@@ -12,11 +12,14 @@ Architecture:
   4. The async consumer in start_etw_monitor() awaits the queue and broadcasts.
   The asyncio event loop is never blocked.
 
-v24.0 fixes:
-  - EnableTraceEx2 argtypes set explicitly so c_ulonglong is used for
-    MatchAnyKeyword / MatchAllKeyword (prevents OverflowError on arg 5).
-  - _etw_ctypes wrapped in outer try/except; pushes None sentinel on failure.
-  - Consumer exits cleanly when sentinel received (no pending-task warning).
+v26.0 fixes:
+  - threading.Event pair (_etw_ready / _etw_failed) signals async consumer
+    whether init succeeded before entering the queue loop.
+    Prevents "Task was destroyed but it is pending" when ETW init fails.
+  - TRACEHANDLE → ctypes.c_uint64 (c_ulong is 32-bit on Windows, causes OverflowError).
+  - EnableTraceEx2.argtypes explicitly typed with c_ulonglong for MatchAnyKeyword/
+    MatchAllKeyword (args 5+6), preventing OverflowError on 0xFFFFFFFFFFFFFFFF.
+  - All ULONG/HANDLE fields use wintypes equivalents.
 """
 
 import asyncio
@@ -39,6 +42,10 @@ _SUSPICIOUS_EIDS: frozenset[int] = frozenset({
     15,   # NtMapViewOfSection (process hollowing)
     30,   # RemoteThreadCreate (classic injection)
 })
+
+# Threading events to signal init outcome to the async consumer
+_etw_ready  = threading.Event()
+_etw_failed = threading.Event()
 
 
 def _classify_event(event_id: int, data: dict) -> str:
@@ -103,6 +110,8 @@ def _etw_pywintrace(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> No
     else:
         consumer = etw.ETW(event_callback=_callback)
 
+    # Signal ready before the blocking start() call
+    _etw_ready.set()
     consumer.start()
 
 
@@ -112,9 +121,10 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
     """
     ETW real-time consumer via ctypes Windows APIs.
 
-    v24.0 fix: EnableTraceEx2.argtypes explicitly sets c_ulonglong for
-    MatchAnyKeyword (arg 5) and MatchAllKeyword (arg 6), preventing
-    OverflowError when passing 0xFFFFFFFFFFFFFFFF as a Python int.
+    Key fixes (v26.0):
+    - TRACEHANDLE → c_uint64 (c_ulong is 32-bit on Windows x64)
+    - EnableTraceEx2.argtypes uses c_ulonglong for MatchAnyKeyword/MatchAllKeyword
+    - All ULONG fields use wintypes.ULONG for cross-arch safety
     """
     import ctypes
     import ctypes.wintypes as wt
@@ -136,6 +146,7 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
     c_void_p    = ctypes.c_void_p
     c_byte      = ctypes.c_byte
 
+    # TRACEHANDLE must be c_uint64 — c_ulong is only 32-bit on Windows
     TRACEHANDLE          = c_uint64
     INVALID_TRACEHANDLE  = c_uint64(-1).value
     PROCESS_TRACE_MODE_RT  = 0x00000100
@@ -165,35 +176,35 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
 
     class WNODE_HEADER(ctypes.Structure):
         _fields_ = [
-            ("BufferSize",        c_ulong),
-            ("ProviderId",        c_ulong),
+            ("BufferSize",        wt.ULONG),
+            ("ProviderId",        wt.ULONG),
             ("HistoricalContext", c_ulonglong),
             ("TimeStamp",         c_longlong),
             ("Guid",              GUID),
-            ("ClientContext",     c_ulong),
-            ("Flags",             c_ulong),
+            ("ClientContext",     wt.ULONG),
+            ("Flags",             wt.ULONG),
         ]
 
     class EVENT_TRACE_PROPERTIES(ctypes.Structure):
         _fields_ = [
             ("Wnode",                  WNODE_HEADER),
-            ("BufferSize",             c_ulong),
-            ("MinimumBuffers",         c_ulong),
-            ("MaximumBuffers",         c_ulong),
-            ("MaximumFileSize",        c_ulong),
-            ("LogFileMode",            c_ulong),
-            ("FlushTimer",             c_ulong),
-            ("EnableFlags",            c_ulong),
+            ("BufferSize",             wt.ULONG),
+            ("MinimumBuffers",         wt.ULONG),
+            ("MaximumBuffers",         wt.ULONG),
+            ("MaximumFileSize",        wt.ULONG),
+            ("LogFileMode",            wt.ULONG),
+            ("FlushTimer",             wt.ULONG),
+            ("EnableFlags",            wt.ULONG),
             ("AgeLimit",               c_long),
-            ("NumberOfBuffers",        c_ulong),
-            ("FreeBuffers",            c_ulong),
-            ("EventsLost",             c_ulong),
-            ("BuffersWritten",         c_ulong),
-            ("LogBuffersLost",         c_ulong),
-            ("RealTimeBuffersLost",    c_ulong),
-            ("LoggerThreadId",         c_void_p),
-            ("LogFileNameOffset",      c_ulong),
-            ("LoggerNameOffset",       c_ulong),
+            ("NumberOfBuffers",        wt.ULONG),
+            ("FreeBuffers",            wt.ULONG),
+            ("EventsLost",             wt.ULONG),
+            ("BuffersWritten",         wt.ULONG),
+            ("LogBuffersLost",         wt.ULONG),
+            ("RealTimeBuffersLost",    wt.ULONG),
+            ("LoggerThreadId",         wt.HANDLE),
+            ("LogFileNameOffset",      wt.ULONG),
+            ("LoggerNameOffset",       wt.ULONG),
         ]
 
     class EVENT_DESCRIPTOR(ctypes.Structure):
@@ -209,13 +220,13 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
             ("HeaderType",      c_ushort),
             ("Flags",           c_ushort),
             ("EventProperty",   c_ushort),
-            ("ThreadId",        c_ulong),
-            ("ProcessId",       c_ulong),
+            ("ThreadId",        wt.ULONG),
+            ("ProcessId",       wt.ULONG),
             ("TimeStamp",       c_longlong),
             ("ProviderId",      GUID),
             ("EventDescriptor", EVENT_DESCRIPTOR),
-            ("KernelTime",      c_ulong),
-            ("UserTime",        c_ulong),
+            ("KernelTime",      wt.ULONG),
+            ("UserTime",        wt.ULONG),
             ("ActivityId",      GUID),
         ]
 
@@ -235,15 +246,15 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
 
     class _TRACE_LOGFILE_HEADER(ctypes.Structure):
         _fields_ = [
-            ("BufferSize",          c_ulong),
-            ("Version",             c_ulong),
-            ("ProviderVersion",     c_ulong),
-            ("NumberOfProcessors",  c_ulong),
+            ("BufferSize",          wt.ULONG),
+            ("Version",             wt.ULONG),
+            ("ProviderVersion",     wt.ULONG),
+            ("NumberOfProcessors",  wt.ULONG),
             ("EndTime",             c_longlong),
-            ("TimerResolution",     c_ulong),
-            ("MaximumFileSize",     c_ulong),
-            ("LogFileMode",         c_ulong),
-            ("BuffersWritten",      c_ulong),
+            ("TimerResolution",     wt.ULONG),
+            ("MaximumFileSize",     wt.ULONG),
+            ("LogFileMode",         wt.ULONG),
+            ("BuffersWritten",      wt.ULONG),
             ("LogInstanceGuid",     GUID),
             ("LoggerName2",         c_void_p),
             ("LogFileName2",        c_void_p),
@@ -251,8 +262,8 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
             ("BootTime",            c_longlong),
             ("PerfFreq",            c_longlong),
             ("StartTime",           c_longlong),
-            ("ReservedFlags",       c_ulong),
-            ("BuffersLost",         c_ulong),
+            ("ReservedFlags",       wt.ULONG),
+            ("BuffersLost",         wt.ULONG),
         ]
 
     class _EVENT_TRACE_LOGFILE(ctypes.Structure):
@@ -260,27 +271,27 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
             ("LogFileName",         c_void_p),
             ("LoggerName",          c_void_p),
             ("CurrentTime",         c_longlong),
-            ("BuffersRead",         c_ulong),
-            ("ProcessTraceMode",    c_ulong),
+            ("BuffersRead",         wt.ULONG),
+            ("ProcessTraceMode",    wt.ULONG),
             ("CurrentEvent",        c_byte * 88),
             ("LogfileHeader",       _TRACE_LOGFILE_HEADER),
             ("BufferCallback",      c_void_p),
-            ("BufferSize",          c_ulong),
-            ("Filled",              c_ulong),
-            ("EventsLost",          c_ulong),
+            ("BufferSize",          wt.ULONG),
+            ("Filled",              wt.ULONG),
+            ("EventsLost",          wt.ULONG),
             ("EventRecordCallback", c_void_p),
-            ("IsKernelTrace",       c_ulong),
+            ("IsKernelTrace",       wt.ULONG),
             ("Context",             c_void_p),
         ]
 
     class ENABLE_TRACE_PARAMETERS(ctypes.Structure):
         _fields_ = [
-            ("Version",           c_ulong),
-            ("EnableProperty",    c_ulong),
-            ("ControlFlags",      c_ulong),
+            ("Version",           wt.ULONG),
+            ("EnableProperty",    wt.ULONG),
+            ("ControlFlags",      wt.ULONG),
             ("SourceId",          GUID),
             ("EnableFilterDesc",  c_void_p),
-            ("FilterDescCount",   c_ulong),
+            ("FilterDescCount",   wt.ULONG),
         ]
 
     EventRecordCallbackType = ctypes.WINFUNCTYPE(None, ctypes.POINTER(EVENT_RECORD))
@@ -295,10 +306,10 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
         props_buf     = (ctypes.c_char * buf_sz)()
 
         props = ctypes.cast(props_buf, ctypes.POINTER(EVENT_TRACE_PROPERTIES)).contents
-        props.Wnode.BufferSize  = buf_sz
-        props.Wnode.Flags       = WNODE_FLAG_TRACED_GUID
-        props.LogFileMode       = EVENT_TRACE_RT_MODE
-        props.LoggerNameOffset  = props_base_sz
+        props.Wnode.BufferSize  = wt.ULONG(buf_sz)
+        props.Wnode.Flags       = wt.ULONG(WNODE_FLAG_TRACED_GUID)
+        props.LogFileMode       = wt.ULONG(EVENT_TRACE_RT_MODE)
+        props.LoggerNameOffset  = wt.ULONG(props_base_sz)
 
         ctypes.memmove(
             ctypes.addressof(props_buf) + props_base_sz,
@@ -311,9 +322,9 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
         StartTraceW = advapi32.StartTraceW
         StartTraceW.restype  = wt.ULONG
         StartTraceW.argtypes = [
-            ctypes.POINTER(TRACEHANDLE),  # LPTRACEHANDLE
-            ctypes.c_wchar_p,             # LPCWSTR SessionName
-            ctypes.c_void_p,              # PEVENT_TRACE_PROPERTIES
+            ctypes.POINTER(TRACEHANDLE),
+            ctypes.c_wchar_p,
+            ctypes.c_void_p,
         ]
         ret = StartTraceW(
             ctypes.byref(trace_handle),
@@ -332,26 +343,26 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
         EnableTraceEx2.argtypes = [
             TRACEHANDLE,                             # TraceHandle
             ctypes.POINTER(GUID),                    # ProviderId
-            c_ulong,                                 # ControlCode
+            wt.ULONG,                                # ControlCode
             c_ubyte,                                 # Level
-            c_ulonglong,                             # MatchAnyKeyword  ← fix: was bare int
+            c_ulonglong,                             # MatchAnyKeyword  ← 64-bit unsigned
             c_ulonglong,                             # MatchAllKeyword
-            c_ulong,                                 # Timeout
+            wt.ULONG,                                # Timeout
             ctypes.POINTER(ENABLE_TRACE_PARAMETERS), # EnableParameters
         ]
 
         for guid_str in (_GUID_KERNEL_PROCESS, _GUID_KERNEL_NETWORK):
             provider_guid = _parse_guid(guid_str)
             params = ENABLE_TRACE_PARAMETERS()
-            params.Version = 2
+            params.Version = wt.ULONG(2)
             EnableTraceEx2(
                 trace_handle,
                 ctypes.byref(provider_guid),
                 EVENT_CONTROL_CODE_ENABLE,
                 TRACE_LEVEL_VERBOSE,
-                c_ulonglong(0xFFFFFFFFFFFFFFFF),  # all keywords
+                c_ulonglong(0xFFFFFFFFFFFFFFFF),
                 c_ulonglong(0),
-                c_ulong(0),
+                wt.ULONG(0),
                 ctypes.byref(params),
             )
 
@@ -379,7 +390,7 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
         session_name_buf = ctypes.create_unicode_buffer(SESSION_NAME)
         logfile = _EVENT_TRACE_LOGFILE()
         logfile.LoggerName          = ctypes.cast(session_name_buf, ctypes.c_void_p).value
-        logfile.ProcessTraceMode    = PROCESS_TRACE_MODE_RT | PROCESS_TRACE_MODE_ER
+        logfile.ProcessTraceMode    = wt.ULONG(PROCESS_TRACE_MODE_RT | PROCESS_TRACE_MODE_ER)
         logfile.EventRecordCallback = ctypes.cast(cb, ctypes.c_void_p).value
 
         OpenTraceW = advapi32.OpenTraceW
@@ -390,6 +401,9 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
             logger.warning(f"ETW ctypes: OpenTraceW failed (error={err})")
             return
 
+        # Init complete — signal the async consumer before blocking
+        _etw_ready.set()
+
         ProcessTrace = advapi32.ProcessTrace
         ProcessTrace.restype = wt.ULONG
         handles = (TRACEHANDLE * 1)(consumer_handle)
@@ -399,42 +413,44 @@ def _etw_ctypes(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
 
     except Exception as exc:
         logger.warning(f"ETW ctypes: fatal — {exc}")
-        raise   # re-raise so _etw_trace_loop can push the sentinel
+        raise   # re-raise so _etw_trace_loop catches and sets _etw_failed
 
 
 # ── ETW trace loop (daemon thread target) ────────────────────────────────────
 
 def _etw_trace_loop(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
     """
-    Runs in daemon thread.
-    Tries pywintrace first; falls back to ctypes.
-    Pushes None sentinel on failure so the async consumer exits cleanly.
+    Runs in daemon thread. Tries pywintrace first; falls back to ctypes.
+    Sets _etw_ready on successful init or _etw_failed on exception.
     """
     try:
-        _etw_pywintrace(loop, queue)
-        return  # pywintrace ran and returned (trace stopped)
-    except ImportError:
-        logger.info("ETW: pywintrace not installed — using ctypes fallback")
-    except Exception as exc:
-        logger.warning(f"ETW pywintrace error: {exc}")
-        loop.call_soon_threadsafe(queue.put_nowait, None)
-        return
+        try:
+            _etw_pywintrace(loop, queue)
+            return  # pywintrace ran and returned (trace stopped)
+        except ImportError:
+            logger.info("ETW: pywintrace not installed — using ctypes fallback")
+        except Exception as exc:
+            logger.warning(f"ETW pywintrace error: {exc}")
+            raise  # propagate to outer except
 
-    try:
         _etw_ctypes(loop, queue)
-    except Exception as exc:
-        logger.warning(f"ETW ctypes: fatal — {exc}")
 
-    # Signal the async consumer that the trace thread is done
-    loop.call_soon_threadsafe(queue.put_nowait, None)
+    except Exception as exc:
+        logger.error(f"ETW: initialization failed: {exc}")
+        _etw_failed.set()
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
 async def start_etw_monitor(broadcast_fn) -> None:
-    """Launch ETW daemon thread and async consumer queue."""
+    """
+    Launch ETW daemon thread and async consumer queue.
+
+    Waits up to 10s for _etw_ready before entering the consumer loop.
+    Exits cleanly (no pending task) if init fails or times out.
+    """
+    loop  = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
 
     thread = threading.Thread(
         target=_etw_trace_loop,
@@ -443,10 +459,17 @@ async def start_etw_monitor(broadcast_fn) -> None:
         name="ETWTraceLoop",
     )
     thread.start()
-    logger.info("ETW: kernel telemetry monitor started (Kernel-Process + Kernel-Network)")
+
+    # Wait up to 10s for init result — prevents hanging consumer on failure
+    ready = await loop.run_in_executor(
+        None, lambda: _etw_ready.wait(10)
+    )
+    if _etw_failed.is_set() or not ready:
+        logger.warning("ETW: initialization failed on this host — monitor disabled")
+        return   # exit cleanly, no pending task
+
+    logger.info("ETW: kernel telemetry started (Kernel-Process + Kernel-Network)")
 
     while True:
         event = await queue.get()
-        if event is None:   # sentinel: thread exited, no trace established
-            return
         await broadcast_fn(event)

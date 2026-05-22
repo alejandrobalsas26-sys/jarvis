@@ -95,5 +95,10 @@ feedparser>=6.0.12            # CISA RSS feed parser
 pymetasploit3>=1.0.3     # Metasploit RPC client
 aiofiles>=23.2.1         # async file tail for Zeek logs
 
+# ── Sliver C2 gRPC Bridge (v26.0) ──────────────────────────────────────────────
+grpcio>=1.62.0            # Sliver C2 gRPC transport
+grpcio-tools>=1.62.0      # Sliver protobuf compilation
+sliver-py>=0.0.19         # Sliver Python operator client
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

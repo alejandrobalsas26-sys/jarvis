@@ -610,6 +610,14 @@
     .type-task_watchdog_event { background: #0a0a0a; border: 1px solid #666666; color: #aaaaaa; }
     .type-sysmon_event        { background: #1a0810; border: 1px solid #cc44aa; color: #ff88dd; }
 
+    /* ── v26.0 eBPF / Sliver / Hardware event type badges ── */
+    .type-ebpf_alert          { background: #1a0505; border: 1px solid #ff4400; color: #ff8844; }
+    .type-sliver_sessions     { background: #051a05; border: 1px solid #00ff44; color: #44ff88; }
+    .type-sliver_generating   { background: #051520; border: 1px solid #00ccff; color: #44ddff; }
+    .type-sliver_implant_ready{ background: #051a05; border: 1px solid #00ff88; color: #88ffaa; }
+    .type-sliver_exec_result  { background: #051515; border: 1px solid #00aaaa; color: #44cccc; }
+    .type-hardware_profile    { background: #050a1a; border: 1px solid #4488ff; color: #88aaff; }
+
     /* ── Trust decision toast ── */
     #trust-toast {
       display: none;
@@ -758,6 +766,15 @@
 <!-- v25.0 trust decision toast -->
 <div id="trust-toast"></div>
 
+<!-- v26.0 hardware profile toast -->
+<div id="hw-toast" style="display:none;position:fixed;top:56px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.94);border-radius:6px;padding:8px 20px;font-size:12px;z-index:142;pointer-events:none;border:1px solid #4488ff;color:#88aaff;letter-spacing:2px;"></div>
+
+<!-- v26.0 Sliver generating HUD overlay -->
+<div id="sliver-generating-overlay" style="display:none;position:absolute;bottom:52px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.90);border:1px solid #00ccff;border-radius:4px;padding:8px 18px;color:#44ddff;font-size:11px;letter-spacing:2px;z-index:116;pointer-events:none;animation:pulse 1.2s ease-in-out infinite;">[ GENERATING SLIVER IMPLANT... ]</div>
+
+<!-- v26.0 Sliver sessions sidebar panel -->
+<div id="sliver-panel" style="display:none;position:absolute;top:60px;right:16px;width:240px;max-height:260px;overflow-y:auto;background:rgba(7,9,15,0.94);border:1px solid #00ff44;border-radius:6px;padding:10px;z-index:111;font-size:11px;"></div>
+
 <!-- v24.0 startup diagnostic panel -->
 <div id="startup-diag-panel">
   <div class="sdp-title">◈ STARTUP DIAGNOSTIC</div>
@@ -866,6 +883,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       trust_decision:              'type-trust_decision',
       task_watchdog_event:         'type-task_watchdog_event',
       sysmon_event:                'type-sysmon_event',
+      ebpf_alert:                  'type-ebpf_alert',
+      sliver_sessions:             'type-sliver_sessions',
+      sliver_generating:           'type-sliver_generating',
+      sliver_implant_ready:        'type-sliver_implant_ready',
+      sliver_exec_result:          'type-sliver_exec_result',
+      hardware_profile:            'type-hardware_profile',
     };
     return map[t] || 'type-default';
   }
@@ -1984,6 +2007,117 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     }, 15000);
   }
 
+  // === v26.0 Hardware Profile, eBPF & Sliver Handlers ===
+
+  let _hwToastTimer = null;
+
+  function handleHardwareProfile(msg) {
+    const toast  = document.getElementById('hw-toast');
+    const isDual = !!msg.dual_channel;
+    const ram    = (msg.ram_gb || 0).toFixed(0);
+    toast.textContent   = isDual
+      ? `DUAL-CHANNEL MODE — ${ram}GB`
+      : `SINGLE-CHANNEL MODE — ${ram}GB`;
+    toast.style.color       = isDual ? '#44ff88' : '#ffcc44';
+    toast.style.borderColor = isDual ? '#00ff44' : '#ffaa00';
+    toast.style.display     = 'block';
+    if (_hwToastTimer) clearTimeout(_hwToastTimer);
+    _hwToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+  }
+
+  const _EBPF_PRIORITY_COLORS = {
+    CRITICAL: 0xff0000,
+    ERROR:    0xff4400,
+    WARNING:  0xffaa00,
+    NOTICE:   0x00ccff,
+    DEBUG:    0x666666,
+  };
+
+  function spawnEbpfAlertNode(msg) {
+    const color  = _EBPF_PRIORITY_COLORS[msg.priority] || 0x00ccff;
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 5.8 + Math.random() * 1.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 1.5;
+
+    const geo = new THREE.SphereGeometry(0.16, 10, 10);
+    const mat = new THREE.MeshPhongMaterial({
+      color, emissive: color, emissiveIntensity: 0.5, shininess: 70,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    const label = _makeTextSprite((msg.rule || '').slice(0, 24), color);
+    label.position.set(x, y + 0.30, z);
+    scene.add(label);
+
+    const fl = new THREE.PointLight(color, 2.5, 5);
+    fl.position.set(x, y, z);
+    scene.add(fl);
+
+    setTimeout(() => {
+      scene.remove(node);
+      scene.remove(label);
+      scene.remove(fl);
+    }, 12000);
+  }
+
+  function renderSliverSessions(msg) {
+    const panel    = document.getElementById('sliver-panel');
+    panel.style.display = 'block';
+    const sessions = msg.sessions || [];
+
+    sessions.forEach(s => {
+      const angle  = Math.random() * Math.PI * 2;
+      const radius = 3.4 + Math.random() * 0.4;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+
+      const geo  = new THREE.SphereGeometry(0.18, 12, 12);
+      const mat  = new THREE.MeshPhongMaterial({
+        color: 0x00ff44, emissive: 0x00aa22, emissiveIntensity: 0.8,
+      });
+      const node = new THREE.Mesh(geo, mat);
+      node.position.set(x, 0, z);
+      scene.add(node);
+
+      const lbl = _makeTextSprite(
+        `${(s.hostname || '').slice(0, 14)}/${s.os || ''}`, 0x44ff88
+      );
+      lbl.position.set(x, 0.32, z);
+      scene.add(lbl);
+
+      setTimeout(() => { scene.remove(node); scene.remove(lbl); }, 30000);
+    });
+
+    panel.innerHTML =
+      `<div style="color:#00ff44;font-size:10px;font-weight:bold;letter-spacing:3px;` +
+      `margin-bottom:6px;border-bottom:1px solid #005522;padding-bottom:3px;">` +
+      `SLIVER SESSIONS [${sessions.length}]</div>` +
+      sessions.map(s =>
+        `<div style="color:#44dd88;margin:3px 0;padding:3px 6px;` +
+        `border:1px solid #003311;border-radius:2px;">` +
+        `${escapeHtml(s.hostname || '?')} · ${escapeHtml(s.os || '?')} · ` +
+        `${escapeHtml(s.remote_addr || '?')}</div>`
+      ).join('');
+  }
+
+  function handleSliverGenerating(msg) {
+    document.getElementById('sliver-generating-overlay').style.display = 'block';
+  }
+
+  function handleSliverImplantReady(msg) {
+    document.getElementById('sliver-generating-overlay').style.display = 'none';
+    let tick = 0;
+    const origColor = coreMesh.material.color.clone();
+    const iv = setInterval(() => {
+      if (++tick > 4) { clearInterval(iv); coreMesh.material.color.copy(origColor); return; }
+      coreMesh.material.color.set(tick % 2 === 0 ? 0x00ff44 : 0x003311);
+    }, 250);
+  }
+
   // === WebSocket with auto-reconnect ===
   function connect() {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2221,6 +2355,38 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'sysmon_event') {
         handleSysmonEvent(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // === v26.0 Hardware Profile, eBPF & Sliver dispatchers ===
+
+      if (msg && msg.type === 'hardware_profile') {
+        handleHardwareProfile(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'ebpf_alert') {
+        spawnEbpfAlertNode(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'sliver_sessions') {
+        renderSliverSessions(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'sliver_generating') {
+        handleSliverGenerating(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'sliver_implant_ready') {
+        handleSliverImplantReady(msg);
         if (!paused) append(e.data);
         return;
       }
