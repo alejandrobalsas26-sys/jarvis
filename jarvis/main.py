@@ -158,6 +158,7 @@ async def _main_async() -> None:
     args = parser.parse_args()
 
     from core.hardware_profile import detect_hardware
+    from core.process_governor import enforce_cpu_priorities
     from core.model_router import (
         check_model_availability, configure_ollama_for_hardware,
         MODEL_FAST, MODEL_DEEP,
@@ -180,6 +181,10 @@ async def _main_async() -> None:
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
     await configure_ollama_for_hardware(hw_profile)
+
+    # v29.0: elevate ollama.exe to HIGH_PRIORITY_CLASS so LLM inference
+    # wins CPU time on the 15W U-series TDP budget. Best-effort; never blocks.
+    enforce_cpu_priorities()
 
     # Check model availability and warn if not pulled
     model_avail = await check_model_availability()
@@ -246,8 +251,11 @@ async def _main_async() -> None:
             # Zeek L7 DPI log streamer
             try:
                 from tools.zeek_dpi import start_zeek_dpi
-                watchdog.register("zeek-dpi", lambda: start_zeek_dpi(_aura_broadcast), RestartPolicy.BACKOFF)
-                logger.info("ZEEK_DPI: L7 deep packet inspection streamer initializing…")
+                try:
+                    watchdog.register("zeek-dpi", lambda: start_zeek_dpi(_aura_broadcast), RestartPolicy.BACKOFF)
+                    logger.info("ZEEK_DPI: L7 deep packet inspection streamer initializing…")
+                except Exception as e:
+                    logger.warning(f"Could not register zeek-dpi: {e}")
             except ImportError:
                 logger.warning("ZEEK_DPI: tools.zeek_dpi unavailable — DPI monitoring disabled")
 
@@ -316,28 +324,37 @@ async def _main_async() -> None:
                 logger.warning("RESOURCE_SENTINEL: tools.resource_sentinel unavailable — watchdog disabled")
 
             # VM Sysmon telemetry bridge
-            watchdog.register(
-                "sysmon-bridge",
-                lambda: start_sysmon_bridge(_aura_broadcast),
-                RestartPolicy.BACKOFF,
-            )
-            logger.info("SYSMON_BRIDGE: VM telemetry bridge registered…")
+            try:
+                watchdog.register(
+                    "sysmon-bridge",
+                    lambda: start_sysmon_bridge(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("SYSMON_BRIDGE: VM telemetry bridge registered…")
+            except Exception as e:
+                logger.warning(f"Could not register sysmon-bridge: {e}")
 
             # eBPF kernel telemetry from Kali VM via Falco
-            watchdog.register(
-                "ebpf-bridge",
-                lambda: start_ebpf_bridge(_aura_broadcast),
-                RestartPolicy.BACKOFF,
-            )
-            logger.info("EBPF_BRIDGE: eBPF/Falco bridge registered…")
+            try:
+                watchdog.register(
+                    "ebpf-bridge",
+                    lambda: start_ebpf_bridge(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("EBPF_BRIDGE: eBPF/Falco bridge registered…")
+            except Exception as e:
+                logger.warning(f"Could not register ebpf-bridge: {e}")
 
             # Sliver C2 session monitor
-            watchdog.register(
-                "sliver-monitor",
-                lambda: start_sliver_monitor(_aura_broadcast),
-                RestartPolicy.BACKOFF,
-            )
-            logger.info("SLIVER_MONITOR: Sliver C2 session monitor registered…")
+            try:
+                watchdog.register(
+                    "sliver-monitor",
+                    lambda: start_sliver_monitor(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("SLIVER_MONITOR: Sliver C2 session monitor registered…")
+            except Exception as e:
+                logger.warning(f"Could not register sliver-monitor: {e}")
 
             # v27.0 severity calibration background loop
             watchdog.register(
@@ -369,12 +386,15 @@ async def _main_async() -> None:
             # v28.0 RF out-of-band command channel
             try:
                 from tools.rf_oob import start_rf_oob
-                watchdog.register(
-                    "rf-oob",
-                    lambda: start_rf_oob(_aura_broadcast),
-                    RestartPolicy.BACKOFF,
-                )
-                logger.info("RF_OOB: out-of-band command channel registered")
+                try:
+                    watchdog.register(
+                        "rf-oob",
+                        lambda: start_rf_oob(_aura_broadcast),
+                        RestartPolicy.BACKOFF,
+                    )
+                    logger.info("RF_OOB: out-of-band command channel registered")
+                except Exception as e:
+                    logger.warning(f"Could not register rf-oob: {e}")
             except ImportError:
                 logger.warning("RF_OOB: tools.rf_oob unavailable — OOB channel disabled")
 

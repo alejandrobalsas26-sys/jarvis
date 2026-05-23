@@ -1,4 +1,11 @@
-"""core/task_watchdog.py — Asyncio task watchdog with auto-restart policies (v25.0)."""
+"""core/task_watchdog.py — Asyncio task watchdog with auto-restart policies (v29.0).
+
+v29.0 adds *exponential silent backoff*: a task that fails repeatedly
+with the same root cause is only logged loudly on the first failure
+and on escalations (every 5th attempt, or when the error signature
+changes). All other restarts are logged at DEBUG so the terminal
+stays quiet on U-series hardware where slow startup races are common.
+"""
 
 import asyncio, time
 from enum import Enum
@@ -9,6 +16,11 @@ class RestartPolicy(Enum):
     ALWAYS  = "always"
     NEVER   = "never"
     BACKOFF = "backoff"
+
+
+# After this many consecutive failures, escalate one log line back to WARNING
+# so a wedged subsystem is still visible without spamming every cycle.
+_ESCALATE_EVERY = 5
 
 
 class TaskWatchdog:
@@ -24,11 +36,13 @@ class TaskWatchdog:
     ) -> asyncio.Task:
         task = asyncio.create_task(coro_factory(), name=name)
         self._registry[name] = {
-            "task":          task,
-            "coro_factory":  coro_factory,
-            "policy":        policy,
-            "restart_count": 0,
-            "last_restart":  time.monotonic(),
+            "task":            task,
+            "coro_factory":    coro_factory,
+            "policy":          policy,
+            "restart_count":   0,
+            "last_restart":    time.monotonic(),
+            "last_error_sig":  None,
+            "silent_streak":   0,
         }
         return task
 
@@ -44,10 +58,31 @@ class TaskWatchdog:
                 policy  = entry["policy"]
                 count   = entry["restart_count"]
 
-                if exc:
-                    logger.error(f"WATCHDOG: task '{name}' failed: {exc}")
+                # Build a stable signature for the failure so repeats of the
+                # same root cause can be silenced. Type + truncated repr is
+                # enough to detect "same error as last time".
+                err_sig = f"{type(exc).__name__}:{repr(exc)[:120]}" if exc else "exit"
+                same_as_last = err_sig == entry["last_error_sig"]
+                streak       = entry["silent_streak"] + 1 if same_as_last else 1
+
+                # First occurrence (or novel error) → loud; repeats → silent;
+                # every Nth repeat → one warning so we don't hide a wedged task.
+                should_escalate = streak == 1 or (streak % _ESCALATE_EVERY == 0)
+
+                if should_escalate:
+                    if exc:
+                        suffix = f" (recurring x{streak})" if streak > 1 else ""
+                        logger.warning(f"WATCHDOG: task '{name}' failed: {exc}{suffix}")
+                    else:
+                        logger.warning(f"WATCHDOG: task '{name}' exited unexpectedly")
                 else:
-                    logger.warning(f"WATCHDOG: task '{name}' exited unexpectedly")
+                    logger.debug(
+                        f"WATCHDOG: task '{name}' failed again ({err_sig}) "
+                        f"streak={streak}"
+                    )
+
+                entry["last_error_sig"] = err_sig
+                entry["silent_streak"]  = streak
 
                 if policy == RestartPolicy.NEVER:
                     await broadcast_fn({"type": "task_watchdog_event",
@@ -63,12 +98,25 @@ class TaskWatchdog:
                 if delay:
                     await asyncio.sleep(delay)
 
-                entry["task"]          = asyncio.create_task(
-                    entry["coro_factory"](), name=name)
+                try:
+                    entry["task"] = asyncio.create_task(
+                        entry["coro_factory"](), name=name
+                    )
+                except (RuntimeError, BaseExceptionGroup, Exception) as e:
+                    if should_escalate:
+                        logger.warning(f"WATCHDOG: could not restart '{name}': {e}")
+                    else:
+                        logger.debug(f"WATCHDOG: could not restart '{name}': {e}")
+                    entry["restart_count"] += 1
+                    continue
+
                 entry["restart_count"] += 1
                 entry["last_restart"]   = time.monotonic()
 
-                logger.info(f"WATCHDOG: restarted '{name}' (attempt {count + 1})")
+                if should_escalate:
+                    logger.info(f"WATCHDOG: restarted '{name}' (attempt {count + 1})")
+                else:
+                    logger.debug(f"WATCHDOG: restarted '{name}' (attempt {count + 1})")
                 await broadcast_fn({"type": "task_watchdog_event",
                                     "name": name, "action": "restarted",
                                     "restart_count": count + 1})
