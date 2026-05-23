@@ -283,6 +283,16 @@ class TemporalCorrelator:
                     **inc.to_dict(),
                 })
 
+            # v28.0 — fire SOAR playbook engine before agentic loop
+            try:
+                from core.playbook_engine import playbook_engine
+                asyncio.create_task(playbook_engine.evaluate({
+                    "rule": rule.name,
+                    **inc.to_dict(),
+                }))
+            except Exception as e:
+                logger.debug(f"CORRELATOR: playbook engine dispatch failed: {e}")
+
     async def _prune_loop(self) -> None:
         while True:
             await asyncio.sleep(self.PRUNE_INTERVAL)

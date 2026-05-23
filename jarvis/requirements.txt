@@ -103,5 +103,10 @@ sliver-py>=0.0.19         # Sliver Python operator client
 # ── v27.0 Temporal Correlation ─────────────────────────────────────────────────
 mmh3>=4.1.0                   # MurmurHash3 — fast non-cryptographic hash for correlation buckets
 
+# ── v28.0 SOAR + RF-OOB ────────────────────────────────────────────────────────
+PyYAML>=6.0.1             # SOAR playbook definition parsing
+cryptography>=42.0.0      # AES-256-GCM for RF-OOB command encryption
+watchdog>=4.0.0           # hot-reload playbook files on disk change
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

@@ -1,0 +1,22 @@
+name: process_injection_sequence
+description: Response to confirmed process injection chain
+auto_authorize: false
+trigger:
+  incident_type: process_injection_sequence
+  severity_min: 7.0
+  mitre_any: [T1055, T1055.001, T1055.012]
+steps:
+  - action: broadcast_alert
+    params:
+      message: "Process injection confirmed — PID {{incident.involved_pids.first}}"
+      severity: CRITICAL
+  - action: run_binary_inversion
+    params:
+      note: "Triggered by incident {{incident.incident_id}}"
+  - action: run_volatility
+    params:
+      plugins: [windows.malfind, windows.dlllist]
+  - action: snapshot_vm
+    params:
+      vmx: "{{config.SECONDARY_VMS.0}}"
+      snapshot_name: "injection_{{incident.incident_id}}"

@@ -1,0 +1,23 @@
+name: c2_beacon_detected
+description: Response to confirmed C2 beacon pattern
+auto_authorize: false
+trigger:
+  incident_type: c2_beacon_detected
+  severity_min: 6.5
+  mitre_any: [T1071, T1071.004, T1048]
+steps:
+  - action: broadcast_alert
+    params:
+      message: "C2 beacon confirmed — blocking and capturing"
+      severity: CRITICAL
+  - action: isolate_ip
+    params:
+      ip: "{{incident.involved_hosts.first}}"
+      ttl_minutes: 240
+  - action: run_nmap
+    params:
+      target: "{{incident.involved_hosts.first}}"
+  - action: store_episode
+    params:
+      content: "C2 beacon playbook executed: hosts={{incident.involved_hosts}}"
+      severity: CRITICAL

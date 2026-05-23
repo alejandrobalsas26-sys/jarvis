@@ -17,6 +17,7 @@ Uso:
     python main.py --no-greeting
 """
 
+import os
 import re
 import sys
 import asyncio
@@ -345,6 +346,37 @@ async def _main_async() -> None:
                 RestartPolicy.BACKOFF,
             )
             logger.info("SEVERITY_CALIBRATOR: adaptive severity scoring registered…")
+
+            # v28.0 SOAR playbook engine — deterministic incident response
+            try:
+                from core.playbook_engine import playbook_engine
+                playbook_engine.load_playbooks()
+                playbook_engine.start_hot_reload()
+                playbook_engine.attach(
+                    broadcast_fn  = _aura_broadcast,
+                    tool_executor = executor,
+                    config        = {
+                        "SECONDARY_VMS":         [v for v in os.getenv("SECONDARY_VMS", "").split(",") if v],
+                        "VOLATILITY_TARGET_VMX": os.getenv("VOLATILITY_TARGET_VMX", ""),
+                    }
+                )
+                logger.info(
+                    f"PLAYBOOK: engine ready — {len(playbook_engine._playbooks)} playbooks loaded"
+                )
+            except ImportError as e:
+                logger.warning(f"PLAYBOOK: engine unavailable — {e}")
+
+            # v28.0 RF out-of-band command channel
+            try:
+                from tools.rf_oob import start_rf_oob
+                watchdog.register(
+                    "rf-oob",
+                    lambda: start_rf_oob(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("RF_OOB: out-of-band command channel registered")
+            except ImportError:
+                logger.warning("RF_OOB: tools.rf_oob unavailable — OOB channel disabled")
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")

@@ -1,0 +1,27 @@
+name: lateral_movement_chain
+description: Automated response to detected lateral movement compound incident
+auto_authorize: false
+trigger:
+  incident_type: lateral_movement_chain
+  severity_min: 6.0
+  mitre_any: [T1021, T1046, T1071]
+steps:
+  - action: broadcast_alert
+    params:
+      message: "Lateral movement detected — incident {{incident.incident_id}}"
+      severity: HIGH
+  - action: isolate_ip
+    params:
+      ip: "{{incident.involved_hosts.first}}"
+      ttl_minutes: 60
+  - action: snapshot_vm
+    params:
+      vmx: "{{config.SECONDARY_VMS.0}}"
+      snapshot_name: "incident_{{incident.incident_id}}"
+  - action: run_volatility
+    params:
+      plugins: [windows.malfind, windows.pslist]
+  - action: store_episode
+    params:
+      content: "Playbook lateral_movement executed on {{incident.incident_id}}"
+      severity: HIGH
