@@ -157,7 +157,14 @@ async def _main_async() -> None:
     parser.add_argument("--no-aura", action="store_true", help="Disable AURA WebSocket server")
     args = parser.parse_args()
 
-    from core.hardware_profile import detect_hardware
+    from core.hardware_profile import detect_hardware, set_cached_profile
+    from core.dependency_guardian import ensure_all, resolve_models
+    from core.shutdown_manager import (
+        install_signal_handlers, get_shutdown_event,
+        run_graceful_shutdown, register_shutdown_callback,
+    )
+    from core.relevance_graph import start_pruning_loop
+    from core.power_monitor import start_power_monitor
     from core.process_governor import enforce_cpu_priorities
     from core.model_router import (
         check_model_availability, configure_ollama_for_hardware,
@@ -180,11 +187,45 @@ async def _main_async() -> None:
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
+    set_cached_profile(hw_profile)
+
+    # v30.0: dependency guardian — start Ollama, install missing packages,
+    # check disk space, install jq. Concurrent — won't block boot.
+    dep_results = await ensure_all(hw_profile)
+    logger.debug(f"GUARDIAN: results → {dep_results}")
+
+    # v30.0: resolve best available models from fallback chain
+    resolved_fast, resolved_deep = await resolve_models(hw_profile)
+    hw_profile.model_fast = resolved_fast
+    hw_profile.model_deep = resolved_deep
+    try:
+        import core.model_router as _mr
+        _mr.MODEL_FAST = resolved_fast
+        _mr.MODEL_DEEP = resolved_deep
+    except Exception:
+        pass
+
     await configure_ollama_for_hardware(hw_profile)
 
     # v29.0: elevate ollama.exe to HIGH_PRIORITY_CLASS so LLM inference
     # wins CPU time on the 15W U-series TDP budget. Best-effort; never blocks.
     enforce_cpu_priorities()
+
+    # v30.0: install signal handlers for graceful shutdown
+    install_signal_handlers(asyncio.get_event_loop())
+
+    # v30.0: register ChromaDB flush callback for graceful shutdown
+    async def _flush_chroma():
+        try:
+            from core.knowledge import get_vault
+            vault = get_vault()
+            chroma = getattr(vault, "_chroma", None)
+            if chroma is not None and hasattr(chroma, "persist"):
+                chroma.persist()
+            logger.info("SHUTDOWN: ChromaDB flushed")
+        except Exception:
+            pass
+    register_shutdown_callback(_flush_chroma)
 
     # Check model availability and warn if not pulled
     model_avail = await check_model_availability()
@@ -203,6 +244,15 @@ async def _main_async() -> None:
     executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
     llm = LLM(tool_executor=executor)
     tts = TTS()
+
+    # v30.0: register session-save callback (closure now has llm reference)
+    async def _flush_session():
+        try:
+            from core.session_manager import save_session
+            save_session(llm.history)
+        except Exception:
+            pass
+    register_shutdown_callback(_flush_session)
 
     # v27.0: store executor reference for HUD bidirectional command dispatch
     try:
@@ -364,6 +414,28 @@ async def _main_async() -> None:
             )
             logger.info("SEVERITY_CALIBRATOR: adaptive severity scoring registered…")
 
+            # v30.0 episodic memory pruning loop (PageRank-based relevance)
+            try:
+                watchdog.register(
+                    "pruning-loop",
+                    lambda: start_pruning_loop(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("RELEVANCE_GRAPH: episodic memory pruning loop registered…")
+            except Exception as e:
+                logger.warning(f"Could not register pruning-loop: {e}")
+
+            # v30.0 battery-aware dynamic reconfiguration
+            try:
+                watchdog.register(
+                    "power-monitor",
+                    lambda: start_power_monitor(_aura_broadcast, hw_profile),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("POWER_MONITOR: battery-aware reconfiguration registered…")
+            except Exception as e:
+                logger.warning(f"Could not register power-monitor: {e}")
+
             # v28.0 SOAR playbook engine — deterministic incident response
             try:
                 from core.playbook_engine import playbook_engine
@@ -430,6 +502,13 @@ async def _main_async() -> None:
         else:
             await _loop_text(llm, tts, settings.assistant_name)
     finally:
+        # v30.0: graceful shutdown sequence — flush ChromaDB, save session,
+        # cancel tasks, write audit log.
+        try:
+            await run_graceful_shutdown(watchdog=watchdog)
+        except Exception as e:
+            logger.debug(f"SHUTDOWN: error during graceful shutdown: {e}")
+
         # Graceful AURA shutdown
         if aura_server is not None:
             aura_server.should_exit = True

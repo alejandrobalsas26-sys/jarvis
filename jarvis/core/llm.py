@@ -582,6 +582,17 @@ class LLM:
         )
         self.tool_executor = tool_executor
         self.history: list[dict] = []
+        self._session_prefix: str = ""
+
+        # v30.0: restore persisted session if recent enough
+        try:
+            from core.session_manager import load_session, offer_resume
+            prior = load_session()
+            if prior:
+                self.history = prior
+                self._session_prefix = offer_resume(prior)
+        except Exception:
+            pass
 
         # Estado MCP — se inicializa de forma lazy en el primer chat_stream
         self._mcp_session = None
@@ -943,11 +954,13 @@ class LLM:
 
         self.history.append({"role": "user", "content": user_message})
 
-        # Query past operational incidents for context injection (best-effort)
+        # v30.0: Query past operational incidents via PageRank-ranked relevance
+        # graph (replaces pure cosine retrieval). Falls back internally to
+        # cosine similarity if igraph is unavailable.
         _incident_prefix = ""
         try:
-            from core.episodic_memory import query_similar_episodes
-            _episodes = await query_similar_episodes(user_message, n_results=1)
+            from core.relevance_graph import query_graph_ranked_episodes
+            _episodes = await query_graph_ranked_episodes(user_message, n_results=2)
             if _episodes:
                 _incident_prefix = (
                     f"[PAST INCIDENT CONTEXT]: {_episodes[0]['content']}\n---\n"
@@ -981,29 +994,33 @@ class LLM:
             accumulated_calls: dict[int, dict] = {}
             finish_reason: str | None = None
 
-            async for chunk in stream:
-                choice = chunk.choices[0]
-                delta = choice.delta
+            try:
+                async for chunk in stream:
+                    choice = chunk.choices[0]
+                    delta = choice.delta
 
-                if delta.content:
-                    yield delta.content
-                    text_chunks.append(delta.content)
+                    if delta.content:
+                        yield delta.content
+                        text_chunks.append(delta.content)
 
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        i = tc_delta.index
-                        if i not in accumulated_calls:
-                            accumulated_calls[i] = {"id": "", "name": "", "arguments": ""}
-                        if tc_delta.id:
-                            accumulated_calls[i]["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                accumulated_calls[i]["name"] += tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                accumulated_calls[i]["arguments"] += tc_delta.function.arguments
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            i = tc_delta.index
+                            if i not in accumulated_calls:
+                                accumulated_calls[i] = {"id": "", "name": "", "arguments": ""}
+                            if tc_delta.id:
+                                accumulated_calls[i]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    accumulated_calls[i]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    accumulated_calls[i]["arguments"] += tc_delta.function.arguments
 
-                if choice.finish_reason is not None:
-                    finish_reason = choice.finish_reason
+                    if choice.finish_reason is not None:
+                        finish_reason = choice.finish_reason
+            except (RuntimeError, BaseExceptionGroup) as e:
+                logger.error(f"LLM: stream interrupted by task group error: {e}")
+                return
 
             full_text = "".join(text_chunks)
             thinking = self._extract_thinking(full_text)
@@ -1042,6 +1059,12 @@ class LLM:
                 })
 
             if finish_reason != "tool_calls" and not forced_tool_calls:
+                # v30.0: persist conversation after each completed turn
+                try:
+                    from core.session_manager import save_session
+                    save_session(self.history)
+                except Exception:
+                    pass
                 break
 
             # ── Ejecutar tools y añadir resultados al historial ───────────────

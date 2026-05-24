@@ -618,6 +618,10 @@
     .type-sliver_exec_result  { background: #051515; border: 1px solid #00aaaa; color: #44cccc; }
     .type-hardware_profile    { background: #050a1a; border: 1px solid #4488ff; color: #88aaff; }
 
+    /* ── v30.0 event type badges ── */
+    .type-memory_pruned       { background: #050a1a; border: 1px solid #4466ff; color: #8899ff; }
+    .type-power_state_change  { background: #0a0a05; border: 1px solid #aaff44; color: #ccff88; }
+
     /* ── Trust decision toast ── */
     #trust-toast {
       display: none;
@@ -851,6 +855,9 @@
 <!-- v26.0 hardware profile toast -->
 <div id="hw-toast" style="display:none;position:fixed;top:56px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.94);border-radius:6px;padding:8px 20px;font-size:12px;z-index:142;pointer-events:none;border:1px solid #4488ff;color:#88aaff;letter-spacing:2px;"></div>
 
+<!-- v30.0 power state toast -->
+<div id="power-toast" style="display:none;position:fixed;top:92px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.94);border-radius:6px;padding:8px 20px;font-size:12px;z-index:143;pointer-events:none;letter-spacing:2px;"></div>
+
 <!-- v26.0 Sliver generating HUD overlay -->
 <div id="sliver-generating-overlay" style="display:none;position:absolute;bottom:52px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.90);border:1px solid #00ccff;border-radius:4px;padding:8px 18px;color:#44ddff;font-size:11px;letter-spacing:2px;z-index:116;pointer-events:none;animation:pulse 1.2s ease-in-out infinite;">[ GENERATING SLIVER IMPLANT... ]</div>
 
@@ -1025,6 +1032,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       playbook_note:               'type-playbook_note',
       rf_oob_command:              'type-rf_oob_command',
       rf_oob_status:               'type-rf_oob_status',
+      // v30.0 adaptive boot intelligence
+      memory_pruned:               'type-memory_pruned',
+      power_state_change:          'type-power_state_change',
     };
     return map[t] || 'type-default';
   }
@@ -2401,6 +2411,38 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     _hwToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
   }
 
+  // === v30.0 handlers ===
+
+  let _powerToastTimer = null;
+  function handlePowerStateChange(msg) {
+    const toast = document.getElementById('power-toast');
+    if (!toast) return;
+    const onAc = !!msg.on_ac;
+    if (onAc) {
+      toast.textContent       = '⚡ AC MODE';
+      toast.style.color       = '#ccff88';
+      toast.style.borderColor = '#aaff44';
+      toast.style.border      = '1px solid #aaff44';
+    } else {
+      const pct = msg.battery_pct != null ? ` (${msg.battery_pct}%)` : '';
+      toast.textContent       = `🔋 BATTERY MODE — POWER SAVE${pct}`;
+      toast.style.color       = '#ffcc44';
+      toast.style.borderColor = '#ffaa00';
+      toast.style.border      = '1px solid #ffaa00';
+    }
+    toast.style.display = 'block';
+    if (_powerToastTimer) clearTimeout(_powerToastTimer);
+    _powerToastTimer = setTimeout(
+      () => { toast.style.display = 'none'; },
+      onAc ? 3000 : 5000,
+    );
+  }
+
+  function handleMemoryPruned(msg) {
+    // Logged via append() in the main dispatcher — no extra UI needed beyond
+    // the badge color in the event stream.
+  }
+
   const _EBPF_PRIORITY_COLORS = {
     CRITICAL: 0xff0000,
     ERROR:    0xff4400,
@@ -2913,6 +2955,20 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'hardware_profile') {
         handleHardwareProfile(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // === v30.0 dispatchers ===
+
+      if (msg && msg.type === 'power_state_change') {
+        handlePowerStateChange(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'memory_pruned') {
+        handleMemoryPruned(msg);
         if (!paused) append(e.data);
         return;
       }
