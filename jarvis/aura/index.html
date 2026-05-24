@@ -622,6 +622,10 @@
     .type-memory_pruned       { background: #050a1a; border: 1px solid #4466ff; color: #8899ff; }
     .type-power_state_change  { background: #0a0a05; border: 1px solid #aaff44; color: #ccff88; }
 
+    /* ── v31.0 event type badges ── */
+    .type-tarpit_trap         { background: #1a0520; border: 1px solid #aa44ff; color: #cc88ff; }
+    .type-yara_file_match     { background: #1a0505; border: 1px solid #ff2200; color: #ff6644; }
+
     /* ── Trust decision toast ── */
     #trust-toast {
       display: none;
@@ -1035,6 +1039,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       // v30.0 adaptive boot intelligence
       memory_pruned:               'type-memory_pruned',
       power_state_change:          'type-power_state_change',
+      // v31.0 CPU-dominance active defense
+      tarpit_trap:                 'type-tarpit_trap',
+      yara_file_match:             'type-yara_file_match',
     };
     return map[t] || 'type-default';
   }
@@ -1505,6 +1512,102 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
     shieldMesh.position.copy(coreMesh.position);
     scene.add(shieldMesh);
+  }
+
+  // ── v31.0 Tarpit trap: spawn purple octahedron at outer radius ──────────────
+  function spawnTarpitTrap(msg) {
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 7.0 + Math.random() * 1.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = (Math.random() - 0.5) * 1.5;
+
+    const geo = new THREE.OctahedronGeometry(0.22, 0);
+    const mat = new THREE.MeshPhongMaterial({
+      color: 0xaa44ff,
+      emissive: 0xaa44ff,
+      emissiveIntensity: 0.55,
+      shininess: 80,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    // Pulsing purple edge to core
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xcc88ff, transparent: true, opacity: 0.85,
+    });
+    const edgeGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(x, y, z),
+      coreMesh ? coreMesh.position.clone() : new THREE.Vector3(0, 0, 0),
+    ]);
+    const edge = new THREE.Line(edgeGeo, edgeMat);
+    scene.add(edge);
+
+    const labelText = `${msg.attacker_ip || '?'}:${msg.port || '?'}`;
+    const label = _makeTextSprite(labelText.slice(0, 22), 0xcc88ff);
+    label.position.set(x, y + 0.35, z);
+    scene.add(label);
+
+    const flash = new THREE.PointLight(0xaa44ff, 2.8, 5);
+    flash.position.copy(node.position);
+    scene.add(flash);
+
+    setTimeout(() => {
+      scene.remove(node);
+      scene.remove(edge);
+      scene.remove(label);
+      scene.remove(flash);
+    }, 30000);
+  }
+
+  // ── v31.0 YARA file match: 4-pulse red flash on root + alert spawn ──────────
+  function triggerYaraFileMatch(msg) {
+    let tick = 0;
+    const origIntensity = cpuLight ? cpuLight.intensity : 1.0;
+    const origColor     = cpuLight ? cpuLight.color.clone() : null;
+    const iv = setInterval(() => {
+      if (++tick > 8) {
+        clearInterval(iv);
+        if (cpuLight && origColor) {
+          cpuLight.color.copy(origColor);
+          cpuLight.intensity = origIntensity;
+        }
+        return;
+      }
+      if (cpuLight) {
+        cpuLight.color.set(tick % 2 === 0 ? 0xff2200 : 0x000000);
+        cpuLight.intensity = tick % 2 === 0 ? 6.0 : 0.0;
+      }
+    }, 120);
+
+    const angle  = Math.random() * Math.PI * 2;
+    const radius = 5.5;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const y = 0.4;
+
+    const geo = new THREE.TetrahedronGeometry(0.28, 0);
+    const mat = new THREE.MeshPhongMaterial({
+      color: 0xff2200, emissive: 0xff2200, emissiveIntensity: 0.7,
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.set(x, y, z);
+    scene.add(node);
+
+    const fname = (msg.file || '').split(/[\\/]/).pop() || 'unknown';
+    const rule  = (msg.matches && msg.matches[0]) || '';
+    const labelText = `${fname} • ${rule}`.slice(0, 24);
+    const label = _makeTextSprite(labelText, 0xff6644);
+    label.position.set(x, y + 0.42, z);
+    scene.add(label);
+
+    setTimeout(() => {
+      scene.remove(node);
+      scene.remove(label);
+    }, 20000);
+
+    triggerFirewallBlock(msg);
   }
 
   // High-intensity red alarm strobe + tactical warning overlay
@@ -2757,6 +2860,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'firewall_block') {
         triggerFirewallBlock(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'tarpit_trap') {
+        spawnTarpitTrap(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'yara_file_match') {
+        triggerYaraFileMatch(msg);
         if (!paused) append(e.data);
         return;
       }

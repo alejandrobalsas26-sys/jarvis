@@ -13,6 +13,7 @@ Memory layout intent (future 64GB pool):
 import io
 import os
 import math
+import queue
 import threading
 import tempfile
 from typing import Tuple, Optional
@@ -23,6 +24,7 @@ import soundfile as sf
 from loguru import logger
 
 from core.config import settings
+from core.audio_vad import VADAccumulator, FRAME_BYTES, SAMPLE_RATE as VAD_SAMPLE_RATE
 
 
 def _try_elevate_priority() -> None:
@@ -57,6 +59,11 @@ class HighPrioritySTTListener:
         self._record_seconds = settings.record_seconds
         self._language       = settings.whisper_language
 
+        # v31.0: WebRTC VAD pre-filter. Gates Whisper inference so it only
+        # runs on confirmed speech segments — eliminates the dominant
+        # idle-silence CPU consumer on the Ryzen 5 7430U.
+        self._vad = VADAccumulator()
+
         loader = threading.Thread(
             target=self._load_model,
             name="whisper-hi-prio",
@@ -72,7 +79,17 @@ class HighPrioritySTTListener:
             from faster_whisper import WhisperModel
             size = settings.whisper_model
             logger.info(f"Audio: cargando Whisper '{size}' en thread de alta prioridad...")
-            self._model = WhisperModel(size, device="cpu", compute_type="int8")
+            # v31.0: int8 + tuned thread budget. cpu_threads=4 leaves 2 of
+            # the Ryzen 5 7430U's 6 physical cores free for the asyncio event
+            # loop and Ollama inference. num_workers=1 because VAD already
+            # pre-filters concurrent requests upstream.
+            self._model = WhisperModel(
+                size,
+                device       = "cpu",
+                compute_type = "int8",
+                cpu_threads  = 4,
+                num_workers  = 1,
+            )
             logger.info("Audio: Whisper listo (modelo aislado del LLM en memoria).")
         except Exception as exc:
             logger.error(f"Audio: error cargando Whisper: {exc}")
@@ -131,4 +148,80 @@ class HighPrioritySTTListener:
         """Backward-compatible: record + transcribe, returns text only."""
         audio = self.record(seconds)
         text, _ = self.transcribe_with_confidence(audio)
+        return text
+
+    # ── v31.0 VAD-gated capture ───────────────────────────────────────────────
+    def listen_vad(self, max_seconds: int = 30) -> str:
+        """
+        VAD-gated capture: stream raw 16 kHz PCM-16 mono frames into the
+        VADAccumulator until it returns a complete utterance, then transcribe.
+
+        Uses a single sounddevice RawInputStream (one audio device, one
+        capture thread — no second PyAudio stream). Whisper runs only on
+        confirmed speech, eliminating idle-silence inference cost.
+
+        max_seconds caps the wait so this never blocks the UI loop forever.
+        """
+        if self._model is None and not self.wait_ready(timeout=30.0):
+            return ""
+
+        self._vad.reset()
+        utterance_holder: dict[str, bytes] = {}
+        frame_q: queue.Queue[bytes] = queue.Queue()
+        stop_event = threading.Event()
+
+        # blocksize=480 samples = 30ms @ 16kHz mono PCM-16 → FRAME_BYTES bytes
+        block_samples = FRAME_BYTES // 2
+
+        def _on_audio(indata, frames, time_info, status):
+            if status:
+                logger.debug(f"VAD stream status: {status}")
+            # indata is a CFFI buffer of bytes — copy out before yielding
+            frame_q.put(bytes(indata))
+
+        try:
+            stream = sd.RawInputStream(
+                samplerate = VAD_SAMPLE_RATE,
+                blocksize  = block_samples,
+                dtype      = "int16",
+                channels   = 1,
+                callback   = _on_audio,
+            )
+        except Exception as exc:
+            logger.warning(f"VAD: could not open audio stream — {exc}")
+            return ""
+
+        deadline = threading.Event()
+        timer = threading.Timer(max_seconds, deadline.set)
+        timer.daemon = True
+        timer.start()
+
+        with stream:
+            while not deadline.is_set():
+                try:
+                    frame = frame_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                utterance = self._vad.feed(frame)
+                if utterance is not None:
+                    utterance_holder["pcm"] = utterance
+                    break
+
+        timer.cancel()
+        stop_event.set()
+
+        pcm = utterance_holder.get("pcm")
+        if not pcm:
+            return ""
+
+        # Convert int16 PCM bytes → float32 numpy at 16kHz for Whisper
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        # transcribe_with_confidence writes via self._sample_rate; temporarily
+        # honour the VAD-native rate to avoid pitch/time distortion.
+        prev_rate = self._sample_rate
+        try:
+            self._sample_rate = VAD_SAMPLE_RATE
+            text, _ = self.transcribe_with_confidence(audio)
+        finally:
+            self._sample_rate = prev_rate
         return text

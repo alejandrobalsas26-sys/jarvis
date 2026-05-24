@@ -183,6 +183,8 @@ async def _main_async() -> None:
     from tools.sysmon_bridge import start_sysmon_bridge
     from tools.ebpf_bridge import start_ebpf_bridge
     from tools.sliver_bridge import start_sliver_monitor
+    from tools.active_tarpit import start_tarpit
+    from tools.yara_file_monitor import start_yara_file_monitor
     from core.severity_calibrator import start_calibration_loop
 
     # FIRST: detect hardware before any model loading or task registration
@@ -435,6 +437,28 @@ async def _main_async() -> None:
                 logger.info("POWER_MONITOR: battery-aware reconfiguration registered…")
             except Exception as e:
                 logger.warning(f"Could not register power-monitor: {e}")
+
+            # v31.0 active deception TCP tarpit (4444/5900/8080/9200/27017)
+            try:
+                watchdog.register(
+                    "active-tarpit",
+                    lambda: start_tarpit(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("TARPIT: cognitive deception matrix registered…")
+            except Exception as e:
+                logger.warning(f"Could not register active-tarpit: {e}")
+
+            # v31.0 event-driven YARA file integrity monitor
+            try:
+                watchdog.register(
+                    "yara-file-monitor",
+                    lambda: start_yara_file_monitor(_aura_broadcast),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("YARA_MONITOR: event-driven file integrity monitor registered…")
+            except Exception as e:
+                logger.warning(f"Could not register yara-file-monitor: {e}")
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:

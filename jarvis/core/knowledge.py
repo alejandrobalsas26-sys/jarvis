@@ -6,6 +6,7 @@ en jarvis/brain/vector_store/. Usa all-MiniLM-L6-v2 para embeddings (CPU-only).
 """
 
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 from loguru import logger
 
@@ -57,7 +58,21 @@ class KnowledgeVault:
         return self._chroma
 
     def _embed(self, text: str) -> list[float]:
+        # v31.0: route through LRU cache. Episodic memory and incident
+        # correlator re-query identical MITRE strings constantly; caching
+        # eliminates the bulk of redundant sentence-transformers passes.
+        return self._embed_cached(text)
+
+    @lru_cache(maxsize=512)
+    def _embed_cached(self, text: str) -> list[float]:
         return self._model.encode([text]).tolist()[0]
+
+    def embedding_cache_info(self) -> str:
+        info = self._embed_cached.cache_info()
+        return (
+            f"embeddings: hits={info.hits} misses={info.misses} "
+            f"size={info.currsize}/{info.maxsize}"
+        )
 
     def _read_pdf(self, path: Path) -> str:
         import pdfplumber

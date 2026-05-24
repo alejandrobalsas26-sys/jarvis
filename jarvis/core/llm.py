@@ -574,6 +574,23 @@ _FALLBACK_TOOL_RE = re.compile(r'\{[^{}]*"name"\s*:\s*"[^"]+"[^}]*\}')
 _THINKING_RE = re.compile(r'\[THINKING\](.*?)\[/THINKING\]', re.DOTALL)
 
 
+# ── v31.0 Adaptive context window ────────────────────────────────────────────
+def _adaptive_ctx(history: list[dict], base_ctx: int) -> int:
+    """
+    Return optimal num_ctx for the current conversation length.
+    Short turns get a smaller KV cache → proportionally less CPU per token.
+    Long agentic loops escalate to the full base_ctx.
+    """
+    total_chars = sum(len(str(m.get("content", ""))) for m in history)
+    estimated_tokens = total_chars // 4
+
+    if estimated_tokens < 500:
+        return min(1024, base_ctx)
+    if estimated_tokens < 2000:
+        return min(2048, base_ctx)
+    return base_ctx
+
+
 class LLM:
     def __init__(self, tool_executor):
         self.client = AsyncOpenAI(
@@ -979,15 +996,25 @@ class LLM:
             ]
 
             _routed_model = select_model(user_message)
+            # v31.0: adaptive ctx — shrink KV cache for short turns
+            try:
+                from core.hardware_profile import get_cached_profile
+                _hw = get_cached_profile()
+                _base_ctx = _hw.recommended_ctx if _hw else 4096
+            except Exception:
+                _base_ctx = 4096
+            _ctx = _adaptive_ctx(self.history, _base_ctx)
             logger.debug(
                 f"LLM: {_routed_model} "
-                f"(score={calculate_complexity(user_message):.2f})"
+                f"(score={calculate_complexity(user_message):.2f}, "
+                f"ctx={_ctx} adaptive)"
             )
             stream = await self.client.chat.completions.create(
                 model=_routed_model,
                 messages=messages_for_api,
                 tools=TOOLS,
                 stream=True,
+                extra_body={"options": {"num_ctx": _ctx}},
             )
 
             text_chunks: list[str] = []

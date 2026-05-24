@@ -108,5 +108,9 @@ PyYAML>=6.0.1             # SOAR playbook definition parsing
 cryptography>=42.0.0      # AES-256-GCM for RF-OOB command encryption
 watchdog>=4.0.0           # hot-reload playbook files on disk change
 
+# ── v31.0 CPU Dominance — WebRTC VAD pre-filter ───────────────────────────────
+webrtcvad>=2.0.10             # Google WebRTC VAD — 30ms frame speech detection
+pyaudio>=0.2.14               # audio capture backend (may already be present transitively)
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0
