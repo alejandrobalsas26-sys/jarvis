@@ -49,3 +49,9 @@ jarvis.log
 jarvis/core/telemetry_keys.json
 jarvis/core/trust_profile.json
 jarvis/core/feed_hashes.json
+
+# v34.0 — Paranoid Fortress security files (NEVER commit)
+jarvis/core/integrity_baseline.json
+jarvis/logs/stix_exports/
+jarvis/core/sigma_rules/
+jarvis/logs/sessions/

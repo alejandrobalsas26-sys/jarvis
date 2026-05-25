@@ -24,6 +24,11 @@ from loguru import logger
 
 from core.config import settings
 from core.model_router import select_model, calculate_complexity
+# v34.0 — cognitive self-optimization
+from core.cognitive_optimizer import (
+    latency_tracker, classify_query,
+    refresh_threat_enrichment, monitor_conversation_health,
+)
 
 # Ruta al servidor MCP (relativa al proyecto, no al módulo)
 _BRIDGE_SCRIPT = Path(__file__).parent.parent.parent / "mcp_servers" / "packet_tracer_bridge.py"
@@ -970,6 +975,29 @@ class LLM:
         await self._init_mcp()
         await self._maybe_compress_history()
 
+        # v34.0 — cognitive pre-classification (0ms overhead)
+        _query_category, _force_deep = classify_query(user_message)
+        logger.debug(
+            f"COGNITIVE: query category={_query_category} "
+            f"force_deep={_force_deep}"
+        )
+
+        # v34.0 — conversation health monitor every 10 turns
+        if len(self.history) and len(self.history) % 10 == 0:
+            try:
+                from tools.executor import _aura_broadcast as _bcast_health
+                asyncio.create_task(monitor_conversation_health(
+                    self.history, _bcast_health
+                ))
+            except Exception:
+                pass
+
+        # v34.0 — enrich system prompt with recent threat context
+        try:
+            _threat_ctx = await refresh_threat_enrichment()
+        except Exception:
+            _threat_ctx = ""
+
         self.history.append({"role": "user", "content": user_message})
 
         # v30.0: Query past operational incidents via PageRank-ranked relevance
@@ -991,6 +1019,9 @@ class LLM:
                 self.system_prompt + "\n\n" + _incident_prefix
                 if _incident_prefix else self.system_prompt
             )
+            # v34.0 — append live threat-feed enrichment to system prompt
+            if _threat_ctx:
+                _sys_content = _sys_content + _threat_ctx
             messages_for_api = [
                 {"role": "system", "content": _sys_content},
                 *self.history,
@@ -998,6 +1029,7 @@ class LLM:
 
             _routed_model = select_model(user_message)
             _infer_start = _time.monotonic()  # v32.0 — inference timing
+            latency_tracker.start()            # v34.0 — cognitive latency
             # v31.0: adaptive ctx — shrink KV cache for short turns
             try:
                 from core.hardware_profile import get_cached_profile
@@ -1053,6 +1085,12 @@ class LLM:
 
             full_text = "".join(text_chunks)
             thinking = self._extract_thinking(full_text)
+
+            # v34.0 — record cognitive latency sample
+            try:
+                latency_tracker.stop(_routed_model, _ctx)
+            except Exception:
+                pass
 
             # v32.0 — broadcast inference timing to AURA HUD
             try:

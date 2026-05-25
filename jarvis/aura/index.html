@@ -946,6 +946,12 @@
     .type-stix_exported            { background:#050518; border:1px solid #6644ff; color:#aa88ff; }
     .type-attck_coverage_matrix    { display:none; }
     .type-emulation_coverage_report{ background:#080818; border:1px solid #4488ff; color:#88aaff; }
+    /* v34.0 — Paranoid Fortress & Cognitive */
+    .type-security_audit           { background:#180505; border:1px solid #ff4400; color:#ff8844; }
+    .type-hardening_complete       { background:#051805; border:1px solid #44ff44; color:#88ff88; }
+    .type-integrity_check          { background:#050518; border:1px solid #4466ff; color:#88aaff; }
+    .type-cognitive_stats          { background:#0a0808; border:1px solid #888888; color:#aaaaaa; }
+    .type-cognitive_health_alert   { background:#1a1000; border:1px solid #ffaa00; color:#ffcc44; }
   </style>
 </head>
 <body>
@@ -1054,6 +1060,7 @@
     <div class="help-grid">
       <div class="help-row"><kbd>?</kbd><span>Toggle this help</span></div>
       <div class="help-row"><kbd>Ctrl+A</kbd><span>Toggle ATT&amp;CK coverage matrix</span></div>
+      <div class="help-row"><kbd>Ctrl+S</kbd><span>Toggle security status panel</span></div>
       <div class="help-row"><kbd>Ctrl+M</kbd><span>Toggle metrics sidebar</span></div>
       <div class="help-row"><kbd>Ctrl+Shift+C</kbd><span>Ops console</span></div>
       <div class="help-row"><kbd>Space</kbd><span>Pause/resume event log</span></div>
@@ -3574,7 +3581,130 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       const p = document.getElementById('attck-panel');
       if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
     }
+    // v34.0 — Ctrl+S toggles security status panel
+    if (e.ctrlKey && e.key === 's' && !e.shiftKey) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      e.preventDefault();
+      const p = document.getElementById('security-panel');
+      if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
+    }
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v34.0 — SECURITY STATUS PANEL
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _securityState = {
+    ollama_isolated:    null,
+    defender_active:    null,
+    unknown_ports:      0,
+    integrity_clean:    null,
+    last_audit:         null,
+  };
+
+  function renderSecurityPanel() {
+    const existing = document.getElementById('security-panel');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'security-panel';
+    panel.style.cssText = `
+      position:fixed; bottom:40px; right:16px; width:200px;
+      background:rgba(4,6,12,0.96); border:1px solid rgba(255,255,255,0.08);
+      border-radius:6px; padding:10px; z-index:108;
+      font-family:'Share Tech Mono',monospace; font-size:10px;
+    `;
+
+    const s = _securityState;
+    const statusIcon  = (val) => val === true  ? '✓' :
+                                 val === false ? '✗' :
+                                 val === null  ? '—' : '?';
+    const statusColor = (val) => val === true  ? '#44ff88' :
+                                 val === false ? '#ff4444' :
+                                 '#666666';
+
+    panel.innerHTML = `
+      <div style="color:rgba(255,255,255,0.3);font-size:9px;
+        letter-spacing:2px;margin-bottom:8px;
+        border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:5px">
+        ◈ SECURITY STATUS
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${[
+          ['Ollama isolated',  s.ollama_isolated],
+          ['Defender active',  s.defender_active],
+          ['File integrity',   s.integrity_clean],
+          ['Unknown ports: ' + s.unknown_ports,
+           s.unknown_ports === 0],
+        ].map(([label, val]) => `
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:rgba(255,255,255,0.4)">${escapeHtml(String(label))}</span>
+            <span style="color:${statusColor(val)};font-weight:bold">
+              ${statusIcon(val)}
+            </span>
+          </div>
+        `).join('')}
+      </div>
+      ${s.last_audit ? `<div style="color:rgba(255,255,255,0.2);font-size:8px;
+        margin-top:6px">last audit: ${escapeHtml(s.last_audit)}</div>` : ''}
+    `;
+
+    document.body.appendChild(panel);
+  }
+
+  function handleHardeningComplete(msg) {
+    _securityState.ollama_isolated = msg.ollama_isolated;
+    _securityState.defender_active = msg.defender_active;
+    renderSecurityPanel();
+  }
+
+  function handleSecurityAudit(msg) {
+    _securityState.unknown_ports = msg.unknown_ports || 0;
+    _securityState.last_audit = new Date().toLocaleTimeString();
+    renderSecurityPanel();
+
+    if (msg.unknown_ports > 0) {
+      const panel = document.getElementById('security-panel');
+      if (panel) {
+        panel.style.borderColor = '#ff4400';
+        setTimeout(() => {
+          if (panel) panel.style.borderColor = 'rgba(255,255,255,0.08)';
+        }, 3000);
+      }
+    }
+  }
+
+  function handleIntegrityCheck(msg) {
+    _securityState.integrity_clean = msg.status === 'clean' ||
+                                     msg.status === 'baseline_created' ||
+                                     msg.status === 'baseline_recreated';
+    renderSecurityPanel();
+
+    if (msg.modified && msg.modified.length > 0) {
+      // Critical — file modification detected
+      let tick = 0;
+      const iv = setInterval(() => {
+        if (++tick > 8) { clearInterval(iv); return; }
+        try {
+          cpuLight.color.set(tick % 2 === 0 ? 0xff0000 : 0x000000);
+          cpuLight.intensity = tick % 2 === 0 ? 6.0 : 0.0;
+        } catch {}
+      }, 200);
+    }
+  }
+
+  function handleCognitiveHealthAlert(msg) {
+    const toast = document.getElementById('hw-toast');
+    if (toast) {
+      toast.textContent = `⚠ Context quality: ${msg.score} — consider fresh session`;
+      toast.style.color = '#ffcc44';
+      toast.style.borderColor = '#ffaa00';
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 6000);
+    }
+  }
+
+  setTimeout(renderSecurityPanel, 1000);
 
   // === WebSocket with auto-reconnect ===
   let ws = null;
@@ -3637,6 +3767,32 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       // v33.0 — ATT&CK coverage matrix (silent — renders panel)
       if (msg && msg.type === 'attck_coverage_matrix') {
         renderAttckMatrix(msg);
+        return;
+      }
+
+      // v34.0 — Paranoid Fortress & Cognitive Self-Optimization
+      if (msg && msg.type === 'hardening_complete') {
+        handleHardeningComplete(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'security_audit') {
+        handleSecurityAudit(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'integrity_check') {
+        handleIntegrityCheck(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'cognitive_health_alert') {
+        handleCognitiveHealthAlert(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'cognitive_stats') {
+        // silent — future dashboard use
         return;
       }
 

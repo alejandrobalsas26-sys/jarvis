@@ -186,6 +186,11 @@ async def _main_async() -> None:
     from tools.active_tarpit import start_tarpit
     from tools.yara_file_monitor import start_yara_file_monitor
     from core.severity_calibrator import start_calibration_loop
+    # v34.0 — Paranoid Fortress & Cognitive Self-Optimization
+    from core.security_auditor    import start_security_auditor
+    from core.windows_hardener    import apply_host_hardening
+    from core.integrity_baseline  import run_integrity_check
+    from core.cognitive_optimizer import start_cognitive_monitor
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -496,6 +501,36 @@ async def _main_async() -> None:
                 logger.info("NETWORK_BASELINE: statistical anomaly engine registered…")
             except Exception as e:
                 logger.warning(f"Could not register network-baseline: {e}")
+
+            # v34.0 — Paranoid Fortress
+            # Run integrity check FIRST (before any code changes), then hardening
+            asyncio.create_task(
+                run_integrity_check(_aura_broadcast),
+                name="integrity-check-boot",
+            )
+            asyncio.create_task(
+                apply_host_hardening(_aura_broadcast),
+                name="host-hardening-boot",
+            )
+            try:
+                watchdog.register(
+                    "security-auditor",
+                    lambda: start_security_auditor(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("SECURITY_AUDITOR: host port auditor registered…")
+            except Exception as e:
+                logger.warning(f"Could not register security-auditor: {e}")
+
+            try:
+                watchdog.register(
+                    "cognitive-monitor",
+                    lambda: start_cognitive_monitor(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("COGNITIVE: self-optimization monitor registered…")
+            except Exception as e:
+                logger.warning(f"Could not register cognitive-monitor: {e}")
 
             try:
                 from core.attck_coverage import broadcast_coverage
