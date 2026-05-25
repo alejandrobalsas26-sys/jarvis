@@ -276,6 +276,24 @@ class TemporalCorrelator:
                 except Exception:
                     pass
 
+                # v33.0 — auto-generate Sigma rule + export STIX IOCs (fire-and-forget)
+                if self._broadcast_fn:
+                    _enriched_inc = {**inc.to_dict(), "sub_events": list(inc.sub_events)}
+                    try:
+                        from core.sigma_generator import generate_sigma_rule
+                        asyncio.create_task(generate_sigma_rule(
+                            _enriched_inc, self._broadcast_fn
+                        ))
+                    except Exception:
+                        pass
+                    try:
+                        from tools.ioc_extractor import export_incident_stix
+                        asyncio.create_task(export_incident_stix(
+                            _enriched_inc, self._broadcast_fn
+                        ))
+                    except Exception:
+                        pass
+
             if self._broadcast_fn:
                 await self._broadcast_fn({
                     "type": "compound_incident",

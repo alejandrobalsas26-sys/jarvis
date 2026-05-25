@@ -49,8 +49,22 @@ async def _tail_log(path: str, parser_fn, broadcast_fn) -> None:
 
 
 async def _parse_conn(record: dict, broadcast_fn) -> None:
-    """conn.log parser — placeholder for C2 beacon detection."""
-    pass
+    """conn.log parser — feeds the v33.0 network baseline / beacon detector."""
+    src = record.get("id.orig_h", "")
+    try:
+        dst_port = int(record.get("id.resp_p", 0) or 0)
+    except (ValueError, TypeError):
+        dst_port = 0
+    try:
+        nbytes = int(record.get("orig_bytes", 0) or 0)
+    except (ValueError, TypeError):
+        nbytes = 0
+    if src and dst_port:
+        try:
+            from core.network_baseline import check_and_alert
+            asyncio.create_task(check_and_alert(src, dst_port, nbytes, broadcast_fn))
+        except Exception:
+            pass
 
 
 async def _parse_dns(record: dict, broadcast_fn) -> None:

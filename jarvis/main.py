@@ -475,6 +475,38 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not register geo-resolver: {e}")
 
+            # v33.0 — Adversarial Intelligence subsystems
+            try:
+                from core.adversary_emulator import adversary_emulator
+                adversary_emulator.attach(_aura_broadcast)
+                logger.info(
+                    f"ADVERSARY_EMULATOR: chains={adversary_emulator.get_available_chains()} "
+                    f"techniques={len(adversary_emulator.get_available_techniques())}"
+                )
+            except Exception as e:
+                logger.warning(f"Could not attach adversary-emulator: {e}")
+
+            try:
+                from core.network_baseline import start_network_baseline
+                watchdog.register(
+                    "network-baseline",
+                    lambda: start_network_baseline(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("NETWORK_BASELINE: statistical anomaly engine registered…")
+            except Exception as e:
+                logger.warning(f"Could not register network-baseline: {e}")
+
+            try:
+                from core.attck_coverage import broadcast_coverage
+                asyncio.create_task(
+                    broadcast_coverage(_aura_broadcast),
+                    name="attck-coverage-broadcast",
+                )
+                logger.info("ATTCK_COVERAGE: matrix scheduled for HUD broadcast…")
+            except Exception as e:
+                logger.warning(f"Could not broadcast ATT&CK coverage: {e}")
+
             # v28.0 SOAR playbook engine — deterministic incident response
             try:
                 from core.playbook_engine import playbook_engine

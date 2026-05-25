@@ -475,3 +475,12 @@ async def start_etw_monitor(broadcast_fn) -> None:
     while True:
         event = await queue.get()
         await broadcast_fn(event)
+        # v33.0 — process injection sub-technique classification
+        if event.get("event_id") in {1, 3, 8, 10, 25, 30}:
+            pid = event.get("pid", 0)
+            if pid:
+                try:
+                    from tools.injection_classifier import analyze_and_broadcast
+                    asyncio.create_task(analyze_and_broadcast(pid, event, broadcast_fn))
+                except Exception:
+                    pass

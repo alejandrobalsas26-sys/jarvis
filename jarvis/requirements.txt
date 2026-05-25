@@ -112,5 +112,9 @@ watchdog>=4.0.0           # hot-reload playbook files on disk change
 webrtcvad>=2.0.10             # Google WebRTC VAD — 30ms frame speech detection
 pyaudio>=0.2.14               # audio capture backend (may already be present transitively)
 
+# ── v33.0 Adversarial Intelligence ────────────────────────────
+stix2>=3.0.0              # STIX 2.1 IOC/TTP export standard
+scipy>=1.12.0             # statistical anomaly detection (z-score)
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

@@ -59,15 +59,30 @@ async def _parse_event(xml_str: str, broadcast_fn) -> None:
         if eid not in SENSITIVE_EVENT_IDS:
             return
         data = {d.get("Name"): d.text for d in root.findall(".//e:Data", ns)}
-        await broadcast_fn({
+        try:
+            pid = int(data.get("ProcessId", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        event = {
             "type":        "sysmon_event",
             "event_id":    eid,
+            "pid":         pid,
             "technique":   TECHNIQUE_MAP.get(eid, f"EventID {eid}"),
             "process":     (data.get("Image", "") or "")[-60:],
             "commandline": (data.get("CommandLine", "") or "")[:120],
             "parent":      (data.get("ParentImage", "") or "")[-60:],
             "target_ip":   data.get("DestinationIp", ""),
             "timestamp":   datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        await broadcast_fn(event)
+
+        # v33.0 — injection sub-technique classification
+        if eid in {1, 3, 8, 10, 25, 30} and pid:
+            try:
+                import asyncio
+                from tools.injection_classifier import analyze_and_broadcast
+                asyncio.create_task(analyze_and_broadcast(pid, event, broadcast_fn))
+            except Exception:
+                pass
     except ET.ParseError:
         pass

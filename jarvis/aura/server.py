@@ -41,9 +41,16 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "rf_bridge_status",
     "run_nmap",
     "run_whois",
+    # v33.0 Adversarial Intelligence
+    "emulate_technique",
+    "emulate_chain",
+    "export_stix",
+    "get_coverage",
 })
-_HIGH_RISK_HUD:   frozenset[str] = frozenset({"sliver_interact", "sliver_generate_implant"})
-_MEDIUM_RISK_HUD: frozenset[str] = frozenset({"run_nmap"})
+_HIGH_RISK_HUD:   frozenset[str] = frozenset({
+    "sliver_interact", "sliver_generate_implant", "emulate_chain",
+})
+_MEDIUM_RISK_HUD: frozenset[str] = frozenset({"run_nmap", "emulate_technique"})
 
 # Simple validator for scan targets / domains (no shell metacharacters)
 _TARGET_RE = re.compile(r'^[a-zA-Z0-9.\-:/\[\]_]{1,100}$')
@@ -179,6 +186,31 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 reasoning="HUD-initiated whois lookup",
             )
             return result
+
+        # ── v33.0 Adversarial Intelligence ───────────────────────────────────
+        elif cmd == "emulate_technique":
+            technique = str(args.get("technique", ""))[:15]
+            from core.adversary_emulator import adversary_emulator
+            return await adversary_emulator.emulate_technique(technique)
+
+        elif cmd == "emulate_chain":
+            chain = str(args.get("chain", ""))[:30]
+            from core.adversary_emulator import adversary_emulator
+            results = await adversary_emulator.emulate_chain(chain)
+            return {"results": results}
+
+        elif cmd == "get_coverage":
+            from core.attck_coverage import get_coverage_matrix
+            return get_coverage_matrix()
+
+        elif cmd == "export_stix":
+            from core.correlator import correlator
+            incidents = correlator.get_active_incidents()
+            if incidents:
+                from tools.ioc_extractor import export_incident_stix
+                path = await export_incident_stix(incidents[0], broadcast_fn)
+                return {"exported": path}
+            return {"error": "no active incidents to export"}
 
         return {"error": f"Handler not implemented for '{cmd}'"}
     except Exception as e:

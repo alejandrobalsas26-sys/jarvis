@@ -935,6 +935,17 @@
     .type-metrics_update        { display: none; }
     .type-llm_inference_complete{ display: none; }
     .type-vad_event             { display: none; }
+
+    /* ── v33.0 Adversarial Intelligence badges ─────────────────────── */
+    .type-sigma_rule_generated     { background:#050a18; border:1px solid #4466ff; color:#88aaff; }
+    .type-emulation_started        { background:#0a0a05; border:1px solid #aaff00; color:#ccff44; }
+    .type-emulation_chain_started  { background:#0a0a05; border:1px solid #aaff00; color:#ccff44; }
+    .type-emulation_chain_complete { background:#050a05; border:1px solid #44ff44; color:#88ff88; }
+    .type-network_anomaly          { background:#1a0800; border:1px solid #ff6600; color:#ffaa44; }
+    .type-injection_classified     { background:#1a0000; border:1px solid #ff0000; color:#ff6666; }
+    .type-stix_exported            { background:#050518; border:1px solid #6644ff; color:#aa88ff; }
+    .type-attck_coverage_matrix    { display:none; }
+    .type-emulation_coverage_report{ background:#080818; border:1px solid #4488ff; color:#88aaff; }
   </style>
 </head>
 <body>
@@ -1042,6 +1053,7 @@
     <div class="help-title">◈ KEYBOARD SHORTCUTS</div>
     <div class="help-grid">
       <div class="help-row"><kbd>?</kbd><span>Toggle this help</span></div>
+      <div class="help-row"><kbd>Ctrl+A</kbd><span>Toggle ATT&amp;CK coverage matrix</span></div>
       <div class="help-row"><kbd>Ctrl+M</kbd><span>Toggle metrics sidebar</span></div>
       <div class="help-row"><kbd>Ctrl+Shift+C</kbd><span>Ops console</span></div>
       <div class="help-row"><kbd>Space</kbd><span>Pause/resume event log</span></div>
@@ -1201,6 +1213,10 @@
       <option value="run_whois">whois lookup</option>
       <option value="sliver_list_sessions">sliver sessions</option>
       <option value="aura_get_incidents">active incidents</option>
+      <option value="emulate_technique">emulate technique</option>
+      <option value="emulate_chain">emulate chain</option>
+      <option value="get_coverage">get ATT&amp;CK coverage</option>
+      <option value="export_stix">export STIX 2.1</option>
     </select>
     <input id="ops-target-input" type="text" placeholder="target / domain / empty">
     <button id="ops-execute-btn">EXECUTE</button>
@@ -3494,6 +3510,72 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     badge.classList.toggle('zero', count === 0);
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v33.0 — ATT&CK COVERAGE HEAT MAP
+  // ═══════════════════════════════════════════════════════════════════
+
+  function renderAttckMatrix(msg) {
+    const existing = document.getElementById('attck-panel');
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'attck-panel';
+    panel.style.cssText = `
+      position:fixed; left:16px; top:84px; width:220px;
+      max-height:calc(100vh - 130px); overflow-y:auto;
+      background:rgba(4,6,12,0.94); border:1px solid rgba(255,255,255,0.08);
+      border-radius:6px; padding:10px; z-index:109;
+      font-family:'Share Tech Mono',monospace; font-size:9px;
+    `;
+
+    const pct = msg.coverage_pct || 0;
+    const color = pct >= 70 ? '#44ff88' : pct >= 40 ? '#ffaa00' : '#ff4444';
+
+    panel.innerHTML = `
+      <div style="color:${color};font-size:9px;letter-spacing:2px;font-weight:bold;
+        margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:5px">
+        ◈ ATT&CK COVERAGE <span style="float:right">${pct}%</span>
+      </div>
+      <div style="margin-bottom:8px">
+        <span style="color:#44ff88">▉ FULL: ${msg.covered}</span>
+        <span style="color:#ffaa00;margin-left:8px">▒ PARTIAL: ${msg.partial}</span>
+        <span style="color:#ff4444;margin-left:8px">░ BLIND: ${msg.blind}</span>
+      </div>
+      ${(msg.tactics || []).map(tactic => `
+        <div style="margin-bottom:6px">
+          <div style="color:rgba(255,255,255,0.35);letter-spacing:1px;
+            margin-bottom:3px;font-size:8px">${escapeHtml(tactic.name)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:2px">
+            ${(tactic.techniques || []).map(tech => {
+              const bg = tech.level === 'full'    ? 'rgba(0,255,65,0.2)'
+                       : tech.level === 'partial' ? 'rgba(255,170,0,0.2)'
+                       :                            'rgba(255,68,0,0.15)';
+              const border = tech.level === 'full'    ? '#00ff41'
+                           : tech.level === 'partial' ? '#ffaa00'
+                           :                            '#ff4444';
+              return `<span title="${escapeHtml(tech.id)}: ${escapeHtml((tech.detectors || []).join(', ') || 'NO COVERAGE')}"
+                style="background:${bg};border:1px solid ${border};border-radius:2px;
+                padding:1px 3px;font-size:7px;color:${border};cursor:default">
+                ${escapeHtml(tech.id)}
+              </span>`;
+            }).join('')}
+          </div>
+        </div>
+      `).join('')}
+    `;
+
+    document.body.appendChild(panel);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 'a') {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      e.preventDefault();
+      const p = document.getElementById('attck-panel');
+      if (p) p.style.display = p.style.display === 'none' ? '' : 'none';
+    }
+  });
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -3551,6 +3633,37 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       // v32.0 — mark task alive from any matching event
       if (msg && msg.type) markTaskAlive(msg.type);
+
+      // v33.0 — ATT&CK coverage matrix (silent — renders panel)
+      if (msg && msg.type === 'attck_coverage_matrix') {
+        renderAttckMatrix(msg);
+        return;
+      }
+
+      // v33.0 — adversary emulation → flash kill chain phase
+      if (msg && msg.type === 'emulation_started') {
+        if (msg.technique) {
+          const phaseMap = {
+            'T1059':'Execution','T1055':'Defense Evasion',
+            'T1003':'Credential Access','T1071':'Command & Control',
+            'T1021':'Lateral Movement','T1547':'Persistence',
+            'T1562':'Defense Evasion',
+          };
+          const found = Object.entries(phaseMap).find(
+            ([k]) => msg.technique.startsWith(k)
+          );
+          if (found) updateKillChain({ kill_chain_phase: found[1], incident_id: 'EMU' });
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v33.0 — injection classification → strobe firewall shield
+      if (msg && msg.type === 'injection_classified') {
+        try { triggerFirewallBlock(msg); } catch {}
+        if (!paused) append(e.data);
+        return;
+      }
 
       if (msg && msg.type === 'telemetry') {
         // CPU → PointLight intensity (updated only on incoming telemetry message)
