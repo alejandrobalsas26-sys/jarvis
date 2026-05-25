@@ -150,6 +150,69 @@ async def execute_macro(
             except ImportError:
                 pass
 
+        # ── v36.0 — Predictive Cognition macros ─────────────────────────────
+        elif action == "swap_deep":
+            try:
+                from core.model_swapper import swap_to_deep
+                asyncio.create_task(swap_to_deep(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: swap_deep error: {e}")
+
+        elif action == "swap_fast":
+            try:
+                from core.model_swapper import swap_to_fast
+                asyncio.create_task(swap_to_fast(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: swap_fast error: {e}")
+
+        elif action == "swap_toggle":
+            try:
+                from core.model_swapper import toggle
+                asyncio.create_task(toggle(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: swap_toggle error: {e}")
+
+        elif action == "generate_report":
+            try:
+                from core.correlator        import correlator
+                from core.incident_reporter import generate_incident_report
+                from core.agent_orchestrator import orchestrator
+                incidents = correlator.get_active_incidents()
+                if incidents:
+                    asyncio.create_task(generate_incident_report(
+                        incidents[0], [], broadcast_fn,
+                        orchestrator._ollama_client,
+                        orchestrator._deep_model,
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: generate_report error: {e}")
+
+        elif action == "consolidate_memory":
+            try:
+                from core.memory_consolidator import consolidate_memory
+                from core.agent_orchestrator  import orchestrator
+                asyncio.create_task(consolidate_memory(
+                    broadcast_fn,
+                    orchestrator._ollama_client,
+                    orchestrator._deep_model,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: consolidate_memory error: {e}")
+
+        elif action == "multi_agent_analyze":
+            try:
+                from core.agent_orchestrator import orchestrator
+                from core.correlator        import correlator
+                incidents = correlator.get_active_incidents()
+                ctx       = incidents[0] if incidents else {}
+                asyncio.create_task(orchestrator.run_task(
+                    "Analyze current active incident",
+                    ["ThreatIntelligence", "IncidentResponder"],
+                    ctx,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: multi_agent_analyze error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

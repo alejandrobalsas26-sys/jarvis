@@ -170,9 +170,21 @@ class TemporalCorrelator:
         self._active:      dict[str, CompoundIncident]  = {}
         self._broadcast_fn                              = None
         self._prune_task:  asyncio.Task | None          = None
+        # v36.0 — references for autonomous narration & predictions
+        self._tts_ref       = None
+        self._ollama_client = None
+        self._fast_model    = "qwen2.5:7b-instruct-q5_K_M"
+        self._deep_model    = "qwen2.5:14b-instruct-q4_K_M"
 
     def attach(self, broadcast_fn) -> None:
         self._broadcast_fn = broadcast_fn
+
+    def attach_llm(self, tts, ollama_client, fast_model: str, deep_model: str) -> None:
+        """v36.0 — wire LLM/TTS refs for autonomous prediction + narration."""
+        self._tts_ref       = tts
+        self._ollama_client = ollama_client
+        self._fast_model    = fast_model
+        self._deep_model    = deep_model
 
     async def start(self) -> None:
         if self._prune_task is None or self._prune_task.done():
@@ -300,6 +312,31 @@ class TemporalCorrelator:
                     "rule": rule.name,
                     **inc.to_dict(),
                 })
+
+                # v36.0 — Predictive cognition + autonomous narration
+                try:
+                    from core.threat_predictor  import analyze_and_predict
+                    from core.tactical_narrator import narrate_incident
+
+                    async def _predict_and_narrate(_inc_dict, _self=self):
+                        preds = await analyze_and_predict(
+                            _inc_dict, _self._broadcast_fn
+                        )
+                        if _self._ollama_client is not None:
+                            await narrate_incident(
+                                _inc_dict, preds,
+                                _self._tts_ref,
+                                _self._broadcast_fn,
+                                _self._ollama_client,
+                                _self._fast_model,
+                            )
+
+                    asyncio.create_task(
+                        _predict_and_narrate(inc.to_dict()),
+                        name=f"v36-predict-{inc.incident_id}",
+                    )
+                except Exception as e:
+                    logger.debug(f"CORRELATOR: v36 prediction dispatch failed: {e}")
 
             # v28.0 — fire SOAR playbook engine before agentic loop
             try:

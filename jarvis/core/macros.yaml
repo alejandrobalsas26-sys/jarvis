@@ -70,3 +70,34 @@ macros:
       vmx: ""
     confirm: true
     response: "Taking VM snapshot."
+
+  # ── v36.0 — Predictive Cognition voice commands ─────────────────────────
+  - trigger: "jarvis use deep model"
+    action: swap_deep
+    confirm: false
+    response: "Switching to deep analysis model."
+
+  - trigger: "jarvis use fast model"
+    action: swap_fast
+    confirm: false
+    response: "Switching to fast response model."
+
+  - trigger: "jarvis switch model"
+    action: swap_toggle
+    confirm: false
+    response: "Toggling model."
+
+  - trigger: "jarvis generate report"
+    action: generate_report
+    confirm: false
+    response: "Generating incident report."
+
+  - trigger: "jarvis consolidate memory"
+    action: consolidate_memory
+    confirm: false
+    response: "Consolidating episodic memory."
+
+  - trigger: "jarvis multi agent analysis"
+    action: multi_agent_analyze
+    confirm: false
+    response: "Spawning expert agents."

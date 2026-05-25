@@ -742,6 +742,29 @@
     .type-hud_command_result         { background: #051a15; border: 1px solid #00aaaa; color: #44ddcc; }
     .type-hud_command_error          { background: #1a0505; border: 1px solid #ff2200; color: #ff6666; }
 
+    /* ── v36.0 Predictive Cognition event type badges ── */
+    .type-threat_prediction    { background:#150a00;border:1px solid #ff8800;color:#ffbb44; }
+    .type-subsystem_prearmed   { background:#0a1500;border:1px solid #88ff00;color:#bbff44; }
+    .type-tactical_narration   { background:#050518;border:1px solid #8888ff;color:#bbbbff; }
+    .type-agent_task_started   { background:#050a18;border:1px solid #4488ff;color:#88bbff; }
+    .type-agent_running        { background:#050a18;border:1px solid #2266cc;color:#6699ff; }
+    .type-agent_complete       { background:#050a18;border:1px solid #4488ff;color:#88bbff; }
+    .type-agent_task_complete  { background:#050a18;border:1px solid #44aaff;color:#88ccff; }
+    .type-report_generating    { background:#0a0518;border:1px solid #aa44ff;color:#cc88ff; }
+    .type-report_generated     { background:#0a0518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-model_swapped        { background:#050a0a;border:1px solid #44cccc;color:#88dddd; }
+    .type-memory_consolidated  { background:#050518;border:1px solid #4444ff;color:#8888ff; }
+
+    /* ── v36.0 tactical narrator banner keyframes ── */
+    @keyframes narrator-in {
+      from { transform: translateY(100%); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    @keyframes narrator-out {
+      from { transform: translateY(0);    opacity: 1; }
+      to   { transform: translateY(100%); opacity: 0; }
+    }
+
     /* ── v28.0 SOAR playbook + RF-OOB event type badges ── */
     .type-playbook_started   { background: #051505; border: 1px solid #44ff44; color: #88ff88; }
     .type-playbook_completed { background: #051505; border: 1px solid #00cc44; color: #44dd88; }
@@ -1473,6 +1496,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       // v27.0
       compound_incident:           'type-compound_incident',
       compound_incident_resolved:  'type-compound_incident_resolved',
+      // v36.0 Predictive Cognition
+      threat_prediction:           'type-threat_prediction',
+      subsystem_prearmed:          'type-subsystem_prearmed',
+      tactical_narration:          'type-tactical_narration',
+      agent_task_started:          'type-agent_task_started',
+      agent_running:               'type-agent_running',
+      agent_complete:              'type-agent_complete',
+      agent_task_complete:         'type-agent_task_complete',
+      report_generating:           'type-report_generating',
+      report_generated:            'type-report_generated',
+      model_swapped:               'type-model_swapped',
+      memory_consolidated:         'type-memory_consolidated',
       hud_command_result:          'type-hud_command_result',
       hud_command_error:           'type-hud_command_error',
       // v28.0 SOAR + RF-OOB
@@ -3958,6 +3993,86 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v36.0 — PREDICTION PANEL + NARRATOR DISPLAY + AGENT STATUS
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _predictions = {};   // incident_id → predictions array
+
+  function handleThreatPrediction(msg) {
+    const preds = msg.predictions || [];
+    _predictions[msg.incident_id] = preds;
+
+    const panel = document.getElementById('incident-panel');
+    if (panel && preds.length) {
+      const predEl = document.createElement('div');
+      predEl.style.cssText =
+        'border-top:1px solid rgba(255,136,0,0.3);' +
+        'margin-top:6px;padding-top:5px;font-size:9px;';
+      predEl.innerHTML = preds.slice(0, 2).map(p =>
+        '<div style="color:#ff8800;margin-bottom:3px">' +
+          '⟶ ' + escapeHtml(p.technique) +
+          ' <span style="color:rgba(255,255,255,0.3)">' +
+            Math.round((p.confidence||0)*100) + '%' +
+          '</span>' +
+        '</div>' +
+        '<div style="color:rgba(255,255,255,0.3);font-size:8px;padding-left:12px">' +
+          escapeHtml((p.description||'').slice(0, 60)) +
+        '</div>'
+      ).join('');
+      panel.appendChild(predEl);
+      setTimeout(() => predEl.remove(), 30000);
+    }
+  }
+
+  function handleTacticalNarration(msg) {
+    const narration = msg.narration || '';
+    if (!narration) return;
+
+    const existing = document.getElementById('narration-banner');
+    if (existing) existing.remove();
+
+    const banner = document.createElement('div');
+    banner.id = 'narration-banner';
+    banner.style.cssText =
+      'position:fixed;bottom:34px;left:0;right:0;' +
+      'background:rgba(40,20,80,0.97);' +
+      'border-top:1px solid rgba(136,88,255,0.5);' +
+      "color:#cc88ff;font-family:'Share Tech Mono',monospace;" +
+      'font-size:13px;padding:10px 24px;z-index:300;letter-spacing:0.5px;' +
+      'animation:narrator-in 0.3s ease-out;';
+    banner.innerHTML =
+      '<span style="color:rgba(136,88,255,0.6);font-size:10px;' +
+      'letter-spacing:3px;margin-right:12px">◈ JARVIS</span>' +
+      escapeHtml(narration);
+    document.body.appendChild(banner);
+    setTimeout(() => {
+      banner.style.animation = 'narrator-out 0.5s ease-in forwards';
+      setTimeout(() => banner.remove(), 500);
+    }, 8000);
+  }
+
+  function handleAgentRunning(msg) {
+    const modelEl = document.getElementById('hb-model-name');
+    if (modelEl) {
+      modelEl.textContent = (msg.agent || '?') + ' [AGENT]';
+      modelEl.style.color = '#ffaa44';
+      setTimeout(() => { modelEl.style.color = ''; }, 5000);
+    }
+  }
+
+  function handleModelSwapped(msg) {
+    const modelEl   = document.getElementById('hb-model-name');
+    const shortName = String(msg.model || '')
+      .replace('qwen2.5:', '').replace('-instruct', '');
+    if (modelEl) modelEl.textContent = shortName;
+    const hb = document.getElementById('header-bar');
+    if (hb) {
+      hb.style.borderBottomColor = msg.mode === 'deep' ? '#8844ff' : '#44cccc';
+      setTimeout(() => { hb.style.borderBottomColor = ''; }, 3000);
+    }
+  }
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -4083,6 +4198,32 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       }
       if (msg && msg.type === 'cognitive_stats') {
         // silent — future dashboard use
+        return;
+      }
+
+      // v36.0 — Predictive Cognition dispatchers
+      if (msg && msg.type === 'threat_prediction') {
+        handleThreatPrediction(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'tactical_narration') {
+        handleTacticalNarration(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'agent_running') {
+        handleAgentRunning(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'model_swapped') {
+        handleModelSwapped(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'subsystem_prearmed') {
+        if (!paused) append(e.data);
         return;
       }
 

@@ -48,6 +48,12 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "get_coverage",
     # v35.0 emergency abort — no OTP required
     "voice_abort",
+    # v36.0 Predictive Cognition
+    "swap_deep",
+    "swap_fast",
+    "multi_agent_analyze",
+    "generate_report",
+    "consolidate_memory",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -219,6 +225,54 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 path = await export_incident_stix(incidents[0], broadcast_fn)
                 return {"exported": path}
             return {"error": "no active incidents to export"}
+
+        # ── v36.0 Predictive Cognition ───────────────────────────────────────
+        elif cmd == "swap_deep":
+            from core.model_swapper import swap_to_deep
+            ok = await swap_to_deep(broadcast_fn)
+            return {"swapped": ok, "mode": "deep"}
+
+        elif cmd == "swap_fast":
+            from core.model_swapper import swap_to_fast
+            ok = await swap_to_fast(broadcast_fn)
+            return {"swapped": ok, "mode": "fast"}
+
+        elif cmd == "multi_agent_analyze":
+            from core.agent_orchestrator import orchestrator
+            from core.correlator        import correlator
+            task    = str(args.get("task", "Analyze current incident"))[:200]
+            agents  = args.get("agents") or ["ThreatIntelligence", "IncidentResponder"]
+            if not isinstance(agents, list):
+                agents = ["ThreatIntelligence", "IncidentResponder"]
+            agents = [str(a)[:40] for a in agents][:5]
+            incidents = correlator.get_active_incidents()
+            ctx       = incidents[0] if incidents else {}
+            asyncio.create_task(orchestrator.run_task(task, agents, ctx))
+            return {"status": "started", "agents": agents}
+
+        elif cmd == "generate_report":
+            from core.correlator        import correlator
+            from core.incident_reporter import generate_incident_report
+            from core.agent_orchestrator import orchestrator
+            incidents = correlator.get_active_incidents()
+            if not incidents:
+                return {"error": "no active incidents"}
+            asyncio.create_task(generate_incident_report(
+                incidents[0], [], broadcast_fn,
+                orchestrator._ollama_client,
+                orchestrator._deep_model,
+            ))
+            return {"status": "generating", "incident_id": incidents[0].get("incident_id")}
+
+        elif cmd == "consolidate_memory":
+            from core.memory_consolidator import consolidate_memory
+            from core.agent_orchestrator  import orchestrator
+            asyncio.create_task(consolidate_memory(
+                broadcast_fn,
+                orchestrator._ollama_client,
+                orchestrator._deep_model,
+            ))
+            return {"status": "consolidating"}
 
         return {"error": f"Handler not implemented for '{cmd}'"}
     except Exception as e:

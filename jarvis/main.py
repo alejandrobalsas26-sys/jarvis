@@ -237,6 +237,11 @@ async def _main_async() -> None:
     from core.cancel_bus     import initialize as init_cancel_bus
     from core.voice_interrupt import is_interrupt_command, handle_interrupt
     from core.voice_macros   import process_for_macro
+    # v36.0 — Predictive Cognition & Autonomous Intelligence
+    from core.agent_orchestrator  import orchestrator as v36_orchestrator
+    from core.model_swapper       import attach as attach_model_swapper
+    from core.memory_consolidator import start_consolidation_scheduler
+    from core.correlator          import correlator as v36_correlator
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -309,6 +314,32 @@ async def _main_async() -> None:
         audio_listener._tts_ref = tts
     except Exception:
         pass
+
+    # v36.0 — Predictive Cognition wiring (model hot-swap + orchestrator + narrator)
+    try:
+        attach_model_swapper(llm)
+    except Exception as e:
+        logger.debug(f"V36: model_swapper attach failed: {e}")
+    try:
+        v36_orchestrator.attach(
+            broadcast_fn  = _aura_broadcast,
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+        )
+        logger.info("V36: agent_orchestrator attached")
+    except Exception as e:
+        logger.debug(f"V36: orchestrator attach failed: {e}")
+    try:
+        v36_correlator.attach_llm(
+            tts           = tts,
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+        )
+        logger.info("V36: correlator LLM/TTS refs attached for autonomous narration")
+    except Exception as e:
+        logger.debug(f"V36: correlator.attach_llm failed: {e}")
 
     # v30.0: register session-save callback (closure now has llm reference)
     async def _flush_session():
@@ -586,6 +617,19 @@ async def _main_async() -> None:
                 logger.info("COGNITIVE: self-optimization monitor registered…")
             except Exception as e:
                 logger.warning(f"Could not register cognitive-monitor: {e}")
+
+            # v36.0 — Memory consolidation scheduler (24h cycle, idle-gated)
+            try:
+                watchdog.register(
+                    "memory-consolidator",
+                    lambda: start_consolidation_scheduler(
+                        _aura_broadcast, llm.client, hw_profile.model_deep
+                    ),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("MEMORY_CONSOLIDATOR: 24h consolidation cycle registered…")
+            except Exception as e:
+                logger.warning(f"Could not register memory-consolidator: {e}")
 
             try:
                 from core.attck_coverage import broadcast_coverage
