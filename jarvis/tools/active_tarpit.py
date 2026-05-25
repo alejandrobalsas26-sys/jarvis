@@ -58,6 +58,13 @@ def _make_handler(port: int, broadcast_fn):
             "severity":    "WARNING",
         })
 
+        # v32.0 — fire-and-forget IP geolocation for AURA globe markers
+        try:
+            from tools.geo_resolver import resolve_ip
+            asyncio.create_task(resolve_ip(ip, broadcast_fn))
+        except Exception:
+            pass
+
         try:
             # Send realistic banner to fool the scanner
             banner = _BANNERS.get(port, b"220 Service ready\r\n")

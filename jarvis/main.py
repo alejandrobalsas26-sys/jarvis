@@ -242,6 +242,9 @@ async def _main_async() -> None:
     # Pre-load Whisper in a high-priority background thread.
     # The model is ready before the LLM starts, preventing CPU contention.
     audio_listener = HighPrioritySTTListener()
+    # v32.0: wire VAD events into AURA HUD broadcast
+    audio_listener._loop_ref      = asyncio.get_event_loop()
+    audio_listener._broadcast_ref = _aura_broadcast
 
     executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
     llm = LLM(tool_executor=executor)
@@ -459,6 +462,18 @@ async def _main_async() -> None:
                 logger.info("YARA_MONITOR: event-driven file integrity monitor registered…")
             except Exception as e:
                 logger.warning(f"Could not register yara-file-monitor: {e}")
+
+            # v32.0 — IP geolocation service for AURA globe markers
+            try:
+                from tools.geo_resolver import watch_and_resolve
+                watchdog.register(
+                    "geo-resolver",
+                    lambda: watch_and_resolve(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("GEO_RESOLVER: IP geolocation service registered…")
+            except Exception as e:
+                logger.warning(f"Could not register geo-resolver: {e}")
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:

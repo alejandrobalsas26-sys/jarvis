@@ -68,6 +68,13 @@ async def canary_handler(
         banner_preview=banner[:64].decode("utf-8", errors="replace"),
     )))
 
+    # v32.0 — fire-and-forget IP geolocation for AURA globe markers
+    try:
+        from tools.geo_resolver import resolve_ip
+        asyncio.create_task(resolve_ip(attacker_ip, broadcast_fn))
+    except Exception:
+        pass
+
     # High-confidence detection: attacker sent a meaningful banner (>16 bytes).
     # Trigger live forensic capture + agentic SOC loop to freeze malicious state
     # before any anti-forensic cleanup can occur.

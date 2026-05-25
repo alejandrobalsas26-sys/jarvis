@@ -11,6 +11,10 @@ from core.events import make_event
 
 _last_suspend: float = 0.0
 
+# v32.0 — rolling history for AURA sparklines (60 points = 5 min @ 5s interval)
+_cpu_history: list[float] = []
+_ram_history: list[float] = []
+
 
 def _read_cpu_temp() -> float | None:
     # Tier 1 — psutil (Linux)
@@ -33,7 +37,43 @@ def _read_cpu_temp() -> float | None:
     return None
 
 
-async def start_resource_sentinel(broadcast_fn) -> None:
+async def _broadcast_metrics(broadcast_fn) -> None:
+    """v32.0 — Broadcast enhanced metrics every 5s for AURA sparklines."""
+    while True:
+        try:
+            cpu = await asyncio.to_thread(psutil.cpu_percent, 1)
+            ram = psutil.virtual_memory()
+            try:
+                disk = psutil.disk_usage("/")
+                disk_free_gb = round(disk.free / (1024**3), 1)
+            except Exception:
+                disk_free_gb = None
+
+            _cpu_history.append(cpu)
+            _ram_history.append(ram.percent)
+            if len(_cpu_history) > 60:
+                _cpu_history.pop(0)
+            if len(_ram_history) > 60:
+                _ram_history.pop(0)
+
+            await broadcast_fn({
+                "type":         "metrics_update",
+                "cpu_percent":  round(cpu, 1),
+                "cpu_history":  list(_cpu_history),
+                "ram_used_gb":  round(ram.used / (1024**3), 1),
+                "ram_total_gb": round(ram.total / (1024**3), 1),
+                "ram_percent":  round(ram.percent, 1),
+                "ram_history":  list(_ram_history),
+                "disk_free_gb": disk_free_gb,
+                "timestamp":    time.time(),
+            })
+        except Exception as e:
+            logger.debug(f"resource_sentinel metrics broadcast failed: {e}")
+        await asyncio.sleep(5)
+
+
+async def _critical_loop(broadcast_fn) -> None:
+    """Original thermal/RAM critical watch loop."""
     global _last_suspend
     temp_warned = False
     while True:
@@ -69,3 +109,11 @@ async def start_resource_sentinel(broadcast_fn) -> None:
                 await proc.communicate()
 
         await asyncio.sleep(5)
+
+
+async def start_resource_sentinel(broadcast_fn) -> None:
+    """v32.0 — concurrent metrics broadcast + critical watch."""
+    await asyncio.gather(
+        _broadcast_metrics(broadcast_fn),
+        _critical_loop(broadcast_fn),
+    )

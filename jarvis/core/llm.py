@@ -11,6 +11,7 @@ v3: Integración MCP asíncrona con packet_tracer_bridge.py via stdio transport.
 import sys
 import json
 import re
+import time as _time
 import uuid
 import asyncio
 from contextlib import AsyncExitStack
@@ -996,6 +997,7 @@ class LLM:
             ]
 
             _routed_model = select_model(user_message)
+            _infer_start = _time.monotonic()  # v32.0 — inference timing
             # v31.0: adaptive ctx — shrink KV cache for short turns
             try:
                 from core.hardware_profile import get_cached_profile
@@ -1051,6 +1053,23 @@ class LLM:
 
             full_text = "".join(text_chunks)
             thinking = self._extract_thinking(full_text)
+
+            # v32.0 — broadcast inference timing to AURA HUD
+            try:
+                _infer_ms = round((_time.monotonic() - _infer_start) * 1000)
+                _tok_count = len(text_chunks)
+                _tok_per_s = round(_tok_count / max(_infer_ms / 1000, 0.001), 1)
+                from tools.executor import _aura_broadcast as _bcast
+                asyncio.create_task(_bcast({
+                    "type":        "llm_inference_complete",
+                    "model":       _routed_model,
+                    "duration_ms": _infer_ms,
+                    "tokens":      _tok_count,
+                    "tok_per_s":   _tok_per_s,
+                    "ctx_used":    len(messages_for_api),
+                }))
+            except Exception:
+                pass
 
             # ── Fallback: si no hubo tool_calls nativos, escanear texto ───────
             forced_tool_calls = False

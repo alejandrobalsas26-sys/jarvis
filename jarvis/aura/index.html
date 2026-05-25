@@ -749,9 +749,323 @@
     .type-playbook_note      { background: #050a0a; border: 1px solid #44aaaa; color: #88cccc; }
     .type-rf_oob_command     { background: #0a0520; border: 1px solid #8844ff; color: #cc88ff; }
     .type-rf_oob_status      { background: #080515; border: 1px solid #6633cc; color: #aa66ff; }
+
+    /* ══════════════════════════════════════════════════════════════════
+       v32.0 AURA HUD OVERHAUL
+       ══════════════════════════════════════════════════════════════════ */
+
+    /* ── v32.0 Header Bar ─────────────────────────────────────────────── */
+    #header-bar {
+      position: fixed; top: 0; left: 0; right: 0; height: 36px;
+      background: rgba(4, 6, 12, 0.97);
+      border-bottom: 1px solid rgba(0,255,65,0.15);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px; z-index: 200; backdrop-filter: blur(8px);
+      font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    }
+    .hb-left   { display: flex; align-items: center; gap: 8px; }
+    .hb-center { display: flex; align-items: center; gap: 16px; }
+    .hb-right  { display: flex; align-items: center; gap: 12px; }
+    .hb-logo   { color: #00ff41; font-weight: bold; letter-spacing: 3px; font-size: 12px; }
+    .hb-tag    { color: rgba(0,255,65,0.4); font-size: 10px; }
+    .hb-stat   { display: flex; align-items: center; gap: 4px; color: #88aa88; }
+    .hb-icon   { font-size: 10px; }
+    .hb-dim    { color: rgba(255,255,255,0.25); }
+    .hb-badge  {
+      background: rgba(255,68,0,0.2); border: 1px solid rgba(255,68,0,0.5);
+      color: #ff8844; padding: 1px 7px; border-radius: 10px; font-size: 10px;
+      min-width: 18px; text-align: center;
+    }
+    .hb-badge.zero { background: rgba(0,255,65,0.1); border-color: rgba(0,255,65,0.2); color: #44aa44; }
+    .hb-shortcut {
+      color: rgba(255,255,255,0.4); cursor: pointer; padding: 2px 6px;
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 3px; font-size: 11px;
+    }
+    .hb-shortcut:hover { color: #00ff41; border-color: rgba(0,255,65,0.4); }
+
+    /* VAD status indicator */
+    .hb-vad-idle         { display: flex; align-items: center; gap: 5px; color: rgba(255,255,255,0.3); }
+    .hb-vad-listening    { display: flex; align-items: center; gap: 5px; color: #00ff41; }
+    .hb-vad-speech       { display: flex; align-items: center; gap: 5px; color: #ffaa00; }
+    .hb-vad-transcribing { display: flex; align-items: center; gap: 5px; color: #00ccff; }
+    .hb-vad-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor;
+    }
+    .hb-vad-listening .hb-vad-dot    { animation: vad-pulse 1.2s ease-in-out infinite; }
+    .hb-vad-speech .hb-vad-dot       { animation: vad-pulse 0.3s ease-in-out infinite; }
+    .hb-vad-transcribing .hb-vad-dot { animation: vad-pulse 0.6s ease-in-out infinite; }
+    @keyframes vad-pulse {
+      0%,100% { opacity: 1; transform: scale(1); }
+      50%     { opacity: 0.3; transform: scale(0.7); }
+    }
+
+    /* ── v32.0 Metrics Sidebar ──────────────────────────────────────── */
+    #metrics-sidebar {
+      position: fixed; right: 16px; top: 48px;
+      width: 220px; max-height: calc(100vh - 120px);
+      background: rgba(4, 6, 12, 0.94);
+      border: 1px solid rgba(0,255,65,0.12);
+      border-radius: 6px; padding: 12px;
+      font-family: 'Share Tech Mono', monospace; font-size: 10px;
+      z-index: 110; overflow-y: auto;
+      backdrop-filter: blur(8px);
+      transition: opacity 0.3s;
+    }
+    #metrics-sidebar.hidden { opacity: 0; pointer-events: none; }
+    .ms-title   { color: #00ff41; letter-spacing: 3px; font-size: 9px;
+                  font-weight: bold; margin-bottom: 10px;
+                  border-bottom: 1px solid rgba(0,255,65,0.15); padding-bottom: 6px; }
+    .ms-section { margin-bottom: 12px; }
+    .ms-label   { color: rgba(255,255,255,0.4); font-size: 9px;
+                  letter-spacing: 2px; margin-bottom: 4px; }
+    .ms-val     { color: #00ff41; font-weight: bold; }
+    .ms-dim     { color: rgba(255,255,255,0.25); }
+    .ms-model   { color: #44aaff; font-size: 9px; margin-bottom: 4px;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ms-infer-row { font-size: 10px; color: rgba(255,255,255,0.4); }
+
+    #cpu-spark, #ram-spark {
+      width: 200px; height: 40px;
+      display: block; margin-top: 2px;
+    }
+
+    #watchdog-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 3px; margin-top: 4px;
+    }
+    .wd-task {
+      padding: 3px 5px; border-radius: 2px; font-size: 8px;
+      display: flex; align-items: center; gap: 4px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .wd-task.alive  { color: #44ff88; border-color: rgba(0,255,65,0.2); }
+    .wd-task.dead   { color: #ff4444; border-color: rgba(255,68,0,0.3); }
+    .wd-task.unknown{ color: rgba(255,255,255,0.3); }
+    .wd-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+    /* ── v32.0 Kill Chain Strip ─────────────────────────────────────── */
+    #killchain-strip {
+      position: fixed; bottom: 0; left: 0; right: 0; height: 32px;
+      background: rgba(4, 6, 12, 0.97);
+      border-top: 1px solid rgba(255,255,255,0.06);
+      display: flex; align-items: center;
+      padding: 0 16px; gap: 8px; z-index: 200;
+      font-family: 'Share Tech Mono', monospace;
+    }
+    .kc-title  { color: rgba(255,255,255,0.25); font-size: 8px;
+                 letter-spacing: 2px; white-space: nowrap; }
+    #kc-phases { display: flex; gap: 3px; flex: 1; }
+    .kc-phase  {
+      padding: 2px 8px; font-size: 8px; letter-spacing: 1px;
+      border-radius: 2px; color: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.06);
+      white-space: nowrap; transition: all 0.4s;
+    }
+    .kc-phase.active {
+      color: #ff4400; border-color: rgba(255,68,0,0.6);
+      background: rgba(255,68,0,0.15);
+      box-shadow: 0 0 8px rgba(255,68,0,0.3);
+    }
+    .kc-phase.completed {
+      color: #44ff88; border-color: rgba(0,255,65,0.3);
+      background: rgba(0,255,65,0.06);
+    }
+    .kc-active-label {
+      font-size: 8px; color: rgba(255,255,255,0.25);
+      letter-spacing: 1px; white-space: nowrap;
+    }
+
+    /* ── v32.0 Event Log Filter Bar ─────────────────────────────────── */
+    #log-filter-bar {
+      position: fixed; top: 40px; left: 16px;
+      display: flex; gap: 4px; align-items: center;
+      padding: 6px 8px 4px; z-index: 105;
+      background: rgba(4,6,12,0.85); border-radius: 4px;
+      backdrop-filter: blur(6px);
+    }
+    .lf-btn {
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.3); font-family: 'Share Tech Mono', monospace;
+      font-size: 9px; padding: 3px 8px; border-radius: 2px; cursor: pointer;
+      letter-spacing: 1px; transition: all 0.2s;
+    }
+    .lf-btn:hover { color: #00ff41; border-color: rgba(0,255,65,0.4); }
+    .lf-btn.active {
+      color: #00ff41; border-color: rgba(0,255,65,0.5);
+      background: rgba(0,255,65,0.08);
+    }
+    .lf-copy, .lf-clear {
+      margin-left: 4px; background: none; border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.25); cursor: pointer; padding: 2px 7px;
+      font-size: 11px; border-radius: 2px; transition: all 0.2s;
+    }
+    .lf-copy:hover  { color: #44aaff; border-color: rgba(68,170,255,0.4); }
+    .lf-clear:hover { color: #ff4444; border-color: rgba(255,68,0,0.4); }
+
+    /* ── v32.0 Help Overlay ─────────────────────────────────────────── */
+    #help-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+      z-index: 900; display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(6px);
+    }
+    .help-box {
+      background: rgba(4,6,12,0.98); border: 1px solid rgba(0,255,65,0.3);
+      border-radius: 8px; padding: 32px 40px; min-width: 360px;
+    }
+    .help-title { color: #00ff41; letter-spacing: 4px; font-size: 11px;
+                  font-weight: bold; margin-bottom: 20px; }
+    .help-grid  { display: flex; flex-direction: column; gap: 10px; }
+    .help-row   { display: flex; align-items: center; gap: 16px; }
+    kbd {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 3px; padding: 2px 8px; font-family: 'Share Tech Mono', monospace;
+      font-size: 11px; color: #88aaff; white-space: nowrap; min-width: 100px;
+      text-align: center;
+    }
+    .help-row span { color: rgba(255,255,255,0.6); font-size: 12px; }
+    .help-close {
+      margin-top: 24px; text-align: center; color: rgba(255,255,255,0.3);
+      cursor: pointer; font-size: 11px; letter-spacing: 2px;
+    }
+    .help-close:hover { color: #ff4444; }
+
+    /* ── v32.0 New event-type colors + silent dispatchers ────────────── */
+    .type-geo_resolved          { background: #050a18; border:1px solid #4466ff; color:#88aaff; }
+    .type-metrics_update        { display: none; }
+    .type-llm_inference_complete{ display: none; }
+    .type-vad_event             { display: none; }
   </style>
 </head>
 <body>
+
+<!-- ══════════════════════════════════════════════════
+     v32.0 HEADER BAR — model status, cpu, vad
+     ══════════════════════════════════════════════════ -->
+<div id="header-bar">
+  <div class="hb-left">
+    <span class="hb-logo">◈ JARVIS</span>
+    <span id="hb-version" class="hb-tag">v32.0</span>
+  </div>
+  <div class="hb-center">
+    <div id="hb-vad" class="hb-vad-idle" title="Voice Activity Detection">
+      <span class="hb-vad-dot"></span>
+      <span id="hb-vad-label">IDLE</span>
+    </div>
+    <div id="hb-model" class="hb-stat" title="Active LLM model">
+      <span class="hb-icon">🧠</span>
+      <span id="hb-model-name">—</span>
+      <span id="hb-tok-rate" class="hb-dim"> — t/s</span>
+    </div>
+    <div id="hb-cpu" class="hb-stat" title="CPU usage">
+      <span class="hb-icon">⚡</span>
+      <span id="hb-cpu-val">—</span>
+      <span class="hb-dim">%</span>
+    </div>
+    <div id="hb-ram" class="hb-stat" title="RAM usage">
+      <span class="hb-icon">📦</span>
+      <span id="hb-ram-val">—</span>
+      <span class="hb-dim">GB</span>
+    </div>
+  </div>
+  <div class="hb-right">
+    <span id="hb-incident-count" class="hb-badge zero" title="Active incidents">0</span>
+    <span class="hb-shortcut" onclick="toggleHelp()">?</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     v32.0 METRICS SIDEBAR — sparklines + watchdog
+     ══════════════════════════════════════════════════ -->
+<div id="metrics-sidebar">
+  <div class="ms-title">◈ SYSTEM METRICS</div>
+
+  <div class="ms-section">
+    <div class="ms-label">CPU <span id="ms-cpu-pct" class="ms-val">—%</span></div>
+    <canvas id="cpu-spark" width="200" height="40"></canvas>
+  </div>
+
+  <div class="ms-section">
+    <div class="ms-label">RAM
+      <span id="ms-ram-used" class="ms-val">—</span>
+      <span class="ms-dim">/ <span id="ms-ram-total">—</span>GB</span>
+    </div>
+    <canvas id="ram-spark" width="200" height="40"></canvas>
+  </div>
+
+  <div class="ms-section">
+    <div class="ms-label">INFERENCE</div>
+    <div id="ms-model-name" class="ms-model">—</div>
+    <div class="ms-infer-row">
+      <span class="ms-dim">last: </span>
+      <span id="ms-infer-ms" class="ms-val">—</span>
+      <span class="ms-dim">ms · </span>
+      <span id="ms-tok-s" class="ms-val">—</span>
+      <span class="ms-dim"> t/s</span>
+    </div>
+  </div>
+
+  <div class="ms-section">
+    <div class="ms-label">WATCHDOG TASKS</div>
+    <div id="watchdog-grid"></div>
+  </div>
+
+  <div class="ms-section">
+    <div class="ms-label">DISK FREE</div>
+    <div id="ms-disk" class="ms-val">—GB</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     v32.0 KILL CHAIN STRIP — bottom progress bar
+     ══════════════════════════════════════════════════ -->
+<div id="killchain-strip">
+  <div class="kc-title">KILL CHAIN</div>
+  <div id="kc-phases">
+    <div class="kc-phase" data-phase="Reconnaissance">RECON</div>
+    <div class="kc-phase" data-phase="Initial Access">ACCESS</div>
+    <div class="kc-phase" data-phase="Execution">EXEC</div>
+    <div class="kc-phase" data-phase="Defense Evasion">EVASION</div>
+    <div class="kc-phase" data-phase="Credential Access">CREDS</div>
+    <div class="kc-phase" data-phase="Lateral Movement">LATERAL</div>
+    <div class="kc-phase" data-phase="Command & Control">C2</div>
+    <div class="kc-phase" data-phase="Exfiltration">EXFIL</div>
+  </div>
+  <div id="kc-active-label" class="kc-active-label">NO ACTIVE INCIDENTS</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     v32.0 KEYBOARD SHORTCUTS HELP OVERLAY
+     ══════════════════════════════════════════════════ -->
+<div id="help-overlay" style="display:none">
+  <div class="help-box">
+    <div class="help-title">◈ KEYBOARD SHORTCUTS</div>
+    <div class="help-grid">
+      <div class="help-row"><kbd>?</kbd><span>Toggle this help</span></div>
+      <div class="help-row"><kbd>Ctrl+M</kbd><span>Toggle metrics sidebar</span></div>
+      <div class="help-row"><kbd>Ctrl+Shift+C</kbd><span>Ops console</span></div>
+      <div class="help-row"><kbd>Space</kbd><span>Pause/resume event log</span></div>
+      <div class="help-row"><kbd>Ctrl+L</kbd><span>Clear event log</span></div>
+      <div class="help-row"><kbd>Ctrl+E</kbd><span>Export log to clipboard</span></div>
+      <div class="help-row"><kbd>F</kbd><span>Cycle event filter</span></div>
+      <div class="help-row"><kbd>Esc</kbd><span>Close overlays</span></div>
+    </div>
+    <div class="help-close" onclick="toggleHelp()">✕ CLOSE</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     v32.0 EVENT LOG FILTER BAR (above existing log)
+     ══════════════════════════════════════════════════ -->
+<div id="log-filter-bar">
+  <button class="lf-btn active" data-filter="all"      onclick="setLogFilter('all')">ALL</button>
+  <button class="lf-btn"        data-filter="threats"  onclick="setLogFilter('threats')">THREATS</button>
+  <button class="lf-btn"        data-filter="playbooks" onclick="setLogFilter('playbooks')">PLAYBOOKS</button>
+  <button class="lf-btn"        data-filter="system"   onclick="setLogFilter('system')">SYSTEM</button>
+  <button class="lf-btn"        data-filter="llm"      onclick="setLogFilter('llm')">LLM</button>
+  <button class="lf-copy" onclick="exportLog()" title="Copy log to clipboard">⎘</button>
+  <button class="lf-clear" onclick="clearLog()" title="Clear log">✕</button>
+</div>
 
 <header>
   <h1>◈ AURA</h1>
@@ -1060,12 +1374,17 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     const ts  = new Date().toISOString().slice(11, 23);
     const div = document.createElement('div');
     div.className = 'event';
+    div.setAttribute('data-event-type', obj.type || '');
+    div.classList.add('event-entry');
     div.innerHTML = `
       <span class="event-ts">${ts}</span>
       <div class="event-body">
         <span class="event-type ${typeClass(obj.type)}">${escapeHtml((obj.type || 'unknown').toUpperCase())}</span>
         <pre class="payload">${highlight(obj)}</pre>
       </div>`;
+    if (typeof shouldShowEvent === 'function' && !shouldShowEvent(obj.type || '')) {
+      div.style.display = 'none';
+    }
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
 
@@ -2812,6 +3131,369 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — METRICS SPARKLINES (Canvas 2D, zero dependencies)
+  // ═══════════════════════════════════════════════════════════════════
+
+  function drawSparkline(canvasId, data, color, fillColor) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    if (!data || data.length < 2) return;
+
+    const min = 0, max = 100;
+    const step = W / (data.length - 1);
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, fillColor);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+    ctx.beginPath();
+    ctx.moveTo(0, H - (data[0] - min) / (max - min) * H);
+    data.forEach((v, i) => {
+      const x = i * step;
+      const y = H - ((v - min) / (max - min)) * H;
+      ctx.lineTo(x, y);
+    });
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    data.forEach((v, i) => {
+      const x = i * step;
+      const y = H - ((v - min) / (max - min)) * H;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    const lastX = (data.length - 1) * step;
+    const lastY = H - ((data[data.length-1] - min) / (max - min)) * H;
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function updateMetrics(msg) {
+    const cpuEl = document.getElementById('hb-cpu-val');
+    const ramEl = document.getElementById('hb-ram-val');
+    if (cpuEl) cpuEl.textContent = msg.cpu_percent;
+    if (ramEl) ramEl.textContent = msg.ram_used_gb;
+
+    const msCpu = document.getElementById('ms-cpu-pct');
+    const msRamU = document.getElementById('ms-ram-used');
+    const msRamT = document.getElementById('ms-ram-total');
+    const msDisk = document.getElementById('ms-disk');
+    if (msCpu)  msCpu.textContent  = msg.cpu_percent + '%';
+    if (msRamU) msRamU.textContent = msg.ram_used_gb;
+    if (msRamT) msRamT.textContent = msg.ram_total_gb;
+    if (msDisk) msDisk.textContent = (msg.disk_free_gb || '—') + 'GB';
+
+    if (msg.cpu_history) {
+      drawSparkline('cpu-spark', msg.cpu_history,
+        '#00ff41', 'rgba(0,255,65,0.15)');
+    }
+    if (msg.ram_history) {
+      drawSparkline('ram-spark', msg.ram_history,
+        '#44aaff', 'rgba(68,170,255,0.12)');
+    }
+
+    if (cpuEl) {
+      cpuEl.style.color = msg.cpu_percent > 80 ? '#ff4400'
+                        : msg.cpu_percent > 60 ? '#ffaa00'
+                        : '#00ff41';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — MODEL INFERENCE STATUS
+  // ═══════════════════════════════════════════════════════════════════
+
+  function updateInferenceStatus(msg) {
+    const modelName  = document.getElementById('hb-model-name');
+    const tokRate    = document.getElementById('hb-tok-rate');
+    const msModel    = document.getElementById('ms-model-name');
+    const msInferMs  = document.getElementById('ms-infer-ms');
+    const msTokS     = document.getElementById('ms-tok-s');
+
+    const shortModel = (msg.model || '—').replace('qwen2.5:', '').replace('-instruct', '');
+    if (modelName) modelName.textContent = shortModel;
+    if (tokRate)   tokRate.textContent   = ` ${msg.tok_per_s || '—'} t/s`;
+    if (msModel)   msModel.textContent   = msg.model || '—';
+    if (msInferMs) msInferMs.textContent = msg.duration_ms || '—';
+    if (msTokS)    msTokS.textContent    = msg.tok_per_s || '—';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — VAD STATUS INDICATOR
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _VAD_CONFIG = {
+    listening:       { cls: 'hb-vad-listening',    label: 'LISTENING' },
+    speech_detected: { cls: 'hb-vad-speech',       label: 'SPEECH ◉' },
+    transcribing:    { cls: 'hb-vad-transcribing', label: 'PROCESSING' },
+    idle:            { cls: 'hb-vad-idle',         label: 'IDLE' },
+  };
+
+  function updateVADStatus(msg) {
+    const el    = document.getElementById('hb-vad');
+    const label = document.getElementById('hb-vad-label');
+    if (!el || !label) return;
+    const cfg = _VAD_CONFIG[msg.state] || _VAD_CONFIG.idle;
+    el.className = cfg.cls;
+    label.textContent = cfg.label;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — KILL CHAIN STRIP
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _KC_ORDER = [
+    'Reconnaissance','Initial Access','Execution','Defense Evasion',
+    'Credential Access','Lateral Movement','Command & Control','Exfiltration'
+  ];
+
+  function updateKillChain(incident) {
+    const phase   = incident.kill_chain_phase || '';
+    const phaseEl = document.getElementById('kc-phases');
+    const label   = document.getElementById('kc-active-label');
+    if (!phaseEl) return;
+
+    const activeIdx = _KC_ORDER.indexOf(phase);
+    phaseEl.querySelectorAll('.kc-phase').forEach((el, i) => {
+      el.classList.remove('active', 'completed');
+      if (i < activeIdx)        el.classList.add('completed');
+      else if (i === activeIdx) el.classList.add('active');
+    });
+
+    if (label) {
+      label.textContent = phase
+        ? `INC-${escapeHtml(incident.incident_id || '?')} · ${escapeHtml(phase)}`
+        : 'NO ACTIVE INCIDENTS';
+      label.style.color = phase ? '#ff8844' : 'rgba(255,255,255,0.25)';
+    }
+  }
+
+  function clearKillChain() {
+    document.querySelectorAll('.kc-phase')
+      .forEach(el => el.classList.remove('active','completed'));
+    const label = document.getElementById('kc-active-label');
+    if (label) {
+      label.textContent = 'NO ACTIVE INCIDENTS';
+      label.style.color = 'rgba(255,255,255,0.25)';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — WATCHDOG TASK GRID
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _wdTaskState = {};
+  const _WD_TASKS = [
+    'zeek-dpi','canary-matrix','rf-bridge','etw-monitor','env-intel',
+    'threat-feed','resource-watchdog','sysmon-bridge','ebpf-bridge',
+    'sliver-monitor','severity-calibrator','pruning-loop',
+    'power-monitor','active-tarpit','yara-file-monitor'
+  ];
+
+  function buildWatchdogGrid() {
+    const grid = document.getElementById('watchdog-grid');
+    if (!grid) return;
+    grid.innerHTML = _WD_TASKS.map(name => {
+      const state = _wdTaskState[name] || 'unknown';
+      const short = name.replace('-monitor','').replace('-bridge','')
+                        .replace('-matrix','').replace('-sentinel','')
+                        .toUpperCase().slice(0,8);
+      return `<div class="wd-task ${state}" title="${escapeHtml(name)}">
+        <span class="wd-dot"></span>${escapeHtml(short)}
+      </div>`;
+    }).join('');
+  }
+
+  function updateWatchdogTask(msg) {
+    const name = msg.name || '';
+    if (msg.action === 'restarted')  _wdTaskState[name] = 'alive';
+    if (msg.action === 'abandoned')  _wdTaskState[name] = 'dead';
+    buildWatchdogGrid();
+  }
+
+  function markTaskAlive(eventType) {
+    const map = {
+      'etw_threat_event':    'etw-monitor',
+      'canary_intrusion':    'canary-matrix',
+      'dpi_alert':           'zeek-dpi',
+      'ebpf_alert':          'ebpf-bridge',
+      'sysmon_event':        'sysmon-bridge',
+      'sliver_sessions':     'sliver-monitor',
+      'rf_oob_command':      'rf-bridge',
+      'tarpit_trap':         'active-tarpit',
+      'yara_file_match':     'yara-file-monitor',
+      'metrics_update':      'resource-watchdog',
+      'environmental_telemetry': 'env-intel',
+      'threat_feed_update':  'threat-feed',
+      'memory_pruned':       'pruning-loop',
+      'power_state_change':  'power-monitor',
+    };
+    if (map[eventType]) {
+      _wdTaskState[map[eventType]] = 'alive';
+    }
+  }
+
+  setTimeout(buildWatchdogGrid, 500);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — GEO GLOBE MARKERS
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _HOME_LAT = 8.9936, _HOME_LON = -79.5197;
+
+  function latLonToVec3(lat, lon, radius) {
+    const phi   = (90 - lat)  * (Math.PI / 180);
+    const theta = (lon + 180) * (Math.PI / 180);
+    return new THREE.Vector3(
+      -radius * Math.sin(phi) * Math.cos(theta),
+       radius * Math.cos(phi),
+       radius * Math.sin(phi) * Math.sin(theta),
+    );
+  }
+
+  function spawnGeoMarker(msg) {
+    if (typeof globeScene === 'undefined' || !globeScene) return;
+
+    const R = 200;
+    const origin = latLonToVec3(msg.lat, msg.lon, R);
+    const home   = latLonToVec3(_HOME_LAT, _HOME_LON, R);
+
+    const geo  = new THREE.SphereGeometry(4, 8, 8);
+    const mat  = new THREE.MeshBasicMaterial({ color: 0xff2200 });
+    const dot  = new THREE.Mesh(geo, mat);
+    dot.position.copy(origin);
+    globeScene.add(dot);
+
+    const mid = new THREE.Vector3()
+      .addVectors(origin, home).multiplyScalar(0.5)
+      .normalize().multiplyScalar(R * 1.3);
+
+    const curve = new THREE.QuadraticBezierCurve3(origin, mid, home);
+    const points = curve.getPoints(30);
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0xff4400, opacity: 0.6, transparent: true,
+    });
+    const arc = new THREE.Line(lineGeo, lineMat);
+    globeScene.add(arc);
+
+    const inset = document.getElementById('globe-inset');
+    if (inset) inset.style.opacity = '1';
+
+    setTimeout(() => { globeScene.remove(dot); globeScene.remove(arc); }, 30000);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — EVENT LOG FILTERING
+  // ═══════════════════════════════════════════════════════════════════
+
+  let _activeFilter = 'all';
+  const _FILTER_TYPES = {
+    threats:   new Set(['canary_intrusion','etw_threat_event','sysmon_event',
+                        'ebpf_alert','compound_incident','tarpit_trap',
+                        'yara_file_match','dpi_alert','deception_tripped',
+                        'firewall_block','neutralized','geo_resolved']),
+    playbooks: new Set(['playbook_started','playbook_completed','playbook_alert',
+                        'playbook_note','compound_incident_resolved']),
+    system:    new Set(['startup_diagnostic','task_watchdog_event','hardware_profile',
+                        'power_state_change','memory_pruned','error',
+                        'resource_critical_alert','environmental_telemetry']),
+    llm:       new Set(['llm_inference_complete','agentic_summary','tool_invoked',
+                        'tool_result','agentic_loop_timeout','trust_decision',
+                        'agentic_cycle','agentic_resolved','agentic_loop_start']),
+  };
+
+  function setLogFilter(filter) {
+    _activeFilter = filter;
+    document.querySelectorAll('.lf-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    document.querySelectorAll('#event-log .event-entry').forEach(el => {
+      const type = el.dataset.eventType || '';
+      el.style.display = shouldShowEvent(type) ? '' : 'none';
+    });
+  }
+
+  function shouldShowEvent(type) {
+    if (_activeFilter === 'all') return true;
+    return _FILTER_TYPES[_activeFilter]?.has(type) ?? false;
+  }
+
+  function exportLog() {
+    const entries = [...document.querySelectorAll('#event-log .event-entry')]
+      .map(el => el.textContent.trim()).join('\n---\n');
+    navigator.clipboard.writeText(entries).then(() => {
+      const btn = document.querySelector('.lf-copy');
+      if (btn) { btn.textContent = '✓'; setTimeout(() => btn.textContent = '⎘', 1500); }
+    });
+  }
+
+  function clearLog() {
+    const log = document.getElementById('event-log');
+    if (log) {
+      [...log.querySelectorAll('.event-entry')].forEach(e => e.remove());
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — KEYBOARD SHORTCUTS
+  // ═══════════════════════════════════════════════════════════════════
+
+  let _metricsVisible = true;
+
+  function toggleHelp() {
+    const el = document.getElementById('help-overlay');
+    if (el) el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+  }
+
+  function toggleMetrics() {
+    _metricsVisible = !_metricsVisible;
+    const el = document.getElementById('metrics-sidebar');
+    if (el) el.classList.toggle('hidden', !_metricsVisible);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === '?')              toggleHelp();
+    if (e.key === 'Escape') {
+      const el = document.getElementById('help-overlay');
+      if (el) el.style.display = 'none';
+    }
+    if (e.ctrlKey && e.key === 'm') { e.preventDefault(); toggleMetrics(); }
+    if (e.ctrlKey && e.key === 'l') { e.preventDefault(); clearLog(); }
+    if (e.ctrlKey && e.key === 'e') { e.preventDefault(); exportLog(); }
+    if (e.key === 'f' && !e.ctrlKey) {
+      const filters = ['all','threats','playbooks','system','llm'];
+      const idx = filters.indexOf(_activeFilter);
+      setLogFilter(filters[(idx + 1) % filters.length]);
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v32.0 — INCIDENT COUNTER IN HEADER
+  // ═══════════════════════════════════════════════════════════════════
+
+  function updateIncidentBadge(count) {
+    const badge = document.getElementById('hb-incident-count');
+    if (!badge) return;
+    badge.textContent = count;
+    badge.classList.toggle('zero', count === 0);
+  }
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -2828,6 +3510,47 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     ws.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { msg = null; }
+
+      // v32.0 — silent metric dispatchers (no log entry)
+      if (msg && msg.type === 'metrics_update') {
+        updateMetrics(msg);
+        markTaskAlive('metrics_update');
+        return;
+      }
+      if (msg && msg.type === 'llm_inference_complete') {
+        updateInferenceStatus(msg);
+        return;
+      }
+      if (msg && msg.type === 'vad_event') {
+        updateVADStatus(msg);
+        return;
+      }
+
+      // v32.0 — geo markers (also logged)
+      if (msg && msg.type === 'geo_resolved') {
+        spawnGeoMarker(msg);
+      }
+
+      // v32.0 — watchdog grid update
+      if (msg && msg.type === 'task_watchdog_event') {
+        updateWatchdogTask(msg);
+      }
+
+      // v32.0 — kill chain + incident counter
+      if (msg && msg.type === 'compound_incident') {
+        updateKillChain(msg);
+        try { updateIncidentBadge(_activeIncidents.size + 1); } catch {}
+      }
+      if (msg && msg.type === 'compound_incident_resolved') {
+        try {
+          const remaining = Math.max(0, _activeIncidents.size - 1);
+          updateIncidentBadge(remaining);
+          if (remaining === 0) clearKillChain();
+        } catch {}
+      }
+
+      // v32.0 — mark task alive from any matching event
+      if (msg && msg.type) markTaskAlive(msg.type);
 
       if (msg && msg.type === 'telemetry') {
         // CPU → PointLight intensity (updated only on incoming telemetry message)

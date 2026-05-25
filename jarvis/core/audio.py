@@ -10,6 +10,7 @@ Memory layout intent (future 64GB pool):
   during concurrent tool-call execution.
 """
 
+import asyncio
 import io
 import os
 import math
@@ -63,6 +64,24 @@ class HighPrioritySTTListener:
         # runs on confirmed speech segments — eliminates the dominant
         # idle-silence CPU consumer on the Ryzen 5 7430U.
         self._vad = VADAccumulator()
+
+        # v32.0: AURA HUD VAD-event bridge (set externally from main.py)
+        self._loop_ref: Optional[asyncio.AbstractEventLoop] = None
+        self._broadcast_ref = None
+
+    def _vad_broadcast(self, state: str) -> None:
+        """v32.0 — Thread-safe VAD state broadcast to AURA HUD."""
+        if self._loop_ref and self._broadcast_ref:
+            try:
+                self._loop_ref.call_soon_threadsafe(
+                    self._loop_ref.create_task,
+                    self._broadcast_ref({
+                        "type":  "vad_event",
+                        "state": state,
+                    })
+                )
+            except Exception:
+                pass
 
         loader = threading.Thread(
             target=self._load_model,
@@ -166,6 +185,7 @@ class HighPrioritySTTListener:
             return ""
 
         self._vad.reset()
+        self._vad_broadcast("listening")  # v32.0
         utterance_holder: dict[str, bytes] = {}
         frame_q: queue.Queue[bytes] = queue.Queue()
         stop_event = threading.Event()
@@ -204,6 +224,7 @@ class HighPrioritySTTListener:
                     continue
                 utterance = self._vad.feed(frame)
                 if utterance is not None:
+                    self._vad_broadcast("speech_detected")  # v32.0
                     utterance_holder["pcm"] = utterance
                     break
 
@@ -212,6 +233,7 @@ class HighPrioritySTTListener:
 
         pcm = utterance_holder.get("pcm")
         if not pcm:
+            self._vad_broadcast("idle")  # v32.0
             return ""
 
         # Convert int16 PCM bytes → float32 numpy at 16kHz for Whisper
@@ -221,7 +243,9 @@ class HighPrioritySTTListener:
         prev_rate = self._sample_rate
         try:
             self._sample_rate = VAD_SAMPLE_RATE
+            self._vad_broadcast("transcribing")  # v32.0
             text, _ = self.transcribe_with_confidence(audio)
         finally:
             self._sample_rate = prev_rate
+            self._vad_broadcast("listening")  # v32.0
         return text
