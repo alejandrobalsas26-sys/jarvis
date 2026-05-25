@@ -124,6 +124,47 @@ async def _loop_text(llm, tts, name: str) -> None:
         await _run_turn(llm, tts, user_input, name)
 
 
+async def _process_voice_input(
+    user_input: str, llm, tts, name: str
+) -> bool:
+    """
+    v35.0 — pre-process STT output. Returns True if handled (skip LLM).
+    Order: interrupt commands → voice macros → LLM.
+    """
+    from tools.executor import _aura_broadcast
+
+    # 1. Interrupt commands always win — fire in <200ms
+    interrupt_type = is_interrupt_command(user_input)
+    if interrupt_type:
+        await handle_interrupt(interrupt_type, _aura_broadcast)
+        if interrupt_type == "abort":
+            # Silence current TTS immediately before speaking confirmation
+            try: tts.interrupt()
+            except Exception: pass
+            await tts.speak_async("Understood. Stopping.")
+        elif interrupt_type == "status":
+            from core.cancel_bus import get_active_operations
+            ops = get_active_operations()
+            msg = (f"Active: {', '.join(ops.keys())}"
+                   if ops else "Nothing active.")
+            await tts.speak_async(msg)
+        elif interrupt_type == "reset":
+            await tts.speak_async("Reset complete.")
+        return True
+
+    # 2. Voice macros — YAML-defined shortcuts
+    try:
+        is_macro = await process_for_macro(user_input, _aura_broadcast, tts)
+        if is_macro:
+            return True
+    except Exception as e:
+        logger.debug(f"MACRO: process error: {e}")
+
+    # 3. Normal LLM routing
+    await _run_turn(llm, tts, user_input, name)
+    return False
+
+
 async def _loop_voice(llm, tts, stt, name: str) -> None:
     loop = asyncio.get_running_loop()
     print("Modo voz activo. Presiona Enter para hablar. Ctrl+C para salir.\n")
@@ -143,7 +184,8 @@ async def _loop_voice(llm, tts, stt, name: str) -> None:
                 await tts.speak_async("Hasta luego.")
                 break
 
-            await _run_turn(llm, tts, user_input, name)
+            # v35.0 — interrupt + macro routing before LLM
+            await _process_voice_input(user_input, llm, tts, name)
 
         except KeyboardInterrupt:
             print("\nCerrando...")
@@ -191,6 +233,10 @@ async def _main_async() -> None:
     from core.windows_hardener    import apply_host_hardening
     from core.integrity_baseline  import run_integrity_check
     from core.cognitive_optimizer import start_cognitive_monitor
+    # v35.0 — Real-Time Interrupt Architecture
+    from core.cancel_bus     import initialize as init_cancel_bus
+    from core.voice_interrupt import is_interrupt_command, handle_interrupt
+    from core.voice_macros   import process_for_macro
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -220,6 +266,9 @@ async def _main_async() -> None:
 
     # v30.0: install signal handlers for graceful shutdown
     install_signal_handlers(asyncio.get_event_loop())
+
+    # v35.0: initialize the global cancellation bus on this event loop
+    init_cancel_bus(asyncio.get_event_loop())
 
     # v30.0: register ChromaDB flush callback for graceful shutdown
     async def _flush_chroma():
@@ -254,6 +303,12 @@ async def _main_async() -> None:
     executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
     llm = LLM(tool_executor=executor)
     tts = TTS()
+
+    # v35.0: wire tts reference into STT listener for fast interrupt path
+    try:
+        audio_listener._tts_ref = tts
+    except Exception:
+        pass
 
     # v30.0: register session-save callback (closure now has llm reference)
     async def _flush_session():

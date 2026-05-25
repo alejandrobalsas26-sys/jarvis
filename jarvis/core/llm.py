@@ -29,6 +29,11 @@ from core.cognitive_optimizer import (
     latency_tracker, classify_query,
     refresh_threat_enrichment, monitor_conversation_health,
 )
+# v35.0 — real-time interrupt architecture
+from core.cancel_bus import (
+    register_operation, unregister_operation, cancel_llm_only,
+)
+import core.cancel_bus as _cancel_bus
 
 # Ruta al servidor MCP (relativa al proyecto, no al módulo)
 _BRIDGE_SCRIPT = Path(__file__).parent.parent.parent / "mcp_servers" / "packet_tracer_bridge.py"
@@ -975,6 +980,11 @@ class LLM:
         await self._init_mcp()
         await self._maybe_compress_history()
 
+        # v35.0 — register stream with cancel bus and clear prior abort flag
+        register_operation("llm_stream")
+        if _cancel_bus.llm_stream_cancel is not None:
+            _cancel_bus.llm_stream_cancel.clear()
+
         # v34.0 — cognitive pre-classification (0ms overhead)
         _query_category, _force_deep = classify_query(user_message)
         logger.debug(
@@ -1057,6 +1067,17 @@ class LLM:
 
             try:
                 async for chunk in stream:
+                    # v35.0 — operator interrupt check on every chunk
+                    if (_cancel_bus.llm_stream_cancel is not None
+                            and _cancel_bus.llm_stream_cancel.is_set()):
+                        logger.info("LLM: stream cancelled — operator interrupt")
+                        try:
+                            await self._broadcast_cancel_event()
+                        except Exception:
+                            pass
+                        unregister_operation("llm_stream")
+                        return
+
                     choice = chunk.choices[0]
                     delta = choice.delta
 
@@ -1079,8 +1100,17 @@ class LLM:
 
                     if choice.finish_reason is not None:
                         finish_reason = choice.finish_reason
+            except asyncio.CancelledError:
+                logger.info("LLM: asyncio.CancelledError — clean exit")
+                try:
+                    await self._broadcast_cancel_event()
+                except Exception:
+                    pass
+                unregister_operation("llm_stream")
+                return
             except (RuntimeError, BaseExceptionGroup) as e:
                 logger.error(f"LLM: stream interrupted by task group error: {e}")
+                unregister_operation("llm_stream")
                 return
 
             full_text = "".join(text_chunks)
@@ -1149,6 +1179,7 @@ class LLM:
                     save_session(self.history)
                 except Exception:
                     pass
+                unregister_operation("llm_stream")  # v35.0
                 break
 
             # ── Ejecutar tools y añadir resultados al historial ───────────────
@@ -1245,6 +1276,23 @@ class LLM:
         async for chunk in self.chat_stream(user_message):
             chunks.append(chunk)
         return "".join(chunks).strip()
+
+    async def _broadcast_cancel_event(self) -> None:
+        """v35.0 — notify AURA HUD that the stream was cancelled."""
+        from datetime import datetime, timezone
+        try:
+            from tools.executor import _aura_broadcast
+            await _aura_broadcast({
+                "type":      "llm_cancelled",
+                "message":   "Response cancelled by operator",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+
+    def cancel_stream(self) -> bool:
+        """v35.0 — public method to cancel this LLM's active stream."""
+        return cancel_llm_only()
 
     def clear_history(self) -> None:
         self.history = []

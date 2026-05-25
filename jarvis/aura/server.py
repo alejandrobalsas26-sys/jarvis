@@ -46,6 +46,8 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "emulate_chain",
     "export_stix",
     "get_coverage",
+    # v35.0 emergency abort — no OTP required
+    "voice_abort",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -202,6 +204,12 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
         elif cmd == "get_coverage":
             from core.attck_coverage import get_coverage_matrix
             return get_coverage_matrix()
+
+        elif cmd == "voice_abort":
+            # v35.0 — operator emergency abort via HUD ABORT button
+            from core.cancel_bus import cancel_all
+            count = cancel_all()
+            return {"cancelled": count, "status": "aborted"}
 
         elif cmd == "export_stix":
             from core.correlator import correlator

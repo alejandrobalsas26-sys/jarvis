@@ -950,8 +950,92 @@
     .type-security_audit           { background:#180505; border:1px solid #ff4400; color:#ff8844; }
     .type-hardening_complete       { background:#051805; border:1px solid #44ff44; color:#88ff88; }
     .type-integrity_check          { background:#050518; border:1px solid #4466ff; color:#88aaff; }
-    .type-cognitive_stats          { background:#0a0808; border:1px solid #888888; color:#aaaaaa; }
+    .type-cognitive_stats          { display:none; }
     .type-cognitive_health_alert   { background:#1a1000; border:1px solid #ffaa00; color:#ffcc44; }
+
+    /* v35.0 — Real-Time Interrupt Architecture */
+    .type-voice_interrupt          { background:#0a0518; border:1px solid #8844ff; color:#cc88ff; }
+    .type-macro_executed           { background:#050a18; border:1px solid #4488ff; color:#88bbff; }
+    .type-macro_confirm_required   { background:#1a0a00; border:1px solid #ffaa00; color:#ffcc44; }
+    .type-llm_cancelled            { background:#1a0000; border:1px solid #ff2200; color:#ff6644; }
+    .type-agentic_aborted          { background:#1a0500; border:1px solid #ff4400; color:#ff8844; }
+
+    /* v35.0 — Tactical Timeline */
+    #timeline-panel {
+      position: fixed; left: 50%; top: 36px; transform: translateX(-50%);
+      width: 600px; max-height: calc(100vh - 70px);
+      background: rgba(4, 6, 12, 0.97);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px; z-index: 150;
+      display: flex; flex-direction: column;
+      backdrop-filter: blur(12px);
+      font-family: 'Share Tech Mono', monospace;
+    }
+    .tp-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.06);
+      flex-shrink: 0;
+    }
+    .tp-title { color: #00ff41; font-size: 10px; letter-spacing: 3px; font-weight: bold; }
+    .tp-controls { display: flex; gap: 6px; align-items: center; }
+    #tp-range, #tp-search {
+      background: #0a1a0a; border: 1px solid rgba(0,255,65,0.2);
+      color: #88aa88; font-family: 'Share Tech Mono', monospace;
+      font-size: 10px; padding: 3px 6px; border-radius: 2px;
+    }
+    .tp-clear {
+      background: none; border: 1px solid rgba(255,68,0,0.3);
+      color: rgba(255,68,0,0.6); cursor: pointer; padding: 2px 6px;
+      font-size: 10px; border-radius: 2px;
+    }
+    #timeline-entries { overflow-y: auto; flex: 1; padding: 8px; }
+    .tl-entry {
+      display: flex; gap: 8px; align-items: flex-start;
+      padding: 5px 6px; border-radius: 3px; margin-bottom: 3px;
+      cursor: pointer; border: 1px solid transparent;
+      transition: border-color 0.2s;
+    }
+    .tl-entry:hover    { border-color: rgba(0,255,65,0.2); }
+    .tl-entry.expanded { border-color: rgba(0,255,65,0.3); }
+    .tl-time { color: rgba(255,255,255,0.3); font-size: 9px;
+               white-space: nowrap; padding-top: 2px; min-width: 55px; }
+    .tl-dot  { width: 7px; height: 7px; border-radius: 50%;
+               flex-shrink: 0; margin-top: 4px; }
+    .tl-body { flex: 1; }
+    .tl-type { font-size: 9px; letter-spacing: 1px; font-weight: bold; }
+    .tl-desc { font-size: 10px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+    .tl-payload {
+      display: none; font-size: 9px; color: rgba(0,255,65,0.4);
+      background: rgba(0,0,0,0.3); padding: 4px 6px; border-radius: 2px;
+      margin-top: 4px; max-height: 80px; overflow-y: auto;
+      word-break: break-all; white-space: pre-wrap;
+    }
+    .tl-entry.expanded .tl-payload { display: block; }
+
+    /* v35.0 — Master Abort Button */
+    #master-abort-btn {
+      position: fixed; bottom: 40px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(180, 0, 0, 0.15);
+      border: 1px solid rgba(255, 0, 0, 0.4);
+      color: #ff4444; font-family: 'Share Tech Mono', monospace;
+      font-size: 11px; letter-spacing: 2px; padding: 6px 20px;
+      border-radius: 3px; cursor: pointer; z-index: 200;
+      transition: all 0.15s;
+    }
+    #master-abort-btn:hover {
+      background: rgba(255, 0, 0, 0.25);
+      border-color: #ff0000; color: #ffffff;
+      box-shadow: 0 0 12px rgba(255, 0, 0, 0.4);
+    }
+    #master-abort-btn.fired {
+      background: rgba(255, 0, 0, 0.5);
+      border-color: #ff0000;
+      animation: abort-flash 0.3s ease-in-out 3;
+    }
+    @keyframes abort-flash {
+      0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
   </style>
 </head>
 <body>
@@ -1061,6 +1145,8 @@
       <div class="help-row"><kbd>?</kbd><span>Toggle this help</span></div>
       <div class="help-row"><kbd>Ctrl+A</kbd><span>Toggle ATT&amp;CK coverage matrix</span></div>
       <div class="help-row"><kbd>Ctrl+S</kbd><span>Toggle security status panel</span></div>
+      <div class="help-row"><kbd>Ctrl+T</kbd><span>Toggle tactical timeline</span></div>
+      <div class="help-row"><kbd>Esc</kbd><span>ABORT all active operations</span></div>
       <div class="help-row"><kbd>Ctrl+M</kbd><span>Toggle metrics sidebar</span></div>
       <div class="help-row"><kbd>Ctrl+Shift+C</kbd><span>Ops console</span></div>
       <div class="help-row"><kbd>Space</kbd><span>Pause/resume event log</span></div>
@@ -1188,6 +1274,29 @@
 
 <!-- v25.0 trust decision toast -->
 <div id="trust-toast"></div>
+
+<!-- v35.0 Tactical Timeline -->
+<div id="timeline-panel" style="display:none">
+  <div class="tp-header">
+    <span class="tp-title">◈ TACTICAL TIMELINE</span>
+    <div class="tp-controls">
+      <select id="tp-range" onchange="filterTimeline()">
+        <option value="300">Last 5 min</option>
+        <option value="900">Last 15 min</option>
+        <option value="3600" selected>Last 1 hr</option>
+        <option value="86400">Last 24 hr</option>
+        <option value="0">All</option>
+      </select>
+      <input id="tp-search" type="text" placeholder="filter…" oninput="filterTimeline()">
+      <button onclick="clearTimeline()" class="tp-clear">✕</button>
+    </div>
+  </div>
+  <div id="timeline-entries"></div>
+</div>
+
+<!-- v35.0 Master Abort button -->
+<button id="master-abort-btn" onclick="masterAbort()"
+        title="Abort all active operations [Esc]">⏹ ABORT</button>
 
 <!-- v26.0 hardware profile toast -->
 <div id="hw-toast" style="display:none;position:fixed;top:56px;left:50%;transform:translateX(-50%);background:rgba(7,9,15,0.94);border-radius:6px;padding:8px 20px;font-size:12px;z-index:142;pointer-events:none;border:1px solid #4488ff;color:#88aaff;letter-spacing:2px;"></div>
@@ -3706,6 +3815,149 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
   setTimeout(renderSecurityPanel, 1000);
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v35.0 — TACTICAL TIMELINE
+  // ═══════════════════════════════════════════════════════════════════
+
+  const _timelineData = [];   // {ts, type, desc, payload}
+  const _TL_MAX = 500;
+
+  const _TL_COLORS = {
+    canary_intrusion:     '#ff4400',
+    compound_incident:    '#ff0000',
+    etw_threat_event:     '#ff6600',
+    sysmon_event:         '#ff44aa',
+    ebpf_alert:           '#ff4400',
+    injection_classified: '#ff0000',
+    playbook_started:     '#44ff44',
+    playbook_completed:   '#00cc44',
+    voice_interrupt:      '#aa44ff',
+    macro_executed:       '#4488ff',
+    macro_confirm_required:'#ffaa00',
+    llm_cancelled:        '#ff4444',
+    agentic_aborted:      '#ff8844',
+    sigma_rule_generated: '#4466ff',
+    stix_exported:        '#6644ff',
+    security_audit:       '#ff8844',
+    hardening_complete:   '#44ff88',
+    integrity_check:      '#4466ff',
+    network_anomaly:      '#ff6600',
+    tarpit_trap:          '#aa44ff',
+  };
+
+  function _tlColor(type) { return _TL_COLORS[type] || '#444444'; }
+
+  function _tlDescription(msg) {
+    if (msg.message)       return msg.message;
+    if (msg.alert_title)   return msg.alert_title;
+    if (msg.description)   return msg.description;
+    if (msg.incident_id)   return `INC-${msg.incident_id} [${msg.kill_chain_phase||'?'}]`;
+    if (msg.rule)          return `Rule: ${msg.rule}`;
+    if (msg.attacker_ip)   return `From: ${msg.attacker_ip}`;
+    if (msg.filename)      return msg.filename;
+    if (msg.command)       return `CMD: ${msg.command}`;
+    return msg.type || '';
+  }
+
+  function addTimelineEntry(msgObj) {
+    if (!msgObj || !msgObj.type) return;
+    // Skip silent/noisy types
+    if (msgObj.type === 'metrics_update' || msgObj.type === 'telemetry'
+        || msgObj.type === 'cognitive_stats' || msgObj.type === 'vad_event'
+        || msgObj.type === 'llm_inference_complete') return;
+    const now = Date.now();
+    const entry = {
+      ts:      now,
+      type:    msgObj.type,
+      desc:    _tlDescription(msgObj),
+      payload: JSON.stringify(msgObj, null, 2).slice(0, 400),
+    };
+    _timelineData.unshift(entry);
+    if (_timelineData.length > _TL_MAX)
+      _timelineData.splice(_TL_MAX);
+    const panel = document.getElementById('timeline-panel');
+    if (panel && panel.style.display !== 'none')
+      renderTimeline();
+  }
+
+  function renderTimeline() {
+    const entriesEl = document.getElementById('timeline-entries');
+    if (!entriesEl) return;
+    const rangeEl  = document.getElementById('tp-range');
+    const searchEl = document.getElementById('tp-search');
+    const rangeSec = parseInt(rangeEl ? rangeEl.value : '3600');
+    const query    = (searchEl ? searchEl.value : '').toLowerCase();
+    const now      = Date.now();
+
+    const filtered = _timelineData.filter(e => {
+      if (rangeSec > 0 && (now - e.ts) > rangeSec * 1000) return false;
+      if (query && !e.type.includes(query)
+          && !e.desc.toLowerCase().includes(query)) return false;
+      return true;
+    });
+
+    entriesEl.innerHTML = filtered.slice(0, 200).map(e => {
+      const color = _tlColor(e.type);
+      const timeStr = new Date(e.ts).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+      return `
+        <div class="tl-entry" onclick="toggleTlEntry(this)">
+          <span class="tl-time">${escapeHtml(timeStr)}</span>
+          <span class="tl-dot" style="background:${color}"></span>
+          <div class="tl-body">
+            <div class="tl-type" style="color:${color}">
+              ${escapeHtml(e.type.toUpperCase())}
+            </div>
+            <div class="tl-desc">${escapeHtml(e.desc.slice(0, 120))}</div>
+            <pre class="tl-payload">${escapeHtml(e.payload)}</pre>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function toggleTlEntry(el) { el.classList.toggle('expanded'); }
+  function filterTimeline()  { renderTimeline(); }
+  function clearTimeline()   { _timelineData.length = 0; renderTimeline(); }
+
+  function toggleTimeline() {
+    const panel = document.getElementById('timeline-panel');
+    if (!panel) return;
+    const visible = panel.style.display !== 'none';
+    panel.style.display = visible ? 'none' : 'flex';
+    if (!visible) renderTimeline();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v35.0 — MASTER ABORT BUTTON
+  // ═══════════════════════════════════════════════════════════════════
+
+  function masterAbort() {
+    const btn = document.getElementById('master-abort-btn');
+    if (btn) {
+      btn.classList.add('fired');
+      setTimeout(() => btn.classList.remove('fired'), 900);
+    }
+    if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        cmd:        'voice_abort',
+        request_id: `abort_${Date.now()}`,
+      }));
+    }
+  }
+
+  // Hotkeys for Ctrl+T (timeline) and Esc (abort)
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.ctrlKey && e.key === 't' && !e.shiftKey) {
+      e.preventDefault(); toggleTimeline();
+    }
+    if (e.key === 'Escape') {
+      masterAbort();
+    }
+  });
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -3722,6 +3974,44 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     ws.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { msg = null; }
+
+      // v35.0 — feed ALL events to the tactical timeline first
+      if (msg) addTimelineEntry(msg);
+
+      // v35.0 — handle interrupt + macro events early
+      if (msg && msg.type === 'voice_interrupt') {
+        const btn = document.getElementById('master-abort-btn');
+        if (btn && msg.command === 'abort') {
+          btn.classList.add('fired');
+          setTimeout(() => btn.classList.remove('fired'), 600);
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'macro_confirm_required') {
+        const toast = document.getElementById('hw-toast');
+        if (toast) {
+          toast.textContent = `Confirm: ${msg.action}? Say "yes" or click ABORT`;
+          toast.style.color = '#ffcc44';
+          toast.style.borderColor = '#ffaa00';
+          toast.style.display = 'block';
+          setTimeout(() => { toast.style.display = 'none'; }, 8000);
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'macro_executed') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'llm_cancelled') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'agentic_aborted') {
+        if (!paused) append(e.data);
+        return;
+      }
 
       // v32.0 — silent metric dispatchers (no log entry)
       if (msg && msg.type === 'metrics_update') {

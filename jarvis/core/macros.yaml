@@ -1,0 +1,72 @@
+# JARVIS Voice Command Macros (v35.0)
+# Hot-reloaded on file change — no restart needed.
+# trigger: phrase spoken by operator
+# action: JARVIS tool/function to execute
+# confirm: if true, JARVIS says "Confirm: <action>?" and waits
+
+macros:
+
+  - trigger: "jarvis red team"
+    action: emulate_chain
+    params:
+      chain: APT_CRED_DUMP
+    confirm: true
+    response: "Initiating APT credential dump emulation."
+
+  - trigger: "jarvis full attack"
+    action: emulate_chain
+    params:
+      chain: FULL_COMPROMISE
+    confirm: true
+    response: "Full compromise emulation starting."
+
+  - trigger: "jarvis status report"
+    action: get_coverage
+    confirm: false
+    response: "Generating ATT&CK coverage status."
+
+  - trigger: "jarvis export intel"
+    action: export_stix
+    confirm: false
+    response: "Exporting IOCs to STIX 2.1."
+
+  - trigger: "jarvis scan network"
+    action: run_nmap
+    params:
+      target: "192.168.1.0/24"
+    confirm: true
+    response: "Starting network scan."
+
+  - trigger: "jarvis check integrity"
+    action: run_integrity_check
+    confirm: false
+    response: "Running file integrity check."
+
+  - trigger: "jarvis lateral"
+    action: emulate_chain
+    params:
+      chain: C2_LATERAL
+    confirm: true
+    response: "C2 and lateral movement emulation starting."
+
+  - trigger: "jarvis lock down"
+    action: apply_hardening
+    confirm: true
+    response: "Applying host hardening measures."
+
+  - trigger: "jarvis clear memory"
+    action: clear_episodic
+    confirm: true
+    response: "Clearing episodic memory. Are you sure?"
+
+  - trigger: "jarvis playbook"
+    action: list_playbooks
+    confirm: false
+    response: "Listing available playbooks."
+
+  - trigger: "jarvis snapshot"
+    action: snapshot_vm
+    params:
+      vmx: ""
+    confirm: true
+    response: "Taking VM snapshot."
