@@ -250,6 +250,9 @@ async def _main_async() -> None:
     # v38.0 — Visual Intelligence (vision/browser/diagrams/screen monitor)
     from core.vision_engine       import capture_and_save
     from core.screen_monitor      import start_screen_monitor
+    # v39.0 — Deep Forensics & Autonomous Remediation
+    from tools.memory_hunter      import dump_process_memory
+    from core.auto_remediator     import draft_mitigation
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -728,6 +731,30 @@ async def _main_async() -> None:
                 logger.info("ATTCK_COVERAGE: matrix scheduled for HUD broadcast…")
             except Exception as e:
                 logger.warning(f"Could not broadcast ATT&CK coverage: {e}")
+
+            # v39.0 — Auto-remediator: hook into correlator broadcasts
+            async def _hook_remediator() -> None:
+                await asyncio.sleep(2.0)   # wait for AURA lifespan to attach
+                if v36_correlator._broadcast_fn is None:
+                    logger.debug("V39: correlator broadcast not ready — remediator hook skipped")
+                    return
+                _orig_correlator_broadcast = v36_correlator._broadcast_fn
+
+                async def _remediating_broadcast(event: dict) -> None:
+                    await _orig_correlator_broadcast(event)
+                    if (event.get("type") == "compound_incident" and
+                            event.get("severity_score", 0) >= 8.0):
+                        asyncio.create_task(draft_mitigation(
+                            event, llm.client,
+                            hw_profile.model_deep,
+                            _aura_broadcast,
+                            incident_id=event.get("incident_id", "unk"),
+                        ))
+
+                v36_correlator.attach(_remediating_broadcast)
+                logger.info("V39: auto-remediator hooked into correlator pipeline")
+
+            asyncio.create_task(_hook_remediator(), name="v39-remediator-hook")
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:

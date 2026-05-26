@@ -54,9 +54,12 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "multi_agent_analyze",
     "generate_report",
     "consolidate_memory",
+    # v39.0 self-healing remediator
+    "execute_mitigation",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
+    "execute_mitigation",
 })
 _MEDIUM_RISK_HUD: frozenset[str] = frozenset({"run_nmap", "emulate_technique"})
 
@@ -273,6 +276,15 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 orchestrator._deep_model,
             ))
             return {"status": "consolidating"}
+
+        # ── v39.0 Self-healing remediator ────────────────────────────────────
+        elif cmd == "execute_mitigation":
+            script_path = str(args.get("script_path", ""))[:300]
+            from core.auto_remediator import execute_mitigation
+            asyncio.create_task(
+                execute_mitigation(script_path, broadcast_fn, _executor_ref)
+            )
+            return {"status": "otp_challenge_issued"}
 
         return {"error": f"Handler not implemented for '{cmd}'"}
     except Exception as e:

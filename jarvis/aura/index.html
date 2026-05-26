@@ -1000,6 +1000,25 @@
     .type-cognitive_stats          { display:none; }
     .type-cognitive_health_alert   { background:#1a1000; border:1px solid #ffaa00; color:#ffcc44; }
 
+    /* v39.0 — Deep Forensics & Autonomous Remediation */
+    .type-memory_dump_started  { background:#050518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-memory_dump_complete { background:#050a05;border:1px solid #44ff44;color:#88ff88; }
+    .type-memory_dump_failed   { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
+    .type-deep_disassembly_complete{background:#050518;border:1px solid #6644ff;color:#9977ff;}
+    .type-mitigation_drafted   { background:#0a0a05;border:1px solid #ffaa00;color:#ffdd44; }
+    .type-mitigation_executed  { background:#051505;border:1px solid #44ff44;color:#88ff88; }
+    .type-mitigation_blocked   { background:#1a0505;border:1px solid #ff4400;color:#ff8844; }
+    .type-mitigation_rejected  { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
+    .type-volatility_queued    { background:#050518;border:1px solid #4466ff;color:#8899ff; }
+    #mitigation-panel {
+      position: fixed; right: 230px; bottom: 40px;
+      width: 320px; background: rgba(16, 12, 0, 0.97);
+      border: 1px solid rgba(255,170,0,0.4); border-radius: 6px;
+      padding: 12px; z-index: 115;
+      font-family: 'Share Tech Mono', monospace; font-size: 10px;
+      backdrop-filter: blur(8px);
+    }
+
     /* v35.0 — Real-Time Interrupt Architecture */
     .type-voice_interrupt          { background:#0a0518; border:1px solid #8844ff; color:#cc88ff; }
     .type-macro_executed           { background:#050a18; border:1px solid #4488ff; color:#88bbff; }
@@ -1341,6 +1360,35 @@
   <div id="timeline-entries"></div>
 </div>
 
+<!-- v39.0 Mitigation Approval Panel -->
+<div id="mitigation-panel" style="display:none">
+  <div style="color:#ffaa00;font-size:10px;letter-spacing:3px;
+    font-weight:bold;margin-bottom:8px;border-bottom:1px solid
+    rgba(255,170,0,0.3);padding-bottom:5px">
+    ◈ REMEDIATION PENDING APPROVAL
+  </div>
+  <div id="mit-incident" style="color:rgba(255,255,255,0.4);
+    font-size:9px;margin-bottom:6px"></div>
+  <pre id="mit-preview" style="color:#ffdd44;font-size:9px;
+    max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.3);
+    padding:6px;border-radius:3px;white-space:pre-wrap"></pre>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button onclick="approveMitigation()" style="flex:1;
+      background:rgba(255,170,0,0.15);border:1px solid #ffaa00;
+      color:#ffaa00;font-family:'Share Tech Mono',monospace;
+      font-size:10px;padding:5px;cursor:pointer;border-radius:3px">
+      ✓ APPROVE (NATO OTP required)
+    </button>
+    <button onclick="rejectMitigation()" style="flex:1;
+      background:rgba(255,34,0,0.1);border:1px solid #ff2200;
+      color:#ff4444;font-family:'Share Tech Mono',monospace;
+      font-size:10px;padding:5px;cursor:pointer;border-radius:3px">
+      ✗ REJECT
+    </button>
+  </div>
+  <div id="mit-script-path" style="display:none"></div>
+</div>
+
 <!-- v35.0 Master Abort button -->
 <button id="master-abort-btn" onclick="masterAbort()"
         title="Abort all active operations [Esc]">⏹ ABORT</button>
@@ -1547,6 +1595,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       // v31.0 CPU-dominance active defense
       tarpit_trap:                 'type-tarpit_trap',
       yara_file_match:             'type-yara_file_match',
+      // v39.0 Deep Forensics & Autonomous Remediation
+      memory_dump_started:         'type-memory_dump_started',
+      memory_dump_complete:        'type-memory_dump_complete',
+      memory_dump_failed:          'type-memory_dump_failed',
+      deep_disassembly_complete:   'type-deep_disassembly_complete',
+      mitigation_drafted:          'type-mitigation_drafted',
+      mitigation_executed:         'type-mitigation_executed',
+      mitigation_blocked:          'type-mitigation_blocked',
+      mitigation_rejected:         'type-mitigation_rejected',
+      volatility_queued:           'type-volatility_queued',
     };
     return map[t] || 'type-default';
   }
@@ -4190,6 +4248,38 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     }, 200);
   }
 
+  // v39.0 — Mitigation approval handlers
+  let _pendingMitigationPath = null;
+
+  function handleMitigationDrafted(msg) {
+    _pendingMitigationPath = msg.script_path || '';
+    document.getElementById('mit-incident').textContent =
+      `Incident: ${escapeHtml(msg.incident_id || '?')} · ${msg.line_count || '?'} lines`;
+    document.getElementById('mit-preview').textContent =
+      escapeHtml((msg.preview || '').slice(0, 600));
+    document.getElementById('mit-script-path').textContent =
+      escapeHtml(msg.script_path || '');
+    document.getElementById('mitigation-panel').style.display = 'block';
+  }
+
+  function approveMitigation() {
+    if (!_pendingMitigationPath) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        cmd:         'execute_mitigation',
+        args:        {script_path: _pendingMitigationPath},
+        request_id:  `mit_${Date.now()}`,
+      }));
+    }
+    document.getElementById('mitigation-panel').style.display = 'none';
+    _pendingMitigationPath = null;
+  }
+
+  function rejectMitigation() {
+    document.getElementById('mitigation-panel').style.display = 'none';
+    _pendingMitigationPath = null;
+  }
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -4362,6 +4452,39 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       }
       if (msg && msg.type === 'osint_enriched') {
         handleOsintEnriched(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v39.0 — Deep Forensics & Autonomous Remediation dispatchers
+      if (msg && msg.type === 'mitigation_drafted') {
+        handleMitigationDrafted(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'memory_dump_complete') {
+        try {
+          const geo = new THREE.SphereGeometry(0.3, 8, 8);
+          const mat = new THREE.MeshPhongMaterial({
+            color: 0xaa44ff, emissive: 0x6622cc, emissiveIntensity: 0.8
+          });
+          const node = new THREE.Mesh(geo, mat);
+          node.position.set(
+            (Math.random()-0.5)*6, 1, (Math.random()-0.5)*6
+          );
+          scene.add(node);
+          setTimeout(() => scene.remove(node), 20000);
+        } catch {}
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && (msg.type === 'memory_dump_started' ||
+                  msg.type === 'memory_dump_failed' ||
+                  msg.type === 'deep_disassembly_complete' ||
+                  msg.type === 'mitigation_executed' ||
+                  msg.type === 'mitigation_blocked' ||
+                  msg.type === 'mitigation_rejected' ||
+                  msg.type === 'volatility_queued')) {
         if (!paused) append(e.data);
         return;
       }

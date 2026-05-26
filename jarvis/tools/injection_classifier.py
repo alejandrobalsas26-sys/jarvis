@@ -10,6 +10,7 @@ Correlates ETW + Sysmon events to identify specific injection sub-techniques:
   T1055.013 — Process Doppelgänging  (NtCreateTransaction + NtWriteFile)
 """
 
+import asyncio
 import collections
 import time
 from datetime import datetime, timezone
@@ -92,3 +93,14 @@ async def analyze_and_broadcast(pid: int, event: dict,
             "severity":  "CRITICAL",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+
+        # Auto-dump memory on high-confidence injection detection
+        if result["technique"] in {"T1055.012", "T1055.001",
+                                    "T1055.002", "T1055.004"}:
+            try:
+                from tools.memory_hunter import dump_process_memory
+                asyncio.create_task(
+                    dump_process_memory(pid, result["process"], broadcast_fn)
+                )
+            except Exception as e:
+                logger.debug(f"INJECTION: memory_hunter trigger error: {e}")

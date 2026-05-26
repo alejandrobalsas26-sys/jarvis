@@ -139,6 +139,17 @@ async def analyze_file(
     strings = _extract_strings(data)
     iocs    = _classify_strings(strings)
 
+    # Deep PE analysis for executables
+    pe_analysis = {}
+    if file_path.suffix.lower() in {".exe", ".dll", ".sys"}:
+        try:
+            from tools.binary_inverter import deep_disassemble
+            pe_analysis = await deep_disassemble(
+                file_path, broadcast_fn, ollama_client, model
+            )
+        except Exception:
+            pass
+
     # Try to read as text for LLM analysis
     try:
         text_content = data.decode("utf-8", errors="replace")[:4000]
@@ -168,6 +179,15 @@ async def analyze_file(
         f"FILE CONTENT (first 3000 chars):\n{text_content[:3000]}\n\n"
         "Provide full analysis:"
     )
+
+    # Add PE analysis to LLM prompt
+    if pe_analysis:
+        prompt += (
+            f"\n\nPE DISASSEMBLY ANALYSIS:\n"
+            f"Suspicious APIs: {pe_analysis.get('suspicious_apis', {})}\n"
+            f"Entry point ASM (first 20):\n"
+            + "\n".join(pe_analysis.get("entry_asm", [])[:20])
+        )
 
     try:
         response = await asyncio.wait_for(

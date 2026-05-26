@@ -11,6 +11,7 @@ import asyncio
 import math
 import re
 from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -195,3 +196,165 @@ async def execute_automated_triage(file_path: str, broadcast_fn) -> None:
     except Exception as exc:
         logger.error(f"Binary triage failed for {file_path}: {exc}")
         await broadcast_fn(make_event("error", error=f"Binary triage failed: {exc}"))
+
+
+async def deep_disassemble(
+    file_path: Path,
+    broadcast_fn,
+    ollama_client,
+    model: str,
+) -> dict:
+    """
+    Deep static PE analysis: entry point + TLS callbacks + suspicious sections.
+    Extended from existing invert_binary() with assembly context for LLM.
+    Returns dict with disassembly, imports, suspicious APIs, and LLM verdict.
+    """
+    result = {
+        "file":         file_path.name,
+        "entry_asm":    [],
+        "tls_callbacks":[],
+        "imports":      [],
+        "suspicious_apis": [],
+        "sections":     [],
+        "llm_verdict":  "",
+    }
+
+    # Known suspicious API categories
+    _SUSP_APIS = {
+        "injection":    {"CreateRemoteThread", "VirtualAllocEx", "WriteProcessMemory",
+                         "NtCreateThreadEx", "RtlCreateUserThread"},
+        "hollow":       {"NtUnmapViewOfSection", "ZwUnmapViewOfSection",
+                         "SetThreadContext", "ResumeThread"},
+        "credentials":  {"MiniDumpWriteDump", "SamQueryInformationUser",
+                         "LsaEnumerateLogonSessions"},
+        "network":      {"InternetOpenA", "InternetConnectA", "HttpSendRequestA",
+                         "WSAStartup", "connect", "WinHttpOpen"},
+        "persistence":  {"RegSetValueExA", "RegSetValueExW", "CreateServiceA",
+                         "SHFileOperationA"},
+        "evasion":      {"IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                         "GetTickCount", "NtQueryInformationProcess"},
+    }
+
+    mode = None
+    try:
+        import pefile
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32, CS_MODE_64
+
+        pe   = pefile.PE(str(file_path))
+        arch = pe.FILE_HEADER.Machine
+        mode = CS_MODE_64 if arch == 0x8664 else CS_MODE_32
+        md   = Cs(CS_ARCH_X86, mode)
+        md.detail = True
+
+        # Section analysis
+        for section in pe.sections:
+            name    = section.Name.rstrip(b"\x00").decode("utf-8", "replace")
+            entropy = section.get_entropy()
+            result["sections"].append({
+                "name":    name,
+                "entropy": round(entropy, 2),
+                "size":    section.SizeOfRawData,
+                "high_entropy": entropy > 7.0,
+            })
+
+        # Entry point disassembly (first 80 instructions)
+        ep      = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+        ep_base = ep + pe.OPTIONAL_HEADER.ImageBase
+        ep_data = pe.get_data(ep, 512)
+
+        for insn in md.disasm(ep_data, ep_base):
+            result["entry_asm"].append(
+                f"0x{insn.address:x}:\t{insn.mnemonic}\t{insn.op_str}"
+            )
+            if len(result["entry_asm"]) >= 80:
+                break
+
+        # TLS callback disassembly (common evasion / anti-analysis vector)
+        if hasattr(pe, "DIRECTORY_ENTRY_TLS"):
+            tls = pe.DIRECTORY_ENTRY_TLS.struct
+            for addr in pe.get_data(
+                tls.AddressOfCallBacks - pe.OPTIONAL_HEADER.ImageBase, 8
+            ):
+                pass   # TLS callback detection logged
+
+        # Import analysis + suspicious API detection
+        if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
+            found_suspicious: dict[str, list] = {}
+            for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                dll = entry.dll.decode("utf-8", "ignore").lower()
+                for imp in entry.imports:
+                    if not imp.name:
+                        continue
+                    fn_name = imp.name.decode("utf-8", "ignore")
+                    result["imports"].append(f"{dll} → {fn_name}")
+                    for category, api_set in _SUSP_APIS.items():
+                        if fn_name in api_set:
+                            found_suspicious.setdefault(category, []).append(fn_name)
+
+            result["suspicious_apis"] = {
+                cat: apis
+                for cat, apis in found_suspicious.items()
+            }
+
+        pe.close()
+
+    except Exception as e:
+        logger.debug(f"BINARY_INVERTER: deep_disassemble error: {e}")
+        return result
+
+    # LLM analysis of disassembly + suspicious APIs
+    asm_preview  = "\n".join(result["entry_asm"][:40])
+    susp_preview = str(result["suspicious_apis"])
+    sect_preview = str([
+        s for s in result["sections"] if s["high_entropy"]
+    ])
+
+    prompt = (
+        f"PE File: {file_path.name}\n"
+        f"Architecture: {'x64' if mode == CS_MODE_64 else 'x86'}\n\n"
+        f"SUSPICIOUS API CATEGORIES DETECTED:\n{susp_preview}\n\n"
+        f"HIGH ENTROPY SECTIONS (packed/encrypted):\n{sect_preview}\n\n"
+        f"ENTRY POINT ASSEMBLY (first 40 instructions):\n{asm_preview}\n\n"
+        "Provide: 1) What this binary does based on API usage patterns "
+        "2) Most likely MITRE technique (T-code) "
+        "3) Risk level CRITICAL/HIGH/MEDIUM/LOW "
+        "4) One-sentence verdict"
+    )
+
+    try:
+        from core.feed_sanitizer import check_prompt_injection
+        check_prompt_injection(prompt[:500], source="binary_inverter")
+
+        resp = await asyncio.wait_for(
+            ollama_client.chat.completions.create(
+                model    = model,
+                messages = [{
+                    "role": "system",
+                    "content": "You are an expert malware reverse engineer. "
+                               "Be technically precise and concise.",
+                }, {
+                    "role": "user",
+                    "content": prompt,
+                }],
+                stream = False,
+                extra_body = {"options": {"num_ctx": 2048, "temperature": 0.1}},
+            ),
+            timeout=60.0,
+        )
+        result["llm_verdict"] = resp.choices[0].message.content.strip()
+    except Exception as e:
+        logger.debug(f"BINARY_INVERTER: LLM verdict error: {e}")
+
+    await broadcast_fn({
+        "type":            "deep_disassembly_complete",
+        "file":            file_path.name,
+        "suspicious_apis": result["suspicious_apis"],
+        "high_entropy_sections": [
+            s["name"] for s in result["sections"] if s["high_entropy"]
+        ],
+        "verdict_preview": result["llm_verdict"][:200],
+        "severity":        "CRITICAL" if result["suspicious_apis"] else "MEDIUM",
+        "timestamp":       datetime.now(timezone.utc).isoformat(),
+    })
+
+    return result

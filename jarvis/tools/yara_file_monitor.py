@@ -57,6 +57,9 @@ def _get_yara_rules():
 
 _rules = None   # lazy-load on first scan
 
+# Module-level queue ref — exposed for memory_hunter.py integration
+_scan_queue_ref: asyncio.Queue | None = None
+
 
 async def _scan_file(path: Path, broadcast_fn) -> None:
     """Scan a single file with YARA. Non-blocking via run_in_executor."""
@@ -119,6 +122,8 @@ async def start_yara_file_monitor(broadcast_fn) -> None:
 
     signed_bcast = make_signed_broadcaster(broadcast_fn, "mitigation")
     scan_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    import tools.yara_file_monitor as _self_module
+    _self_module._scan_queue_ref = scan_queue
     loop = asyncio.get_running_loop()
 
     class _Handler(FileSystemEventHandler):
