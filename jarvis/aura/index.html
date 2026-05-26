@@ -768,6 +768,17 @@
     .type-lab_snapshot_taken    { background:#050518;border:1px solid #4466ff;color:#8899ff; }
     .type-lab_vm_list           { background:#050a0a;border:1px solid #44aaaa;color:#88dddd; }
 
+    /* ── v38.0 Visual Intelligence event badges ── */
+    .type-vision_analyzing     { background:#050518;border:1px solid #6644ff;color:#9977ff; }
+    .type-vision_complete      { background:#050518;border:1px solid #4455ff;color:#8899ff; }
+    .type-browser_navigating   { background:#050a18;border:1px solid #4488ff;color:#88aaff; }
+    .type-browser_complete     { background:#051505;border:1px solid #44aa44;color:#88cc88; }
+    .type-browser_blocked      { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
+    .type-browser_error        { background:#1a0505;border:1px solid #ff4422;color:#ff8866; }
+    .type-diagram_generated    { background:#050a18;border:1px solid #44aaff;color:#88ccff; }
+    .type-cve_researched       { background:#1a0505;border:1px solid #ff6600;color:#ffaa44; }
+    .type-screen_change        { background:#0a0a05;border:1px solid #aaaa00;color:#cccc44; }
+
     /* ── v36.0 tactical narrator banner keyframes ── */
     @keyframes narrator-in {
       from { transform: translateY(100%); opacity: 0; }
@@ -4004,6 +4015,15 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     if (e.key === 'Escape') {
       masterAbort();
     }
+    // v38.0 — V key triggers JARVIS screen vision analysis
+    if (e.key === 'v' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          cmd: 'analyze_screen',
+          request_id: 'vis_' + Date.now(),
+        }));
+      }
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -4347,6 +4367,58 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       }
       if (msg && msg.type === 'lab_vm_isolated') {
         handleLabVmIsolated(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v38.0 — Visual Intelligence dispatchers
+      if (msg && msg.type === 'diagram_generated') {
+        const toast = document.createElement('div');
+        toast.style.cssText =
+          'position:fixed;bottom:40px;right:230px;' +
+          'background:rgba(5,10,24,0.97);border:1px solid #44aaff;' +
+          "color:#88ccff;font-family:'Share Tech Mono',monospace;" +
+          'font-size:10px;padding:8px 12px;border-radius:4px;z-index:300;';
+        toast.textContent = '◈ DIAGRAM: ' + escapeHtml(msg.diagram || '?') +
+          ' → ' + escapeHtml((msg.path || '').split(/[/\\]/).pop());
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 8000);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'vision_complete') {
+        const overlay = document.createElement('div');
+        overlay.style.cssText =
+          'position:fixed;bottom:40px;left:230px;max-width:360px;' +
+          'background:rgba(5,5,24,0.97);border:1px solid #6644ff;' +
+          "color:#9977ff;font-family:'Share Tech Mono',monospace;" +
+          'font-size:10px;padding:10px 14px;border-radius:4px;z-index:300;' +
+          'line-height:1.5;';
+        overlay.innerHTML =
+          '<div style="color:#aa88ff;font-size:9px;letter-spacing:2px;margin-bottom:4px">' +
+          '◈ VISION ANALYSIS</div>' +
+          escapeHtml((msg.analysis || '').slice(0, 300));
+        document.body.appendChild(overlay);
+        setTimeout(() => overlay.remove(), 10000);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'vision_analyzing') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'browser_navigating' ||
+          msg && msg.type === 'browser_complete' ||
+          msg && msg.type === 'browser_blocked' ||
+          msg && msg.type === 'browser_error' ||
+          msg && msg.type === 'cve_researched') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'screen_change') {
+        if (msg.concerning) {
+          try { triggerFirewallBlock(msg); } catch {}
+        }
         if (!paused) append(e.data);
         return;
       }

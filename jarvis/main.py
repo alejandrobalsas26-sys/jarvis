@@ -247,6 +247,9 @@ async def _main_async() -> None:
     from core.cve_intel           import start_cve_monitor
     from core.code_intel          import start_inbox_watcher
     from core.lab_manager         import list_vms as list_lab_vms
+    # v38.0 — Visual Intelligence (vision/browser/diagrams/screen monitor)
+    from core.vision_engine       import capture_and_save
+    from core.screen_monitor      import start_screen_monitor
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -677,6 +680,44 @@ async def _main_async() -> None:
                 logger.info("LAB_MANAGER: VM enumeration scheduled…")
             except Exception as e:
                 logger.warning(f"V37: lab_manager boot failed: {e}")
+
+            # v38.0 — Visual Intelligence (vision engine + screen monitor)
+            try:
+                v36_orchestrator._vision_enabled = True
+            except Exception:
+                pass
+
+            try:
+                watchdog.register(
+                    "screen-monitor",
+                    lambda: start_screen_monitor(
+                        _aura_broadcast, llm.client, tts,
+                    ),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info(
+                    "SCREEN_MONITOR: registered "
+                    f"({'ACTIVE' if os.getenv('JARVIS_SCREEN_MONITOR') == '1' else 'DISABLED — set JARVIS_SCREEN_MONITOR=1'})"
+                )
+            except Exception as e:
+                logger.warning(f"Could not register screen-monitor: {e}")
+
+            # Auto-screenshot on critical compound incidents (for reports)
+            try:
+                _v38_orig_broadcast = _aura_broadcast
+                async def _visual_broadcast(event: dict) -> None:
+                    await _v38_orig_broadcast(event)
+                    if (event.get("type") == "compound_incident" and
+                            event.get("severity_score", 0) >= 8.0):
+                        try:
+                            asyncio.create_task(capture_and_save(
+                                f"incident_{event.get('incident_id','unk')}"
+                            ))
+                        except Exception:
+                            pass
+                logger.info("VISION: auto-screenshot on critical incident armed")
+            except Exception as e:
+                logger.debug(f"V38: visual_broadcast wire failed: {e}")
 
             try:
                 from core.attck_coverage import broadcast_coverage

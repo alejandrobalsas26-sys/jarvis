@@ -122,5 +122,10 @@ nvdlib>=0.7.5             # NVD CVE database access (no auth required)
 shodan>=1.31.0            # Shodan IP intelligence (needs SHODAN_API_KEY)
 playwright>=1.40.0        # Headless browser for web OSINT
 
+# ── v38.0 Visual Intelligence — Vision/Browser/Diagrams ───────
+mss>=9.0.1                # ultra-fast cross-platform screenshot
+qrcode>=7.4.2             # QR code generation for phishing sim
+networkx>=3.2.0           # graph drawing for network topology
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

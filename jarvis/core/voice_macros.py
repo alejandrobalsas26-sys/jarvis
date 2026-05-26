@@ -292,6 +292,84 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: list_github_tools error: {e}")
 
+        # ── v38.0 — Visual Intelligence dispatch ────────────────────────────
+        elif action == "analyze_screen":
+            try:
+                from core.vision_engine import analyze_screen
+                from core.agent_orchestrator import orchestrator
+                asyncio.create_task(analyze_screen(
+                    "Describe everything visible. Identify any security-relevant "
+                    "elements, error messages, suspicious processes, or code.",
+                    orchestrator._ollama_client, broadcast_fn, tts=tts,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: analyze_screen error: {e}")
+
+        elif action == "browser_open":
+            try:
+                url = params.get("url", "")
+                if url:
+                    from tools.browser_intel import open_url_tactical
+                    asyncio.create_task(open_url_tactical(url, broadcast_fn))
+                else:
+                    if tts:
+                        asyncio.create_task(tts.speak_async(
+                            "What URL should I open?"
+                        ))
+            except Exception as e:
+                logger.debug(f"MACRO: browser_open error: {e}")
+
+        elif action == "research_cve_browser":
+            try:
+                cve = params.get("cve_id", "")
+                if cve:
+                    from tools.browser_intel    import research_cve
+                    from core.agent_orchestrator import orchestrator
+                    asyncio.create_task(research_cve(
+                        cve, broadcast_fn, orchestrator._ollama_client,
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: research_cve_browser error: {e}")
+
+        elif action == "generate_network_diagram":
+            try:
+                from tools.diagram_generator import generate_network_topology
+                asyncio.create_task(
+                    generate_network_topology([], broadcast_fn)
+                )
+            except Exception as e:
+                logger.debug(f"MACRO: generate_network_diagram error: {e}")
+
+        elif action == "generate_timeline":
+            try:
+                from core.correlator         import correlator
+                from tools.diagram_generator import generate_attack_timeline
+                incidents = correlator.get_active_incidents()
+                if incidents:
+                    asyncio.create_task(
+                        generate_attack_timeline(incidents[0], broadcast_fn)
+                    )
+            except Exception as e:
+                logger.debug(f"MACRO: generate_timeline error: {e}")
+
+        elif action == "generate_qr":
+            try:
+                url   = params.get("url",   "https://jarvis.local/test")
+                label = params.get("label", "test_payload")
+                from tools.diagram_generator import generate_qr_code
+                asyncio.create_task(
+                    generate_qr_code(url, label, broadcast_fn)
+                )
+            except Exception as e:
+                logger.debug(f"MACRO: generate_qr error: {e}")
+
+        elif action == "take_screenshot":
+            try:
+                from core.vision_engine import capture_and_save
+                asyncio.create_task(capture_and_save("operator_request"))
+            except Exception as e:
+                logger.debug(f"MACRO: take_screenshot error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

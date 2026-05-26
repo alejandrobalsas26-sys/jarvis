@@ -137,3 +137,44 @@ macros:
     action: list_github_tools
     confirm: false
     response: "Listing integrated GitHub tools."
+
+  # ── v38.0 — Visual Intelligence voice commands ──────────────────────────
+  - trigger: "jarvis what do you see"
+    action: analyze_screen
+    confirm: false
+    response: "Analyzing what's on your screen."
+
+  - trigger: "jarvis look at this"
+    action: analyze_screen
+    confirm: false
+    response: "Looking at your screen now."
+
+  - trigger: "jarvis open"
+    action: browser_open
+    confirm: false
+    response: "Opening in browser."
+
+  - trigger: "jarvis research cve"
+    action: research_cve_browser
+    confirm: false
+    response: "Researching CVE details."
+
+  - trigger: "jarvis generate diagram"
+    action: generate_network_diagram
+    confirm: false
+    response: "Generating network topology diagram."
+
+  - trigger: "jarvis attack timeline"
+    action: generate_timeline
+    confirm: false
+    response: "Generating attack chain timeline."
+
+  - trigger: "jarvis generate qr"
+    action: generate_qr
+    confirm: false
+    response: "Generating QR code."
+
+  - trigger: "jarvis screenshot"
+    action: take_screenshot
+    confirm: false
+    response: "Capturing screenshot."
