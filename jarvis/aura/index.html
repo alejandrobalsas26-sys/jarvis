@@ -755,6 +755,19 @@
     .type-model_swapped        { background:#050a0a;border:1px solid #44cccc;color:#88dddd; }
     .type-memory_consolidated  { background:#050518;border:1px solid #4444ff;color:#8888ff; }
 
+    /* ── v37.0 Autonomous Intelligence & GitHub-Native Tools ── */
+    .type-github_search_started { background:#050a18;border:1px solid #4488ff;color:#88aaff; }
+    .type-github_downloading    { background:#050a18;border:1px solid #2266cc;color:#6699ff; }
+    .type-github_tool_integrated{ background:#051505;border:1px solid #44ff44;color:#88ff88; }
+    .type-code_analysis_started { background:#080518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-code_analysis_complete{ background:#050518;border:1px solid #6644ff;color:#9977ff; }
+    .type-cve_alert             { background:#1a0505;border:1px solid #ff2200;color:#ff7755; }
+    .type-osint_enriched        { background:#050a18;border:1px solid #4488ff;color:#88aaff; }
+    .type-lab_vm_isolated       { background:#1a0a00;border:1px solid #ff6600;color:#ffaa44; }
+    .type-lab_vm_restored       { background:#051505;border:1px solid #44ff44;color:#88ff88; }
+    .type-lab_snapshot_taken    { background:#050518;border:1px solid #4466ff;color:#8899ff; }
+    .type-lab_vm_list           { background:#050a0a;border:1px solid #44aaaa;color:#88dddd; }
+
     /* ── v36.0 tactical narrator banner keyframes ── */
     @keyframes narrator-in {
       from { transform: translateY(100%); opacity: 0; }
@@ -4073,6 +4086,90 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v37.0 — GITHUB TOOL PANEL + CVE ALERT + CODE INTEL + OSINT + LAB
+  // ═══════════════════════════════════════════════════════════════════
+  function handleGithubToolIntegrated(msg) {
+    const banner = document.createElement('div');
+    banner.style.cssText =
+      'position:fixed; top:36px; right:16px;' +
+      'background:rgba(5,20,5,0.97);' +
+      'border:1px solid #44ff44; border-radius:4px;' +
+      'padding:8px 14px; font-size:11px; color:#88ff88;' +
+      "font-family:'Share Tech Mono',monospace; z-index:300;" +
+      'animation: narrator-in 0.3s ease-out;';
+    banner.innerHTML =
+      '✓ TOOL INTEGRATED: ' + escapeHtml(msg.repo || '?') + '<br>' +
+      '<span style="color:rgba(136,255,136,0.4);font-size:9px">' +
+      '★' + (msg.stars || 0) + ' · ' + escapeHtml(msg.install_dir || '') +
+      '</span>';
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 6000);
+  }
+
+  function handleCveAlert(msg) {
+    const alert = document.createElement('div');
+    alert.style.cssText =
+      'position:fixed; top:80px; left:50%; transform:translateX(-50%);' +
+      'background:rgba(26,0,0,0.97);' +
+      'border:1px solid #ff2200; border-radius:4px;' +
+      'padding:10px 16px; font-size:11px;' +
+      "font-family:'Share Tech Mono',monospace; z-index:300;" +
+      'min-width:400px; animation:narrator-in 0.3s ease-out;';
+    const labMatch = msg.lab_match && msg.lab_match.length > 0;
+    alert.innerHTML =
+      '<div style="color:#ff4400;font-weight:bold;letter-spacing:2px">' +
+      '⚠ ' + escapeHtml(msg.cve_id || '?') + ' — CVSS ' + (msg.score || '?') +
+      (labMatch ? ' <span style="color:#ff0000">◀ LAB MATCH</span>' : '') +
+      '</div>' +
+      '<div style="color:rgba(255,100,50,0.7);font-size:10px;margin-top:4px">' +
+      escapeHtml((msg.description || '').slice(0, 200)) +
+      '</div>' +
+      ((msg.pocs && msg.pocs.length > 0) ?
+        '<div style="color:#ff8844;font-size:9px;margin-top:4px">' +
+        msg.pocs.length + ' PoC exploits found on GitHub' +
+        '</div>' : '');
+    document.body.appendChild(alert);
+    setTimeout(() => alert.remove(), 12000);
+  }
+
+  function handleCodeAnalysisComplete(msg) {
+    const sev = msg.severity || 'MEDIUM';
+    const color = sev === 'CRITICAL' ? 0xff0000 :
+                  sev === 'HIGH'     ? 0xff6600 : 0xffaa00;
+    if (typeof scene !== 'undefined' && scene && typeof THREE !== 'undefined') {
+      try {
+        const x = (Math.random() - 0.5) * 8;
+        const z = (Math.random() - 0.5) * 8;
+        const geo = new THREE.OctahedronGeometry(0.2, 0);
+        const mat = new THREE.MeshPhongMaterial({
+          color: color, emissive: color, emissiveIntensity: 0.7
+        });
+        const node = new THREE.Mesh(geo, mat);
+        node.position.set(x, 1.5, z);
+        scene.add(node);
+        setTimeout(() => scene.remove(node), 20000);
+      } catch {}
+    }
+  }
+
+  function handleOsintEnriched(msg) {
+    if (msg.lat && msg.lon) {
+      try { spawnGeoMarker(msg); } catch {}
+    }
+    if ((msg.threat_score || 0) >= 5) {
+      try { triggerFirewallBlock(msg); } catch {}
+    }
+  }
+
+  function handleLabVmIsolated(msg) {
+    let t = 0;
+    const iv = setInterval(() => {
+      if (++t > 6) { clearInterval(iv); return; }
+      try { cpuLight.color.set(t%2===0 ? 0xff6600 : 0x000000); } catch {}
+    }, 200);
+  }
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -4223,6 +4320,42 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         return;
       }
       if (msg && msg.type === 'subsystem_prearmed') {
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v37.0 — Autonomous Intelligence dispatchers
+      if (msg && msg.type === 'github_tool_integrated') {
+        handleGithubToolIntegrated(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'cve_alert') {
+        handleCveAlert(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'code_analysis_complete') {
+        handleCodeAnalysisComplete(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'osint_enriched') {
+        handleOsintEnriched(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'lab_vm_isolated') {
+        handleLabVmIsolated(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'github_search_started' ||
+          msg && msg.type === 'github_downloading' ||
+          msg && msg.type === 'code_analysis_started' ||
+          msg && msg.type === 'lab_vm_list' ||
+          msg && msg.type === 'lab_vm_restored' ||
+          msg && msg.type === 'lab_snapshot_taken') {
         if (!paused) append(e.data);
         return;
       }

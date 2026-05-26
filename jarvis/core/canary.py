@@ -75,6 +75,13 @@ async def canary_handler(
     except Exception:
         pass
 
+    # v37.0 — fire-and-forget OSINT enrichment (Shodan/VT/OTX/ipinfo)
+    try:
+        from tools.osint_engine import enrich_ip
+        asyncio.create_task(enrich_ip(attacker_ip, broadcast_fn))
+    except Exception:
+        pass
+
     # High-confidence detection: attacker sent a meaningful banner (>16 bytes).
     # Trigger live forensic capture + agentic SOC loop to freeze malicious state
     # before any anti-forensic cleanup can occur.

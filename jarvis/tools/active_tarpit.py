@@ -65,6 +65,13 @@ def _make_handler(port: int, broadcast_fn):
         except Exception:
             pass
 
+        # v37.0 — fire-and-forget OSINT enrichment (Shodan/VT/OTX/ipinfo)
+        try:
+            from tools.osint_engine import enrich_ip
+            asyncio.create_task(enrich_ip(ip, broadcast_fn))
+        except Exception:
+            pass
+
         try:
             # Send realistic banner to fool the scanner
             banner = _BANNERS.get(port, b"220 Service ready\r\n")

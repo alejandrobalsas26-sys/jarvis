@@ -242,6 +242,11 @@ async def _main_async() -> None:
     from core.model_swapper       import attach as attach_model_swapper
     from core.memory_consolidator import start_consolidation_scheduler
     from core.correlator          import correlator as v36_correlator
+    # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
+    from core.github_explorer     import load_registry as load_github_registry
+    from core.cve_intel           import start_cve_monitor
+    from core.code_intel          import start_inbox_watcher
+    from core.lab_manager         import list_vms as list_lab_vms
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -630,6 +635,48 @@ async def _main_async() -> None:
                 logger.info("MEMORY_CONSOLIDATOR: 24h consolidation cycle registered…")
             except Exception as e:
                 logger.warning(f"Could not register memory-consolidator: {e}")
+
+            # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
+            try:
+                load_github_registry()
+            except Exception as e:
+                logger.warning(f"V37: github registry load failed: {e}")
+
+            try:
+                watchdog.register(
+                    "cve-monitor",
+                    lambda: start_cve_monitor(_aura_broadcast, tts),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("CVE_INTEL: NVD monitor registered…")
+            except Exception as e:
+                logger.warning(f"Could not register cve-monitor: {e}")
+
+            try:
+                from pathlib import Path as _P
+                watchdog.register(
+                    "code-intel",
+                    lambda: start_inbox_watcher(
+                        _aura_broadcast, tts,
+                        llm.client, hw_profile.model_deep,
+                    ),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info(
+                    f"CODE_INTEL: drop folder watcher registered — "
+                    f"{_P('analyze_inbox').absolute()}"
+                )
+            except Exception as e:
+                logger.warning(f"Could not register code-intel: {e}")
+
+            try:
+                asyncio.create_task(
+                    list_lab_vms(_aura_broadcast),
+                    name="lab-vm-list-boot",
+                )
+                logger.info("LAB_MANAGER: VM enumeration scheduled…")
+            except Exception as e:
+                logger.warning(f"V37: lab_manager boot failed: {e}")
 
             try:
                 from core.attck_coverage import broadcast_coverage

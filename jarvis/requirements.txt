@@ -116,5 +116,11 @@ pyaudio>=0.2.14               # audio capture backend (may already be present tr
 stix2>=3.0.0              # STIX 2.1 IOC/TTP export standard
 scipy>=1.12.0             # statistical anomaly detection (z-score)
 
+# ── v37.0 Autonomous Intelligence & GitHub Tool Ecosystem ─────
+gitpython>=3.1.40         # GitHub repo cloning and management
+nvdlib>=0.7.5             # NVD CVE database access (no auth required)
+shodan>=1.31.0            # Shodan IP intelligence (needs SHODAN_API_KEY)
+playwright>=1.40.0        # Headless browser for web OSINT
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

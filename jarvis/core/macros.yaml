@@ -101,3 +101,39 @@ macros:
     action: multi_agent_analyze
     confirm: false
     response: "Spawning expert agents."
+
+  # ── v37.0 — Autonomous Intelligence voice commands ──────────────────────
+  - trigger: "jarvis find tool"
+    action: github_search
+    confirm: false
+    response: "Searching GitHub for security tools."
+
+  - trigger: "jarvis analyze this"
+    action: analyze_inbox
+    confirm: false
+    response: "File analysis inbox active. Drop your file."
+
+  - trigger: "jarvis cve briefing"
+    action: cve_briefing
+    confirm: false
+    response: "Pulling today's CVE intelligence."
+
+  - trigger: "jarvis enrich"
+    action: osint_enrich_recent
+    confirm: false
+    response: "Enriching recent IPs with OSINT data."
+
+  - trigger: "jarvis isolate victim"
+    action: lab_isolate
+    confirm: true
+    response: "Isolating victim VM. Confirm?"
+
+  - trigger: "jarvis list vms"
+    action: lab_list
+    confirm: false
+    response: "Listing running virtual machines."
+
+  - trigger: "jarvis list tools"
+    action: list_github_tools
+    confirm: false
+    response: "Listing integrated GitHub tools."
