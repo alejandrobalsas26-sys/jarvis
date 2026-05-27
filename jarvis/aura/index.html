@@ -1010,6 +1010,13 @@
     .type-mitigation_blocked   { background:#1a0505;border:1px solid #ff4400;color:#ff8844; }
     .type-mitigation_rejected  { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
     .type-volatility_queued    { background:#050518;border:1px solid #4466ff;color:#8899ff; }
+
+    /* v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter */
+    .type-ocr_started        { background:#050518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-ocr_complete       { background:#050518;border:1px solid #6644ff;color:#9977ff; }
+    .type-ghost_hands_started{ background:#050a05;border:1px solid #44ff44;color:#88ff88; }
+    .type-ghost_hands_complete{background:#050a05;border:1px solid #44cc44;color:#88cc88; }
+    .type-ghost_hands_timeout{ background:#1a0505;border:1px solid #ff4400;color:#ff8844; }
     #mitigation-panel {
       position: fixed; right: 230px; bottom: 40px;
       width: 320px; background: rgba(16, 12, 0, 0.97);
@@ -1219,6 +1226,8 @@
       <div class="help-row"><kbd>Ctrl+L</kbd><span>Clear event log</span></div>
       <div class="help-row"><kbd>Ctrl+E</kbd><span>Export log to clipboard</span></div>
       <div class="help-row"><kbd>F</kbd><span>Cycle event filter</span></div>
+      <div class="help-row"><kbd>O</kbd><span>OCR analyze screen</span></div>
+      <div class="help-row"><kbd>Ctrl+G</kbd><span>List lab profiles</span></div>
       <div class="help-row"><kbd>Esc</kbd><span>Close overlays</span></div>
     </div>
     <div class="help-close" onclick="toggleHelp()">✕ CLOSE</div>
@@ -1281,18 +1290,7 @@
       <div id="kernel-panel-title">KERNEL ANOMALIES</div>
       <div id="kernel-panel-body"></div>
     </div>
-    <div id="telemetry-hud">
-      <div class="hud-block">
-        <div class="hud-label">CPU</div>
-        <div class="hud-value" id="cpu-val">--.-</div>
-        <div class="hud-sub">percent</div>
-      </div>
-      <div class="hud-block">
-        <div class="hud-label">RAM</div>
-        <div class="hud-value" id="ram-pct-val">--.-</div>
-        <div class="hud-sub" id="ram-gb-val">-- / -- GB</div>
-      </div>
-    </div>
+    <!-- telemetry-hud removed in v40.0 — metrics sidebar is the single source -->
   </div>
 </div>
 
@@ -1643,8 +1641,22 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
   // === Three.js WebGL Scene ===
   const glCanvas = document.getElementById('webgl-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = (function() {
+    try {
+      return new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: true });
+    } catch (err) {
+      console.error('Three.js init failed:', err);
+      if (glCanvas) {
+        const ctx2d = document.createElement('div');
+        ctx2d.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:rgba(0,255,65,0.3);font-family:Share Tech Mono,monospace;font-size:12px;letter-spacing:2px;';
+        ctx2d.textContent = '[ WebGL unavailable — open in Chrome ]';
+        glCanvas.parentNode.appendChild(ctx2d);
+      }
+      return null;
+    }
+  })();
+  if (!renderer) { console.warn('AURA: WebGL disabled — 3D scene skipped'); }
+  if (renderer) renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
   const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
   camera.position.set(0, 5, 9);
@@ -4082,6 +4094,17 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         }));
       }
     }
+    // v40.0 — O key triggers OCR screen analysis
+    if (e.key === 'o' && !e.ctrlKey) {
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({cmd: 'ocr_analyze_screen', request_id: 'ocr_' + Date.now()}));
+    }
+    // v40.0 — Ctrl+G lists Ghost Hands lab profiles
+    if (e.ctrlKey && e.key === 'g') {
+      e.preventDefault();
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({cmd: 'list_lab_profiles', request_id: 'ghp_' + Date.now()}));
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -4291,6 +4314,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     ws.onopen = () => {
       badge.className   = 'badge-connected';
       badge.textContent = '● CONNECTED';
+      const vadEl = document.getElementById('hb-vad');
+      const vadLabel = document.getElementById('hb-vad-label');
+      if (vadEl) vadEl.className = 'hb-vad-listening';
+      if (vadLabel) vadLabel.textContent = 'CONNECTED';
     };
 
     ws.onmessage = (e) => {
@@ -4585,10 +4612,13 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         cpuLight.intensity = 0.4 + (msg.cpu_pct / 100) * 3.5;
         // RAM → uSaturation drives ring color + point size
         ringMat.uniforms.uSaturation.value = msg.ram_pct / 100;
-        // Sidebar DOM updates
-        document.getElementById('cpu-val').textContent     = msg.cpu_pct.toFixed(1) + '%';
-        document.getElementById('ram-pct-val').textContent = msg.ram_pct.toFixed(1) + '%';
-        document.getElementById('ram-gb-val').textContent  =
+        // Sidebar DOM updates (v40.0: floating HUD removed, null-safe)
+        const _cpuV = document.getElementById('cpu-val');
+        const _ramV = document.getElementById('ram-pct-val');
+        const _ramG = document.getElementById('ram-gb-val');
+        if (_cpuV) _cpuV.textContent = msg.cpu_pct.toFixed(1) + '%';
+        if (_ramV) _ramV.textContent = msg.ram_pct.toFixed(1) + '%';
+        if (_ramG) _ramG.textContent =
           msg.ram_used_gb.toFixed(1) + ' / ' + msg.ram_total_gb.toFixed(1) + ' GB';
         // Auto-restore resource contraction when RAM recovers above the floor
         if (_resourceContracted && (100 - msg.ram_pct) > 8.0) {
@@ -4941,12 +4971,32 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         return;
       }
 
+      // v40.0 — OCR + Ghost Hands dispatchers
+      if (msg && msg.type === 'ocr_complete') {
+        handleTacticalNarration({narration: msg.analysis || ''});
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'ghost_hands_started') {
+        const hb = document.getElementById('header-bar');
+        if (hb) {
+          hb.style.borderBottomColor = '#44ff44';
+          setTimeout(() => hb.style.borderBottomColor = '', 5000);
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+
       if (!paused) append(e.data);
     };
 
     ws.onclose = () => {
       badge.className   = 'badge-disconnected';
       badge.textContent = '● DISCONNECTED — retrying in 3s…';
+      const vadLabel = document.getElementById('hb-vad-label');
+      if (vadLabel) vadLabel.textContent = 'OFFLINE';
+      const vadEl = document.getElementById('hb-vad');
+      if (vadEl) vadEl.className = 'hb-vad-idle';
       setTimeout(connect, 3000);
     };
 

@@ -1,0 +1,51 @@
+# JARVIS Ghost Hands Lab Profiles (v40.0)
+# Edit freely — no code changes needed.
+# Add new profiles by following the existing structure.
+# Supported actions: open_app, open_url, type_text, hotkey, wait, arrange_windows
+
+profiles:
+
+  web_pentest:
+    description: "Web penetration testing environment"
+    steps:
+      - action: open_app
+        path: "C:\\Program Files\\BurpSuiteCommunity\\BurpSuiteCommunity.exe"
+        wait_seconds: 5
+      - action: open_url
+        url: "http://localhost:8080"
+      - action: wait
+        seconds: 2
+      - action: arrange_windows
+        layout: side_by_side
+
+  malware_analysis:
+    description: "Malware static and dynamic analysis environment"
+    steps:
+      - action: open_app
+        path: "C:\\Program Files\\x64dbg\\release\\x64\\x64dbg.exe"
+        wait_seconds: 3
+      - action: wait
+        seconds: 2
+      - action: arrange_windows
+        layout: side_by_side
+
+  network_monitor:
+    description: "Network traffic analysis environment"
+    steps:
+      - action: open_app
+        path: "C:\\Program Files\\Wireshark\\Wireshark.exe"
+        wait_seconds: 4
+      - action: wait
+        seconds: 2
+      - action: arrange_windows
+        layout: side_by_side
+
+  purple_team:
+    description: "Full Purple Team environment"
+    steps:
+      - action: open_url
+        url: "file:///C:/Users/aleja/Downloads/jarvis_v2/jarvis/aura/index.html"
+      - action: wait
+        seconds: 2
+      - action: arrange_windows
+        layout: quad

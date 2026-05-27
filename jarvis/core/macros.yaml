@@ -178,3 +178,52 @@ macros:
     action: take_screenshot
     confirm: false
     response: "Capturing screenshot."
+
+  # ── v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter ───────────
+  - trigger: "jarvis analyze code on screen"
+    action: ocr_analyze_screen
+    confirm: false
+    response: "Analyzing what's on your screen with OCR."
+
+  - trigger: "jarvis analyze screen"
+    action: ocr_analyze_screen
+    confirm: false
+    response: "Reading your screen."
+
+  - trigger: "jarvis prepare web lab"
+    action: ghost_hands_profile
+    params:
+      profile: web_pentest
+    confirm: true
+    response: "Preparing web penetration testing environment. Confirm?"
+
+  - trigger: "jarvis prepare malware lab"
+    action: ghost_hands_profile
+    params:
+      profile: malware_analysis
+    confirm: true
+    response: "Preparing malware analysis environment. Confirm?"
+
+  - trigger: "jarvis prepare network lab"
+    action: ghost_hands_profile
+    params:
+      profile: network_monitor
+    confirm: true
+    response: "Preparing network monitoring environment. Confirm?"
+
+  - trigger: "jarvis prepare purple team"
+    action: ghost_hands_profile
+    params:
+      profile: purple_team
+    confirm: true
+    response: "Preparing full Purple Team environment. Confirm?"
+
+  - trigger: "jarvis generate word report"
+    action: generate_docx_report
+    confirm: false
+    response: "Generating forensic Word document report."
+
+  - trigger: "jarvis list lab profiles"
+    action: list_lab_profiles
+    confirm: false
+    response: "Listing available lab profiles."

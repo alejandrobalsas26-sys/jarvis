@@ -370,6 +370,59 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: take_screenshot error: {e}")
 
+        # ── v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter dispatch ──
+        elif action == "ocr_analyze_screen":
+            try:
+                from core.ocr_engine import read_screen_and_analyze
+                from core.agent_orchestrator import orchestrator
+                asyncio.create_task(read_screen_and_analyze(
+                    params.get("context", "Analyze security-relevant content on screen"),
+                    broadcast_fn, orchestrator._ollama_client,
+                    orchestrator._fast_model, tts=tts
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: ocr_analyze_screen error: {e}")
+
+        elif action == "ghost_hands_profile":
+            try:
+                from tools.ghost_hands import execute_lab_profile
+                profile = params.get("profile", "")
+                if profile:
+                    asyncio.create_task(execute_lab_profile(profile, broadcast_fn, tts))
+            except Exception as e:
+                logger.debug(f"MACRO: ghost_hands_profile error: {e}")
+
+        elif action == "list_lab_profiles":
+            try:
+                from tools.ghost_hands import list_profiles
+                profiles = list_profiles()
+                if tts:
+                    asyncio.create_task(tts.speak_async(
+                        f"Available profiles: {', '.join(profiles)}"
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: list_lab_profiles error: {e}")
+
+        elif action == "generate_docx_report":
+            try:
+                from core.correlator import correlator
+                from core.forensic_reporter import generate_forensic_report
+                from core.agent_orchestrator import orchestrator
+                incidents = correlator.get_active_incidents()
+                if incidents:
+                    asyncio.create_task(generate_forensic_report(
+                        incidents[0], [], broadcast_fn,
+                        orchestrator._ollama_client,
+                        orchestrator._deep_model,
+                    ))
+                else:
+                    if tts:
+                        asyncio.create_task(tts.speak_async(
+                            "No active incidents to report."
+                        ))
+            except Exception as e:
+                logger.debug(f"MACRO: generate_docx_report error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

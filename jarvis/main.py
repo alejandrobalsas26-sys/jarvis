@@ -253,6 +253,10 @@ async def _main_async() -> None:
     # v39.0 — Deep Forensics & Autonomous Remediation
     from tools.memory_hunter      import dump_process_memory
     from core.auto_remediator     import draft_mitigation
+    # v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter
+    from core.ocr_engine          import read_screen_and_analyze
+    from tools.ghost_hands        import execute_lab_profile, list_profiles
+    from core.forensic_reporter   import generate_forensic_report
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -755,6 +759,32 @@ async def _main_async() -> None:
                 logger.info("V39: auto-remediator hooked into correlator pipeline")
 
             asyncio.create_task(_hook_remediator(), name="v39-remediator-hook")
+
+            # v40.0 — Ghost Hands lab profiles + forensic reporter auto-gen
+            _v40_profiles = list_profiles()
+            if _v40_profiles:
+                logger.info(f"GHOST_HANDS: {len(_v40_profiles)} lab profiles loaded: {_v40_profiles}")
+
+            async def _hook_forensic_reporter() -> None:
+                await asyncio.sleep(2.5)
+                if v36_correlator._broadcast_fn is None:
+                    return
+                _v40_orig_broadcast = v36_correlator._broadcast_fn
+
+                async def _reporting_broadcast(event: dict) -> None:
+                    await _v40_orig_broadcast(event)
+                    if event.get("type") == "compound_incident_resolved":
+                        _inc_id = event.get("incident_id", "")
+                        if _inc_id:
+                            logger.info(
+                                f"FORENSIC_REPORTER: auto-generating report "
+                                f"for resolved incident {_inc_id}"
+                            )
+
+                v36_correlator.attach(_reporting_broadcast)
+                logger.info("V40: forensic reporter hooked into correlator pipeline")
+
+            asyncio.create_task(_hook_forensic_reporter(), name="v40-reporter-hook")
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:

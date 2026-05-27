@@ -127,5 +127,11 @@ mss>=9.0.1                # ultra-fast cross-platform screenshot
 qrcode>=7.4.2             # QR code generation for phishing sim
 networkx>=3.2.0           # graph drawing for network topology
 
+# ── v40.0 Omni-Vision, Ghost Hands & Forensic Reporter ────────
+easyocr>=1.7.1            # OCR for hex dumps, assembly, terminal output
+pyautogui>=0.9.54         # GUI automation for lab environment setup
+pygetwindow>=0.0.9        # Window management and organization
+python-docx>=1.1.0        # Professional Word forensic report generation
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0
