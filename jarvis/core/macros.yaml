@@ -310,3 +310,52 @@ macros:
     action: sensor_status
     confirm: false
     response: "Checking connected sensor agents."
+
+  # ── v43.0 — BIFROST PROTOCOL ───────────────────────────────────────
+  # BAS Breach Simulation
+  - trigger: "jarvis run apt chain"
+    action: bas_apt_chain
+    confirm: true
+    response: "Running full APT simulation chain. Confirm target?"
+
+  - trigger: "jarvis simulate beacon"
+    action: bas_cs_beacon
+    confirm: false
+    response: "Simulating Cobalt Strike beacon traffic."
+
+  - trigger: "jarvis simulate lateral"
+    action: bas_smb_lateral
+    confirm: false
+    response: "Simulating SMB lateral movement."
+
+  - trigger: "jarvis simulate dns c2"
+    action: bas_dns_c2
+    confirm: false
+    response: "Simulating DNS tunneling C2."
+
+  - trigger: "jarvis simulate exfil"
+    action: bas_data_exfil
+    confirm: true
+    response: "Simulating data exfiltration. Confirm?"
+
+  - trigger: "jarvis simulate injection"
+    action: bas_process_inject
+    confirm: false
+    response: "Generating process injection artifact for detection testing."
+
+  # Purple Team Coverage
+  - trigger: "jarvis coverage report"
+    action: purple_coverage_report
+    confirm: false
+    response: "Generating ATT&CK coverage report."
+
+  - trigger: "jarvis coverage gaps"
+    action: purple_gap_analysis
+    confirm: false
+    response: "Analyzing detection coverage gaps."
+
+  # Detection Engineering
+  - trigger: "jarvis improve detections"
+    action: detection_engineer_gaps
+    confirm: false
+    response: "Analyzing and improving detection coverage."

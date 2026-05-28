@@ -476,7 +476,8 @@ async def start_etw_monitor(broadcast_fn) -> None:
         event = await queue.get()
         await broadcast_fn(event)
         # v33.0 — process injection sub-technique classification
-        if event.get("event_id") in {1, 3, 8, 10, 25, 30}:
+        eid = event.get("event_id")
+        if eid in {1, 3, 8, 10, 25, 30}:
             pid = event.get("pid", 0)
             if pid:
                 try:
@@ -484,3 +485,21 @@ async def start_etw_monitor(broadcast_fn) -> None:
                     asyncio.create_task(analyze_and_broadcast(pid, event, broadcast_fn))
                 except Exception:
                     pass
+        # v43.0 — feed purple coordinator on injection-class ETW events
+        if eid in {5, 9, 15, 30}:
+            try:
+                from core.purple_coordinator import register_detection_event
+                # Map suspicious EIDs back to MITRE techniques covered
+                tech_map = {
+                    5:  "T1055",        # ImageLoad / DLL injection vector
+                    9:  "T1055.012",    # PageFaultCopyOnWrite (process hollowing)
+                    15: "T1055.012",    # NtMapViewOfSection (hollowing)
+                    30: "T1055.003",    # RemoteThreadCreate
+                }
+                technique_id = tech_map.get(eid)
+                if technique_id:
+                    asyncio.create_task(register_detection_event(
+                        technique_id, "etw", broadcast_fn,
+                    ))
+            except Exception:
+                pass

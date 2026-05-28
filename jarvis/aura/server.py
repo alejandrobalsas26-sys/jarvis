@@ -56,10 +56,14 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "consolidate_memory",
     # v39.0 self-healing remediator
     "execute_mitigation",
+    # v43.0 BIFROST PROTOCOL
+    "deploy_sigma_rule",
+    "run_bas_scenario",
+    "get_coverage",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
-    "execute_mitigation",
+    "execute_mitigation", "run_bas_scenario", "deploy_sigma_rule",
 })
 _MEDIUM_RISK_HUD: frozenset[str] = frozenset({"run_nmap", "emulate_technique"})
 
@@ -211,8 +215,19 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             return {"results": results}
 
         elif cmd == "get_coverage":
-            from core.attck_coverage import get_coverage_matrix
-            return get_coverage_matrix()
+            from core.attck_coverage import get_coverage_matrix as _attck_matrix
+            try:
+                from core.purple_coordinator import (
+                    get_coverage_matrix as _purple_matrix,
+                    get_coverage_summary as _purple_summary,
+                )
+                return {
+                    "attck":           _attck_matrix(),
+                    "purple_matrix":   _purple_matrix()[:20],
+                    "purple_summary":  _purple_summary(),
+                }
+            except Exception:
+                return _attck_matrix()
 
         elif cmd == "voice_abort":
             # v35.0 — operator emergency abort via HUD ABORT button
@@ -285,6 +300,24 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 execute_mitigation(script_path, broadcast_fn, _executor_ref)
             )
             return {"status": "otp_challenge_issued"}
+
+        # ── v43.0 BIFROST PROTOCOL ───────────────────────────────────────────
+        elif cmd == "deploy_sigma_rule":
+            draft_path = str(args.get("draft_path", ""))[:300]
+            from core.detection_engineer import deploy_approved_rule
+            asyncio.create_task(deploy_approved_rule(draft_path, broadcast_fn))
+            return {"status": "deploying"}
+
+        elif cmd == "run_bas_scenario":
+            target   = str(args.get("target",   "192.168.1.100"))[:50]
+            scenario = str(args.get("scenario", "apt_chain"))[:30]
+            if not _TARGET_RE.match(target):
+                return {"error": "Invalid target format"}
+            from tools.breach_simulator import run_full_bas_scenario
+            asyncio.create_task(run_full_bas_scenario(
+                target, broadcast_fn, scenario,
+            ))
+            return {"status": "started", "scenario": scenario, "target": target}
 
         return {"error": f"Handler not implemented for '{cmd}'"}
     except Exception as e:

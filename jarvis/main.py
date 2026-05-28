@@ -262,6 +262,10 @@ async def _main_async() -> None:
     # v42.0 — ARES PROTOCOL (Red Team Operator + Sensor Mesh + MITM Proxy)
     from core.red_team_operator   import ares_operator
     from core.sensor_mesh         import start_sensor_server, get_connected_agents
+    # v43.0 — BIFROST PROTOCOL (Purple Team Coordinator + BAS + Detection Eng + OPSEC)
+    from core.purple_coordinator  import attach_llm as purple_attach_llm
+    from core.purple_coordinator  import get_coverage_summary as purple_summary
+    from tools.breach_simulator   import run_full_bas_scenario  # noqa: F401
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -373,6 +377,13 @@ async def _main_async() -> None:
         logger.info("ARES: autonomous red team operator ready")
     except Exception as e:
         logger.debug(f"V42: ares_operator attach failed: {e}")
+
+    # v43.0 — Attach LLM to purple coordinator for auto-detection-engineering
+    try:
+        purple_attach_llm(llm.client, hw_profile.model_deep)
+        logger.info("PURPLE_COORDINATOR: LLM attached — detection engineering enabled")
+    except Exception as e:
+        logger.debug(f"V43: purple_coordinator attach failed: {e}")
 
     # v30.0: register session-save callback (closure now has llm reference)
     async def _flush_session():

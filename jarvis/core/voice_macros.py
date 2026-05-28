@@ -546,6 +546,101 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: proxy_start error: {e}")
 
+        # ── v43.0 — BIFROST PROTOCOL dispatch ──────────────────────────────
+        elif action == "bas_apt_chain":
+            try:
+                from tools.breach_simulator import run_full_bas_scenario
+                target = params.get("target", "192.168.1.100")
+                asyncio.create_task(run_full_bas_scenario(
+                    target, broadcast_fn, "apt_chain",
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: bas_apt_chain error: {e}")
+
+        elif action == "bas_cs_beacon":
+            try:
+                from tools.breach_simulator import simulate_cs_beacon
+                target = params.get("target", "192.168.1.100")
+                asyncio.create_task(simulate_cs_beacon(target, broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: bas_cs_beacon error: {e}")
+
+        elif action == "bas_smb_lateral":
+            try:
+                from tools.breach_simulator import simulate_smb_lateral
+                target = params.get("target", "192.168.1.100")
+                asyncio.create_task(simulate_smb_lateral(target, broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: bas_smb_lateral error: {e}")
+
+        elif action == "bas_dns_c2":
+            try:
+                from tools.breach_simulator import simulate_dns_c2
+                target = params.get("target", "192.168.1.100")
+                asyncio.create_task(simulate_dns_c2(target, broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: bas_dns_c2 error: {e}")
+
+        elif action == "bas_data_exfil":
+            try:
+                from tools.breach_simulator import simulate_data_exfil
+                target = params.get("target", "192.168.1.100")
+                asyncio.create_task(simulate_data_exfil(target, broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: bas_data_exfil error: {e}")
+
+        elif action == "bas_process_inject":
+            try:
+                from tools.breach_simulator import simulate_process_injection_artifact
+                asyncio.create_task(
+                    simulate_process_injection_artifact(broadcast_fn)
+                )
+            except Exception as e:
+                logger.debug(f"MACRO: bas_process_inject error: {e}")
+
+        elif action == "purple_coverage_report" or action == "purple_gap_analysis":
+            try:
+                from core.purple_coordinator import (
+                    get_coverage_matrix, get_coverage_summary,
+                )
+                matrix  = get_coverage_matrix()
+                summary = get_coverage_summary()
+                asyncio.create_task(broadcast_fn({
+                    "type":      "purple_coverage_report",
+                    "matrix":    matrix[:20],
+                    "summary":   summary,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }))
+                if tts and summary:
+                    asyncio.create_task(tts.speak_async(
+                        f"Coverage: {summary.get('coverage_pct', 0)}% of "
+                        f"{summary.get('total', 0)} techniques. "
+                        f"{summary.get('gaps', 0)} gaps detected. "
+                        f"Mean detection time: "
+                        f"{summary.get('mttd_ms', 0):.0f} milliseconds."
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: purple_coverage_report error: {e}")
+
+        elif action == "detection_engineer_gaps":
+            try:
+                from core.purple_coordinator import get_coverage_matrix
+                from core.detection_engineer import draft_rule_for_gap
+                from core.agent_orchestrator import orchestrator
+                gaps = [r for r in get_coverage_matrix() if r["tier"] == "GAP"]
+                for gap in gaps[:3]:
+                    asyncio.create_task(draft_rule_for_gap(
+                        gap["technique"], broadcast_fn,
+                        orchestrator._ollama_client,
+                        orchestrator._deep_model,
+                    ))
+                if tts:
+                    asyncio.create_task(tts.speak_async(
+                        f"Drafting detection rules for {len(gaps)} coverage gaps."
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: detection_engineer_gaps error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

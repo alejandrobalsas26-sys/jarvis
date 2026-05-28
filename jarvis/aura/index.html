@@ -1038,6 +1038,27 @@
     .type-sensor_disconnected    { background:#0a0808;border:1px solid #884444;color:#cc8888; }
     .type-sensor_deployed        { background:#051505;border:1px solid #44cc44;color:#88ff88; }
 
+    /* v43.0 — BIFROST PROTOCOL */
+    .type-purple_detection_confirmed { background:#050a05;border:1px solid #44ff44;color:#88ff88; }
+    .type-purple_coverage_gap        { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
+    .type-bas_simulation_started     { background:#150005;border:1px solid #ff0044;color:#ff4488; }
+    .type-bas_simulation_complete    { background:#050a05;border:1px solid #44ff66;color:#88ffaa; }
+    .type-bas_scenario_started       { background:#150005;border:1px solid #ff0044;color:#ff4488; }
+    .type-bas_scenario_complete      { background:#050a05;border:1px solid #00ff41;color:#44ff88; }
+    .type-sigma_rule_drafted         { background:#050518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-sigma_rule_deployed        { background:#050a05;border:1px solid #44cc44;color:#88ff88; }
+    .type-opsec_score                { background:#050508;border:1px solid #4466ff;color:#8899ff; }
+    .type-detection_rule_needed      { background:#1a0800;border:1px solid #ff8800;color:#ffcc44; }
+    .type-purple_coverage_report     { background:#050510;border:1px solid #6644ff;color:#aa88ff; }
+
+    #bifrost-panel {
+      position: fixed; right: 230px; top: 48px;
+      width: 220px; background: rgba(4,8,4,0.96);
+      border: 1px solid rgba(0,255,65,0.3); border-radius: 6px;
+      padding: 10px; z-index: 114;
+      font-family: 'Share Tech Mono', monospace; font-size: 10px;
+    }
+
     #ares-panel {
       position: fixed; left: 16px; bottom: 40px;
       width: 200px; background: rgba(20,0,5,0.96);
@@ -1264,6 +1285,8 @@
       <div class="help-row"><kbd>F</kbd><span>Cycle event filter</span></div>
       <div class="help-row"><kbd>O</kbd><span>OCR analyze screen</span></div>
       <div class="help-row"><kbd>Ctrl+G</kbd><span>List lab profiles</span></div>
+      <div class="help-row"><kbd>X</kbd><span>Toggle ARES campaign panel</span></div>
+      <div class="help-row"><kbd>P</kbd><span>Toggle BIFROST coverage heatmap</span></div>
       <div class="help-row"><kbd>Esc</kbd><span>Close overlays</span></div>
     </div>
     <div class="help-close" onclick="toggleHelp()">✕ CLOSE</div>
@@ -1448,6 +1471,25 @@
     ◈ SENSOR MESH
   </div>
   <div id="sensor-agent-list"></div>
+</div>
+
+<!-- v43.0 BIFROST Coverage Panel -->
+<div id="bifrost-panel" style="display:none">
+  <div style="color:#00ff41;font-size:9px;letter-spacing:3px;
+    font-weight:bold;margin-bottom:6px;
+    border-bottom:1px solid rgba(0,255,65,0.2);padding-bottom:4px">
+    ◈ BIFROST — LIVE COVERAGE
+  </div>
+  <div id="bifrost-summary" style="color:rgba(255,255,255,0.4);
+    font-size:9px;margin-bottom:6px"></div>
+  <div id="bifrost-heatmap" style="display:flex;flex-wrap:wrap;
+    gap:2px;max-height:120px;overflow-y:auto"></div>
+  <div style="margin-top:6px;font-size:8px;
+    color:rgba(255,255,255,0.2);display:flex;gap:8px">
+    <span style="color:#44ff44">■ COVERED</span>
+    <span style="color:#ffaa00">■ PARTIAL</span>
+    <span style="color:#ff2200">■ GAP</span>
+  </div>
 </div>
 
 <!-- v35.0 Master Abort button -->
@@ -1666,6 +1708,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       mitigation_blocked:          'type-mitigation_blocked',
       mitigation_rejected:         'type-mitigation_rejected',
       volatility_queued:           'type-volatility_queued',
+      // v43.0 — BIFROST PROTOCOL
+      purple_detection_confirmed:  'type-purple_detection_confirmed',
+      purple_coverage_gap:         'type-purple_coverage_gap',
+      purple_coverage_report:      'type-purple_coverage_report',
+      bas_simulation_started:      'type-bas_simulation_started',
+      bas_simulation_complete:     'type-bas_simulation_complete',
+      bas_scenario_started:        'type-bas_scenario_started',
+      bas_scenario_complete:       'type-bas_scenario_complete',
+      sigma_rule_drafted:          'type-sigma_rule_drafted',
+      sigma_rule_deployed:         'type-sigma_rule_deployed',
+      opsec_score:                 'type-opsec_score',
+      detection_rule_needed:       'type-detection_rule_needed',
     };
     return map[t] || 'type-default';
   }
@@ -4513,7 +4567,141 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       const p = document.getElementById('ares-panel');
       if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
     }
+    // v43.0 — toggle BIFROST coverage panel with 'p'
+    if (e.key === 'p' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const panel = document.getElementById('bifrost-panel');
+      if (panel) {
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      }
+    }
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v43.0 — BIFROST PROTOCOL handlers (Purple coordinator + BAS + OPSEC)
+  // ═══════════════════════════════════════════════════════════════════
+
+  function updateHeatmapCell(technique, tier, color) {
+    const heatmap = document.getElementById('bifrost-heatmap');
+    if (!heatmap) return;
+    const safeId = 'heat_' + String(technique).replace(/[^a-zA-Z0-9_]/g, '_');
+    let cell = document.getElementById(safeId);
+    if (!cell) {
+      cell = document.createElement('div');
+      cell.id = safeId;
+      cell.style.cssText =
+        'font-size:8px;padding:2px 4px;border-radius:2px;' +
+        'cursor:default;transition:background 0.3s;';
+      cell.title = String(technique);
+      heatmap.appendChild(cell);
+    }
+    cell.style.background = color + '33';
+    cell.style.border     = '1px solid ' + color + '66';
+    cell.style.color      = color;
+    cell.textContent      = String(technique).replace('T1', '').slice(0, 6);
+  }
+
+  function handlePurpleDetectionConfirmed(msg) {
+    const latency = msg.latency_ms || 0;
+    const color   = latency < 1000 ? '#44ff44' :
+                    latency < 5000 ? '#ffaa00' : '#ff4400';
+    updateHeatmapCell(msg.technique, 'COVERED', color);
+  }
+
+  function handlePurpleCoverageGap(msg) {
+    updateHeatmapCell(msg.technique, 'GAP', '#ff2200');
+    const hb = document.getElementById('header-bar');
+    if (hb) {
+      hb.style.borderBottomColor = '#ff2200';
+      setTimeout(() => hb.style.borderBottomColor = '', 3000);
+    }
+  }
+
+  function handlePurpleCoverageReport(msg) {
+    const panel   = document.getElementById('bifrost-panel');
+    const summary = msg.summary || {};
+    if (panel) panel.style.display = 'block';
+    const summaryEl = document.getElementById('bifrost-summary');
+    if (summaryEl) {
+      summaryEl.innerHTML =
+        'Coverage: <span style="color:#00ff41">' +
+          escapeHtml(String(summary.coverage_pct || 0)) + '%</span> &nbsp;' +
+        'Gaps: <span style="color:#ff2200">' +
+          escapeHtml(String(summary.gaps || 0)) + '</span> &nbsp;' +
+        'MTTD: <span style="color:#ffaa00">' +
+          escapeHtml(String(summary.mttd_ms || 0)) + 'ms</span>';
+    }
+    (msg.matrix || []).forEach(rec => {
+      const color = rec.tier === 'COVERED' ? '#44ff44' :
+                    rec.tier === 'PARTIAL' ? '#ffaa00' : '#ff2200';
+      updateHeatmapCell(rec.technique, rec.tier, color);
+    });
+  }
+
+  function handleOpsecScore(msg) {
+    const score = msg.opsec_score || 50;
+    const color = score >= 60 ? '#44ff44' :
+                  score >= 40 ? '#ffaa00' : '#ff2200';
+    const toast = document.createElement('div');
+    toast.style.cssText =
+      'position:fixed;bottom:70px;left:50%;' +
+      'transform:translateX(-50%);' +
+      'background:rgba(4,4,16,0.97);' +
+      'border:1px solid ' + color + ';border-radius:4px;' +
+      'padding:6px 14px;font-size:10px;color:' + color + ';' +
+      "font-family:'Share Tech Mono',monospace;z-index:300;" +
+      'letter-spacing:1px;';
+    const stars = score >= 80 ? '◈◈◈◈◈' :
+                  score >= 60 ? '◈◈◈◈○' :
+                  score >= 40 ? '◈◈◈○○' :
+                  score >= 20 ? '◈◈○○○' : '◈○○○○';
+    toast.textContent = 'OPSEC ' + stars + ' ' + score + '/100 — ' +
+                        (msg.risk_level || '?');
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+  }
+
+  function handleSigmaRuleDrafted(msg) {
+    const panel = document.getElementById('bifrost-panel');
+    if (panel) panel.style.display = 'block';
+    const color = (msg.is_valid && (msg.quality_score || 0) > 0.6)
+                  ? '#8844ff' : '#ffaa44';
+    const toast = document.createElement('div');
+    toast.style.cssText =
+      'position:fixed;bottom:120px;right:30px;max-width:380px;' +
+      'background:rgba(8,5,24,0.97);border:1px solid ' + color + ';' +
+      'border-radius:4px;padding:8px 12px;font-size:10px;' +
+      'color:' + color + ";font-family:'Share Tech Mono',monospace;" +
+      'z-index:300;line-height:1.4;';
+    toast.innerHTML =
+      '<div style="font-size:9px;letter-spacing:2px;margin-bottom:4px">' +
+      '◈ SIGMA RULE DRAFTED — ' + escapeHtml(msg.technique || '?') +
+      '</div>' +
+      'Quality: ' + escapeHtml(String(msg.quality_score || 0)) +
+      ' &nbsp; Valid: ' + (msg.is_valid ? 'YES' : 'NO');
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 9000);
+  }
+
+  function handleBasScenarioComplete(msg) {
+    const cov = msg.coverage || {};
+    const banner = document.createElement('div');
+    banner.style.cssText =
+      'position:fixed;top:40px;left:50%;transform:translateX(-50%);' +
+      'background:rgba(4,10,4,0.97);border:1px solid #00ff41;' +
+      'border-radius:4px;padding:10px 18px;font-size:11px;' +
+      "color:#44ff88;font-family:'Share Tech Mono',monospace;" +
+      'z-index:300;min-width:350px;text-align:center;';
+    banner.innerHTML =
+      '◈ BAS SCENARIO COMPLETE: ' + escapeHtml(msg.scenario || '?') + '<br>' +
+      '<span style="color:rgba(68,255,136,0.5);font-size:10px">' +
+      'Coverage: ' + escapeHtml(String(cov.coverage_pct || 0)) + '% &nbsp;|&nbsp; ' +
+      'Gaps: ' + escapeHtml(String(cov.gaps || 0)) + ' &nbsp;|&nbsp; ' +
+      'MTTD: ' + escapeHtml(String(cov.mttd_ms || 0)) + 'ms' +
+      '</span>';
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 10000);
+    handlePurpleCoverageReport({matrix: [], summary: cov});
+  }
 
   // === WebSocket with auto-reconnect ===
   let ws = null;
@@ -5265,6 +5453,49 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       }
       if (msg && msg.type === 'proxy_credential_found') {
         handleProxyCredentialFound(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v43.0 — BIFROST PROTOCOL dispatchers
+      if (msg && msg.type === 'purple_detection_confirmed') {
+        handlePurpleDetectionConfirmed(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'purple_coverage_gap') {
+        handlePurpleCoverageGap(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'purple_coverage_report') {
+        handlePurpleCoverageReport(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'bas_scenario_complete') {
+        handleBasScenarioComplete(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'opsec_score') {
+        handleOpsecScore(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'sigma_rule_drafted') {
+        handleSigmaRuleDrafted(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'sigma_rule_deployed') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && (msg.type === 'bas_simulation_started' ||
+                  msg.type === 'bas_simulation_complete' ||
+                  msg.type === 'bas_scenario_started' ||
+                  msg.type === 'detection_rule_needed')) {
         if (!paused) append(e.data);
         return;
       }

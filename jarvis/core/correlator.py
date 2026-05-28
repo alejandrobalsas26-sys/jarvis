@@ -313,6 +313,17 @@ class TemporalCorrelator:
                     **inc.to_dict(),
                 })
 
+                # v43.0 — feed purple coordinator: every technique resolved
+                # by the correlator counts as a successful detection
+                try:
+                    from core.purple_coordinator import register_detection_event
+                    for technique in inc.mitre_techniques:
+                        asyncio.create_task(register_detection_event(
+                            technique, "correlator", self._broadcast_fn,
+                        ))
+                except Exception as e:
+                    logger.debug(f"CORRELATOR: purple register failed: {e}")
+
                 # v36.0 — Predictive cognition + autonomous narration
                 try:
                     from core.threat_predictor  import analyze_and_predict
