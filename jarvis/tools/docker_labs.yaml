@@ -1,0 +1,78 @@
+# JARVIS Docker Lab Templates (v41.0)
+# Edit freely — no code changes needed.
+# mem_limit: "2g" | "4g" (protect host RAM)
+# cpu_quota: 200000 = 2 cores, 100000 = 1 core
+
+labs:
+
+  kali:
+    description: "Kali Linux ephemeral attack platform"
+    image: kalilinux/kali-last-release
+    container_name: jarvis_kali
+    mem_limit: "3g"
+    cpu_quota: 200000
+    ports:
+      "22/tcp": 2222
+      "4444/tcp": 4444
+    network_mode: bridge
+    browser_url: ""
+    browser_delay: 2
+
+  metasploitable:
+    description: "Metasploitable 2 vulnerable target"
+    image: tleemcjr/metasploitable2
+    container_name: jarvis_msf_target
+    mem_limit: "1g"
+    cpu_quota: 100000
+    ports:
+      "80/tcp": 8081
+      "21/tcp": 2121
+      "22/tcp": 2223
+    network_mode: bridge
+    browser_url: "http://localhost:8081"
+    browser_delay: 5
+
+  dvwa:
+    description: "DVWA vulnerable web application"
+    compose_file: |
+      version: '3'
+      services:
+        dvwa:
+          image: vulnerables/web-dvwa
+          ports:
+            - "8082:80"
+          environment:
+            - MYSQL_ROOT_PASSWORD=dvwa
+          restart: unless-stopped
+        db:
+          image: mysql:5.7
+          environment:
+            - MYSQL_ROOT_PASSWORD=dvwa
+            - MYSQL_DATABASE=dvwa
+          restart: unless-stopped
+    browser_url: "http://localhost:8082"
+    browser_delay: 8
+
+  juice_shop:
+    description: "OWASP Juice Shop intentionally vulnerable app"
+    image: bkimminich/juice-shop
+    container_name: jarvis_juice_shop
+    mem_limit: "1g"
+    cpu_quota: 100000
+    ports:
+      "3000/tcp": 3000
+    network_mode: bridge
+    browser_url: "http://localhost:3000"
+    browser_delay: 4
+
+  webgoat:
+    description: "OWASP WebGoat web security training platform"
+    image: webgoat/webgoat
+    container_name: jarvis_webgoat
+    mem_limit: "1g"
+    cpu_quota: 100000
+    ports:
+      "8080/tcp": 8083
+    network_mode: bridge
+    browser_url: "http://localhost:8083/WebGoat"
+    browser_delay: 6

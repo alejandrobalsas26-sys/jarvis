@@ -1017,6 +1017,14 @@
     .type-ghost_hands_started{ background:#050a05;border:1px solid #44ff44;color:#88ff88; }
     .type-ghost_hands_complete{background:#050a05;border:1px solid #44cc44;color:#88cc88; }
     .type-ghost_hands_timeout{ background:#1a0505;border:1px solid #ff4400;color:#ff8844; }
+
+    /* v41.0 — Ephemeral Docker Lab Orchestrator */
+    .type-docker_deploying        { background:#050a18;border:1px solid #4488ff;color:#88aaff; }
+    .type-docker_deployed         { background:#051505;border:1px solid #44ff44;color:#88ff88; }
+    .type-docker_destroyed        { background:#050518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-docker_error            { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
+    .type-docker_container_stopped{ background:#1a0800;border:1px solid #ff6600;color:#ffaa44; }
+    .type-docker_lab_list         { background:#050a18;border:1px solid #4466ff;color:#8899ff; }
     #mitigation-panel {
       position: fixed; right: 230px; bottom: 40px;
       width: 320px; background: rgba(16, 12, 0, 0.97);
@@ -4983,6 +4991,40 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
           hb.style.borderBottomColor = '#44ff44';
           setTimeout(() => hb.style.borderBottomColor = '', 5000);
         }
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v41.0 — Ephemeral Docker Lab dispatchers
+      if (msg && msg.type === 'docker_deployed') {
+        // Green flash banner on successful deploy
+        const banner = document.createElement('div');
+        banner.style.cssText = `
+          position:fixed;top:40px;left:50%;transform:translateX(-50%);
+          background:rgba(5,20,5,0.97);border:1px solid #44ff44;
+          border-radius:4px;padding:8px 18px;font-size:11px;color:#88ff88;
+          font-family:'Share Tech Mono',monospace;z-index:300;
+          letter-spacing:1px;
+        `;
+        banner.innerHTML = `
+          ◈ LAB DEPLOYED: ${escapeHtml(msg.lab||'?')}
+          ${msg.url ? `<span style="color:rgba(136,255,136,0.5)"> → ${escapeHtml(msg.url)}</span>` : ''}
+        `;
+        document.body.appendChild(banner);
+        setTimeout(() => banner.remove(), 6000);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'docker_destroyed') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'docker_container_stopped') {
+        triggerFirewallBlock(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'docker_deploying') {
         if (!paused) append(e.data);
         return;
       }

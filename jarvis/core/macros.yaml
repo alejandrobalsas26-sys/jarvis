@@ -227,3 +227,47 @@ macros:
     action: list_lab_profiles
     confirm: false
     response: "Listing available lab profiles."
+
+  # ── v41.0 — Ephemeral Docker Lab Orchestrator ──────────────────────
+  - trigger: "jarvis deploy kali"
+    action: docker_deploy
+    params:
+      lab: kali
+    confirm: true
+    response: "Deploying ephemeral Kali Linux container. Confirm?"
+
+  - trigger: "jarvis deploy dvwa"
+    action: docker_deploy
+    params:
+      lab: dvwa
+    confirm: true
+    response: "Deploying DVWA vulnerable web application. Confirm?"
+
+  - trigger: "jarvis deploy juice shop"
+    action: docker_deploy
+    params:
+      lab: juice_shop
+    confirm: false
+    response: "Deploying OWASP Juice Shop."
+
+  - trigger: "jarvis deploy metasploitable"
+    action: docker_deploy
+    params:
+      lab: metasploitable
+    confirm: true
+    response: "Deploying Metasploitable 2 target. Confirm?"
+
+  - trigger: "jarvis kill lab"
+    action: docker_teardown_all
+    confirm: true
+    response: "Destroying all ephemeral lab containers. Confirm?"
+
+  - trigger: "jarvis kill"
+    action: docker_teardown_named
+    confirm: true
+    response: "Stopping specified lab container. Confirm?"
+
+  - trigger: "jarvis list labs"
+    action: docker_list_labs
+    confirm: false
+    response: "Listing running lab containers."

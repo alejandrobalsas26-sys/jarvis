@@ -423,6 +423,39 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: generate_docx_report error: {e}")
 
+        # ── v41.0 — Ephemeral Docker Lab Orchestrator dispatch ─────────────
+        elif action == "docker_deploy":
+            try:
+                from tools.docker_manager import deploy_lab
+                lab = params.get("lab", "")
+                if lab:
+                    asyncio.create_task(deploy_lab(lab, broadcast_fn, tts))
+            except Exception as e:
+                logger.debug(f"MACRO: docker_deploy error: {e}")
+
+        elif action == "docker_teardown_all":
+            try:
+                from tools.docker_manager import teardown_all_labs
+                asyncio.create_task(teardown_all_labs(broadcast_fn, tts))
+            except Exception as e:
+                logger.debug(f"MACRO: docker_teardown_all error: {e}")
+
+        elif action == "docker_teardown_named":
+            try:
+                from tools.docker_manager import teardown_lab
+                lab = params.get("lab", "")
+                if lab:
+                    asyncio.create_task(teardown_lab(lab, broadcast_fn, tts))
+            except Exception as e:
+                logger.debug(f"MACRO: docker_teardown_named error: {e}")
+
+        elif action == "docker_list_labs":
+            try:
+                from tools.docker_manager import list_running_labs
+                asyncio.create_task(list_running_labs(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: docker_list_labs error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

@@ -133,5 +133,9 @@ pyautogui>=0.9.54         # GUI automation for lab environment setup
 pygetwindow>=0.0.9        # Window management and organization
 python-docx>=1.1.0        # Professional Word forensic report generation
 
+# ── v41.0 Ephemeral Docker Labs & Adaptive OCR ────────────────
+docker>=7.0.0             # Docker SDK for Python — ephemeral lab orchestration
+opencv-python>=4.9.0      # Adaptive image pre-processing for OCR (dark/light/hex)
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

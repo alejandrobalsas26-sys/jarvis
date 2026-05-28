@@ -257,6 +257,8 @@ async def _main_async() -> None:
     from core.ocr_engine          import read_screen_and_analyze
     from tools.ghost_hands        import execute_lab_profile, list_profiles
     from core.forensic_reporter   import generate_forensic_report
+    # v41.0 — Ephemeral Docker Lab Orchestrator
+    from tools.docker_manager     import list_running_labs, _get_client as _docker_get_client
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -785,6 +787,20 @@ async def _main_async() -> None:
                 logger.info("V40: forensic reporter hooked into correlator pipeline")
 
             asyncio.create_task(_hook_forensic_reporter(), name="v40-reporter-hook")
+
+            # v41.0 — Ephemeral Docker lab orchestrator — non-blocking daemon probe
+            async def _check_docker():
+                loop = asyncio.get_running_loop()
+                client = await loop.run_in_executor(None, _docker_get_client)
+                if client:
+                    logger.info("DOCKER: daemon available — ephemeral labs ready")
+                else:
+                    logger.info(
+                        "DOCKER: daemon not found — "
+                        "install Docker Desktop and start it to enable lab containers"
+                    )
+
+            asyncio.create_task(_check_docker(), name="v41-docker-check")
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:
