@@ -359,3 +359,32 @@ macros:
     action: detection_engineer_gaps
     confirm: false
     response: "Analyzing and improving detection coverage."
+
+  # ── v44.0 — Quality of Life ────────────────────────────────────────
+  # Clipboard + Aliases
+  - trigger: "jarvis remember as"
+    action: add_alias
+    confirm: false
+    response: "Target alias saved."
+
+  - trigger: "jarvis show targets"
+    action: show_aliases
+    confirm: false
+    response: "Showing known targets."
+
+  - trigger: "jarvis forget target"
+    action: remove_alias
+    confirm: false
+    response: "Alias removed."
+
+  # Daily briefing on demand
+  - trigger: "jarvis briefing"
+    action: daily_briefing
+    confirm: false
+    response: "Delivering briefing."
+
+  # Session journal
+  - trigger: "jarvis save session"
+    action: save_journal
+    confirm: false
+    response: "Saving session journal."

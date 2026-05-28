@@ -641,6 +641,69 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: detection_engineer_gaps error: {e}")
 
+        # ── v44.0 — Quality of Life dispatch ───────────────────────────────
+        elif action == "add_alias":
+            try:
+                from core.target_aliases import add_alias, broadcast_aliases
+                name   = params.get("name", "")
+                target = params.get("target", "")
+                if name and target:
+                    add_alias(name, target)
+                    asyncio.create_task(broadcast_aliases(broadcast_fn))
+                    if tts:
+                        asyncio.create_task(tts.speak_async(
+                            f"Alias saved. {name} is now {target}."
+                        ))
+            except Exception as e:
+                logger.debug(f"MACRO: add_alias error: {e}")
+
+        elif action == "remove_alias":
+            try:
+                from core.target_aliases import remove_alias, broadcast_aliases
+                name = params.get("name", "")
+                if name and remove_alias(name):
+                    asyncio.create_task(broadcast_aliases(broadcast_fn))
+                    if tts:
+                        asyncio.create_task(tts.speak_async(f"Alias {name} removed."))
+            except Exception as e:
+                logger.debug(f"MACRO: remove_alias error: {e}")
+
+        elif action == "show_aliases":
+            try:
+                from core.target_aliases import list_aliases, broadcast_aliases
+                aliases = list_aliases()
+                asyncio.create_task(broadcast_aliases(broadcast_fn))
+                if tts:
+                    if aliases:
+                        lines = ", ".join(
+                            f"{n} is {v}" for n, v in list(aliases.items())[:5]
+                        )
+                        asyncio.create_task(tts.speak_async(
+                            f"Known targets: {lines}"
+                        ))
+                    else:
+                        asyncio.create_task(tts.speak_async("No aliases saved yet."))
+            except Exception as e:
+                logger.debug(f"MACRO: show_aliases error: {e}")
+
+        elif action == "daily_briefing":
+            try:
+                from core.daily_briefing import deliver_briefing
+                asyncio.create_task(
+                    deliver_briefing(broadcast_fn, tts)
+                )
+            except Exception as e:
+                logger.debug(f"MACRO: daily_briefing error: {e}")
+
+        elif action == "save_journal":
+            try:
+                from core.session_journal import write_journal
+                asyncio.create_task(write_journal())
+                if tts:
+                    asyncio.create_task(tts.speak_async("Session journal saved."))
+            except Exception as e:
+                logger.debug(f"MACRO: save_journal error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

@@ -32,7 +32,7 @@ lxml>=5.0.0
 # ── Sistema ────────────────────────────────────────────────────
 psutil>=5.9.8             # CPU, RAM, disco, procesos
 pyautogui>=0.9.54         # GUI automation + screenshots
-pyperclip>=1.8.0          # Clipboard
+pyperclip>=1.8.2          # Clipboard — cross-platform clipboard access (v44.0 clipboard intel)
 keyboard>=0.13.5          # Hotkeys globales
 
 # ── Packet Tracer / Networking ─────────────────────────────────

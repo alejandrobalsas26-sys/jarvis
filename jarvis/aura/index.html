@@ -797,6 +797,13 @@
     .type-rf_oob_command     { background: #0a0520; border: 1px solid #8844ff; color: #cc88ff; }
     .type-rf_oob_status      { background: #080515; border: 1px solid #6633cc; color: #aa66ff; }
 
+    /* ── v44.0 Quality of Life badges ── */
+    .type-clipboard_artifact_detected{background:#050a18;border:1px solid #4466ff;color:#8899ff;}
+    .type-clipboard_cve_enriched     {background:#1a0505;border:1px solid #ff6600;color:#ffaa44;}
+    .type-clipboard_hash_enriched    {background:#0a0518;border:1px solid #8844ff;color:#bb88ff;}
+    .type-daily_briefing             {background:#050a05;border:1px solid #44ff44;color:#88ff88;}
+    .type-target_aliases_updated     {background:#050a18;border:1px solid #4488ff;color:#88aaff;}
+
     /* ══════════════════════════════════════════════════════════════════
        v32.0 AURA HUD OVERHAUL
        ══════════════════════════════════════════════════════════════════ */
@@ -5243,6 +5250,54 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       if (msg && msg.type === 'sysmon_event') {
         handleSysmonEvent(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // === v44.0 Quality of Life dispatchers ===
+
+      if (msg && msg.type === 'daily_briefing') {
+        // Show briefing in a clean panel for 15s
+        const panel = document.createElement('div');
+        panel.style.cssText = `
+          position:fixed;top:48px;right:230px;width:260px;
+          background:rgba(4,10,4,0.97);
+          border:1px solid rgba(0,255,65,0.4);border-radius:6px;
+          padding:12px;z-index:200;
+          font-family:'Share Tech Mono',monospace;font-size:9px;
+          color:rgba(255,255,255,0.6);line-height:1.6;
+        `;
+        const sections = (msg.sections||[]).slice(0,6);
+        panel.innerHTML = `
+          <div style="color:#00ff41;font-size:9px;letter-spacing:3px;
+            margin-bottom:6px">◈ ${escapeHtml(msg.date||'')} BRIEFING</div>
+          ${sections.map(s => `<div>${escapeHtml(s)}</div>`).join('')}
+        `;
+        document.body.appendChild(panel);
+        setTimeout(() => panel.remove(), 15000);
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'target_aliases_updated') {
+        // Update any alias-aware displays
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'clipboard_artifact_detected') {
+        // Subtle pulse on the header to indicate clipboard activity
+        const hb = document.getElementById('header-bar');
+        if (hb) {
+          hb.style.borderBottomColor = '#4466ff';
+          setTimeout(() => hb.style.borderBottomColor = '', 1500);
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+
+      if (msg && msg.type === 'clipboard_hash_enriched'
+          || msg && msg.type === 'clipboard_cve_enriched') {
         if (!paused) append(e.data);
         return;
       }

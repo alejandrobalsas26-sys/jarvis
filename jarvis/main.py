@@ -133,6 +133,13 @@ async def _process_voice_input(
     """
     from tools.executor import _aura_broadcast
 
+    # v44.0 — journal the operator command (non-blocking, best-effort)
+    try:
+        from core.session_journal import record_voice_command
+        record_voice_command(user_input)
+    except Exception:
+        pass
+
     # 1. Interrupt commands always win — fire in <200ms
     interrupt_type = is_interrupt_command(user_input)
     if interrupt_type:
@@ -891,6 +898,54 @@ async def _main_async() -> None:
                     logger.warning(f"Could not register rf-oob: {e}")
             except ImportError:
                 logger.warning("RF_OOB: tools.rf_oob unavailable — OOB channel disabled")
+
+            # ── v44.0 — Quality of Life: clipboard intel, briefing, journal, aliases ──
+            try:
+                from core.clipboard_monitor import start_clipboard_monitor
+                from core.daily_briefing    import deliver_briefing
+                from core.session_journal   import record_event, write_journal
+                from core.target_aliases    import list_aliases
+
+                # Hook session journal into the broadcast pipeline
+                _orig_broadcast_for_journal = _aura_broadcast
+                async def _journaled_broadcast(event: dict) -> None:
+                    await _orig_broadcast_for_journal(event)
+                    record_event(event)
+
+                # Clipboard intelligence monitor — polls every 1.5s in executor
+                watchdog.register(
+                    "clipboard-monitor",
+                    lambda: start_clipboard_monitor(_journaled_broadcast, tts),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info("CLIPBOARD: intelligence monitor registered")
+
+                # Daily briefing — fires once after subsystem init
+                asyncio.create_task(
+                    deliver_briefing(
+                        _journaled_broadcast, tts,
+                        llm.client, hw_profile.model_fast,
+                    ),
+                    name="v44-daily-briefing",
+                )
+
+                # Session journal — written on graceful shutdown
+                async def _flush_session_journal():
+                    try:
+                        await write_journal(llm.client, hw_profile.model_fast)
+                    except Exception:
+                        pass
+                register_shutdown_callback(_flush_session_journal)
+
+                # Log known target aliases at startup
+                _known_aliases = list_aliases()
+                if _known_aliases:
+                    logger.info(
+                        f"TARGET_ALIASES: {len(_known_aliases)} known targets — "
+                        f"{list(_known_aliases.keys())}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not initialize v44.0 Quality of Life: {e}")
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
