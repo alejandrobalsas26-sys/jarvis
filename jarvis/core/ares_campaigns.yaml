@@ -1,0 +1,28 @@
+# ARES Campaign Templates (v42.0)
+# Pre-configured attack campaigns for common lab scenarios
+
+campaigns:
+
+  web_app_assessment:
+    name: "Web Application Security Assessment"
+    stages: [RECON, SCAN, ENUMERATE, EXPLOIT, REPORT]
+    focus: ["web", "http", "https", "sql"]
+    nmap_flags: "-sV -sC -p 80,443,8080,8443,3000"
+
+  full_network_audit:
+    name: "Full Network Penetration Test"
+    stages: [RECON, SCAN, ENUMERATE, EXPLOIT, POST, REPORT]
+    focus: ["all"]
+    nmap_flags: "-sV -O --top-ports 1000 --open"
+
+  active_directory:
+    name: "Active Directory Attack Chain"
+    stages: [RECON, SCAN, ENUMERATE, EXPLOIT, POST, REPORT]
+    focus: ["smb", "kerberos", "ldap", "rdp"]
+    nmap_flags: "-sV -p 88,135,139,389,445,464,636,3268,3389"
+
+  quick_recon:
+    name: "Quick Passive Reconnaissance"
+    stages: [RECON, SCAN, REPORT]
+    focus: ["osint"]
+    nmap_flags: "-sV --top-ports 100"

@@ -1025,6 +1025,34 @@
     .type-docker_error            { background:#1a0505;border:1px solid #ff2200;color:#ff6644; }
     .type-docker_container_stopped{ background:#1a0800;border:1px solid #ff6600;color:#ffaa44; }
     .type-docker_lab_list         { background:#050a18;border:1px solid #4466ff;color:#8899ff; }
+
+    /* v42.0 — ARES PROTOCOL (Red Team + Sensor Mesh + MITM Proxy) */
+    .type-ares_campaign_started  { background:#150005;border:1px solid #ff0044;color:#ff4488; }
+    .type-ares_stage_started     { background:#100005;border:1px solid #cc0033;color:#ff3366; }
+    .type-ares_stage_complete    { background:#050a05;border:1px solid #44ff66;color:#88ffaa; }
+    .type-ares_approval_required { background:#1a0000;border:1px solid #ff0000;color:#ff4444; }
+    .type-proxy_started          { background:#050518;border:1px solid #4488ff;color:#88aaff; }
+    .type-proxy_credential_found { background:#1a0000;border:1px solid #ff0000;color:#ff4444; }
+    .type-proxy_sqli_reflected   { background:#1a0500;border:1px solid #ff4400;color:#ff8844; }
+    .type-sensor_connected       { background:#051505;border:1px solid #44ff88;color:#88ffcc; }
+    .type-sensor_disconnected    { background:#0a0808;border:1px solid #884444;color:#cc8888; }
+    .type-sensor_deployed        { background:#051505;border:1px solid #44cc44;color:#88ff88; }
+
+    #ares-panel {
+      position: fixed; left: 16px; bottom: 40px;
+      width: 200px; background: rgba(20,0,5,0.96);
+      border: 1px solid rgba(255,0,68,0.4); border-radius: 6px;
+      padding: 10px; z-index: 113;
+      font-family: 'Share Tech Mono', monospace; font-size: 10px;
+    }
+    #sensor-panel {
+      position: fixed; left: 230px; bottom: 40px;
+      width: 180px; background: rgba(4,10,6,0.96);
+      border: 1px solid rgba(68,255,136,0.3); border-radius: 6px;
+      padding: 10px; z-index: 112;
+      font-family: 'Share Tech Mono', monospace; font-size: 10px;
+      max-height: 200px; overflow-y: auto;
+    }
     #mitigation-panel {
       position: fixed; right: 230px; bottom: 40px;
       width: 320px; background: rgba(16, 12, 0, 0.97);
@@ -1393,6 +1421,33 @@
     </button>
   </div>
   <div id="mit-script-path" style="display:none"></div>
+</div>
+
+<!-- v42.0 ARES Campaign Panel -->
+<div id="ares-panel" style="display:none">
+  <div style="color:#ff0044;font-size:9px;letter-spacing:3px;
+    font-weight:bold;margin-bottom:8px;
+    border-bottom:1px solid rgba(255,0,68,0.3);padding-bottom:5px">
+    ⚔ ARES CAMPAIGN ACTIVE
+  </div>
+  <div id="ares-campaign-id" style="color:rgba(255,68,136,0.7);
+    font-size:9px;margin-bottom:4px"></div>
+  <div id="ares-target" style="color:rgba(255,255,255,0.4);
+    font-size:9px;margin-bottom:6px"></div>
+  <div id="ares-stage-progress" style="display:flex;gap:3px;
+    flex-wrap:wrap;margin-bottom:8px"></div>
+  <div id="ares-latest-finding" style="color:#ff4488;
+    font-size:9px;max-height:60px;overflow:hidden"></div>
+</div>
+
+<!-- v42.0 Sensor Mesh Panel -->
+<div id="sensor-panel" style="display:none">
+  <div style="color:#44ff88;font-size:9px;letter-spacing:3px;
+    font-weight:bold;margin-bottom:6px;
+    border-bottom:1px solid rgba(68,255,136,0.2);padding-bottom:4px">
+    ◈ SENSOR MESH
+  </div>
+  <div id="sensor-agent-list"></div>
 </div>
 
 <!-- v35.0 Master Abort button -->
@@ -4311,6 +4366,155 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     _pendingMitigationPath = null;
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // v42.0 — ARES PROTOCOL handlers (Red Team Operator + Sensor Mesh)
+  // ═══════════════════════════════════════════════════════════════════
+  const _ARES_STAGE_ORDER = ['RECON','SCAN','ENUMERATE','EXPLOIT','POST','REPORT'];
+  let _aresCurrentStage = 'RECON';
+
+  function handleAresCampaignStarted(msg) {
+    const panel = document.getElementById('ares-panel');
+    if (panel) panel.style.display = 'block';
+    const idEl = document.getElementById('ares-campaign-id');
+    if (idEl) idEl.textContent = `CAMPAIGN: ${escapeHtml(msg.campaign_id||'?')}`;
+    const tgtEl = document.getElementById('ares-target');
+    if (tgtEl) tgtEl.textContent = `TARGET: ${escapeHtml(msg.target_ip||'?')}`;
+    _renderAresProgress('RECON');
+
+    // Spawn red pulsing node for target in 3D scene
+    try {
+      if (typeof scene !== 'undefined' && typeof THREE !== 'undefined') {
+        const geo  = new THREE.OctahedronGeometry(0.4, 0);
+        const mat  = new THREE.MeshPhongMaterial({
+          color:0xff0044, emissive:0xaa0022, emissiveIntensity:1.0
+        });
+        const node = new THREE.Mesh(geo, mat);
+        node.position.set(0, 0, -5);
+        node.userData = {targetNode: true};
+        scene.add(node);
+      }
+    } catch (_e) { /* scene may not be ready */ }
+  }
+
+  function handleAresStageStarted(msg) {
+    _aresCurrentStage = msg.stage || 'RECON';
+    _renderAresProgress(_aresCurrentStage);
+  }
+
+  function _renderAresProgress(currentStage) {
+    const el = document.getElementById('ares-stage-progress');
+    if (!el) return;
+    el.innerHTML = _ARES_STAGE_ORDER.map(s => {
+      const idx = _ARES_STAGE_ORDER.indexOf(s);
+      const cur = _ARES_STAGE_ORDER.indexOf(currentStage);
+      const color = idx < cur ? '#44ff88' : idx === cur ? '#ff0044' : '#333';
+      return `<span style="background:${color};color:#000;font-size:8px;
+        padding:1px 4px;border-radius:2px">${escapeHtml(s.slice(0,3))}</span>`;
+    }).join('');
+  }
+
+  function handleAresApprovalRequired(msg) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position:fixed;inset:0;background:rgba(30,0,5,0.92);
+      display:flex;flex-direction:column;align-items:center;
+      justify-content:center;z-index:900;backdrop-filter:blur(6px);
+    `;
+    overlay.innerHTML = `
+      <div style="color:#ff0044;font-size:30px;font-weight:bold;
+        letter-spacing:4px;margin-bottom:16px">⚔ ARES AUTHORIZATION</div>
+      <div style="color:#ff4488;font-size:14px;margin-bottom:8px">
+        Campaign: ${escapeHtml(msg.campaign_id||'?')}
+      </div>
+      <div style="color:#ffffff;font-size:16px;margin-bottom:8px">
+        Stage: <strong>${escapeHtml(msg.stage||'?')}</strong>
+      </div>
+      <div style="color:#ff8888;font-size:14px;margin-bottom:24px">
+        Target: ${escapeHtml(msg.target||'?')}
+      </div>
+      <div style="color:rgba(255,100,100,0.6);font-size:12px">
+        Speak NATO OTP phrase to authorize — or say ABORT to cancel
+      </div>
+      <button onclick="this.parentElement.remove()" style="
+        margin-top:20px;background:rgba(255,0,68,0.2);
+        border:1px solid #ff0044;color:#ff4488;
+        font-family:'Share Tech Mono',monospace;
+        padding:8px 24px;cursor:pointer;font-size:12px;
+        border-radius:4px">DISMISS</button>
+    `;
+    document.body.appendChild(overlay);
+    setTimeout(() => overlay.remove(), 30000);
+  }
+
+  function handleSensorConnected(msg) {
+    const list  = document.getElementById('sensor-agent-list');
+    const panel = document.getElementById('sensor-panel');
+    if (!list || !panel) return;
+    panel.style.display = 'block';
+
+    const item = document.createElement('div');
+    item.id = `sensor_${escapeHtml(msg.agent_id||'?')}`;
+    item.style.cssText = `margin:3px 0;padding:3px 5px;
+      border:1px solid rgba(68,255,136,0.2);border-radius:2px;
+      font-size:9px;color:#44ff88`;
+    item.innerHTML = `
+      <span style="display:inline-block;width:6px;height:6px;
+        border-radius:50%;background:#44ff88;margin-right:4px;
+        animation:vad-pulse 2s infinite"></span>
+      ${escapeHtml(msg.hostname||'?')}
+      <span style="color:rgba(68,255,136,0.4)"> ${escapeHtml(msg.ip||'?')}</span>
+    `;
+    list.appendChild(item);
+
+    // Spawn green sensor node in 3D scene
+    try {
+      if (typeof scene !== 'undefined' && typeof THREE !== 'undefined') {
+        const angle = Math.random()*Math.PI*2, r = 6;
+        const geo   = new THREE.SphereGeometry(0.15,8,8);
+        const mat   = new THREE.MeshPhongMaterial({
+          color:0x44ff88, emissive:0x22aa44, emissiveIntensity:0.8
+        });
+        const node  = new THREE.Mesh(geo, mat);
+        node.position.set(Math.cos(angle)*r, 0.5, Math.sin(angle)*r);
+        scene.add(node);
+      }
+    } catch (_e) { /* scene may not be ready */ }
+  }
+
+  function handleSensorDisconnected(msg) {
+    const el = document.getElementById(`sensor_${msg.agent_id||''}`);
+    if (el) el.remove();
+  }
+
+  function handleProxyCredentialFound(msg) {
+    try { triggerFirewallBlock(msg); } catch (_e) {}
+    const banner = document.createElement('div');
+    banner.style.cssText = `
+      position:fixed;top:40px;left:50%;transform:translateX(-50%);
+      background:rgba(30,0,0,0.97);border:2px solid #ff0000;
+      border-radius:4px;padding:10px 18px;font-size:12px;
+      font-family:'Share Tech Mono',monospace;z-index:400;
+      color:#ff4444;letter-spacing:1px;
+    `;
+    banner.innerHTML = `
+      ⚠ CREDENTIAL INTERCEPTED: ${escapeHtml(msg.cred_type||'?')}<br>
+      <span style="color:rgba(255,100,100,0.6);font-size:10px">
+        ${escapeHtml((msg.url||'').slice(0,80))}
+      </span>
+    `;
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 8000);
+  }
+
+  // v42.0 — toggle ARES panel with 'x'
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'x' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const p = document.getElementById('ares-panel');
+      if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+
   // === WebSocket with auto-reconnect ===
   let ws = null;
   function connect() {
@@ -5025,6 +5229,42 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         return;
       }
       if (msg && msg.type === 'docker_deploying') {
+        if (!paused) append(e.data);
+        return;
+      }
+
+      // v42.0 — ARES PROTOCOL dispatchers
+      if (msg && msg.type === 'ares_campaign_started') {
+        handleAresCampaignStarted(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'ares_stage_started') {
+        handleAresStageStarted(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'ares_approval_required') {
+        handleAresApprovalRequired(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'ares_stage_complete') {
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'sensor_connected') {
+        handleSensorConnected(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'sensor_disconnected') {
+        handleSensorDisconnected(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'proxy_credential_found') {
+        handleProxyCredentialFound(msg);
         if (!paused) append(e.data);
         return;
       }

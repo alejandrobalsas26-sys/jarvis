@@ -456,6 +456,96 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: docker_list_labs error: {e}")
 
+        # ── v42.0 — ARES PROTOCOL dispatch ─────────────────────────────────
+        elif action == "ares_start_campaign":
+            try:
+                from core.red_team_operator import ares_operator
+                target_ip = params.get("target", params.get("ip", ""))
+                if not target_ip:
+                    if tts:
+                        asyncio.create_task(tts.speak_async(
+                            "What is the target IP address?"
+                        ))
+                else:
+                    asyncio.create_task(
+                        ares_operator.start_campaign(
+                            target_ip, params.get("name", "")
+                        )
+                    )
+            except Exception as e:
+                logger.debug(f"MACRO: ares_start_campaign error: {e}")
+
+        elif action == "ares_abort_campaign":
+            try:
+                from core.red_team_operator import ares_operator
+                campaigns = ares_operator.get_active_campaigns()
+                for c in campaigns:
+                    asyncio.create_task(
+                        ares_operator.abort_campaign(c["campaign_id"])
+                    )
+            except Exception as e:
+                logger.debug(f"MACRO: ares_abort_campaign error: {e}")
+
+        elif action == "ares_campaign_status":
+            try:
+                from core.red_team_operator import ares_operator
+                campaigns = ares_operator.get_active_campaigns()
+                if tts:
+                    if campaigns:
+                        c = campaigns[0]
+                        asyncio.create_task(tts.speak_async(
+                            f"Campaign {c['campaign_id']} targeting "
+                            f"{c['target_ip']} — stage {c['stage']}"
+                        ))
+                    else:
+                        asyncio.create_task(tts.speak_async(
+                            "No active campaigns."
+                        ))
+            except Exception as e:
+                logger.debug(f"MACRO: ares_campaign_status error: {e}")
+
+        elif action == "sensor_deploy":
+            try:
+                import os as _os
+                from core.sensor_mesh import deploy_sensor_to_vm
+                host = params.get("ip", params.get("host", ""))
+                key  = _os.getenv("KALI_KEY_PATH", "")
+                user = _os.getenv("KALI_USER", "kali")
+                if host and key:
+                    asyncio.create_task(
+                        deploy_sensor_to_vm(
+                            host, user, key, broadcast_fn, tts
+                        )
+                    )
+                else:
+                    if tts:
+                        asyncio.create_task(tts.speak_async(
+                            "Target IP and KALI_KEY_PATH required."
+                        ))
+            except Exception as e:
+                logger.debug(f"MACRO: sensor_deploy error: {e}")
+
+        elif action == "sensor_status":
+            try:
+                from core.sensor_mesh import get_connected_agents
+                agents = get_connected_agents()
+                if tts:
+                    msg = (
+                        f"{len(agents)} sensor agents connected: "
+                        f"{', '.join(a.get('hostname','?') for a in agents[:3])}"
+                        if agents else "No sensor agents connected."
+                    )
+                    asyncio.create_task(tts.speak_async(msg))
+            except Exception as e:
+                logger.debug(f"MACRO: sensor_status error: {e}")
+
+        elif action == "proxy_start":
+            try:
+                from core.proxy_intel import start_proxy_intel
+                asyncio.create_task(start_proxy_intel(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: proxy_start error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

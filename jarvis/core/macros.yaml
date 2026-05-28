@@ -271,3 +271,42 @@ macros:
     action: docker_list_labs
     confirm: false
     response: "Listing running lab containers."
+
+  # ── v42.0 — ARES PROTOCOL ──────────────────────────────────────────
+  # ARES Red Team Operator
+  - trigger: "jarvis start campaign"
+    action: ares_start_campaign
+    confirm: true
+    response: "Initiating ARES red team campaign. Confirm target?"
+
+  - trigger: "jarvis attack"
+    action: ares_start_campaign
+    confirm: true
+    response: "ARES attack campaign initiated. Confirm?"
+
+  - trigger: "jarvis abort campaign"
+    action: ares_abort_campaign
+    confirm: false
+    response: "Aborting active ARES campaign."
+
+  - trigger: "jarvis campaign status"
+    action: ares_campaign_status
+    confirm: false
+    response: "Checking active campaign status."
+
+  # MITM Proxy
+  - trigger: "jarvis start proxy"
+    action: proxy_start
+    confirm: false
+    response: "Starting MITM intelligence proxy on port 8888."
+
+  # Sensor Mesh
+  - trigger: "jarvis deploy sensor"
+    action: sensor_deploy
+    confirm: true
+    response: "Deploying JARVIS sensor agent. Confirm target IP?"
+
+  - trigger: "jarvis sensor status"
+    action: sensor_status
+    confirm: false
+    response: "Checking connected sensor agents."

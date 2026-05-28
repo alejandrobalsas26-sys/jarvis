@@ -259,6 +259,9 @@ async def _main_async() -> None:
     from core.forensic_reporter   import generate_forensic_report
     # v41.0 — Ephemeral Docker Lab Orchestrator
     from tools.docker_manager     import list_running_labs, _get_client as _docker_get_client
+    # v42.0 — ARES PROTOCOL (Red Team Operator + Sensor Mesh + MITM Proxy)
+    from core.red_team_operator   import ares_operator
+    from core.sensor_mesh         import start_sensor_server, get_connected_agents
 
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
@@ -357,6 +360,19 @@ async def _main_async() -> None:
         logger.info("V36: correlator LLM/TTS refs attached for autonomous narration")
     except Exception as e:
         logger.debug(f"V36: correlator.attach_llm failed: {e}")
+
+    # v42.0 — ARES Red Team Operator attach (llm + tts + executor refs)
+    try:
+        ares_operator.attach(
+            broadcast_fn  = _aura_broadcast,
+            ollama_client = llm.client,
+            deep_model    = hw_profile.model_deep,
+            tool_executor = executor,
+            tts           = tts,
+        )
+        logger.info("ARES: autonomous red team operator ready")
+    except Exception as e:
+        logger.debug(f"V42: ares_operator attach failed: {e}")
 
     # v30.0: register session-save callback (closure now has llm reference)
     async def _flush_session():
@@ -801,6 +817,35 @@ async def _main_async() -> None:
                     )
 
             asyncio.create_task(_check_docker(), name="v41-docker-check")
+
+            # v42.0 — Distributed Sensor Mesh WebSocket server (port 9999)
+            try:
+                watchdog.register(
+                    "sensor-mesh",
+                    lambda: start_sensor_server(_aura_broadcast),
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("SENSOR_MESH: WebSocket server registered on port 9999")
+            except Exception as e:
+                logger.warning(f"Could not register sensor-mesh: {e}")
+
+            # v42.0 — MITM Proxy Intelligence (opt-in via JARVIS_PROXY_ENABLE=1)
+            if os.getenv("JARVIS_PROXY_ENABLE", "0") == "1":
+                try:
+                    from core.proxy_intel import start_proxy_intel
+                    watchdog.register(
+                        "proxy-intel",
+                        lambda: start_proxy_intel(_aura_broadcast),
+                        RestartPolicy.BACKOFF,
+                    )
+                    logger.info("PROXY_INTEL: MITM proxy registered on port 8888")
+                except Exception as e:
+                    logger.warning(f"Could not register proxy-intel: {e}")
+            else:
+                logger.info(
+                    "PROXY_INTEL: disabled "
+                    "(set JARVIS_PROXY_ENABLE=1 to enable)"
+                )
 
             # v28.0 SOAR playbook engine — deterministic incident response
             try:
