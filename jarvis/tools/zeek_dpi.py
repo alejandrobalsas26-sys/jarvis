@@ -120,9 +120,14 @@ async def _parse_http(record: dict, broadcast_fn) -> None:
 
 async def start_zeek_dpi(broadcast_fn) -> None:
     from core.telemetry_auth import make_signed_broadcaster
+    from loguru import logger
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "zeek")
     """Launch all Zeek log tailers as concurrent tasks."""
-    base = Path(settings.zeek_log_dir)
+    base = Path(settings.zeek_log_dir) if settings.zeek_log_dir else None
+    if not base or not base.exists():
+        logger.info("ZEEK: log path not found or missing config — DPI bridge dormant")
+        await asyncio.Event().wait()   # sleep forever, watchdog stays happy
+        return
     await broadcast_fn(make_event(
         "system",
         message=f"Zeek DPI streamer starting — {base}",
