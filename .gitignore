@@ -45,6 +45,9 @@ brain/
 jarvis.log
 *.log
 
+# Runtime logs tree (hunt results, reports, intel_fusion.db, etc.)
+logs/
+
 # v27.0 HMAC telemetry signing keys — NEVER commit
 jarvis/core/telemetry_keys.json
 jarvis/core/trust_profile.json
