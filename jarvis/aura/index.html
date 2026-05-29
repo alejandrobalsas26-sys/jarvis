@@ -1173,6 +1173,113 @@
     @keyframes abort-flash {
       0%,100% { opacity: 1; } 50% { opacity: 0.3; }
     }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       v45.0 WAR ROOM MODE
+    ═══════════════════════════════════════════════════════════════════ */
+    #war-room-overlay {
+      display: none;
+      position: fixed; inset: 36px 0 32px 0;
+      z-index: 500;
+      pointer-events: none;
+    }
+    #war-room-overlay.active { display: block; }
+
+    /* Four panels surrounding Three.js scene */
+    .wr-panel {
+      position: absolute;
+      background: rgba(4, 6, 12, 0.93);
+      border: 1px solid rgba(0, 255, 65, 0.15);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 9px;
+      pointer-events: all;
+      backdrop-filter: blur(4px);
+      overflow: hidden;
+    }
+    .wr-panel-title {
+      color: #00ff41;
+      font-size: 8px;
+      letter-spacing: 3px;
+      font-weight: bold;
+      margin-bottom: 8px;
+      border-bottom: 1px solid rgba(0,255,65,0.15);
+      padding-bottom: 4px;
+    }
+
+    /* Panel positions */
+    #wr-hunts     { top:0; left:0; width:240px; height:45%; }
+    #wr-campaigns { top:0; right:0; width:240px; height:45%; }
+    #wr-coverage  { bottom:0; left:0; width:240px; height:52%; }
+    #wr-timeline  { bottom:0; right:0; width:240px; height:52%; }
+
+    /* War room toggle button */
+    #war-room-btn {
+      position: fixed; top: 6px; right: 460px;
+      background: none;
+      border: 1px solid rgba(0,255,65,0.3);
+      color: rgba(0,255,65,0.5);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 9px; letter-spacing: 2px;
+      padding: 2px 8px; cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+    }
+    #war-room-btn:hover,
+    #war-room-btn.active {
+      background: rgba(0,255,65,0.1);
+      border-color: #00ff41;
+      color: #00ff41;
+    }
+
+    /* Hunt verdict colors */
+    .wr-positive    { color: #ff4444; }
+    .wr-negative    { color: #44ff44; }
+    .wr-inconclusive{ color: #ffaa44; }
+
+    /* Campaign tier dots */
+    .wr-camp-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+
+    /* Coverage mini heatmap */
+    .wr-heat-cell {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border-radius: 2px;
+      margin: 1px;
+      font-size: 6px;
+      line-height: 14px;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    /* Timeline scrollable */
+    #wr-timeline-entries {
+      overflow-y: auto;
+      max-height: calc(100% - 30px);
+    }
+    .wr-timeline-row {
+      display: flex; gap: 6px;
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      font-size: 8px;
+    }
+    .wr-tl-time { color: rgba(255,255,255,0.25); min-width: 44px; }
+    .wr-tl-type { min-width: 60px; }
+    .wr-tl-desc { color: rgba(255,255,255,0.4); flex: 1; overflow: hidden; }
+
+    /* New event type badges */
+    .type-hunt_started        { background:#050518;border:1px solid #6644ff;color:#9977ff; }
+    .type-hunt_complete       { background:#050518;border:1px solid #4455ff;color:#8899ff; }
+    .type-hunt_sweep_started  { background:#050518;border:1px solid #8844ff;color:#bb88ff; }
+    .type-hunt_sweep_complete { background:#050a05;border:1px solid #44ff44;color:#88ff88; }
+    .type-intel_digest_generated{background:#050a18;border:1px solid #4488ff;color:#88aaff;}
+    .type-telegram_alert_sent { background:#050518;border:1px solid #4466cc;color:#8899dd; }
   </style>
 </head>
 <body>
@@ -1294,6 +1401,7 @@
       <div class="help-row"><kbd>Ctrl+G</kbd><span>List lab profiles</span></div>
       <div class="help-row"><kbd>X</kbd><span>Toggle ARES campaign panel</span></div>
       <div class="help-row"><kbd>P</kbd><span>Toggle BIFROST coverage heatmap</span></div>
+      <div class="help-row"><kbd>W</kbd><span>Toggle War Room mode</span></div>
       <div class="help-row"><kbd>Esc</kbd><span>Close overlays</span></div>
     </div>
     <div class="help-close" onclick="toggleHelp()">✕ CLOSE</div>
@@ -1451,6 +1559,48 @@
     </button>
   </div>
   <div id="mit-script-path" style="display:none"></div>
+</div>
+
+<!-- v45.0 War Room Toggle Button -->
+<button id="war-room-btn" onclick="toggleWarRoom()" title="War Room [W]">
+  WAR ROOM
+</button>
+
+<!-- v45.0 War Room Overlay -->
+<div id="war-room-overlay">
+
+  <!-- Top-Left: Active Hunts -->
+  <div class="wr-panel" id="wr-hunts">
+    <div class="wr-panel-title">⚔ THREAT HUNTS</div>
+    <div id="wr-hunts-content">
+      <div style="color:rgba(255,255,255,0.2)">
+        Waiting for hunt data…
+      </div>
+    </div>
+  </div>
+
+  <!-- Top-Right: Campaign Tracker -->
+  <div class="wr-panel" id="wr-campaigns">
+    <div class="wr-panel-title">◈ THREAT CAMPAIGNS</div>
+    <div id="wr-campaigns-content">
+      <div style="color:rgba(255,255,255,0.2)">
+        No campaigns tracked yet
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom-Left: Coverage Heatmap -->
+  <div class="wr-panel" id="wr-coverage">
+    <div class="wr-panel-title">■ ATT&CK COVERAGE</div>
+    <div id="wr-coverage-content"></div>
+  </div>
+
+  <!-- Bottom-Right: Intelligence Timeline -->
+  <div class="wr-panel" id="wr-timeline">
+    <div class="wr-panel-title">◷ INTELLIGENCE TIMELINE</div>
+    <div id="wr-timeline-entries"></div>
+  </div>
+
 </div>
 
 <!-- v42.0 ARES Campaign Panel -->
@@ -4581,7 +4731,191 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
       }
     }
+    // v45.0 — toggle War Room mode with 'w'
+    if (e.key === 'w' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      toggleWarRoom();
+    }
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v45.0 WAR ROOM MODE
+  // ═══════════════════════════════════════════════════════════════════
+
+  let _warRoomActive    = false;
+  const _huntHistory    = [];   // last 12 hunt results
+  const _campaignData   = [];   // active campaigns
+  const _wrTimeline     = [];   // war room timeline entries
+
+  function toggleWarRoom() {
+    _warRoomActive = !_warRoomActive;
+    const overlay = document.getElementById('war-room-overlay');
+    const btn     = document.getElementById('war-room-btn');
+    if (overlay) overlay.classList.toggle('active', _warRoomActive);
+    if (btn)     btn.classList.toggle('active', _warRoomActive);
+    if (_warRoomActive) {
+      _renderWarRoom();
+      // Request fresh data
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({cmd:'get_coverage', request_id:`wr_${Date.now()}`}));
+      }
+    }
+  }
+
+  function _renderWarRoom() {
+    _renderHunts();
+    _renderCampaigns();
+    _renderCoverageHeatmap();
+    _renderWrTimeline();
+  }
+
+  function _renderHunts() {
+    const el = document.getElementById('wr-hunts-content');
+    if (!el) return;
+    if (_huntHistory.length === 0) {
+      el.innerHTML = '<div style="color:rgba(255,255,255,0.2)">No hunts run yet</div>';
+      return;
+    }
+    el.innerHTML = _huntHistory.slice(-8).reverse().map(h => {
+      const cls   = h.verdict === 'POSITIVE' ? 'wr-positive'
+                  : h.verdict === 'NEGATIVE' ? 'wr-negative'
+                  : 'wr-inconclusive';
+      const icon  = h.verdict === 'POSITIVE' ? '🔴'
+                  : h.verdict === 'NEGATIVE' ? '✓' : '?';
+      return `
+        <div style="display:flex;gap:6px;padding:2px 0;
+          border-bottom:1px solid rgba(255,255,255,0.04)">
+          <span style="min-width:14px">${icon}</span>
+          <span class="${cls}" style="min-width:28px;font-size:8px">
+            ${escapeHtml(h.id||'?')}
+          </span>
+          <span style="color:rgba(255,255,255,0.4);font-size:8px;flex:1">
+            ${escapeHtml((h.name||'').slice(0,20))}
+          </span>
+          <span style="color:rgba(255,255,255,0.25);font-size:8px">
+            ${h.confidence||0}%
+          </span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function _renderCampaigns() {
+    const el = document.getElementById('wr-campaigns-content');
+    if (!el) return;
+    if (_campaignData.length === 0) {
+      el.innerHTML = '<div style="color:rgba(255,255,255,0.2)">Monitoring…</div>';
+      return;
+    }
+    el.innerHTML = _campaignData.slice(0, 6).map(c => {
+      const intensity = Math.min(c.incident_count * 30, 255);
+      const color     = `rgb(${intensity}, ${Math.max(100-intensity/3,30)}, 30)`;
+      return `
+        <div style="margin:3px 0;padding:4px 6px;
+          border:1px solid rgba(255,80,50,0.2);border-radius:3px">
+          <div style="display:flex;justify-content:space-between">
+            <span style="color:#ff8866;font-size:9px;font-weight:bold">
+              ${escapeHtml(c.id||'?')}
+            </span>
+            <span style="color:rgba(255,255,255,0.25);font-size:8px">
+              ${c.incident_count||0} incidents
+            </span>
+          </div>
+          <div style="color:rgba(255,255,255,0.3);font-size:8px">
+            Target: ${escapeHtml((c.target||'?').slice(0,20))}
+          </div>
+          <div style="color:rgba(255,140,100,0.5);font-size:8px">
+            ${c.technique_count||0} techniques · ${escapeHtml(c.last_seen||'?').slice(0,10)}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function _renderCoverageHeatmap() {
+    const el = document.getElementById('wr-coverage-content');
+    if (!el || Object.keys(_predictions || {}).length === 0) return;
+    // Render mini heatmap from existing coverage data
+    const cells = Object.entries(_predictions || {}).slice(0, 40);
+    el.innerHTML = cells.map(([tech]) => {
+      const cell  = document.getElementById(`heat_${tech}`);
+      const color = cell ? cell.style.background.replace('33','') : '#333333';
+      return `
+        <span class="wr-heat-cell" style="background:${color}33;
+          border:1px solid ${color}66;color:${color};font-size:6px"
+          title="${escapeHtml(tech)}">
+          ${escapeHtml(tech.replace('T1','').slice(0,4))}
+        </span>
+      `;
+    }).join('');
+  }
+
+  function _renderWrTimeline() {
+    const el = document.getElementById('wr-timeline-entries');
+    if (!el) return;
+    el.innerHTML = _wrTimeline.slice(-20).reverse().map(e => `
+      <div class="wr-timeline-row">
+        <span class="wr-tl-time">${escapeHtml(e.time||'')}</span>
+        <span class="wr-tl-type" style="color:${_wrEventColor(e.type)}">
+          ${escapeHtml((e.type||'').slice(0,12))}
+        </span>
+        <span class="wr-tl-desc">${escapeHtml((e.desc||'').slice(0,40))}</span>
+      </div>
+    `).join('');
+  }
+
+  function _wrEventColor(type) {
+    const t = type || '';
+    if (t.includes('hunt'))     return '#8888ff';
+    if (t.includes('incident')) return '#ff4444';
+    if (t.includes('canary'))   return '#ff6600';
+    if (t.includes('cve'))      return '#ffaa44';
+    if (t.includes('campaign')) return '#ff8866';
+    return 'rgba(255,255,255,0.3)';
+  }
+
+  function _addWrTimelineEntry(msg) {
+    _wrTimeline.push({
+      time: new Date().toLocaleTimeString([], {
+        hour:'2-digit', minute:'2-digit', second:'2-digit'
+      }),
+      type: msg.type || '',
+      desc: msg.name || msg.message || msg.incident_id || msg.cve_id || '',
+    });
+    if (_wrTimeline.length > 100) _wrTimeline.shift();
+    if (_warRoomActive) _renderWrTimeline();
+  }
+
+  // ═══ Hunt handlers ═══════════════════════════════════════════════
+
+  function handleHuntComplete(msg) {
+    _huntHistory.push({
+      id:         msg.hypothesis || '?',
+      name:       msg.name || '?',
+      verdict:    msg.verdict || 'INCONCLUSIVE',
+      confidence: msg.confidence || 0,
+      findings:   msg.findings || 0,
+    });
+    if (_huntHistory.length > 24) _huntHistory.shift();
+    _addWrTimelineEntry(msg);
+    if (_warRoomActive) _renderHunts();
+
+    // Red flash for positive hunt findings
+    if (msg.verdict === 'POSITIVE' && (msg.confidence || 0) >= 60) {
+      const hb = document.getElementById('header-bar');
+      if (hb) {
+        hb.style.borderBottomColor = '#ff0044';
+        setTimeout(() => hb.style.borderBottomColor = '', 4000);
+      }
+    }
+  }
+
+  function handleHuntSweepComplete(msg) {
+    _addWrTimelineEntry({
+      type: 'hunt_sweep_complete',
+      desc: `${msg.positives||0}/${msg.total||0} positive`,
+    });
+    if (_warRoomActive) _renderWarRoom();
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // v43.0 — BIFROST PROTOCOL handlers (Purple coordinator + BAS + OPSEC)
@@ -4733,6 +5067,32 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       // v35.0 — feed ALL events to the tactical timeline first
       if (msg) addTimelineEntry(msg);
+
+      // v45.0 — War Room dispatchers
+      if (msg && msg.type === 'hunt_complete') {
+        handleHuntComplete(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'hunt_started') {
+        _addWrTimelineEntry(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'hunt_sweep_complete') {
+        handleHuntSweepComplete(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'intel_digest_generated') {
+        _addWrTimelineEntry(msg);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'compound_incident') {
+        _addWrTimelineEntry(msg);
+        // don't return — let normal handler run
+      }
 
       // v35.0 — handle interrupt + macro events early
       if (msg && msg.type === 'voice_interrupt') {

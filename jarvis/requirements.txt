@@ -141,5 +141,9 @@ opencv-python>=4.9.0      # Adaptive image pre-processing for OCR (dark/light/he
 mitmproxy>=10.3.0         # MITM proxy with async Python API (proxy_intel)
 # websockets>=12.0 — already declared above (AURA UI section), reused for sensor mesh
 
+# ── v45.0 PROMETHEUS — Telegram Mobile Bridge & Intel Fusion ──
+python-telegram-bot>=20.7  # Async Telegram Bot API
+aiosqlite>=0.20.0          # Async SQLite for persistent IOC database
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0

@@ -388,3 +388,24 @@ macros:
     action: save_journal
     confirm: false
     response: "Saving session journal."
+
+  # PROMETHEUS
+  - trigger: "jarvis run hunt"
+    action: run_hunt_sweep
+    confirm: false
+    response: "Initiating threat hunt sweep. Running 12 hypotheses."
+
+  - trigger: "jarvis weekly digest"
+    action: weekly_digest
+    confirm: false
+    response: "Generating weekly intelligence digest."
+
+  - trigger: "jarvis war room"
+    action: war_room_toggle
+    confirm: false
+    response: "Toggling War Room mode."
+
+  - trigger: "jarvis telegram test"
+    action: telegram_test
+    confirm: false
+    response: "Sending test message to Telegram."

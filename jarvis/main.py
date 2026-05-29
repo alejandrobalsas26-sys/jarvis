@@ -947,6 +947,96 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not initialize v44.0 Quality of Life: {e}")
 
+            # ── v45.0 — PROMETHEUS: Telegram bridge, hunt scheduler, intel fusion ──
+            try:
+                from core.telegram_bridge import (
+                    start_telegram_bridge, stop_telegram_bridge, push_alert,
+                )
+                from core.hunt_scheduler import start_hunt_scheduler
+                from core.intel_fusion   import (
+                    initialize_db as init_intel_db,
+                    ingest_incident, ingest_ioc,
+                )
+
+                # Initialize persistent cross-session IOC/campaign database
+                try:
+                    await init_intel_db()
+                    logger.info("INTEL_FUSION: persistent IOC database initialized")
+                except Exception as e:
+                    logger.warning(f"INTEL_FUSION: db init failed: {e}")
+
+                # Shared fusion ingest — feeds incidents/IOCs into the engine
+                # and pushes CRITICAL events to the operator's phone.
+                async def _fusion_ingest(event: dict) -> None:
+                    etype = event.get("type")
+                    if etype == "compound_incident":
+                        asyncio.create_task(ingest_incident(event))
+                    elif etype == "osint_enriched":
+                        asyncio.create_task(ingest_ioc(
+                            "ip", event.get("ip", ""),
+                            event.get("threat_score", 0),
+                        ))
+                    if event.get("severity") == "CRITICAL":
+                        asyncio.create_task(push_alert(
+                            event.get("type", "ALERT").upper(),
+                            event.get("message", str(event)[:200]),
+                            "CRITICAL",
+                        ))
+
+                # Broadcast wrapper for hunt scheduler + telegram bridge events:
+                # forwards to AURA HUD, then runs fusion ingest / critical push.
+                _prev_for_fusion = _aura_broadcast
+                async def _fusion_broadcast(event: dict) -> None:
+                    await _prev_for_fusion(event)
+                    try:
+                        await _fusion_ingest(event)
+                    except Exception:
+                        pass
+
+                # Chain fusion ingest into the correlator pipeline so real
+                # compound incidents reach the fusion engine. Mirrors the
+                # v39/v40 remediator + reporter hooks (preserves the chain).
+                async def _hook_fusion() -> None:
+                    await asyncio.sleep(3.0)
+                    if v36_correlator._broadcast_fn is None:
+                        logger.debug("V45: correlator broadcast not ready — fusion hook skipped")
+                        return
+                    _orig_for_fusion = v36_correlator._broadcast_fn
+                    async def _fusing_broadcast(event: dict) -> None:
+                        await _orig_for_fusion(event)
+                        try:
+                            await _fusion_ingest(event)
+                        except Exception:
+                            pass
+                    v36_correlator.attach(_fusing_broadcast)
+                    logger.info("V45: intel fusion hooked into correlator pipeline")
+
+                asyncio.create_task(_hook_fusion(), name="v45-fusion-hook")
+
+                # Telegram mobile command bridge (push + pull)
+                watchdog.register(
+                    "telegram-bridge",
+                    lambda: start_telegram_bridge(_fusion_broadcast, tts),
+                    RestartPolicy.BACKOFF,
+                )
+                register_shutdown_callback(stop_telegram_bridge)
+                logger.info("TELEGRAM: bridge registered")
+
+                # Autonomous threat hunt scheduler — 12 hypotheses, every 4h
+                watchdog.register(
+                    "hunt-scheduler",
+                    lambda: start_hunt_scheduler(
+                        _fusion_broadcast, llm.client, hw_profile.model_deep
+                    ),
+                    RestartPolicy.BACKOFF,
+                )
+                logger.info(
+                    "HUNT_SCHEDULER: registered — "
+                    "12 hypotheses, sweeping every 4h"
+                )
+            except Exception as e:
+                logger.warning(f"Could not initialize v45.0 PROMETHEUS: {e}")
+
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 

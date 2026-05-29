@@ -704,6 +704,48 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: save_journal error: {e}")
 
+        # ── v45.0 — PROMETHEUS dispatch ────────────────────────────────────
+        elif action == "run_hunt_sweep":
+            try:
+                from core.hunt_scheduler import run_all_hunts
+                from core.agent_orchestrator import orchestrator
+                asyncio.create_task(run_all_hunts(
+                    broadcast_fn,
+                    orchestrator._ollama_client,
+                    orchestrator._deep_model,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: run_hunt_sweep error: {e}")
+
+        elif action == "weekly_digest":
+            try:
+                from core.intel_fusion import generate_weekly_digest
+                from core.agent_orchestrator import orchestrator
+                asyncio.create_task(generate_weekly_digest(
+                    broadcast_fn,
+                    orchestrator._ollama_client,
+                    orchestrator._deep_model,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: weekly_digest error: {e}")
+
+        elif action == "war_room_toggle":
+            try:
+                await broadcast_fn({"type": "war_room_toggle_requested"})
+            except Exception as e:
+                logger.debug(f"MACRO: war_room_toggle error: {e}")
+
+        elif action == "telegram_test":
+            try:
+                from core.telegram_bridge import push_alert
+                asyncio.create_task(push_alert(
+                    "JARVIS TEST",
+                    "Connection confirmed. PROMETHEUS online.",
+                    "INFO",
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: telegram_test error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",
