@@ -409,3 +409,19 @@ macros:
     action: telegram_test
     confirm: false
     response: "Sending test message to Telegram."
+
+  # GENESIS
+  - trigger: "jarvis self test"
+    action: run_self_test
+    confirm: false
+    response: "Running subsystem self-test."
+
+  - trigger: "jarvis performance"
+    action: performance_report
+    confirm: false
+    response: "Generating performance report."
+
+  - trigger: "jarvis reload config"
+    action: reload_config
+    confirm: false
+    response: "Reloading configuration."

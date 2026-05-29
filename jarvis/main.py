@@ -1037,6 +1037,60 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not initialize v45.0 PROMETHEUS: {e}")
 
+            # ── v46.0 — GENESIS: unified config, self-test, boot sequence, profiler ──
+            try:
+                from core.config_manager       import load_config
+                from core.self_test            import run_self_test
+                from core.boot_sequence        import execute_boot_sequence
+                from core.performance_profiler import broadcast_stats as profiler_broadcast
+
+                # Load unified configuration (auto-creates jarvis_config.yaml)
+                try:
+                    _v46_config = load_config()
+                    logger.info(
+                        f"CONFIG: loaded v46.0 configuration "
+                        f"({len(_v46_config) if isinstance(_v46_config, dict) else 0} sections)"
+                    )
+                except Exception as e:
+                    logger.warning(f"CONFIG: load failed: {e}")
+
+                # Self-test + cinematic boot sequence — runs ONCE on real startup
+                # (created as a task, not watchdog-managed → never re-runs on restart)
+                async def _startup_sequence():
+                    try:
+                        test_report = await run_self_test(_aura_broadcast)
+                        if test_report.get("failed", 0) > 0:
+                            logger.warning(
+                                f"STARTUP: {test_report['failed']} subsystems "
+                                f"failed self-test"
+                            )
+                    except Exception as e:
+                        logger.debug(f"V46: self-test error: {e}")
+                    try:
+                        await execute_boot_sequence(_aura_broadcast, tts)
+                    except Exception as e:
+                        logger.debug(f"V46: boot sequence error: {e}")
+
+                asyncio.create_task(_startup_sequence(), name="v46-startup-sequence")
+
+                # Periodic performance profile broadcast (every 5 minutes)
+                async def _profile_loop():
+                    while True:
+                        await asyncio.sleep(300)
+                        try:
+                            await profiler_broadcast(_aura_broadcast)
+                        except Exception as e:
+                            logger.debug(f"PROFILER: broadcast error: {e}")
+
+                watchdog.register(
+                    "performance-profiler",
+                    _profile_loop,
+                    RestartPolicy.ALWAYS,
+                )
+                logger.info("PERFORMANCE_PROFILER: registered (5min interval)")
+            except Exception as e:
+                logger.warning(f"Could not initialize v46.0 GENESIS: {e}")
+
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 

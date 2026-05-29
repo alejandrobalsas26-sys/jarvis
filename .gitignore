@@ -58,3 +58,6 @@ jarvis/core/integrity_baseline.json
 jarvis/logs/stix_exports/
 jarvis/core/sigma_rules/
 jarvis/logs/sessions/
+
+# v46.0 — unified config (may hold telegram/API secrets — NEVER commit)
+jarvis_config.yaml

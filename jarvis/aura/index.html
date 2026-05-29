@@ -1280,6 +1280,13 @@
     .type-hunt_sweep_complete { background:#050a05;border:1px solid #44ff44;color:#88ff88; }
     .type-intel_digest_generated{background:#050a18;border:1px solid #4488ff;color:#88aaff;}
     .type-telegram_alert_sent { background:#050518;border:1px solid #4466cc;color:#8899dd; }
+
+    /* v46.0 GENESIS event badges */
+    .type-boot_sequence_started { background:#050a05;border:1px solid #44ff44;color:#88ff88; }
+    .type-boot_phase            { background:#050a05;border:1px solid #4488ff;color:#88aaff; }
+    .type-boot_sequence_complete{ background:#051505;border:1px solid #00ff41;color:#44ff88; }
+    .type-self_test_complete    { background:#050a18;border:1px solid #6644ff;color:#9977ff; }
+    .type-performance_profile   { background:#050518;border:1px solid #4466ff;color:#8899ff; }
   </style>
 </head>
 <body>
@@ -5092,6 +5099,64 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       if (msg && msg.type === 'compound_incident') {
         _addWrTimelineEntry(msg);
         // don't return — let normal handler run
+      }
+
+      // v46.0 — GENESIS dispatchers (boot sequence, self-test, profiler)
+      if (msg && msg.type === 'boot_phase') {
+        // Boot phase indicator - subtle pulse on header
+        const hb = document.getElementById('header-bar');
+        if (hb) {
+          hb.style.borderBottomColor = '#44ff44';
+          setTimeout(() => hb.style.borderBottomColor = '', 800);
+        }
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'boot_sequence_complete') {
+        // Final boot ready flash
+        const banner = document.createElement('div');
+        banner.style.cssText = `
+          position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+          background:rgba(0,20,5,0.97);border:2px solid #00ff41;
+          color:#00ff41;font-family:'Share Tech Mono',monospace;
+          padding:20px 40px;font-size:18px;letter-spacing:6px;
+          border-radius:6px;z-index:500;
+          animation: narrator-in 0.5s ease-out;
+        `;
+        banner.textContent = '◈ JARVIS ONLINE';
+        document.body.appendChild(banner);
+        setTimeout(() => {
+          banner.style.animation = 'narrator-out 0.8s ease-in forwards';
+          setTimeout(() => banner.remove(), 800);
+        }, 2500);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'self_test_complete') {
+        // Show test results briefly
+        const health = msg.health || 'UNKNOWN';
+        const color  = health === 'OK' ? '#44ff44' : '#ffaa00';
+        const banner = document.createElement('div');
+        banner.style.cssText = `
+          position:fixed;top:48px;right:230px;
+          background:rgba(4,8,12,0.97);border:1px solid ${color};
+          color:${color};font-family:'Share Tech Mono',monospace;
+          padding:8px 14px;font-size:10px;border-radius:4px;z-index:200;
+        `;
+        banner.innerHTML = `
+          ◈ SELF-TEST ${escapeHtml(health)}<br>
+          <span style="color:rgba(255,255,255,0.4);font-size:9px">
+            ${msg.passed||0}/${msg.total||0} passed in ${msg.duration_s||0}s
+          </span>
+        `;
+        document.body.appendChild(banner);
+        setTimeout(() => banner.remove(), 6000);
+        if (!paused) append(e.data);
+        return;
+      }
+      if (msg && msg.type === 'performance_profile') {
+        if (!paused) append(e.data);
+        return;
       }
 
       // v35.0 — handle interrupt + macro events early

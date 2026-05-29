@@ -746,6 +746,32 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: telegram_test error: {e}")
 
+        # ── v46.0 — GENESIS dispatch ───────────────────────────────────────
+        elif action == "run_self_test":
+            try:
+                from core.self_test import run_self_test
+                asyncio.create_task(run_self_test(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: run_self_test error: {e}")
+
+        elif action == "performance_report":
+            try:
+                from core.performance_profiler import broadcast_stats
+                asyncio.create_task(broadcast_stats(broadcast_fn))
+            except Exception as e:
+                logger.debug(f"MACRO: performance_report error: {e}")
+
+        elif action == "reload_config":
+            try:
+                from core.config_manager import reload
+                new_config = reload()
+                if tts:
+                    asyncio.create_task(tts.speak_async(
+                        f"Configuration reloaded. {len(new_config)} sections active."
+                    ))
+            except Exception as e:
+                logger.debug(f"MACRO: reload_config error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",
