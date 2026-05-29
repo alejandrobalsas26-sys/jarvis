@@ -23,9 +23,14 @@ from loguru import logger
 from core.feed_sanitizer import sanitize_for_hud
 from core.telemetry_auth import make_signed_broadcaster
 
-# Directories to monitor — add or remove as needed
+_JARVIS_ROOT = Path(__file__).parent.parent
+
+# Directories to monitor — JARVIS source (core/, tools/) + external threat zones.
+# NEVER watch the repo root: it contains logs/, and JARVIS log writes would
+# trigger scans → which write logs → infinite YARA loop / QueueFull.
 _MONITOR_PATHS = [
-    Path(__file__).parent.parent,                          # JARVIS root
+    _JARVIS_ROOT / "core",                                 # JARVIS source
+    _JARVIS_ROOT / "tools",                                # JARVIS source
     Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "drivers",
     Path.home() / "Downloads",
 ]
@@ -38,6 +43,44 @@ _SCAN_EXTENSIONS = {
 
 # Max file size to scan (skip huge files — model weights, VODs, etc.)
 _MAX_SCAN_BYTES = 50 * 1024 * 1024   # 50MB
+
+# ── Scan exclusions — prevent the log-write → scan → log-write loop ──────────
+_EXCLUDED_DIRS = {
+    "logs", "logs/", ".git", "__pycache__",
+    "node_modules", ".venv", "venv",
+}
+_EXCLUDED_EXTENSIONS = {
+    ".jsonl", ".json", ".log", ".md", ".yaml", ".yml",
+    ".db", ".sqlite", ".sqlite3", ".dmp", ".png", ".jpg",
+    ".docx", ".pdf", ".txt", ".html", ".css",
+}
+_WATCHED_EXTENSIONS = {
+    ".py", ".ps1", ".exe", ".dll", ".sys",
+    ".vbs", ".bat", ".js", ".ts", ".sh",
+}
+
+
+def _should_scan(path: str) -> bool:
+    """
+    Return True only if this path should be YARA-scanned.
+    Excludes logs/, temp files, and all non-executable types.
+    """
+    p = Path(path)
+
+    # Exclude any path inside excluded directories
+    parts = {part.lower() for part in p.parts}
+    if parts & _EXCLUDED_DIRS:
+        return False
+
+    # Skip excluded extensions
+    if p.suffix.lower() in _EXCLUDED_EXTENSIONS:
+        return False
+
+    # Skip files in logs-like / temp paths
+    if "log" in str(p).lower() or "temp" in str(p).lower():
+        return False
+
+    return True
 
 
 def _get_yara_rules():
@@ -128,22 +171,24 @@ async def start_yara_file_monitor(broadcast_fn) -> None:
 
     class _Handler(FileSystemEventHandler):
         def on_created(self, event):
-            if not event.is_directory:
-                try:
-                    loop.call_soon_threadsafe(
-                        scan_queue.put_nowait, Path(event.src_path)
-                    )
-                except asyncio.QueueFull:
-                    pass
+            if event.is_directory or not _should_scan(event.src_path):
+                return
+            try:
+                loop.call_soon_threadsafe(
+                    scan_queue.put_nowait, Path(event.src_path)
+                )
+            except asyncio.QueueFull:
+                pass
 
         def on_modified(self, event):
-            if not event.is_directory:
-                try:
-                    loop.call_soon_threadsafe(
-                        scan_queue.put_nowait, Path(event.src_path)
-                    )
-                except asyncio.QueueFull:
-                    pass
+            if event.is_directory or not _should_scan(event.src_path):
+                return
+            try:
+                loop.call_soon_threadsafe(
+                    scan_queue.put_nowait, Path(event.src_path)
+                )
+            except asyncio.QueueFull:
+                pass
 
     observer = Observer()
     handler  = _Handler()

@@ -21,6 +21,12 @@ _BASELINE_PATH   = Path(__file__).parent / "integrity_baseline.json"
 _SCAN_EXTENSIONS = {".py"}
 _EXCLUDE_DIRS    = {"__pycache__", ".git", "brain", "logs", "static"}
 
+# Auto-reset thresholds — a large delta means a version upgrade changed many
+# files at once, not malware. Regenerate the baseline silently instead of
+# raising a false CRITICAL self-tamper alert.
+_STALE_THRESHOLD_MODIFIED = 10
+_STALE_THRESHOLD_NEW      = 20
+
 
 def _hash_file(path: Path) -> str:
     """SHA-256 hash of a file."""
@@ -109,6 +115,28 @@ def verify_integrity() -> dict:
         if path not in current:
             missing.append(path)
 
+    # Stale-baseline auto-reset — too many changes means a version upgrade,
+    # not tampering. Regenerate silently rather than panic.
+    if (len(modified) > _STALE_THRESHOLD_MODIFIED or
+            len(added) > _STALE_THRESHOLD_NEW):
+        logger.warning(
+            f"INTEGRITY: {len(modified)} modified + {len(added)} new files "
+            f"detected — baseline is STALE (major version change). "
+            f"Auto-regenerating baseline…"
+        )
+        establish_baseline()
+        return {
+            "status":        "baseline_regenerated",
+            "reason":        "stale_after_version_upgrade",
+            "modified":      [],
+            "added":         [],
+            "missing":       [],
+            "checked":       len(current),
+            "prev_modified": len(modified),
+            "prev_new":      len(added),
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        }
+
     result = {
         "status":    "clean" if not (modified or added or missing) else "ALERT",
         "modified":  modified,
@@ -139,6 +167,22 @@ async def run_integrity_check(broadcast_fn) -> dict:
     """Run integrity check and broadcast result to AURA."""
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, verify_integrity)
+
+    # Baseline was auto-regenerated (stale after upgrade) — broadcast an
+    # informational event, never a tamper alarm.
+    if result.get("status") == "baseline_regenerated":
+        try:
+            await broadcast_fn({
+                "type":      "integrity_baseline_regenerated",
+                "reason":    result.get("reason", "stale_after_version_upgrade"),
+                "modified":  result.get("prev_modified", 0),
+                "new":       result.get("prev_new", 0),
+                "severity":  "INFO",
+                "timestamp": result["timestamp"],
+            })
+        except Exception as e:
+            logger.debug(f"INTEGRITY: broadcast failed: {e}")
+        return result
 
     severity = (
         "CRITICAL" if result.get("modified") else

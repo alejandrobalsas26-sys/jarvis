@@ -47,6 +47,7 @@ async def start_telegram_bridge(broadcast_fn, tts=None) -> None:
             "TELEGRAM: disabled — set JARVIS_TELEGRAM_TOKEN "
             "and JARVIS_TELEGRAM_CHAT_ID to enable"
         )
+        await asyncio.Event().wait()   # sleep forever, watchdog stays happy
         return
 
     try:

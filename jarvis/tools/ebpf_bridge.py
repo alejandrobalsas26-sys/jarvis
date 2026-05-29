@@ -36,6 +36,8 @@ async def start_ebpf_bridge(broadcast_fn) -> None:
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "ebpf")
 
     if not KALI_HOST or not KALI_KEY_PATH:
+        logger.info("EBPF: KALI_HOST not configured — bridge dormant")
+        await asyncio.Event().wait()   # sleep forever, watchdog stays happy
         return
 
     global _ssh_client

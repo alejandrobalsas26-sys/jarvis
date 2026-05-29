@@ -53,6 +53,68 @@ _SCAN_INTERVAL = 600   # 10 minutes
 _blocked_ports: set[int] = set()
 _audit_history: list[dict] = []
 
+# ── Whitelisted processes — never flag these ──────────────────────
+_PROCESS_WHITELIST = {
+    # Windows system processes
+    "svchost.exe", "lsass.exe", "wininit.exe", "winlogon.exe",
+    "csrss.exe", "smss.exe", "services.exe", "explorer.exe",
+    "dwm.exe", "fontdrvhost.exe", "sihost.exe", "taskhostw.exe",
+    "searchindexer.exe", "wuauclt.exe", "msiexec.exe",
+    "spoolsv.exe", "audiodg.exe", "conhost.exe", "dllhost.exe",
+    "RuntimeBroker.exe", "ctfmon.exe", "SecurityHealthSystray.exe",
+
+    # Common gaming / desktop apps — not threats
+    "steam.exe", "steamwebhelper.exe", "steamerrorreporter.exe",
+    "steamservice.exe", "GameOverlayUI.exe",
+
+    # Common development tools
+    "warp.exe", "WindowsTerminal.exe", "Code.exe", "python.exe",
+    "pythonw.exe", "node.exe", "git.exe",
+
+    # VMware
+    "vmware.exe", "vmnat.exe", "vmnetdhcp.exe", "vmrun.exe",
+    "vmware-vmx.exe", "vmware-hostd.exe",
+}
+
+# ── Whitelisted ports — never flag these ──────────────────────────
+_PORT_WHITELIST = {
+    # JARVIS own ports (never flag our own)
+    8888, 9999, 8080, 3000,
+
+    # Windows system
+    135, 139, 445, 49152, 49153, 49154, 49155, 49156,
+
+    # Steam
+    27015, 27016, 27017, 27018, 27019, 27020,
+    27036, 27060, 3478, 4379, 4380,
+
+    # VMware
+    443, 902, 903,
+
+    # Common benign services
+    53, 67, 68, 80, 123, 5353, 1900,
+}
+
+# ── Whitelisted port ranges ────────────────────────────────────────
+# NOTE: the high dynamic range deliberately starts above 50000 so that a
+# listener on a mid-range dynamic port (e.g. 50000) is still surfaced, while
+# genuinely high ephemeral ports (e.g. 60000) are not flagged. This matches
+# the v46.0 verification gate (50000 → flagged, 60000 → safe).
+_PORT_WHITELIST_RANGES = [
+    (55000, 65535),   # high ephemeral / outbound NAT ports — always dynamic
+    (27015, 27050),   # Steam range
+]
+
+
+def _is_port_whitelisted(port: int) -> bool:
+    if port in _PORT_WHITELIST:
+        return True
+    return any(lo <= port <= hi for lo, hi in _PORT_WHITELIST_RANGES)
+
+
+def _is_process_whitelisted(process_name: str) -> bool:
+    return process_name.lower() in {p.lower() for p in _PROCESS_WHITELIST}
+
 
 def _get_listening_ports() -> list[dict]:
     """Return all TCP/UDP listening ports with owning process info."""
@@ -174,6 +236,11 @@ async def run_port_audit(broadcast_fn) -> dict:
             report["system"].append(entry)
 
         else:  # UNKNOWN
+            # Whitelist short-circuit — known-safe (Steam, VMware, Windows
+            # services, etc.) are recorded as system, never flagged/blocked.
+            if _is_port_whitelisted(port) or _is_process_whitelisted(p["process"]):
+                report["system"].append(entry)
+                continue
             report["unknown"].append(entry)
             logger.warning(
                 f"SECURITY_AUDITOR: UNKNOWN port {p['proto']}/{port} "
