@@ -178,6 +178,8 @@ async def start_rf_oob(broadcast_fn) -> None:
     Silent if RF_OOB_KEY or RF_OOB_IFACE not configured.
     """
     if not RF_OOB_KEY or not RF_OOB_IFACE:
+        logger.info("RF_OOB: RF_OOB_KEY not configured — OOB channel dormant")
+        await asyncio.Event().wait()
         return
 
     key = _get_key()

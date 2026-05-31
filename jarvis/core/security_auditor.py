@@ -74,6 +74,13 @@ _PROCESS_WHITELIST = {
     # VMware
     "vmware.exe", "vmnat.exe", "vmnetdhcp.exe", "vmrun.exe",
     "vmware-vmx.exe", "vmware-hostd.exe",
+
+    # Cloud sync / system services
+    "googledriveFS.exe", "googledrivefs.exe",
+    "dashost.exe",
+    "onedrive.sync.service.exe",
+    "onedrive.exe",
+    "msedgewebview2.exe",
 }
 
 # ── Whitelisted ports — never flag these ──────────────────────────
@@ -93,6 +100,9 @@ _PORT_WHITELIST = {
 
     # Common benign services
     53, 67, 68, 80, 123, 5353, 1900,
+
+    # Windows system / cloud sync ports
+    5357, 2869, 7679, 10004, 5355, 3702,
 }
 
 # ── Whitelisted port ranges ────────────────────────────────────────
@@ -236,6 +246,13 @@ async def run_port_audit(broadcast_fn) -> dict:
             report["system"].append(entry)
 
         else:  # UNKNOWN
+            pid          = p["pid"]
+            process_name = p["process"]
+            if pid == 4:
+                continue
+            if any(s in process_name.lower() for s in
+                   ("onedrive", "google", "dropbox", "dashost")):
+                continue
             # Whitelist short-circuit — known-safe (Steam, VMware, Windows
             # services, etc.) are recorded as system, never flagged/blocked.
             if _is_port_whitelisted(port) or _is_process_whitelisted(p["process"]):

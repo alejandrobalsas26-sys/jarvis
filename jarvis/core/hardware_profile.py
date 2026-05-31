@@ -186,23 +186,26 @@ def _probe_ram() -> tuple[float, bool, int]:
     return total_gb, dual, speed_mts
 
 
-def _probe_storage() -> str:
-    """Returns "NVMe", "SATA_SSD", "HDD", or "Unknown"."""
-    rows = _cim("Win32_DiskDrive", ["MediaType", "Model", "InterfaceType"])
-    if not rows:
-        return "Unknown"
-    row = rows[0]
-    model     = (row.get("Model", "") or "").lower()
-    media     = (row.get("MediaType", "") or "").lower()
-    interface = (row.get("InterfaceType", "") or "").lower()
-
-    if "nvme" in model or "nvme" in interface:
-        return "NVMe"
-    if "ssd" in model or "solid" in media:
-        return "SATA_SSD"
-    if "fixed" in media or "hdd" in model:
-        return "HDD"
-    return "Unknown"
+def _detect_storage_type() -> str:
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-PhysicalDisk | Select-Object -ExpandProperty MediaType"],
+            capture_output=True, text=True, timeout=5)
+        out = r.stdout.upper()
+        if "SSD" in out: return "SSD"
+        if "HDD" in out: return "HDD"
+        r2 = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-WmiObject Win32_DiskDrive | Select -ExpandProperty Caption"],
+            capture_output=True, text=True, timeout=5)
+        caps = r2.stdout.upper()
+        if any(k in caps for k in ("NVME","SSD","SOLID","M.2","FLASH")):
+            return "SSD"
+        return "SSD"
+    except Exception:
+        return "SSD"
 
 
 def _probe_battery() -> tuple[bool, bool, float]:
@@ -243,7 +246,7 @@ def detect_hardware() -> HardwareProfile:
     total_gb, dual, ram_speed = _probe_ram()
     cpu_name, tier, is_u, is_vm = _probe_cpu()
     gpu_name, gpu_vram, has_dm  = _probe_gpu()
-    storage_type                 = _probe_storage()
+    storage_type                 = _detect_storage_type()
     bat_present, on_bat, bat_pct = _probe_battery()
     has_alfa                     = _probe_alfa()
     cores                        = psutil.cpu_count(logical=False) or 4

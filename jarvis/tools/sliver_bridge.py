@@ -124,6 +124,8 @@ async def start_sliver_monitor(broadcast_fn) -> None:
     from core.telemetry_auth import make_signed_broadcaster
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "sliver")
     if not SLIVER_CONFIG_PATH:
+        logger.info("SLIVER: config path not set — C2 bridge dormant")
+        await asyncio.Event().wait()
         return
     while True:
         client = await _get_client()

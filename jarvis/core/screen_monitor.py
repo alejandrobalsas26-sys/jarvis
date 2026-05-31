@@ -57,10 +57,8 @@ async def start_screen_monitor(
     global _last_hash
 
     if not _ENABLED:
-        logger.info(
-            "SCREEN_MONITOR: disabled "
-            "(set JARVIS_SCREEN_MONITOR=1 to enable)"
-        )
+        logger.info("SCREEN_MONITOR: disabled (set JARVIS_SCREEN_MONITOR=1 to enable)")
+        await asyncio.Event().wait()
         return
 
     logger.info(
