@@ -26,7 +26,14 @@ async def start_sysmon_bridge(broadcast_fn) -> None:
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "sysmon")
 
     if not SYSMON_LOG_PATH:
-        return   # total silence if not configured
+        logger.info("SYSMON_BRIDGE: Sysmon not detected — bridge dormant")
+        await asyncio.Event().wait()
+        return
+
+    if not os.path.exists(SYSMON_LOG_PATH):
+        logger.info("SYSMON_BRIDGE: Sysmon not detected — bridge dormant")
+        await asyncio.Event().wait()
+        return
 
     try:
         async with aiofiles.open(SYSMON_LOG_PATH, mode="r",
@@ -45,7 +52,9 @@ async def start_sysmon_bridge(broadcast_fn) -> None:
                     await _parse_event(buffer[start:end], broadcast_fn)
                     buffer = buffer[end:]
     except FileNotFoundError:
-        logger.warning("SYSMON_BRIDGE: log file not found — check SYSMON_LOG_PATH")
+        logger.info("SYSMON_BRIDGE: Sysmon not detected — bridge dormant")
+        await asyncio.Event().wait()
+        return
     except Exception as e:
         logger.error(f"SYSMON_BRIDGE: error: {e}")
         raise

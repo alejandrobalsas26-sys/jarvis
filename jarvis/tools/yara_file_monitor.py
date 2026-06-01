@@ -29,10 +29,8 @@ _JARVIS_ROOT = Path(__file__).parent.parent
 # NEVER watch the repo root: it contains logs/, and JARVIS log writes would
 # trigger scans → which write logs → infinite YARA loop / QueueFull.
 _MONITOR_PATHS = [
-    _JARVIS_ROOT / "core",                                 # JARVIS source
-    _JARVIS_ROOT / "tools",                                # JARVIS source
-    Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "drivers",
-    Path.home() / "Downloads",
+    _JARVIS_ROOT / "analyze_inbox",                        # external drop zone
+    Path.home() / "Downloads",                             # external downloads
 ]
 
 # File extensions worth scanning (skip media, databases, models)
@@ -48,6 +46,7 @@ _MAX_SCAN_BYTES = 50 * 1024 * 1024   # 50MB
 _EXCLUDED_DIRS = {
     "logs", "logs/", ".git", "__pycache__",
     "node_modules", ".venv", "venv",
+    "core", "tools", "aura",
 }
 _EXCLUDED_EXTENSIONS = {
     ".jsonl", ".json", ".log", ".md", ".yaml", ".yml",
@@ -55,8 +54,9 @@ _EXCLUDED_EXTENSIONS = {
     ".docx", ".pdf", ".txt", ".html", ".css",
 }
 _WATCHED_EXTENSIONS = {
-    ".py", ".ps1", ".exe", ".dll", ".sys",
-    ".vbs", ".bat", ".js", ".ts", ".sh",
+    ".exe", ".dll", ".sys",
+    ".ps1", ".bat", ".vbs",
+    ".js", ".hta",
 }
 
 
