@@ -173,30 +173,169 @@ async def _process_voice_input(
 
 
 async def _loop_voice(llm, tts, stt, name: str) -> None:
-    loop = asyncio.get_running_loop()
-    print("Modo voz activo. Presiona Enter para hablar. Ctrl+C para salir.\n")
+    """
+    Continuous VAD-based voice loop — Gemini Live style.
+    Always listening. No Enter press. Auto-detects speech.
 
-    while True:
+    Flow: listen → VAD detects speech → accumulate →
+          silence detected → transcribe → LLM → TTS → repeat
+    """
+    import sounddevice as sd
+    import numpy as np
+    import collections
+
+    SAMPLE_RATE    = 16000
+    FRAME_MS       = 30          # WebRTC VAD frame size
+    FRAME_SAMPLES  = int(SAMPLE_RATE * FRAME_MS / 1000)   # 480
+    FRAME_BYTES    = FRAME_SAMPLES * 2                     # 16-bit
+
+    SPEECH_TRIGGER    = 4    # voiced frames to confirm speech started
+    SILENCE_TRIGGER   = 50   # unvoiced frames to confirm speech ended (~1.5s)
+    MIN_SPEECH_FRAMES = 10   # minimum frames to bother transcribing (~0.3s)
+
+    try:
+        import webrtcvad
+        vad = webrtcvad.Vad(2)   # aggressiveness 0-3; 2 = balanced
+    except ImportError:
+        logger.error("VOICE: webrtcvad not installed — run: pip install webrtcvad")
+        return
+
+    logger.info("VOICE: continuous listening mode active — speak naturally")
+    if tts:
+        asyncio.create_task(tts.speak_async(
+            "Modo escucha continua activo. Habla cuando quieras."
+        ))
+
+    loop = asyncio.get_event_loop()
+
+    # Shared audio queue between sounddevice callback and async loop
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+
+    def _sd_callback(indata, frames, time_info, status):
+        """sounddevice callback — runs in audio thread."""
+        if status:
+            pass   # ignore input overflow warnings
+        # Convert float32 → int16 PCM
+        pcm = (indata[:, 0] * 32767).astype(np.int16).tobytes()
         try:
-            await loop.run_in_executor(None, input, "[Enter para hablar | Ctrl+C para salir]")
-            user_input: str = await loop.run_in_executor(None, stt.listen)
+            loop.call_soon_threadsafe(audio_queue.put_nowait, pcm)
+        except Exception:
+            pass   # queue full — drop frame
 
-            if not user_input:
-                print("(sin voz detectada, intenta de nuevo)")
-                continue
+    # State machine
+    STATE_LISTENING  = "listening"
+    STATE_RECORDING  = "recording"
 
-            print(f"Tú: {user_input}")
+    state          = STATE_LISTENING
+    speech_frames: list[bytes] = []
+    voiced_count   = 0
+    silence_count  = 0
+    ring_buf: "collections.deque[bytes]" = collections.deque(maxlen=SPEECH_TRIGGER * 3)
 
-            if any(w in user_input.lower() for w in ("salir", "adiós", "hasta luego")):
-                await tts.speak_async("Hasta luego.")
-                break
+    print(f"\n[{name}] Escuchando... (Ctrl+C para salir)\n")
 
-            # v35.0 — interrupt + macro routing before LLM
-            await _process_voice_input(user_input, llm, tts, name)
+    def _transcribe_pcm(pcm_bytes: bytes) -> str:
+        """Convert int16 PCM bytes → float32 ndarray and call existing STT."""
+        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        text, _conf = stt.transcribe_with_confidence(audio_np)
+        return text
 
-        except KeyboardInterrupt:
-            print("\nCerrando...")
-            break
+    try:
+        with sd.InputStream(
+            samplerate  = SAMPLE_RATE,
+            channels    = 1,
+            dtype       = "float32",
+            blocksize   = FRAME_SAMPLES,
+            callback    = _sd_callback,
+        ):
+            while True:
+                # Get next audio frame (30ms)
+                try:
+                    pcm_bytes = await asyncio.wait_for(
+                        audio_queue.get(), timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                # Ensure exact frame size for WebRTC VAD
+                if len(pcm_bytes) != FRAME_BYTES:
+                    continue
+
+                try:
+                    is_speech = vad.is_speech(pcm_bytes, SAMPLE_RATE)
+                except Exception:
+                    continue
+
+                if state == STATE_LISTENING:
+                    # Ring buffer of recent frames for pre-roll
+                    ring_buf.append(pcm_bytes)
+                    if is_speech:
+                        voiced_count += 1
+                    else:
+                        voiced_count = max(0, voiced_count - 1)
+
+                    if voiced_count >= SPEECH_TRIGGER:
+                        # Speech confirmed — start recording
+                        state         = STATE_RECORDING
+                        silence_count = 0
+                        # Include ring buffer as pre-roll (captures start of word)
+                        speech_frames = list(ring_buf)
+                        logger.debug("VOICE: speech detected — recording")
+
+                elif state == STATE_RECORDING:
+                    speech_frames.append(pcm_bytes)
+
+                    if is_speech:
+                        silence_count = 0
+                    else:
+                        silence_count += 1
+
+                    if silence_count >= SILENCE_TRIGGER:
+                        # Silence confirmed — end of utterance
+                        state        = STATE_LISTENING
+                        voiced_count = 0
+                        ring_buf.clear()
+
+                        if len(speech_frames) < MIN_SPEECH_FRAMES:
+                            speech_frames = []
+                            continue   # too short — ignore
+
+                        # Transcribe
+                        pcm_all = b"".join(speech_frames)
+                        speech_frames = []
+
+                        logger.info(
+                            f"VOICE: transcribing "
+                            f"{len(pcm_all)//FRAME_BYTES * FRAME_MS}ms of speech"
+                        )
+
+                        try:
+                            text = await loop.run_in_executor(
+                                None,
+                                lambda: _transcribe_pcm(pcm_all),
+                            )
+                        except Exception as e:
+                            logger.warning(f"VOICE: transcription error: {e}")
+                            continue
+
+                        if not text or len(text.strip()) < 2:
+                            continue
+
+                        text = text.strip()
+                        print(f"\nTú: {text}")
+                        logger.info(f"VOICE: transcribed → '{text}'")
+
+                        # Route through interrupt → macro → LLM pipeline
+                        try:
+                            await _process_voice_input(text, llm, tts, name)
+                        except Exception as e:
+                            logger.warning(f"VOICE: pipeline error: {e}")
+                            continue
+
+    except KeyboardInterrupt:
+        logger.info("VOICE: interrupted by user")
+    except Exception as e:
+        logger.error(f"VOICE: continuous loop error: {e}")
 
 
 async def _main_async() -> None:
