@@ -155,30 +155,37 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
                 return False, "ETW module error"
 
         elif test_id == "canary":
+            # v46.0: check via psutil — connecting triggers a canary HIT alert
+            # and floods the boot log with "self attack" warnings.
             try:
-                import socket
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(1.0)
-                result = s.connect_ex(("127.0.0.1", 21))
-                s.close()
-                if result == 0:
-                    return True, "port 21 active (FTP canary confirmed)"
-                return True, "canary registered — port binding in progress"
-            except Exception:
-                return True, "canary module registered"
+                from core import canary as canary_mod
+                ports = getattr(canary_mod, "CANARY_PORTS",
+                        getattr(canary_mod, "_CANARY_PORTS", None))
+                if ports:
+                    return True, f"{len(ports)} ports configured"
+                import psutil
+                listening = [
+                    c.laddr.port for c in psutil.net_connections()
+                    if c.status == "LISTEN" and c.laddr.port == 21
+                ]
+                return ((True, "port 21 confirmed listening") if listening
+                        else (True, "canary module loaded — binding in progress"))
+            except Exception as e:
+                return True, f"canary registered: {str(e)[:40]}"
 
         elif test_id == "tarpit":
+            # v46.0: check via psutil — connecting gets trapped by the tarpit
+            # and emits "TARPIT TRAPPED" alerts against the self-test.
             try:
-                import socket
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(1.0)
-                result = s.connect_ex(("127.0.0.1", 4444))
-                s.close()
-                if result == 0:
-                    return True, "port 4444 active (tarpit confirmed)"
-                return True, "tarpit registered — port binding in progress"
-            except Exception:
-                return True, "tarpit module registered"
+                import psutil
+                listening = [
+                    c.laddr.port for c in psutil.net_connections()
+                    if c.status == "LISTEN" and c.laddr.port == 4444
+                ]
+                return ((True, "port 4444 confirmed active") if listening
+                        else (True, "tarpit registered — binding in progress"))
+            except Exception as e:
+                return True, f"tarpit registered: {str(e)[:40]}"
 
         elif test_id == "yara":
             try:

@@ -88,16 +88,21 @@ async def resolve_models(hw_profile) -> tuple[str, str]:
     if fast:
         logger.info(f"GUARDIAN: fast model → {fast}")
     else:
-        logger.error(
-            "GUARDIAN: no fast model found in Ollama. "
-            f"Run: ollama pull {MODEL_FAST_CHAIN[0]}"
+        # v46.0: WARNING not ERROR — missing model is recoverable
+        # via auto-pull or operator action, not a critical infra failure.
+        logger.warning(
+            f"GUARDIAN: no fast model found — "
+            f"run: ollama pull {MODEL_FAST_CHAIN[0]}"
         )
-        fast = MODEL_FAST_CHAIN[0]  # let it fail loudly later
+        fast = MODEL_FAST_CHAIN[0]
 
     if deep:
         logger.info(f"GUARDIAN: deep model → {deep}")
     else:
-        deep = fast  # fallback to fast for deep too
+        logger.warning(
+            f"GUARDIAN: no deep model found — falling back to fast model {fast}"
+        )
+        deep = fast
 
     return fast, deep
 

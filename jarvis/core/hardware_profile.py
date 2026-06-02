@@ -30,6 +30,8 @@ TDP_CONFIGS = {
     "DESKTOP":       {"pools": 4, "ctx": 16384, "model_fast": "qwen2.5:7b-instruct-q8_0"},
     "VM_GUEST":      {"pools": 1, "ctx": 4096,  "model_fast": "qwen2.5:7b-instruct-q4_K_M"},
 }
+# Battery mode: use q4_K_M (smaller, lower power consumption)
+# q5_K_M is used on AC power for better output quality
 BATTERY_OVERRIDE = {
     "pools": 1, "ctx": 2048, "model_fast": "qwen2.5:7b-instruct-q4_K_M"
 }

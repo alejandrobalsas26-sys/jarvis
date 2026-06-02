@@ -22,6 +22,23 @@ import re
 import sys
 import asyncio
 import argparse
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    module="scapy",
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*TripleDES.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*CryptographyDeprecationWarning.*",
+)
+
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -1264,19 +1281,24 @@ async def _main_async() -> None:
     finally:
         # v30.0: graceful shutdown sequence — flush ChromaDB, save session,
         # cancel tasks, write audit log.
+        # v46.0: broad except — MCP/anyio cancel scope errors on shutdown
+        # are cosmetic and should not pollute the operator's terminal.
         try:
             await run_graceful_shutdown(watchdog=watchdog)
-        except Exception as e:
+        except (RuntimeError, asyncio.CancelledError, Exception) as e:
             logger.debug(f"SHUTDOWN: error during graceful shutdown: {e}")
 
         # Graceful AURA shutdown
-        if aura_server is not None:
-            aura_server.should_exit = True
-        if aura_task is not None:
-            try:
-                await asyncio.wait_for(aura_task, timeout=3.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                aura_task.cancel()
+        try:
+            if aura_server is not None:
+                aura_server.should_exit = True
+            if aura_task is not None:
+                try:
+                    await asyncio.wait_for(aura_task, timeout=3.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    aura_task.cancel()
+        except (RuntimeError, asyncio.CancelledError, Exception):
+            pass  # MCP/anyio cancel scope error on shutdown is cosmetic
 
 
 def main() -> None:

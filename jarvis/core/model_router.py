@@ -78,15 +78,16 @@ async def check_model_availability() -> dict[str, bool]:
 
 async def configure_ollama_for_hardware(hw_profile) -> None:
     """Log optimal ollama serve flags for the operator."""
-    if hw_profile.is_dual_channel:
-        logger.info(
-            "OLLAMA CONFIG (dual-channel): "
-            "OLLAMA_NUM_PARALLEL=2 OLLAMA_KEEP_ALIVE=30m "
-            "OLLAMA_MAX_LOADED_MODELS=2 ollama serve"
-        )
-    else:
-        logger.info(
-            "OLLAMA CONFIG (single-channel): "
-            "OLLAMA_NUM_PARALLEL=1 OLLAMA_KEEP_ALIVE=10m "
-            "OLLAMA_MAX_LOADED_MODELS=1 ollama serve"
-        )
+    # v46.0: parallelism must match actual recommended pools — on battery
+    # pools=1 even when RAM is dual-channel, so reading pools dynamically
+    # prevents the hardcoded =2 mismatch with the resolved profile.
+    parallel = getattr(hw_profile, "recommended_pools",
+                       getattr(hw_profile, "pools", 1))
+    keep_alive = "30m" if hw_profile.is_dual_channel else "10m"
+    logger.info(
+        f"OLLAMA CONFIG: "
+        f"OLLAMA_NUM_PARALLEL={parallel} "
+        f"OLLAMA_KEEP_ALIVE={keep_alive} "
+        f"OLLAMA_MAX_LOADED_MODELS={parallel} "
+        f"ollama serve"
+    )
