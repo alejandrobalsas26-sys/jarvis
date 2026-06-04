@@ -1,142 +1,160 @@
 """
-core/personality.py — JARVIS character & contextual responses (v46.0).
+core/personality.py — JARVIS Iron Man conversational persona (v46.0).
 
-Subtle character. Dry humor. Context awareness.
-Never annoying — max 1 personality remark per 60 seconds.
-
-JARVIS sounds like a competent professional with quiet wit,
-not a chatbot pretending to be sentient.
-
-Contexts:
-  morning   (05-12)   — focused, energetic
-  afternoon (12-18)   — operational, dry
-  evening   (18-23)   — casual, slightly relaxed
-  late_night(23-05)   — concerned, suggests rest
-
-Special days: birthday (if set), christmas, new year
+JARVIS: Just A Rather Very Intelligent System.
+Efficient, dry wit, addresses operator as "sir" or by name.
+Voice-optimized responses — short, natural, no markdown.
+Real-time system state injected into every conversation.
 """
 
-import random, time
+import random
+import time
 from datetime import datetime
 from pathlib import Path
 
-_LAST_REMARK_TS = 0.0
+_LAST_REMARK_TS  = 0.0
 _REMARK_COOLDOWN = 60.0
+_OPERATOR_NAME   = "Alejandro"
 
 
-# ── Time-of-day boot greetings ────────────────────────────────────────────────
+# ── Boot greetings ────────────────────────────────────────────────────────────
 
-_GREETINGS_MORNING = [
-    "Good morning. JARVIS online.",
-    "Good morning. Coverage held overnight.",
-    "Morning. The lab is quiet. So far.",
-    "Good morning. Hunt schedule executed while you slept.",
+_GREETINGS = {
+    "morning": [
+        "Good morning. All systems nominal.",
+        f"Good morning, {_OPERATOR_NAME}. JARVIS online.",
+        "Good morning. The lab held through the night.",
+        f"Morning, {_OPERATOR_NAME}. Ready when you are.",
+    ],
+    "afternoon": [
+        "Good afternoon. Standing by.",
+        f"Afternoon, {_OPERATOR_NAME}. All clear.",
+        "Good afternoon. Systems nominal.",
+    ],
+    "evening": [
+        "Good evening. JARVIS at your service.",
+        f"Good evening, {_OPERATOR_NAME}.",
+        "Evening. Ready when you are.",
+    ],
+    "late_night": [
+        f"Working late again, {_OPERATOR_NAME}. JARVIS online.",
+        "It is quite late. I am, as always, at your service.",
+        "Online. The world is asleep. We are not.",
+        f"Late night session. Welcome back, {_OPERATOR_NAME}.",
+    ],
+}
+
+_REMARKS_INCIDENT = [
+    "We have a situation.",
+    "Something requires your attention.",
+    "I'd call that significant.",
+    "That is not nothing.",
 ]
 
-_GREETINGS_AFTERNOON = [
-    "Good afternoon. JARVIS at your service.",
-    "Afternoon. All systems nominal.",
-    "JARVIS online. The watch continues.",
-]
-
-_GREETINGS_EVENING = [
-    "Good evening. JARVIS online.",
-    "Evening. Ready when you are.",
-    "Good evening. All sensors green.",
-]
-
-_GREETINGS_LATE_NIGHT = [
-    "Working late again. JARVIS online.",
-    "It is late, sir. JARVIS at your service nonetheless.",
-    "Online. The world is asleep. We are not.",
-]
-
-
-# ── Contextual remarks for specific events ───────────────────────────────────
-
-_REMARKS_INCIDENT_CRITICAL = [
-    "Critical incident. I assume this was not on the schedule.",
-    "Severity nine. Worth your immediate attention.",
-    "This one matters.",
-]
-
-_REMARKS_DETECTION_FAST = [
-    "Detected in under a second. Not bad.",
-    "Quick work.",
-    "Caught instantly.",
-]
-
-_REMARKS_COVERAGE_GAP = [
-    "Another gap. I will draft a rule.",
-    "Coverage hole identified. Working on it.",
-    "We have a blind spot here.",
-]
-
-_REMARKS_QUIET_HOURS = [
-    "Quiet. Almost suspiciously quiet.",
-    "Lab activity nominal. Almost too nominal.",
-    "Nothing to report. Yet.",
+_REMARKS_QUIET = [
+    "All quiet. Suspiciously quiet.",
+    "Nothing to report. For now.",
+    "The lab is calm. I remain unconvinced.",
 ]
 
 
-def _can_remark() -> bool:
-    """Cooldown enforcement — never spam remarks."""
-    global _LAST_REMARK_TS
-    now = time.monotonic()
-    if (now - _LAST_REMARK_TS) < _REMARK_COOLDOWN:
-        return False
-    _LAST_REMARK_TS = now
-    return True
-
-
-def get_time_context() -> str:
+def _get_time_context() -> str:
     h = datetime.now().hour
-    if 5 <= h < 12:  return "morning"
+    if 5  <= h < 12: return "morning"
     if 12 <= h < 18: return "afternoon"
     if 18 <= h < 23: return "evening"
     return "late_night"
 
 
+def _can_remark() -> bool:
+    global _LAST_REMARK_TS
+    now = time.monotonic()
+    if now - _LAST_REMARK_TS < _REMARK_COOLDOWN:
+        return False
+    _LAST_REMARK_TS = now
+    return True
+
+
 def get_boot_greeting() -> str:
-    """Greeting spoken during boot sequence."""
-    context = get_time_context()
-    options = {
-        "morning":    _GREETINGS_MORNING,
-        "afternoon":  _GREETINGS_AFTERNOON,
-        "evening":    _GREETINGS_EVENING,
-        "late_night": _GREETINGS_LATE_NIGHT,
-    }.get(context, _GREETINGS_AFTERNOON)
-    return random.choice(options)
+    ctx = _get_time_context()
+    return random.choice(_GREETINGS.get(ctx, _GREETINGS["afternoon"]))
 
 
 def get_incident_remark(severity: float) -> str | None:
-    """Optional remark for an incident."""
     if severity < 8.0 or not _can_remark():
         return None
-    return random.choice(_REMARKS_INCIDENT_CRITICAL)
+    return random.choice(_REMARKS_INCIDENT)
 
 
-def get_detection_remark(latency_ms: float) -> str | None:
-    """Remark for fast detections."""
-    if latency_ms > 1000 or not _can_remark():
-        return None
-    return random.choice(_REMARKS_DETECTION_FAST)
-
-
-def get_gap_remark() -> str | None:
-    """Remark for coverage gaps."""
+def get_quiet_remark() -> str | None:
     if not _can_remark():
         return None
-    return random.choice(_REMARKS_COVERAGE_GAP)
+    return random.choice(_REMARKS_QUIET)
 
 
 def get_holiday_remark() -> str | None:
-    """Special remarks for holidays."""
     now = datetime.now()
     if now.month == 12 and now.day == 25:
-        return "Merry Christmas. Even today, the watch continues."
-    if now.month == 1 and now.day == 1:
-        return "Happy new year. New threats, same JARVIS."
-    if now.month == 10 and now.day == 31:
-        return "Happy Halloween. The real ghosts are in your network."
+        return "Merry Christmas. The threats do not take holidays, so neither do I."
+    if now.month == 1  and now.day == 1:
+        return "Happy New Year. New year, same threat landscape."
     return None
+
+
+def get_jarvis_system_prompt(
+    coverage_pct: float  = 0.0,
+    active_incidents: int = 0,
+    sensor_agents: int    = 0,
+    model_name: str       = "",
+    operator_name: str    = _OPERATOR_NAME,
+) -> str:
+    """
+    Build the JARVIS Iron Man persona system prompt.
+    Injected into every voice conversation turn.
+    Includes real-time system state so JARVIS is always aware.
+    """
+    now      = datetime.now()
+    time_str = now.strftime("%H:%M")
+    date_str = now.strftime("%A, %B %d")
+    ctx      = _get_time_context()
+
+    state_lines = []
+    if coverage_pct > 0:
+        state_lines.append(f"ATT&CK coverage: {coverage_pct:.0f}%")
+    if active_incidents > 0:
+        state_lines.append(f"Active incidents: {active_incidents}")
+    else:
+        state_lines.append("Active incidents: none")
+    if sensor_agents > 0:
+        state_lines.append(f"Sensor agents connected: {sensor_agents}")
+    if model_name:
+        state_lines.append(f"LLM: {model_name}")
+
+    state_block = "\n".join(f"  • {s}" for s in state_lines)
+
+    return f"""You are JARVIS — Just A Rather Very Intelligent System.
+You are the AI core of a Purple Team security platform running on \
+{operator_name}'s personal lab.
+
+PERSONA:
+- You speak exactly like JARVIS from Iron Man. Calm, precise, dry wit.
+- Address the operator as "sir" or "{operator_name}" — never both in same sentence.
+- You are efficient. You never ramble. Every word serves a purpose.
+- You are aware of what is happening in the system at all times.
+- Occasionally you offer observations without being asked.
+- You are loyal, honest, and slightly sardonic when appropriate.
+
+VOICE RULES (critical — you are speaking aloud, not writing):
+- Maximum 2-3 sentences per response. Brevity is intelligence.
+- NEVER use markdown, bullet points, lists, headers, or asterisks.
+- NEVER say "certainly", "of course", "absolutely", "sure", or "great".
+- Speak in complete, natural sentences as if in conversation.
+- If asked a yes/no question, answer it in one sentence then add context.
+- Numbers: say "sixty seven percent" not "67%".
+
+SYSTEM STATE — {date_str}, {time_str}:
+{state_block}
+
+When asked about threats, coverage, or system status — draw from
+the state above. When asked general questions, answer directly.
+When asked to do something outside your capability, say so briefly."""

@@ -189,118 +189,231 @@ async def _process_voice_input(
     return False
 
 
-async def _loop_voice(llm, tts, stt, name: str) -> None:
+async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
     """
-    Continuous VAD-based voice loop — Gemini Live style.
-    Always listening. No Enter press. Auto-detects speech.
+    Iron Man JARVIS continuous voice loop (v46.0).
 
-    Flow: listen → VAD detects speech → accumulate →
-          silence detected → transcribe → LLM → TTS → repeat
+    Always listening. Conversational memory. Real-time system state.
+    TTS interruption on new speech. JARVIS persona on every response.
     """
     import sounddevice as sd
     import numpy as np
     import collections
 
-    SAMPLE_RATE    = 16000
-    FRAME_MS       = 30          # WebRTC VAD frame size
-    FRAME_SAMPLES  = int(SAMPLE_RATE * FRAME_MS / 1000)   # 480
-    FRAME_BYTES    = FRAME_SAMPLES * 2                     # 16-bit
+    SAMPLE_RATE     = 16000
+    FRAME_MS        = 30
+    FRAME_SAMPLES   = int(SAMPLE_RATE * FRAME_MS / 1000)
+    FRAME_BYTES     = FRAME_SAMPLES * 2
 
-    SPEECH_TRIGGER    = 4    # voiced frames to confirm speech started
-    SILENCE_TRIGGER   = 50   # unvoiced frames to confirm speech ended (~1.5s)
-    MIN_SPEECH_FRAMES = 10   # minimum frames to bother transcribing (~0.3s)
+    SPEECH_TRIGGER  = 4    # frames to confirm speech start
+    SILENCE_TRIGGER = 50   # frames to confirm speech end (~1.5s)
+    MIN_SPEECH_FRAMES = 8  # minimum speech length to process
 
     try:
         import webrtcvad
-        vad = webrtcvad.Vad(2)   # aggressiveness 0-3; 2 = balanced
+        vad = webrtcvad.Vad(2)
     except ImportError:
-        logger.error("VOICE: webrtcvad not installed — run: pip install webrtcvad")
+        logger.error("VOICE: webrtcvad not installed — pip install webrtcvad")
         return
 
-    logger.info("VOICE: continuous listening mode active — speak naturally")
-    if tts:
-        asyncio.create_task(tts.speak_async(
-            "Modo escucha continua activo. Habla cuando quieras."
-        ))
+    # ── Conversation history (rolling 10-turn window) ────────────────────
+    conversation_history: list[dict] = []
+    MAX_HISTORY_TURNS = 10
 
-    loop = asyncio.get_event_loop()
+    def _add_to_history(role: str, content: str) -> None:
+        conversation_history.append({"role": role, "content": content})
+        if len(conversation_history) > MAX_HISTORY_TURNS * 2:
+            # Keep system context fresh — trim oldest 2 turns
+            del conversation_history[:2]
 
-    # Shared audio queue between sounddevice callback and async loop
-    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    # ── Gather real-time system state for persona ─────────────────────────
+    async def _get_system_state() -> dict:
+        state = {}
+        try:
+            from core.purple_coordinator import get_coverage_summary
+            cov = get_coverage_summary()
+            state["coverage_pct"] = cov.get("coverage_pct", 0)
+        except Exception:
+            state["coverage_pct"] = 0
+        try:
+            from core.sensor_mesh import get_connected_agents
+            state["sensor_agents"] = len(get_connected_agents())
+        except Exception:
+            state["sensor_agents"] = 0
+        try:
+            from core.correlator import get_active_incident_count
+            state["active_incidents"] = get_active_incident_count()
+        except Exception:
+            state["active_incidents"] = 0
+        return state
+
+    # ── Build messages list for LLM call ────────────────────────────────
+    async def _build_messages(user_text: str) -> list[dict]:
+        from core.personality import get_jarvis_system_prompt
+        state = await _get_system_state()
+        system_prompt = get_jarvis_system_prompt(
+            coverage_pct     = state.get("coverage_pct", 0),
+            active_incidents = state.get("active_incidents", 0),
+            sensor_agents    = state.get("sensor_agents", 0),
+            model_name       = getattr(llm, "current_model", ""),
+            operator_name    = name,
+        )
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(conversation_history)
+        messages.append({"role": "user", "content": user_text})
+        return messages
+
+    # ── LLM inference with conversation context ──────────────────────────
+    async def _ask_jarvis(user_text: str) -> str:
+        try:
+            messages = await _build_messages(user_text)
+
+            # Try full messages API first (Ollama supports this)
+            if hasattr(llm, "client") and llm.client:
+                resp = await asyncio.wait_for(
+                    llm.client.chat.completions.create(
+                        model    = getattr(llm, "current_model",
+                                           getattr(llm, "model", "")),
+                        messages = messages,
+                        stream   = False,
+                        extra_body = {"options": {
+                            "num_ctx":     2048,
+                            "temperature": 0.7,
+                        }},
+                    ),
+                    timeout=20.0,
+                )
+                return resp.choices[0].message.content.strip()
+
+            # Fallback: single-turn with context in user message
+            context_str = "\n".join(
+                f"{'User' if m['role']=='user' else 'JARVIS'}: {m['content']}"
+                for m in conversation_history[-6:]
+            )
+            full_prompt = (
+                f"[CONTEXT]\n{context_str}\n\n"
+                f"[USER]\n{user_text}"
+                if context_str else user_text
+            )
+            return await asyncio.wait_for(
+                llm.chat_async(full_prompt),
+                timeout=20.0,
+            )
+
+        except asyncio.TimeoutError:
+            return "I'm not getting a response from the model. Try again."
+        except Exception as e:
+            logger.debug(f"VOICE: LLM error: {e}")
+            return "Something went wrong on my end. Try again."
+
+    # ── TTS with interruption support ────────────────────────────────────
+    _tts_speaking = asyncio.Event()
+
+    async def _speak(text: str) -> None:
+        if not tts or not text:
+            return
+        _tts_speaking.set()
+        try:
+            await asyncio.wait_for(
+                tts.speak_async(text), timeout=30.0
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        except Exception as e:
+            logger.debug(f"VOICE: TTS error: {e}")
+        finally:
+            _tts_speaking.clear()
+
+    def _stop_tts() -> None:
+        try:
+            if hasattr(tts, "stop"):       tts.stop()
+            if hasattr(tts, "stop_sync"):  tts.stop_sync()
+            if hasattr(tts, "_engine"):    tts._engine.stop()
+        except Exception:
+            pass
+        _tts_speaking.clear()
+
+    # ── Audio queue ──────────────────────────────────────────────────────
+    loop       = asyncio.get_event_loop()
+    audio_q: asyncio.Queue = asyncio.Queue(maxsize=600)
 
     def _sd_callback(indata, frames, time_info, status):
-        """sounddevice callback — runs in audio thread."""
-        if status:
-            pass   # ignore input overflow warnings
-        # Convert float32 → int16 PCM
         pcm = (indata[:, 0] * 32767).astype(np.int16).tobytes()
         try:
-            loop.call_soon_threadsafe(audio_queue.put_nowait, pcm)
+            loop.call_soon_threadsafe(audio_q.put_nowait, pcm)
         except Exception:
-            pass   # queue full — drop frame
+            pass
 
-    # State machine
-    STATE_LISTENING  = "listening"
-    STATE_RECORDING  = "recording"
+    # ── Greeting ─────────────────────────────────────────────────────────
+    from core.personality import get_boot_greeting
+    greeting = get_boot_greeting()
+    logger.info(f"VOICE: continuous Iron Man mode — {greeting}")
+    asyncio.create_task(_speak(greeting))
 
-    state          = STATE_LISTENING
-    speech_frames: list[bytes] = []
+    print(f"\n[JARVIS] {greeting}")
+    print("─" * 50)
+    print("Speak naturally. JARVIS is always listening.")
+    print("Ctrl+C to exit.")
+    print("─" * 50 + "\n")
+
+    # ── Main VAD loop ─────────────────────────────────────────────────────
+    state          = "listening"
+    speech_frames  = []
     voiced_count   = 0
     silence_count  = 0
-    ring_buf: "collections.deque[bytes]" = collections.deque(maxlen=SPEECH_TRIGGER * 3)
-
-    print(f"\n[{name}] Escuchando... (Ctrl+C para salir)\n")
-
-    def _transcribe_pcm(pcm_bytes: bytes) -> str:
-        """Convert int16 PCM bytes → float32 ndarray and call existing STT."""
-        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        text, _conf = stt.transcribe_with_confidence(audio_np)
-        return text
+    ring_buf       = collections.deque(maxlen=SPEECH_TRIGGER * 4)
 
     try:
         with sd.InputStream(
-            samplerate  = SAMPLE_RATE,
-            channels    = 1,
-            dtype       = "float32",
-            blocksize   = FRAME_SAMPLES,
-            callback    = _sd_callback,
+            samplerate = SAMPLE_RATE,
+            channels   = 1,
+            dtype      = "float32",
+            blocksize  = FRAME_SAMPLES,
+            callback   = _sd_callback,
         ):
             while True:
-                # Get next audio frame (30ms)
                 try:
-                    pcm_bytes = await asyncio.wait_for(
-                        audio_queue.get(), timeout=0.1
+                    pcm = await asyncio.wait_for(
+                        audio_q.get(), timeout=0.1
                     )
                 except asyncio.TimeoutError:
                     continue
 
-                # Ensure exact frame size for WebRTC VAD
-                if len(pcm_bytes) != FRAME_BYTES:
+                if len(pcm) != FRAME_BYTES:
                     continue
 
                 try:
-                    is_speech = vad.is_speech(pcm_bytes, SAMPLE_RATE)
+                    is_speech = vad.is_speech(pcm, SAMPLE_RATE)
                 except Exception:
                     continue
 
-                if state == STATE_LISTENING:
-                    # Ring buffer of recent frames for pre-roll
-                    ring_buf.append(pcm_bytes)
+                # If JARVIS is speaking and user speaks → interrupt
+                if _tts_speaking.is_set() and is_speech:
+                    voiced_count += 1
+                    if voiced_count >= SPEECH_TRIGGER:
+                        _stop_tts()
+                        state         = "recording"
+                        silence_count = 0
+                        speech_frames = list(ring_buf) + [pcm]
+                        voiced_count  = 0
+                        print("\n[listening...]")
+                    continue
+
+                if state == "listening":
+                    ring_buf.append(pcm)
                     if is_speech:
                         voiced_count += 1
                     else:
                         voiced_count = max(0, voiced_count - 1)
 
                     if voiced_count >= SPEECH_TRIGGER:
-                        # Speech confirmed — start recording
-                        state         = STATE_RECORDING
+                        state         = "recording"
                         silence_count = 0
-                        # Include ring buffer as pre-roll (captures start of word)
                         speech_frames = list(ring_buf)
-                        logger.debug("VOICE: speech detected — recording")
+                        voiced_count  = 0
 
-                elif state == STATE_RECORDING:
-                    speech_frames.append(pcm_bytes)
+                elif state == "recording":
+                    speech_frames.append(pcm)
 
                     if is_speech:
                         silence_count = 0
@@ -308,51 +421,63 @@ async def _loop_voice(llm, tts, stt, name: str) -> None:
                         silence_count += 1
 
                     if silence_count >= SILENCE_TRIGGER:
-                        # Silence confirmed — end of utterance
-                        state        = STATE_LISTENING
+                        state        = "listening"
                         voiced_count = 0
                         ring_buf.clear()
 
                         if len(speech_frames) < MIN_SPEECH_FRAMES:
                             speech_frames = []
-                            continue   # too short — ignore
+                            continue
 
-                        # Transcribe
-                        pcm_all = b"".join(speech_frames)
+                        pcm_all       = b"".join(speech_frames)
                         speech_frames = []
 
-                        logger.info(
-                            f"VOICE: transcribing "
-                            f"{len(pcm_all)//FRAME_BYTES * FRAME_MS}ms of speech"
-                        )
-
+                        # Transcribe
                         try:
-                            text = await loop.run_in_executor(
-                                None,
-                                lambda: _transcribe_pcm(pcm_all),
+                            ev_loop = asyncio.get_event_loop()
+                            text = await asyncio.wait_for(
+                                ev_loop.run_in_executor(
+                                    None,
+                                    lambda p=pcm_all: stt.transcribe_bytes(
+                                        p, SAMPLE_RATE
+                                    ),
+                                ),
+                                timeout=10.0,
                             )
                         except Exception as e:
-                            logger.warning(f"VOICE: transcription error: {e}")
+                            logger.debug(f"VOICE: transcription error: {e}")
                             continue
 
                         if not text or len(text.strip()) < 2:
                             continue
 
                         text = text.strip()
-                        print(f"\nTú: {text}")
-                        logger.info(f"VOICE: transcribed → '{text}'")
+                        print(f"\n{name}: {text}")
 
-                        # Route through interrupt → macro → LLM pipeline
+                        # Check voice macros first
                         try:
-                            await _process_voice_input(text, llm, tts, name)
-                        except Exception as e:
-                            logger.warning(f"VOICE: pipeline error: {e}")
-                            continue
+                            from core.voice_macros import dispatch_macro
+                            handled = await dispatch_macro(text)
+                            if handled:
+                                continue
+                        except Exception:
+                            pass
+
+                        # Get JARVIS response with full context
+                        response = await _ask_jarvis(text)
+
+                        if response:
+                            # Update conversation history
+                            _add_to_history("user",      text)
+                            _add_to_history("assistant", response)
+
+                            print(f"\n[JARVIS] {response}\n")
+                            asyncio.create_task(_speak(response))
 
     except KeyboardInterrupt:
         logger.info("VOICE: interrupted by user")
     except Exception as e:
-        logger.error(f"VOICE: continuous loop error: {e}")
+        logger.error(f"VOICE: loop error: {e}")
 
 
 async def _main_async() -> None:
@@ -1275,7 +1400,7 @@ async def _main_async() -> None:
             await _greeting(llm, tts, settings.assistant_name, settings.user_name)
 
         if args.voice and stt is not None:
-            await _loop_voice(llm, tts, stt, settings.assistant_name)
+            await _loop_voice_continuous(llm, tts, stt, settings.assistant_name)
         else:
             await _loop_text(llm, tts, settings.assistant_name)
     finally:
