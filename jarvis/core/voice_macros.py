@@ -772,6 +772,74 @@ async def execute_macro(
             except Exception as e:
                 logger.debug(f"MACRO: reload_config error: {e}")
 
+        # ── v46.0 OMEGA dispatch ───────────────────────────────────────────
+        elif action == "war_room_debate":
+            try:
+                from core.war_room_debate import run_war_room_debate
+                from core.agent_orchestrator import orchestrator
+                from core.correlator import correlator as _corr
+                active = _corr.get_active_incidents()
+                incident = active[0] if active else {
+                    "kill_chain_phase": "threat analysis requested",
+                    "severity_score":   7.0,
+                    "involved_hosts":   set(),
+                    "mitre_techniques": ["T1059"],
+                }
+                asyncio.create_task(run_war_room_debate(
+                    incident,
+                    orchestrator._ollama_client,
+                    orchestrator._deep_model,
+                    tts,
+                    broadcast_fn,
+                ))
+            except Exception as e:
+                logger.debug(f"MACRO: war_room_debate error: {e}")
+
+        elif action == "punisher_enable":
+            try:
+                import core.punisher as _p
+                _p._PUNISHER_ENABLED = True
+            except Exception as e:
+                logger.debug(f"MACRO: punisher_enable error: {e}")
+
+        elif action == "punisher_disable":
+            try:
+                import core.punisher as _p
+                _p._PUNISHER_ENABLED = False
+            except Exception as e:
+                logger.debug(f"MACRO: punisher_disable error: {e}")
+
+        elif action == "vision_room":
+            try:
+                from core.vision_engine import analyze_room
+                from core.agent_orchestrator import orchestrator
+                async def _vr():
+                    desc = await analyze_room(orchestrator._ollama_client)
+                    if tts:
+                        await tts.speak_async(desc[:300])
+                asyncio.create_task(_vr())
+            except Exception as e:
+                logger.debug(f"MACRO: vision_room error: {e}")
+
+        elif action == "vision_screen":
+            try:
+                from core.vision_engine import analyze_screen_vision
+                from core.agent_orchestrator import orchestrator
+                async def _vs():
+                    desc = await analyze_screen_vision(orchestrator._ollama_client)
+                    if tts:
+                        await tts.speak_async(desc[:300])
+                asyncio.create_task(_vs())
+            except Exception as e:
+                logger.debug(f"MACRO: vision_screen error: {e}")
+
+        elif action == "iot_clear":
+            try:
+                from core.iot_bridge import alert_clear
+                asyncio.create_task(alert_clear())
+            except Exception as e:
+                logger.debug(f"MACRO: iot_clear error: {e}")
+
         try:
             await broadcast_fn({
                 "type":      "macro_executed",

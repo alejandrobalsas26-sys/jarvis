@@ -192,3 +192,140 @@ async def capture_and_save(
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, _capture_screen, monitor)
     return _save_screenshot(data, label)
+
+
+# ── v46.0 OMEGA — Webcam + Moondream vision ────────────────────────────────
+
+async def capture_webcam_frame() -> bytes | None:
+    """
+    Capture a single frame from the default webcam.
+    Returns JPEG bytes or None if no webcam available.
+    """
+    try:
+        import cv2
+        loop = asyncio.get_event_loop()
+
+        def _grab():
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                return None
+            # Warm up — discard first 3 frames (exposure adjustment)
+            for _ in range(3):
+                cap.read()
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                return None
+            _, buf = cv2.imencode(
+                ".jpg", frame,
+                [cv2.IMWRITE_JPEG_QUALITY, 85]
+            )
+            return buf.tobytes()
+
+        return await loop.run_in_executor(None, _grab)
+
+    except ImportError:
+        logger.warning("VISION: opencv not installed — pip install opencv-python")
+        return None
+    except Exception as e:
+        logger.warning(f"VISION: webcam capture error: {e}")
+        return None
+
+
+async def analyze_room(
+    ollama_client,
+    model_vision: str = "moondream:latest",
+    query: str = "Describe everything you see in detail.",
+) -> str:
+    """
+    Capture webcam frame and analyze with Moondream.
+    Returns natural language description of the room/environment.
+    """
+    import base64, aiohttp, time
+
+    frame_bytes = await capture_webcam_frame()
+    if not frame_bytes:
+        return "No webcam detected or unable to capture frame."
+
+    img_b64 = base64.b64encode(frame_bytes).decode()
+
+    # Save for reference
+    ts = int(time.time())
+    snap_path = Path("logs/visuals") / f"room_{ts}.jpg"
+    snap_path.parent.mkdir(parents=True, exist_ok=True)
+    snap_path.write_bytes(frame_bytes)
+
+    try:
+        ollama_host = "http://127.0.0.1:11434"
+        payload = {
+            "model": model_vision,
+            "messages": [{
+                "role": "user",
+                "content": query,
+                "images": [img_b64],
+            }],
+            "stream": False,
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{ollama_host}/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as r:
+                data = await r.json()
+                desc = (data.get("message", {})
+                           .get("content", "No description returned."))
+                logger.info(f"VISION: room analysis complete — {len(desc)} chars")
+                return desc
+
+    except Exception as e:
+        logger.warning(f"VISION: moondream error: {e}")
+        return f"Vision analysis failed: {e}"
+
+
+async def analyze_screen_vision(
+    ollama_client,
+    model_vision: str = "moondream:latest",
+    query: str = "Describe what you see on this screen in detail.",
+) -> str:
+    """
+    Capture screen and analyze with Moondream.
+    Returns natural language description of screen content.
+    """
+    import base64, aiohttp, io
+
+    try:
+        png_bytes = _capture_screen()
+        if not png_bytes:
+            return "Screen capture unavailable."
+
+        # Re-encode PNG to JPEG for Moondream
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(png_bytes))
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=85)
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            img_b64 = base64.b64encode(png_bytes).decode()
+
+        payload = {
+            "model": model_vision,
+            "messages": [{
+                "role": "user",
+                "content": query,
+                "images": [img_b64],
+            }],
+            "stream": False,
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                "http://127.0.0.1:11434/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as r:
+                data = await r.json()
+                return (data.get("message", {})
+                           .get("content", "No description returned."))
+    except Exception as e:
+        return f"Screen analysis failed: {e}"

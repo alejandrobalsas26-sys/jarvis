@@ -189,6 +189,34 @@ async def _process_voice_input(
     return False
 
 
+async def run_war_room_debate_on_last_incident(llm, tts, broadcast_fn):
+    """Trigger War Room debate on the last significant incident."""
+    from core.war_room_debate import run_war_room_debate
+    try:
+        from core.correlator import correlator as _corr
+        active = _corr.get_active_incidents()
+        incident = active[0] if active else {
+            "kill_chain_phase": "threat analysis requested",
+            "severity_score":   7.0,
+            "involved_hosts":   set(),
+            "mitre_techniques": ["T1059"],
+        }
+    except Exception:
+        incident = {
+            "kill_chain_phase": "threat analysis requested",
+            "severity_score":   7.0,
+            "involved_hosts":   set(),
+            "mitre_techniques": ["T1059"],
+        }
+    await run_war_room_debate(
+        incident,
+        llm.client,
+        getattr(llm, "current_model", getattr(llm, "model", "")),
+        tts,
+        broadcast_fn,
+    )
+
+
 async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
     """
     Iron Man JARVIS continuous voice loop (v46.0).
@@ -454,10 +482,89 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                         text = text.strip()
                         print(f"\n{name}: {text}")
 
+                        text_lower = text.lower()
+
+                        # ── v46.0 OMEGA — War Room trigger ──────────────────
+                        if any(kw in text_lower for kw in (
+                            "war room", "sala de guerra", "debate",
+                            "ares vs", "red vs blue",
+                        )):
+                            from tools.executor import _aura_broadcast as _br
+                            asyncio.create_task(
+                                run_war_room_debate_on_last_incident(
+                                    llm, tts, _br,
+                                )
+                            )
+                            continue
+
+                        # ── v46.0 OMEGA — Room / webcam analysis ────────────
+                        if any(kw in text_lower for kw in (
+                            "qué ves", "que ves", "analiza el cuarto",
+                            "analiza la habitacion", "mira alrededor",
+                            "look around", "what do you see",
+                            "describe my room", "scan the room",
+                        )):
+                            asyncio.create_task(_speak(
+                                "Activating visual cortex. Stand by."
+                            ))
+                            from core.vision_engine import analyze_room
+                            model_v = getattr(llm, "model_vision",
+                                              "moondream:latest")
+                            desc = await analyze_room(
+                                llm.client, model_v,
+                                "Describe the room and environment in detail. "
+                                "Note any screens, people, objects, lighting."
+                            )
+                            synthesis = await _ask_jarvis(
+                                f"Moondream visual analysis of the room: {desc}\n\n"
+                                "Summarize what you see in 2 sentences. "
+                                "Note anything unusual or security-relevant."
+                            )
+                            print(f"\n[JARVIS VISION] {synthesis}\n")
+                            asyncio.create_task(_speak(synthesis))
+                            _add_to_history("user", text)
+                            _add_to_history("assistant", synthesis)
+                            continue
+
+                        # ── v46.0 OMEGA — Screen analysis ───────────────────
+                        if any(kw in text_lower for kw in (
+                            "analiza la pantalla", "analiza mi pantalla",
+                            "analyze my screen", "what's on screen",
+                            "es phishing", "is this phishing",
+                            "analyze this", "que hay en pantalla",
+                            "lee la pantalla", "read the screen",
+                        )):
+                            asyncio.create_task(_speak("Capturing screen."))
+                            from core.vision_engine import analyze_screen_vision
+                            model_v = getattr(llm, "model_vision",
+                                              "moondream:latest")
+                            if "phishing" in text_lower:
+                                query = ("Is this email or webpage showing "
+                                         "signs of phishing? Look for: "
+                                         "suspicious sender, urgent language, "
+                                         "fake logos, suspicious links.")
+                            else:
+                                query = ("Describe exactly what you see on "
+                                         "this screen.")
+                            desc = await analyze_screen_vision(
+                                llm.client, model_v, query
+                            )
+                            synthesis = await _ask_jarvis(
+                                f"Screen analysis: {desc}\n\n"
+                                "Give me a 2-sentence assessment. "
+                                "If it is phishing, say so clearly."
+                            )
+                            print(f"\n[JARVIS SCREEN] {synthesis}\n")
+                            asyncio.create_task(_speak(synthesis))
+                            _add_to_history("user", text)
+                            _add_to_history("assistant", synthesis)
+                            continue
+
                         # Check voice macros first
                         try:
-                            from core.voice_macros import dispatch_macro
-                            handled = await dispatch_macro(text)
+                            from core.voice_macros import process_for_macro
+                            from tools.executor import _aura_broadcast as _br
+                            handled = await process_for_macro(text, _br, tts)
                             if handled:
                                 continue
                         except Exception:
@@ -1318,6 +1425,89 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not initialize v45.0 PROMETHEUS: {e}")
 
+            # ── v46.0 OMEGA — IoT bridge, Punisher Mode, War Room auto-trigger ──
+            try:
+                from core.iot_bridge import (
+                    alert_red, alert_orange, alert_clear, is_configured,
+                )
+                from core.punisher import punisher_response
+
+                async def _hook_omega() -> None:
+                    await asyncio.sleep(3.5)
+                    if v36_correlator._broadcast_fn is None:
+                        logger.debug("V46_OMEGA: correlator broadcast not ready — omega hook skipped")
+                        return
+                    _orig_for_omega = v36_correlator._broadcast_fn
+
+                    async def _omega_broadcast(event: dict) -> None:
+                        await _orig_for_omega(event)
+                        etype = event.get("type", "")
+                        sev   = event.get("severity_score", 0)
+
+                        # IoT lights on compound incidents
+                        if etype == "compound_incident":
+                            try:
+                                if sev >= 8.0:
+                                    asyncio.create_task(alert_red(
+                                        flash=True,
+                                        reason=event.get("kill_chain_phase",""),
+                                    ))
+                                elif sev >= 6.0:
+                                    asyncio.create_task(alert_orange(
+                                        reason=event.get("kill_chain_phase",""),
+                                    ))
+                            except Exception:
+                                pass
+
+                            # Punisher Mode — auto-execute for severity >= 9.0
+                            try:
+                                if sev >= 9.0:
+                                    asyncio.create_task(
+                                        punisher_response(
+                                            event, tts, _aura_broadcast,
+                                        )
+                                    )
+                            except Exception:
+                                pass
+
+                            # Auto War Room debate for severity >= 7.0
+                            try:
+                                if sev >= 7.0:
+                                    from core.war_room_debate import (
+                                        run_war_room_debate,
+                                    )
+                                    asyncio.create_task(run_war_room_debate(
+                                        event,
+                                        llm.client,
+                                        hw_profile.model_deep,
+                                        tts,
+                                        _aura_broadcast,
+                                    ))
+                            except Exception:
+                                pass
+
+                        # IoT red flash on canary hits
+                        elif etype in ("CANARY_HIT", "canary_hit", "canary_triggered"):
+                            try:
+                                asyncio.create_task(alert_red(
+                                    flash=True, reason="canary_hit",
+                                ))
+                            except Exception:
+                                pass
+
+                    v36_correlator.attach(_omega_broadcast)
+                    logger.info(
+                        "V46_OMEGA: IoT + Punisher + War Room hooked into correlator"
+                    )
+
+                asyncio.create_task(_hook_omega(), name="v46-omega-hook")
+                logger.info(
+                    f"V46_OMEGA: bridge armed — "
+                    f"iot_configured={is_configured()}"
+                )
+            except Exception as e:
+                logger.warning(f"V46_OMEGA: bridge init failed: {e}")
+
             # ── v46.0 — GENESIS: unified config, self-test, boot sequence, profiler ──
             try:
                 from core.config_manager       import load_config
@@ -1351,6 +1541,20 @@ async def _main_async() -> None:
                         await execute_boot_sequence(_aura_broadcast, tts)
                     except Exception as e:
                         logger.debug(f"V46: boot sequence error: {e}")
+                    # v46.0 OMEGA — IoT startup pulse
+                    try:
+                        from core.iot_bridge import startup_pulse, is_configured
+                        if is_configured():
+                            asyncio.create_task(startup_pulse())
+                            logger.info("IOT_BRIDGE: startup pulse sent")
+                        else:
+                            logger.info(
+                                "IOT_BRIDGE: no smart home configured — "
+                                "set JARVIS_HA_URL, JARVIS_HUE_BRIDGE, "
+                                "or JARVIS_IOT_WEBHOOK to enable"
+                            )
+                    except Exception:
+                        pass
 
                 asyncio.create_task(_startup_sequence(), name="v46-startup-sequence")
 

@@ -425,3 +425,34 @@ macros:
     action: reload_config
     confirm: false
     response: "Reloading configuration."
+
+  # ── v46.0 OMEGA — War Room, Punisher, Vision, IoT ─────────────────
+  - trigger: "jarvis war room debate"
+    action: war_room_debate
+    confirm: false
+    response: "Initiating War Room protocol. ARES and CIPHER standing by."
+
+  - trigger: "jarvis punisher on"
+    action: punisher_enable
+    confirm: false
+    response: "Punisher mode enabled. Auto-isolation active above severity nine."
+
+  - trigger: "jarvis punisher off"
+    action: punisher_disable
+    confirm: false
+    response: "Punisher mode disabled. Manual approval required for all actions."
+
+  - trigger: "jarvis que ves"
+    action: vision_room
+    confirm: false
+    response: "Activating visual cortex."
+
+  - trigger: "jarvis analiza pantalla"
+    action: vision_screen
+    confirm: false
+    response: "Capturing screen."
+
+  - trigger: "jarvis all clear"
+    action: iot_clear
+    confirm: false
+    response: "Restoring normal environment."
