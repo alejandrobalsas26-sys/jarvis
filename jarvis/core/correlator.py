@@ -200,7 +200,7 @@ class TemporalCorrelator:
             await self._evaluate_rule(rule, now)
         self._maybe_trigger_ram_hunt(event)
         self._maybe_quarantine(event)
-        self._maybe_ir_report(event)
+        self._maybe_soar_then_report(event)
         self._maybe_reverse(event)
         self._maybe_ntdll(event)
 
@@ -264,6 +264,33 @@ class TemporalCorrelator:
                 from core import network_quarantine
                 asyncio.create_task(network_quarantine.quarantine(
                     str(ip), reason=f"correlator:{etype}", correlator=self))
+        except Exception:
+            pass
+
+    def _maybe_soar_then_report(self, event: dict) -> None:
+        """V50.0: enrich criticals with external CTI, THEN emit IR report."""
+        try:
+            if event.get("source") == "ir_reporter":
+                return
+            sev = float(event.get("severity", 0) or 0)
+            mitigated = bool(event.get("mitigated") or event.get("killed_pids")
+                             or event.get("host_isolated"))
+            if not (sev >= 9.0 or mitigated):
+                return
+            import asyncio
+            asyncio.create_task(self._soar_report_task(event))
+        except Exception:
+            pass
+
+    async def _soar_report_task(self, event: dict) -> None:
+        try:
+            from core import soar_enrichment
+            await soar_enrichment.enrich(event)   # mutates event in place
+        except Exception:
+            pass
+        try:
+            from core import ir_reporter
+            await ir_reporter.generate_report(event, correlator=self)
         except Exception:
             pass
 

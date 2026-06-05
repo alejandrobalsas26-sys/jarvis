@@ -640,6 +640,7 @@ async def _main_async() -> None:
     from core import ram_hunter, ransomware_decoy
     from core import network_quarantine, ir_reporter, honey_credentials
     from core import ai_reverser, ntdll_monitor, amsi_bridge
+    from core import soar_enrichment, persistence_hunter, tarpit_deception
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
@@ -1587,6 +1588,9 @@ async def _main_async() -> None:
             asyncio.create_task(ai_reverser.start(v36_correlator))
             asyncio.create_task(ntdll_monitor.start(v36_correlator))
             asyncio.create_task(amsi_bridge.start(v36_correlator))
+            asyncio.create_task(soar_enrichment.start(v36_correlator))
+            asyncio.create_task(persistence_hunter.start(v36_correlator))
+            asyncio.create_task(tarpit_deception.start(v36_correlator))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
