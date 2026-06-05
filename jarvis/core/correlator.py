@@ -201,6 +201,47 @@ class TemporalCorrelator:
         self._maybe_trigger_ram_hunt(event)
         self._maybe_quarantine(event)
         self._maybe_ir_report(event)
+        self._maybe_reverse(event)
+        self._maybe_ntdll(event)
+
+    def _maybe_reverse(self, event: dict) -> None:
+        """V49.0: static-triage any unverified PE referenced by an event."""
+        try:
+            if event.get("source") == "ai_reverser":
+                return
+            path = (event.get("file_path") or event.get("path")
+                    or event.get("decoy"))
+            if not path:
+                return
+            if not str(path).lower().endswith((".exe", ".dll", ".sys", ".scr", ".cpl")):
+                return
+            import asyncio
+            from core import ai_reverser
+            asyncio.create_task(ai_reverser.analyze(str(path), correlator=self))
+        except Exception:
+            pass
+
+    def _maybe_ntdll(self, event: dict) -> None:
+        """V49.0: on high-severity injection events, check the process for
+        ntdll unhooking/inline hooks."""
+        try:
+            if event.get("source") in ("ntdll_monitor", "ram_hunter"):
+                return
+            sev = float(event.get("severity", 0) or 0)
+            etype = str(event.get("type", "")).lower()
+            attck = event.get("attck") or event.get("technique") or []
+            if isinstance(attck, str):
+                attck = [attck]
+            pid = event.get("pid")
+            inj = ("inject" in etype or
+                   any(str(t).upper().startswith("T1055") for t in attck))
+            if pid and sev >= 8.0 and inj:
+                import asyncio
+                from core import ntdll_monitor
+                asyncio.create_task(ntdll_monitor.scan_pid(
+                    int(pid), reason=f"correlator:{etype}", correlator=self))
+        except Exception:
+            pass
 
     def _maybe_quarantine(self, event: dict) -> None:
         """V48.0: contain a malicious local host on high-severity lateral
