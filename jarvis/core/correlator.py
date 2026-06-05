@@ -198,6 +198,31 @@ class TemporalCorrelator:
         self._buffer.append(stamped)
         for rule in _RULES:
             await self._evaluate_rule(rule, now)
+        self._maybe_trigger_ram_hunt(event)
+
+    def _maybe_trigger_ram_hunt(self, event: dict) -> None:
+        """V47.0: on high-severity injection events, scan the live process
+        memory via ram_hunter. Re-entry guarded against ram_hunter's own
+        feedback events to avoid scan loops."""
+        try:
+            if event.get("source") == "ram_hunter":
+                return
+            sev = float(event.get("severity", 0) or 0)
+            etype = str(event.get("type", "")).lower()
+            attck = event.get("attck") or event.get("technique") or []
+            if isinstance(attck, str):
+                attck = [attck]
+            pid = event.get("pid")
+            is_injection = ("inject" in etype or
+                            any(str(t).upper().startswith("T1055") for t in attck))
+            if pid and sev >= 8.0 and is_injection:
+                import asyncio
+                from core import ram_hunter
+                asyncio.create_task(ram_hunter.hunt(
+                    int(pid), reason=f"correlator:{etype}", correlator=self))
+        except Exception:
+            # Never let the responder break correlation.
+            pass
 
     async def _evaluate_rule(self, rule: CorrelationRule, now: float) -> None:
         window_start = now - rule.window_sec

@@ -637,6 +637,7 @@ async def _main_async() -> None:
     from core.model_swapper       import attach as attach_model_swapper
     from core.memory_consolidator import start_consolidation_scheduler
     from core.correlator          import correlator as v36_correlator
+    from core import ram_hunter, ransomware_decoy
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
@@ -1575,6 +1576,9 @@ async def _main_async() -> None:
                 logger.info("PERFORMANCE_PROFILER: registered (5min interval)")
             except Exception as e:
                 logger.warning(f"Could not initialize v46.0 GENESIS: {e}")
+
+            asyncio.create_task(ram_hunter.start(v36_correlator))
+            asyncio.create_task(ransomware_decoy.start(v36_correlator))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
