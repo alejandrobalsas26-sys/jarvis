@@ -638,6 +638,7 @@ async def _main_async() -> None:
     from core.memory_consolidator import start_consolidation_scheduler
     from core.correlator          import correlator as v36_correlator
     from core import ram_hunter, ransomware_decoy
+    from core import network_quarantine, ir_reporter, honey_credentials
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
@@ -1579,6 +1580,9 @@ async def _main_async() -> None:
 
             asyncio.create_task(ram_hunter.start(v36_correlator))
             asyncio.create_task(ransomware_decoy.start(v36_correlator))
+            asyncio.create_task(network_quarantine.start(v36_correlator))
+            asyncio.create_task(ir_reporter.start(v36_correlator))
+            asyncio.create_task(honey_credentials.start(v36_correlator))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")

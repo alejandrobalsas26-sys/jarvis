@@ -199,6 +199,47 @@ class TemporalCorrelator:
         for rule in _RULES:
             await self._evaluate_rule(rule, now)
         self._maybe_trigger_ram_hunt(event)
+        self._maybe_quarantine(event)
+        self._maybe_ir_report(event)
+
+    def _maybe_quarantine(self, event: dict) -> None:
+        """V48.0: contain a malicious local host on high-severity lateral
+        movement / scanning. Endpoint + (optional) NAC isolation only."""
+        try:
+            if event.get("source") in ("network_quarantine", "ir_reporter", "ram_hunter"):
+                return
+            sev = float(event.get("severity", 0) or 0)
+            etype = str(event.get("type", "")).lower()
+            attck = event.get("attck") or event.get("technique") or []
+            if isinstance(attck, str):
+                attck = [attck]
+            ip = (event.get("src_ip") or event.get("source_ip")
+                  or event.get("remote_ip") or event.get("ip"))
+            is_net = ("lateral" in etype or "scan" in etype or
+                      any(str(t).upper().split(".")[0] in ("T1021", "T1046", "T1018")
+                          for t in attck))
+            if ip and sev >= 9.0 and is_net:
+                import asyncio
+                from core import network_quarantine
+                asyncio.create_task(network_quarantine.quarantine(
+                    str(ip), reason=f"correlator:{etype}", correlator=self))
+        except Exception:
+            pass
+
+    def _maybe_ir_report(self, event: dict) -> None:
+        """V48.0: emit a compliance IR report for mitigated/critical incidents."""
+        try:
+            if event.get("source") == "ir_reporter":
+                return
+            sev = float(event.get("severity", 0) or 0)
+            mitigated = bool(event.get("mitigated") or event.get("killed_pids")
+                             or event.get("host_isolated"))
+            if sev >= 9.0 or mitigated:
+                import asyncio
+                from core import ir_reporter
+                asyncio.create_task(ir_reporter.generate_report(event, correlator=self))
+        except Exception:
+            pass
 
     def _maybe_trigger_ram_hunt(self, event: dict) -> None:
         """V47.0: on high-severity injection events, scan the live process
