@@ -192,6 +192,16 @@ class TemporalCorrelator:
                 self._prune_loop(), name="correlator-prune"
             )
 
+    async def ingest_event(self, event):
+        import asyncio as _a
+        r = self.ingest(event)
+        if _a.iscoroutine(r):
+            return await r
+        return r
+
+    def add_event(self, event):
+        return self.ingest(event)
+
     async def ingest(self, event: dict) -> None:
         now    = time.monotonic()
         stamped = {**event, "__mono_ts": now}

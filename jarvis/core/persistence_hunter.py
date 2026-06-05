@@ -40,8 +40,39 @@ _OBF = re.compile(
     r"-noprofile\b|\bbypass\b|certutil\s+-decode|\bmshta\b|regsvr32.*scrobj|"
     r"rundll32.*javascript|[A-Za-z0-9+/]{80,}={0,2}", re.IGNORECASE)
 _SYS_DIRS = ("c:\\windows", "c:\\program files", "c:\\program files (x86)")
-_USER_WRITABLE = ("\\temp\\", "\\appdata\\", "\\users\\public", "\\downloads\\",
-                  "\\programdata\\")
+_ANOMALOUS_DIRS = ("\\temp\\", "\\tmp\\", "\\downloads\\", "\\users\\public\\",
+                   "\\appdata\\local\\temp\\", "\\windows\\temp\\",
+                   "\\$recycle.bin\\", "\\perflogs\\", "\\programdata\\temp\\")
+_PATH_RE = re.compile(r'"?([a-zA-Z]:\\[^"]+?\.(?:exe|dll|scr|bat|cmd|ps1|vbs|js|com|pif))"?', re.I)
+
+
+def _primary_path(value):
+    m = _PATH_RE.search(value or "")
+    return m.group(1) if m else None
+
+
+def _authenticode_batch(paths):
+    res = {}
+    paths = sorted({p for p in paths if p})
+    if not paths or not _IS_WINDOWS:
+        return res
+    arr = ",".join("'" + p.replace("'", "''") + "'" for p in paths)
+    ps = ("Get-AuthenticodeSignature -LiteralPath @(" + arr + ") "
+          "-ErrorAction SilentlyContinue | Select-Object Path,Status | "
+          "ConvertTo-Json -Compress")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             capture_output=True, text=True, timeout=120,
+                             creationflags=_NO_WINDOW)
+        data = json.loads(out.stdout or "null")
+        if isinstance(data, dict):
+            data = [data]
+        for d in (data or []):
+            if d and d.get("Path"):
+                res[os.path.normcase(str(d["Path"]))] = str(d.get("Status"))
+    except Exception as e:
+        logger.debug("persistence: authenticode batch failed: %s", e)
+    return res
 
 if _WINREG_OK:
     _HKLM = winreg.HKEY_LOCAL_MACHINE
@@ -137,7 +168,7 @@ def _collect_registry():
         ip = _read_single(_HKLM, svc_root + "\\" + sub, "ImagePath")
         if ip:
             low = ip.lower()
-            if any(t in low for t in _USER_WRITABLE):
+            if any(t in low for t in _ANOMALOUS_DIRS):
                 findings.append((f"Service:{sub}", "ImagePath", ip))
     return findings
 
@@ -208,16 +239,15 @@ def _collect_wmi_subscriptions():
     return findings
 
 
-def _suspicious(value: str):
+def _suspicious(value: str, sig_status: str | None = None):
     reasons = []
-    if _OBF.search(value):
+    if _OBF.search(value or ""):
         reasons.append("obfuscation/encoded-command")
-    low = value.lower()
-    m = re.search(r"[a-z]:\\[^\"'<>|]+", low)
-    if m:
-        p = m.group(0)
-        if any(t in p for t in _USER_WRITABLE) and not any(p.startswith(s) for s in _SYS_DIRS):
-            reasons.append("user-writable/external binary path")
+    low = (value or "").lower()
+    if any(t in low for t in _ANOMALOUS_DIRS):
+        reasons.append("anomalous-autostart-dir")
+    if sig_status and sig_status != "Valid":
+        reasons.append(f"unsigned-or-invalid:{sig_status}")
     return reasons
 
 
@@ -244,13 +274,24 @@ def _sweep_blocking():
     findings += _collect_startup_folders()
     findings += _collect_scheduled_tasks()
     findings += _collect_wmi_subscriptions()
+
+    paths = [_primary_path(value) for _, _, value in findings]
+    sig_map = _authenticode_batch([p for p in paths if p])
+
     suspicious = []
-    for vector, name, value in findings:
-        reasons = _suspicious(value)
-        if reasons:
-            h = sha256(f"{vector}|{name}|{value}".encode("utf-8", "ignore")).hexdigest()
-            suspicious.append({"vector": vector, "name": name,
-                               "value": value[:500], "reasons": reasons, "h": h})
+    seen = set()
+    for (vector, name, value), p in zip(findings, paths):
+        sig_status = sig_map.get(os.path.normcase(p)) if p else None
+        reasons = _suspicious(value, sig_status)
+        if not reasons:
+            continue
+        h = sha256(f"{vector}|{value}".encode("utf-8", "ignore")).hexdigest()
+        if h in seen:
+            continue
+        seen.add(h)
+        suspicious.append({"vector": vector, "name": name,
+                           "value": (value or "")[:500],
+                           "reasons": reasons, "h": h})
     return suspicious
 
 

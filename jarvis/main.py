@@ -54,6 +54,8 @@ logger.add(
 )
 logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
 
+_V4X_TASKS = []   # strong refs; asyncio only holds weak refs to tasks
+
 # Regex para detectar final de oración — se usa en el sentence splitter
 _SENTENCE_END_RE = re.compile(r'(?<=[.!?;:])\s+')
 
@@ -1580,17 +1582,17 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not initialize v46.0 GENESIS: {e}")
 
-            asyncio.create_task(ram_hunter.start(v36_correlator))
-            asyncio.create_task(ransomware_decoy.start(v36_correlator))
-            asyncio.create_task(network_quarantine.start(v36_correlator))
-            asyncio.create_task(ir_reporter.start(v36_correlator))
-            asyncio.create_task(honey_credentials.start(v36_correlator))
-            asyncio.create_task(ai_reverser.start(v36_correlator))
-            asyncio.create_task(ntdll_monitor.start(v36_correlator))
-            asyncio.create_task(amsi_bridge.start(v36_correlator))
-            asyncio.create_task(soar_enrichment.start(v36_correlator))
-            asyncio.create_task(persistence_hunter.start(v36_correlator))
-            asyncio.create_task(tarpit_deception.start(v36_correlator))
+            _V4X_TASKS.append(asyncio.create_task(ram_hunter.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(ransomware_decoy.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(network_quarantine.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(ir_reporter.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(honey_credentials.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(ai_reverser.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(ntdll_monitor.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(amsi_bridge.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(soar_enrichment.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(persistence_hunter.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(tarpit_deception.start(v36_correlator)))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
