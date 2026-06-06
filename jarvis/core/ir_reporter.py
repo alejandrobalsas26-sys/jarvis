@@ -125,6 +125,13 @@ def _build_markdown(event: dict) -> str:
     if not acted:
         m.append("- Detection only; no automated containment recorded for this event.")
     m.append("")
+    if event.get("compliance"):
+        m.append("## 5b. Regulatory / Compliance Impact")
+        m.append("| Framework | Control |")
+        m.append("|---|---|")
+        for c in event.get("compliance", [])[:25]:
+            m.append(f"| {c.get('framework','')} | {c.get('control','')} |")
+        m.append("")
     m.append("## 6. Raw Event")
     m.append("    " + json.dumps(event, default=str)[:4000])  # indented block (no fences)
     m.append("")

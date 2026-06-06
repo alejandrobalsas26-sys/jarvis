@@ -235,6 +235,13 @@ class TemporalCorrelator:
         """V49.0: on high-severity injection events, check the process for
         ntdll unhooking/inline hooks."""
         try:
+            from core import detection_harness as _dh
+            if event.get("simulation") or getattr(_dh, "SIM_ACTIVE", False):
+                return
+        except Exception:
+            if event.get("simulation"):
+                return
+        try:
             if event.get("source") in ("ntdll_monitor", "ram_hunter"):
                 return
             sev = float(event.get("severity", 0) or 0)
@@ -256,6 +263,13 @@ class TemporalCorrelator:
     def _maybe_quarantine(self, event: dict) -> None:
         """V48.0: contain a malicious local host on high-severity lateral
         movement / scanning. Endpoint + (optional) NAC isolation only."""
+        try:
+            from core import detection_harness as _dh
+            if event.get("simulation") or getattr(_dh, "SIM_ACTIVE", False):
+                return
+        except Exception:
+            if event.get("simulation"):
+                return
         try:
             if event.get("source") in ("network_quarantine", "ir_reporter", "ram_hunter"):
                 return

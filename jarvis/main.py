@@ -643,6 +643,8 @@ async def _main_async() -> None:
     from core import network_quarantine, ir_reporter, honey_credentials
     from core import ai_reverser, ntdll_monitor, amsi_bridge
     from core import soar_enrichment, persistence_hunter, tarpit_deception
+    from core import (dlp_sensor, exfil_detector, decoy_filesystem,
+                      decoy_service, detection_harness, coverage_reporter)
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
@@ -1593,6 +1595,12 @@ async def _main_async() -> None:
             _V4X_TASKS.append(asyncio.create_task(soar_enrichment.start(v36_correlator)))
             _V4X_TASKS.append(asyncio.create_task(persistence_hunter.start(v36_correlator)))
             _V4X_TASKS.append(asyncio.create_task(tarpit_deception.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(dlp_sensor.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(exfil_detector.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(decoy_filesystem.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(decoy_service.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(detection_harness.start(v36_correlator)))
+            _V4X_TASKS.append(asyncio.create_task(coverage_reporter.start(v36_correlator)))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
