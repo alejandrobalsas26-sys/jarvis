@@ -211,8 +211,17 @@ class TemporalCorrelator:
         self._maybe_trigger_ram_hunt(event)
         self._maybe_quarantine(event)
         self._maybe_soar_then_report(event)
+        self._maybe_dashboard(event)
         self._maybe_reverse(event)
         self._maybe_ntdll(event)
+
+    def _maybe_dashboard(self, event: dict) -> None:
+        """V52.0: stream events to the local AEGIS C2 dashboard (sev>5 filtered there)."""
+        try:
+            from core import c2_dashboard
+            c2_dashboard.push(event)
+        except Exception:
+            pass
 
     def _maybe_reverse(self, event: dict) -> None:
         """V49.0: static-triage any unverified PE referenced by an event."""
