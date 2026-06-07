@@ -647,6 +647,7 @@ async def _main_async() -> None:
                       decoy_service, detection_harness, coverage_reporter)
     from core import c2_dashboard, health_watchdog, itdr_sentinel
     from core import dns_sinkhole, arp_deception, cmd_analyser
+    from core import mobile_c2, vss_vaccine, industrial_asset_guard
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
@@ -1610,6 +1611,9 @@ async def _main_async() -> None:
             health_watchdog.track("dns_sinkhole", lambda: dns_sinkhole.start(v36_correlator))
             health_watchdog.track("arp_deception", lambda: arp_deception.start(v36_correlator))
             health_watchdog.track("cmd_analyser", lambda: cmd_analyser.start(v36_correlator))
+            health_watchdog.track("mobile_c2", lambda: mobile_c2.start(v36_correlator))
+            health_watchdog.track("vss_vaccine", lambda: vss_vaccine.start(v36_correlator))
+            health_watchdog.track("industrial_asset_guard", lambda: industrial_asset_guard.start(v36_correlator))
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")

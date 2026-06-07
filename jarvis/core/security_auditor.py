@@ -251,7 +251,7 @@ async def run_port_audit(broadcast_fn) -> dict:
             if pid == 4:
                 continue
             if any(s in process_name.lower() for s in
-                   ("onedrive", "google", "dropbox", "dashost")):
+                   ("onedrive", "google", "dropbox", "dashost", "ankama")):
                 continue
             # Whitelist short-circuit — known-safe (Steam, VMware, Windows
             # services, etc.) are recorded as system, never flagged/blocked.

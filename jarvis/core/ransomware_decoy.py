@@ -44,7 +44,7 @@ _IS_WINDOWS = os.name == "nt"
 
 # --- Config ------------------------------------------------------------------
 _VAULT_DIR = Path(os.environ.get(
-    "JARVIS_DECOY_VAULT", str(Path.home() / "Documents" / ".jarvis_vault")))
+    "JARVIS_DECOY_VAULT", str(Path.home() / ".jarvis_vault")))
 _AUTO_KILL_ENABLED = True            # toggle (mirrors core/punisher.py house style)
 _PROTECTED_PIDS = {0, 4}
 _PROTECTED_NAMES = {

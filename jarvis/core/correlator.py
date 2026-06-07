@@ -214,12 +214,21 @@ class TemporalCorrelator:
         self._maybe_dashboard(event)
         self._maybe_reverse(event)
         self._maybe_ntdll(event)
+        self._maybe_mobile_alert(event)
 
     def _maybe_dashboard(self, event: dict) -> None:
         """V52.0: stream events to the local AEGIS C2 dashboard (sev>5 filtered there)."""
         try:
             from core import c2_dashboard
             c2_dashboard.push(event)
+        except Exception:
+            pass
+
+    def _maybe_mobile_alert(self, event: dict) -> None:
+        """V54.0: push sev>=8 events to the operator's phone (filter inside mobile_c2.push)."""
+        try:
+            from core import mobile_c2
+            mobile_c2.push(event)
         except Exception:
             pass
 
