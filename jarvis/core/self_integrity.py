@@ -35,6 +35,11 @@ _baseline_exec_pages: set = set()
 
 if _IS_WINDOWS:
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # restype MUST be a pointer-width type — the ctypes default (c_int) truncates
+    # 64-bit HMODULE/address returns, corrupting every PE walk on 64-bit Windows.
+    _k32.GetModuleHandleW.restype = ctypes.c_void_p
+    _k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    _k32.VirtualQuery.restype = ctypes.c_size_t
 
 
 def _is_admin():

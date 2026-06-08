@@ -145,5 +145,9 @@ mitmproxy>=10.3.0         # MITM proxy with async Python API (proxy_intel)
 python-telegram-bot>=20.7  # Async Telegram Bot API
 aiosqlite>=0.20.0          # Async SQLite for persistent IOC database
 
+# ── v55.0 OMNI-REDUNDANCY — Kernel ETW Telemetry ──────────────
+pywintrace>=0.2.0         # real-time Microsoft-Windows-Kernel-Process ETW session
+                         # (kernel_telemetry — dormant until run elevated)
+
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0
