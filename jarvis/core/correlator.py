@@ -215,6 +215,22 @@ class TemporalCorrelator:
         self._maybe_reverse(event)
         self._maybe_ntdll(event)
         self._maybe_mobile_alert(event)
+        self._maybe_plugin_route(event)
+
+    def _maybe_plugin_route(self, event: dict) -> None:
+        """V55.0: route eligible high-severity events through loaded plugins."""
+        try:
+            if event.get("_plugin_enriched"):
+                return
+            sev = float(event.get("severity", 0) or 0)
+            if sev < 7.0:
+                return
+            from core import plugin_loader
+            if plugin_loader.LOADED_PLUGINS:
+                import asyncio
+                asyncio.create_task(plugin_loader.route_event(event))
+        except Exception:
+            pass
 
     def _maybe_dashboard(self, event: dict) -> None:
         """V52.0: stream events to the local AEGIS C2 dashboard (sev>5 filtered there)."""
