@@ -140,6 +140,17 @@ async def _loop_text(llm, tts, name: str) -> None:
             await tts.speak_async("Hasta luego.")
             break
 
+        if user_input.lower() == "/loop":
+            import subprocess
+            from functools import partial
+            print("Ejecutando tests...")
+            func = partial(subprocess.run, ["pytest"], capture_output=True, text=True)
+            result = await loop.run_in_executor(None, func)
+            print(result.stdout)
+            if result.stderr:
+                print(result.stderr)
+            continue
+
         await _run_turn(llm, tts, user_input, name)
 
 
