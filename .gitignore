@@ -61,3 +61,10 @@ jarvis/logs/sessions/
 
 # v46.0 — unified config (may hold telegram/API secrets — NEVER commit)
 jarvis_config.yaml
+
+# Test/runtime artifacts (audit trail, triage queue, forensics & GRC reports)
+tactic_audit.jsonl
+triage_queue/
+jarvis/logs/*.jsonl
+jarvis/logs/forensics/
+jarvis/logs/grc_reports/
