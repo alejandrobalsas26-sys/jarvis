@@ -1630,6 +1630,40 @@ async def _main_async() -> None:
             health_watchdog.track("self_integrity",   lambda: self_integrity.start(v36_correlator))
             health_watchdog.track("plugin_loader",    lambda: plugin_loader.start(v36_correlator))
 
+            # ── v57.0 NEXUS — Cisco Bare-Metal, GRC Auditor, PCAP Forensics ──────
+            try:
+                from core.cisco_controller import cisco_controller as _cisco_ctrl
+                from core.grc_auditor      import grc_auditor      as _grc_aud
+                from core.pcap_capture     import pcap_orchestrator as _pcap_orc
+
+                # Wire hardware controllers to correlator (inject optional deps)
+                if hasattr(v36_correlator, "attach_cisco_controller"):
+                    v36_correlator.attach_cisco_controller(_cisco_ctrl)
+                if hasattr(v36_correlator, "attach_pcap_orchestrator"):
+                    v36_correlator.attach_pcap_orchestrator(_pcap_orc)
+
+                # Cisco hardware watchdog (dormant when env unconfigured)
+                health_watchdog.track("cisco_controller", lambda: _cisco_ctrl.start())
+                logger.info(
+                    "CISCO_CTRL: bare-metal containment registered (%s)",
+                    "ENABLED" if _cisco_ctrl.is_enabled() else "DORMANT — set JARVIS_HW_SSH_URL/USERNAME/PASSWORD",
+                )
+
+                # GRC auditor periodic reports
+                health_watchdog.track("grc_auditor", lambda: _grc_aud.start())
+                logger.info(
+                    "GRC_AUDITOR: compliance reporting registered (%s)",
+                    "ENABLED" if _grc_aud.is_enabled() else "DISABLED — set JARVIS_GRC_ENABLED=1",
+                )
+
+                # PCAP orchestrator — passive (fires per-alert via correlator)
+                logger.info(
+                    "PCAP_ORCHESTRATOR: forensic capture registered (%s)",
+                    "ENABLED" if _pcap_orc.is_enabled() else "DISABLED — set JARVIS_PCAP_ENABLED=1",
+                )
+            except Exception as _v57_err:
+                logger.warning("V57_NEXUS: initialization failed: %s", _v57_err)
+
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 

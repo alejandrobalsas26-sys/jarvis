@@ -178,6 +178,9 @@ class TemporalCorrelator:
         # V55.0 TITAN — optional persistent state + SIEM forwarding
         self._db_manager     = None  # core.db_manager.DBManager | None
         self._siem_forwarder = None  # core.siem_forwarder.SIEMForwarder | None
+        # V57.0 NEXUS — optional hardware containment + PCAP forensics
+        self._cisco_controller  = None  # core.cisco_controller.CiscoController | None
+        self._pcap_orchestrator = None  # core.pcap_capture.PCAPCaptureOrchestrator | None
 
     def attach(self, broadcast_fn) -> None:
         self._broadcast_fn = broadcast_fn
@@ -186,6 +189,14 @@ class TemporalCorrelator:
         """V55.0: wire DBManager and SIEMForwarder for persistent alert state."""
         self._db_manager     = db_manager
         self._siem_forwarder = siem_forwarder
+
+    def attach_cisco_controller(self, controller) -> None:
+        """V57.0: wire CiscoController for sev>=9.5 bare-metal containment."""
+        self._cisco_controller = controller
+
+    def attach_pcap_orchestrator(self, orchestrator) -> None:
+        """V57.0: wire PCAPCaptureOrchestrator for exfil/C2 forensic capture."""
+        self._pcap_orchestrator = orchestrator
 
     def attach_llm(self, tts, ollama_client, fast_model: str, deep_model: str) -> None:
         """v36.0 — wire LLM/TTS refs for autonomous prediction + narration."""
@@ -224,6 +235,57 @@ class TemporalCorrelator:
         self._maybe_ntdll(event)
         self._maybe_mobile_alert(event)
         self._maybe_plugin_route(event)
+        self._maybe_cisco_contain(event)
+        self._maybe_pcap_capture(event)
+
+    def _maybe_cisco_contain(self, event: dict) -> None:
+        """V57.0: on sev >= 9.5, dispatch bare-metal containment to CiscoController."""
+        try:
+            if self._cisco_controller is None:
+                return
+            if not self._cisco_controller.is_enabled():
+                return
+            sev = float(event.get("severity", 0) or 0)
+            if sev < 9.5:
+                return
+            import asyncio
+            asyncio.create_task(
+                self._cisco_controller.contain_alert(event),
+                name=f"cisco-contain-{event.get('type','ev')}",
+            )
+        except Exception:
+            pass
+
+    def _maybe_pcap_capture(self, event: dict) -> None:
+        """V57.0: on high-severity exfil/C2 events, schedule a forensic PCAP capture."""
+        try:
+            if self._pcap_orchestrator is None:
+                return
+            if not self._pcap_orchestrator.is_enabled():
+                return
+            sev = float(event.get("severity", 0) or 0)
+            if sev < 8.0:
+                return
+            etype = str(event.get("type", "")).lower()
+            attck = event.get("attck") or event.get("technique") or []
+            if isinstance(attck, str):
+                attck = [attck]
+            is_target = (
+                any(kw in etype for kw in ("exfil", "c2", "command", "beacon",
+                                           "exfiltration", "lateral"))
+                or any(str(t).upper().split(".")[0] in (
+                    "T1041", "T1567", "T1020", "T1048",
+                    "T1071", "T1095", "T1102",
+                ) for t in attck)
+            )
+            if is_target:
+                import asyncio
+                asyncio.create_task(
+                    self._pcap_orchestrator.capture_for_alert(event),
+                    name=f"pcap-{event.get('type','ev')}",
+                )
+        except Exception:
+            pass
 
     def _maybe_plugin_route(self, event: dict) -> None:
         """V55.0: route eligible high-severity events through loaded plugins."""

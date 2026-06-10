@@ -160,3 +160,7 @@ redis>=5.0.0              # redis.asyncio client (dedup, cache, pub/sub)
 
 # ── V55.0 TITAN — Linting ───────────────────────────────────────
 ruff>=0.4.0               # fast Python linter / formatter
+
+# ── V57.0 NEXUS — Cisco Bare-Metal & PCAP Forensics ─────────────
+asyncssh>=2.14.0          # native async SSH (preferred Cisco IOS transport)
+netmiko>=4.3.0            # multi-vendor SSH automation (asyncssh fallback)
