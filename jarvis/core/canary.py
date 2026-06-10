@@ -40,6 +40,7 @@ async def canary_handler(
     broadcast_fn,
     tool_executor_ref=None,
     llm_client_ref=None,
+    cognitive_engine=None,
 ) -> None:
     peer = writer.get_extra_info("peername")
     attacker_ip = peer[0] if peer else "unknown"
@@ -112,6 +113,7 @@ async def canary_handler(
                         tool_executor=tool_executor_ref,
                         broadcast_fn=broadcast_fn,
                         llm_client=llm_client_ref,
+                        cognitive_engine=cognitive_engine,
                     ),
                     name="agentic-incident",
                 )
@@ -123,6 +125,7 @@ async def start_canaries(
     broadcast_fn,
     tool_executor_ref=None,
     llm_client_ref=None,
+    cognitive_engine=None,
 ) -> None:
     """Bind honeypot listeners on all available ports and serve indefinitely."""
     from core.telemetry_auth import make_signed_broadcaster
@@ -137,8 +140,9 @@ async def start_canaries(
         try:
             # CRITICAL CLOSURE FIX: freeze port + refs into lambda via default keyword args
             server = await asyncio.start_server(
-                lambda r, w, p=port, te=tool_executor_ref, lc=llm_client_ref: (
-                    canary_handler(r, w, p, broadcast_fn, te, lc)
+                lambda r, w, p=port, te=tool_executor_ref, lc=llm_client_ref, \
+                       ce=cognitive_engine: (
+                    canary_handler(r, w, p, broadcast_fn, te, lc, ce)
                 ),
                 "0.0.0.0",
                 port,

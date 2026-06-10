@@ -901,7 +901,8 @@ async def _main_async() -> None:
                 from core.canary import start_canaries
                 watchdog.register(
                     "canary-matrix",
-                    lambda: start_canaries(_aura_broadcast, executor, llm),
+                    lambda: start_canaries(_aura_broadcast, executor, llm,
+                                           cognitive_engine),
                     RestartPolicy.ALWAYS,
                 )
                 logger.info("CANARY: honeypot matrix initializing…")
