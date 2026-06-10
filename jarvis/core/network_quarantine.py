@@ -19,6 +19,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from core.rbac_manager import ClearanceLevel, requires_clearance
+
 logger = logging.getLogger("jarvis.network_quarantine")
 
 _IS_WINDOWS = os.name == "nt"
@@ -143,6 +145,7 @@ async def _report(correlator, ip: str, reason: str, res: dict) -> None:
         logger.error("network_quarantine: report dispatch failed: %s", e)
 
 
+@requires_clearance(ClearanceLevel.L3_Hunter)
 async def quarantine(ip: str, *, reason: str = "manual", correlator=None) -> dict:
     res = {"ip": ip, "reason": reason, "ts": time.time(),
            "host_isolated": False, "nac_isolated": False, "skipped": None}
@@ -183,6 +186,7 @@ async def quarantine(ip: str, *, reason: str = "manual", correlator=None) -> dic
     return res
 
 
+@requires_clearance(ClearanceLevel.L3_Hunter)
 async def release(ip: str) -> dict:
     res = {"ip": ip, "released": False}
     if not (_IS_WINDOWS and _is_admin()):

@@ -151,3 +151,12 @@ pywintrace>=0.2.0         # real-time Microsoft-Windows-Kernel-Process ETW sessi
 
 # ── Testing ────────────────────────────────────────────────────
 pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# ── V55.0 TITAN — Persistent state & SIEM forwarding ───────────
+asyncpg>=0.29.0           # async PostgreSQL driver (DBManager)
+redis>=5.0.0              # redis.asyncio client (dedup, cache, pub/sub)
+# aiohttp already declared above (v21.0 section)
+
+# ── V55.0 TITAN — Linting ───────────────────────────────────────
+ruff>=0.4.0               # fast Python linter / formatter

@@ -175,9 +175,17 @@ class TemporalCorrelator:
         self._ollama_client = None
         self._fast_model    = "qwen2.5:7b-instruct-q5_K_M"
         self._deep_model    = "qwen2.5:14b-instruct-q4_K_M"
+        # V55.0 TITAN — optional persistent state + SIEM forwarding
+        self._db_manager     = None  # core.db_manager.DBManager | None
+        self._siem_forwarder = None  # core.siem_forwarder.SIEMForwarder | None
 
     def attach(self, broadcast_fn) -> None:
         self._broadcast_fn = broadcast_fn
+
+    def attach_persistence(self, db_manager, siem_forwarder=None) -> None:
+        """V55.0: wire DBManager and SIEMForwarder for persistent alert state."""
+        self._db_manager     = db_manager
+        self._siem_forwarder = siem_forwarder
 
     def attach_llm(self, tts, ollama_client, fast_model: str, deep_model: str) -> None:
         """v36.0 — wire LLM/TTS refs for autonomous prediction + narration."""
@@ -320,8 +328,20 @@ class TemporalCorrelator:
             if ip and sev >= 9.0 and is_net:
                 import asyncio
                 from core import network_quarantine
-                asyncio.create_task(network_quarantine.quarantine(
-                    str(ip), reason=f"correlator:{etype}", correlator=self))
+
+                async def _auto_quarantine(ip_: str, reason_: str, corr_) -> None:
+                    try:
+                        from core.rbac_manager import ActorContext, ClearanceLevel
+                        import core.rbac_manager as _rbac_mgr
+                        _rbac_mgr.set_current_actor(
+                            ActorContext("jarvis-system", ClearanceLevel.L3_Hunter, "contextvar")
+                        )
+                        await network_quarantine.quarantine(ip_, reason=reason_, correlator=corr_)
+                    except Exception:
+                        pass
+
+                asyncio.create_task(_auto_quarantine(
+                    str(ip), f"correlator:{etype}", self))
         except Exception:
             pass
 
@@ -468,6 +488,16 @@ class TemporalCorrelator:
                     f"[{rule.name}] phase={inc.kill_chain_phase} "
                     f"severity={inc.severity_score:.1f}"
                 )
+
+                # V55.0 TITAN — persist and forward new incidents
+                _inc_payload = {**inc.to_dict(), "rule": rule.name}
+                if self._db_manager is not None:
+                    asyncio.create_task(
+                        self._db_manager.save_alert(_inc_payload),
+                        name=f"db-save-{inc.incident_id}",
+                    )
+                if self._siem_forwarder is not None:
+                    self._siem_forwarder.enqueue(_inc_payload)
 
                 try:
                     from core.episodic_memory import store_episode

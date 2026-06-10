@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  jarvis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://jarvis:jarvis@postgres:5432/jarvis}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SIEM_ENDPOINT: ${SIEM_ENDPOINT:-}
+      SIEM_API_KEY: ${SIEM_API_KEY:-}
+      RBAC_DEFAULT_ACTOR: ${RBAC_DEFAULT_ACTOR:-analyst@local:Analyst}
+      JARVIS_ENV: ${JARVIS_ENV:-production}
+    ports:
+      - "8765:8765"
+    volumes:
+      - jarvis_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jarvis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jarvis}
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  jarvis_logs:

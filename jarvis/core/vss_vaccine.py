@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio, json, logging, os, subprocess, time
 from pathlib import Path
 
+from core.rbac_manager import ClearanceLevel, requires_clearance
+
 logger = logging.getLogger("jarvis.vss_vaccine")
 
 _IS_WINDOWS = os.name == "nt"
@@ -131,6 +133,7 @@ async def list_snapshots():
     return await loop.run_in_executor(None, _list_shadows_blocking)
 
 
+@requires_clearance(ClearanceLevel.Admin)
 async def restore_to(shadow_id: str):
     """OPERATOR-ONLY. Mounts the shadow read-only at C:\\jarvis_shadow_mount so the
     operator restores selectively. Not auto-called by the module."""
