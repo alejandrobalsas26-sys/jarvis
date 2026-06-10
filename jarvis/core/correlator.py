@@ -61,6 +61,35 @@ _KILL_CHAIN: dict[frozenset, str] = {
 }
 
 
+def _safe_schedule(coro, name: str):
+    """
+    Safely schedule a coroutine on the running event loop.
+
+    V57.0 NEXUS hardening: never let a fire-and-forget dispatch crash ingest().
+    Requires a running loop (correlator ingest is always called from async code);
+    if none is running or scheduling fails, the coroutine is closed and the
+    failure is logged rather than raised.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("CORRELATOR: no running event loop — dropped task %r", name)
+        try:
+            coro.close()
+        except Exception:
+            pass
+        return None
+    try:
+        return loop.create_task(coro, name=name)
+    except Exception as e:
+        logger.warning("CORRELATOR: failed to schedule task %r: %s", name, e)
+        try:
+            coro.close()
+        except Exception:
+            pass
+        return None
+
+
 def _infer_kill_chain(techniques: list[str]) -> str:
     t_set = set(techniques)
     for chain_set, phase in _KILL_CHAIN.items():
@@ -248,13 +277,12 @@ class TemporalCorrelator:
             sev = float(event.get("severity", 0) or 0)
             if sev < 9.5:
                 return
-            import asyncio
-            asyncio.create_task(
+            _safe_schedule(
                 self._cisco_controller.contain_alert(event),
                 name=f"cisco-contain-{event.get('type','ev')}",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("CORRELATOR: cisco containment dispatch failed: %s", e)
 
     def _maybe_pcap_capture(self, event: dict) -> None:
         """V57.0: on high-severity exfil/C2 events, schedule a forensic PCAP capture."""
@@ -279,13 +307,12 @@ class TemporalCorrelator:
                 ) for t in attck)
             )
             if is_target:
-                import asyncio
-                asyncio.create_task(
+                _safe_schedule(
                     self._pcap_orchestrator.capture_for_alert(event),
                     name=f"pcap-{event.get('type','ev')}",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("CORRELATOR: pcap capture dispatch failed: %s", e)
 
     def _maybe_plugin_route(self, event: dict) -> None:
         """V55.0: route eligible high-severity events through loaded plugins."""

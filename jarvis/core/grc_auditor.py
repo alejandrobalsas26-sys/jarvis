@@ -8,6 +8,9 @@ Generates a degraded report with clear status when no telemetry is available.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import html
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -280,27 +283,28 @@ class GRCAuditor:
         return "\n".join(lines)
 
     def render_html(self, summary: dict) -> str:
-        ts     = summary["generated_at"]
+        ts     = html.escape(str(summary["generated_at"]))
         avail  = summary.get("data_available", False)
         crit   = summary.get("critical_alerts", 0)
         badge_color = "#e74c3c" if crit > 0 else "#27ae60"
 
+        esc = html.escape
         nist_rows = "".join(
-            f"<tr><td><b>{func}</b></td>"
-            f"<td>{data['label']}</td>"
+            f"<tr><td><b>{esc(str(func))}</b></td>"
+            f"<td>{esc(str(data['label']))}</td>"
             f"<td style='color:{'#e74c3c' if len(data['events']) else '#27ae60'};"
             f"font-weight:bold'>{len(data['events'])}</td></tr>"
             for func, data in summary.get("nist_csf", {}).items()
         )
         recs = "".join(
-            f"<li>{r}</li>" for r in summary.get("recommendations", [])
+            f"<li>{esc(str(r))}</li>" for r in summary.get("recommendations", [])
         )
         tactics_rows = "".join(
-            f"<tr><td>{t}</td><td>{c}</td></tr>"
+            f"<tr><td>{esc(str(t))}</td><td>{esc(str(c))}</td></tr>"
             for t, c in summary.get("top_tactics", [])
         )
         hosts_list = "".join(
-            f"<li>{h}</li>" for h in summary.get("affected_hosts", [])
+            f"<li>{esc(str(h))}</li>" for h in summary.get("affected_hosts", [])
         ) or "<li>None</li>"
         status_block = (
             '<div class="warn">&#9888; No telemetry available in this window.</div>'
@@ -358,6 +362,33 @@ ul{{margin:0.5em 0;}} li{{margin:0.3em 0;}}
 </body>
 </html>"""
 
+    @staticmethod
+    def _append_manifest(archive_dir: Path, files: dict[str, str]) -> None:
+        """
+        Append a SHA256 integrity record for the archived report to
+        logs/grc_reports/manifest.jsonl (one JSON object per line).
+        """
+        try:
+            entry = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "files": {},
+            }
+            for label, path_str in files.items():
+                p = Path(path_str)
+                if not p.exists():
+                    continue
+                digest = hashlib.sha256(p.read_bytes()).hexdigest()
+                entry["files"][label] = {
+                    "name":   p.name,
+                    "sha256": digest,
+                    "bytes":  p.stat().st_size,
+                }
+            manifest = archive_dir / "manifest.jsonl"
+            with open(manifest, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("GRC_AUDITOR: manifest update failed: %s", e)
+
     async def write_immutable_report(self, html: str, markdown: str) -> dict:
         """Write the current report and an immutable timestamped archive copy."""
         try:
@@ -386,6 +417,10 @@ ul{{margin:0.5em 0;}} li{{margin:0.3em 0;}}
             async with aiofiles.open(archive_md, "w", encoding="utf-8") as f:
                 await f.write(markdown)
 
+            await asyncio.to_thread(
+                self._append_manifest, archive_dir,
+                {"html": str(archive_html), "md": str(archive_md)},
+            )
             logger.info("GRC_AUDITOR: report written → %s", report_path)
             return {
                 "current":      str(report_path),
@@ -407,6 +442,9 @@ ul{{margin:0.5em 0;}} li{{margin:0.3em 0;}}
         report_path.write_text(html, encoding="utf-8")
         archive_html.write_text(html, encoding="utf-8")
         archive_md.write_text(markdown, encoding="utf-8")
+        self._append_manifest(
+            archive_dir, {"html": str(archive_html), "md": str(archive_md)}
+        )
         return {
             "current":      str(report_path),
             "archive_html": str(archive_html),

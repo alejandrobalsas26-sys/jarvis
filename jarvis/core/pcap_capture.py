@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,11 +42,24 @@ class PCAPCaptureOrchestrator:
     Safe-by-default: dormant unless JARVIS_PCAP_ENABLED is set.
     """
 
+    _MAX_COOLDOWN_ENTRIES = 512
+
     def __init__(self) -> None:
         self._cooldown: dict[str, float] = {}
 
     def _cooldown_secs(self) -> float:
         return 120.0
+
+    def _prune_cooldown(self, now: float) -> None:
+        """Bound the cooldown dict: drop expired keys, then evict oldest if oversized."""
+        ttl = self._cooldown_secs()
+        for k in [k for k, t in self._cooldown.items() if now - t >= ttl]:
+            self._cooldown.pop(k, None)
+        if len(self._cooldown) > self._MAX_COOLDOWN_ENTRIES:
+            for k, _ in sorted(self._cooldown.items(), key=lambda kv: kv[1])[
+                : len(self._cooldown) - self._MAX_COOLDOWN_ENTRIES
+            ]:
+                self._cooldown.pop(k, None)
 
     def is_enabled(self) -> bool:
         return os.environ.get("JARVIS_PCAP_ENABLED", "").lower() in ("1", "true", "yes")
@@ -78,6 +92,7 @@ class PCAPCaptureOrchestrator:
             )
             return {"status": "cooldown", "key": key}
         self._cooldown[key] = now
+        self._prune_cooldown(now)
 
         interface = self.detect_interface()
         if interface is None:
@@ -106,10 +121,21 @@ class PCAPCaptureOrchestrator:
             logger.info("PCAP[DRY-RUN]: %s", " ".join(cmd))
             return {"status": "dry_run", "cmd": cmd, "output": str(output)}
 
-        asyncio.create_task(
-            self._run_capture(cmd, output),
-            name=f"pcap-{inc_id}-{ts}",
-        )
+        # Verify the capture tool is actually installed before scheduling.
+        # On Windows tshark/tcpdump are frequently absent — no-op safely.
+        if shutil.which(cmd[0]) is None:
+            logger.warning("PCAP: tool %r not found on PATH — capture skipped", cmd[0])
+            return {"status": "tool_missing", "tool": cmd[0]}
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._run_capture(cmd, output),
+                name=f"pcap-{inc_id}-{ts}",
+            )
+        except RuntimeError:
+            logger.warning("PCAP: no running event loop — capture skipped")
+            return {"status": "no_loop"}
         logger.info(
             "PCAP: capture scheduled → %s (interface=%s duration=%ds)",
             output, interface, self._duration(),

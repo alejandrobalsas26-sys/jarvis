@@ -24,6 +24,8 @@ _IP_RE   = re.compile(
     r'^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$'
 )
 _VLAN_RE = re.compile(r'^\d{1,4}$')
+# Cisco interface names: e.g. GigabitEthernet0/0, Fa0/1, Te1/0/1
+_IFACE_RE = re.compile(r'^[A-Za-z][A-Za-z0-9/\.\-]{0,63}$')
 
 
 def _normalize_mac(mac: str) -> str:
@@ -119,10 +121,26 @@ class CiscoController:
 
     @property
     def _hw_interface(self) -> str:
-        return os.environ.get("JARVIS_HW_INTERFACE", "GigabitEthernet0/0")
+        # No default: router ACL injection requires an explicit interface.
+        return os.environ.get("JARVIS_HW_INTERFACE", "").strip()
+
+    def _hw_action_enabled(self) -> bool:
+        """Real hardware actions require an explicit JARVIS_HW_ENABLE=true opt-in."""
+        return os.environ.get("JARVIS_HW_ENABLE", "").lower() in ("1", "true", "yes")
+
+    def _persist_config(self) -> bool:
+        """Persist running-config to startup only when explicitly opted in."""
+        return os.environ.get("JARVIS_HW_PERSIST_CONFIG", "").lower() in ("1", "true", "yes")
 
     def _dry_run(self) -> bool:
-        return os.environ.get("JARVIS_HW_DRY_RUN", "").lower() in ("1", "true", "yes")
+        """
+        Safe-by-default: dry-run unless real actions are enabled AND the operator
+        has explicitly set JARVIS_HW_DRY_RUN=false. Without JARVIS_HW_ENABLE=true
+        every action is forced to dry-run.
+        """
+        if not self._hw_action_enabled():
+            return True
+        return os.environ.get("JARVIS_HW_DRY_RUN", "true").lower() not in ("0", "false", "no")
 
     def is_enabled(self) -> bool:
         """True only when SSH URL, username, and password are all configured."""
@@ -220,8 +238,9 @@ class CiscoController:
             "configure terminal",
             f"mac address-table static {norm} vlan {vlan} drop",
             "end",
-            "write memory",
         ]
+        if self._persist_config():
+            commands.append("write memory")
 
         if self._dry_run():
             logger.info(
@@ -265,9 +284,15 @@ class CiscoController:
         except ValueError as e:
             return {"status": "error", "reason": str(e)}
 
+        interface = self._hw_interface
+        if not interface:
+            return {"status": "error",
+                    "reason": "JARVIS_HW_INTERFACE not set (required for ACL injection)"}
+        if not _IFACE_RE.match(interface):
+            return {"status": "error", "reason": f"invalid interface {interface!r}"}
+
         acl_token = str(uuid.uuid4())[:8].upper()
         acl_name  = f"JARVIS-DROP-{acl_token}"
-        interface = self._hw_interface
 
         commands = (
             ["configure terminal", f"ip access-list extended {acl_name}"]
@@ -279,9 +304,10 @@ class CiscoController:
                 f"ip access-group {acl_name} in",
                 "exit",
                 "end",
-                "write memory",
             ]
         )
+        if self._persist_config():
+            commands.append("write memory")
 
         if self._dry_run():
             logger.info(
@@ -379,7 +405,8 @@ class CiscoController:
                 if c not in ("write memory", "end", "exit", "configure terminal")
             ]
             output = conn.send_config_set(config_cmds)
-            conn.save_config()
+            if self._persist_config():
+                conn.save_config()
         return True, output
 
 
