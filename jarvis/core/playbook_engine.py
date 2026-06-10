@@ -141,7 +141,7 @@ async def _execute_step(
             target = params.get("target", "")
             if target and tool_executor:
                 asyncio.create_task(
-                    tool_executor.execute(
+                    tool_executor.aexecute(
                         tool_name="network_scan",
                         tool_input={"target": target, "scan_type": "-sV --top-ports 100"},
                         reasoning=f"Playbook-triggered scan: {incident.get('incident_id')}",

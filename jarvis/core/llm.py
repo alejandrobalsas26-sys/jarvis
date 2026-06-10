@@ -1204,8 +1204,8 @@ class LLM:
                     except Exception as e:
                         result = {"error": f"MCP error en '{tool_name}': {e}"}
                 else:
-                    # execute() is fully async — NATO gate + run_in_executor inside
-                    result = await self.tool_executor.execute(tool_name, tool_input, thinking)
+                    # aexecute() is fully async — NATO gate + run_in_executor inside
+                    result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
 
                 logger.debug(f"Result: {result}")
                 result_str = json.dumps(result, ensure_ascii=False)

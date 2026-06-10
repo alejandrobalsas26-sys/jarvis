@@ -258,7 +258,7 @@ class AresOperator:
         logger.info(f"ARES SCAN: nmap -sV -O --top-ports 1000 {target}")
         if self._tool_executor:
             try:
-                result = await self._tool_executor.execute(
+                result = await self._tool_executor.aexecute(
                     tool_name  = "network_scan",
                     tool_input = {
                         "target":    target,

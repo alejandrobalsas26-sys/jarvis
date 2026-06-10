@@ -114,7 +114,7 @@ async def run_agentic_incident(
                     continue
 
             try:
-                result = await tool_executor.execute(
+                result = await tool_executor.aexecute(
                     tool_name=tool_name,
                     tool_input=tool_input,
                     reasoning=f"[AGENTIC cycle={cycle+1}] {reasoning}",

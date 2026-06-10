@@ -15,6 +15,7 @@ Security layers:
 """
 
 import asyncio
+import ipaddress
 import json
 import math
 import random
@@ -231,16 +232,53 @@ _PII_OUTPUT_RE = re.compile(
 )
 
 
-def _validate_command(command: str) -> tuple[bool, str, list[str], str, str]:
+def _contains_shell_metacharacters(value: str) -> bool:
+    """True if *value* contains any shell metacharacter / expansion token."""
+    return bool(_FORBIDDEN_CHARS_RE.search(value or ""))
+
+
+def _validate_network_target(target: str) -> str:
+    """
+    Validate a scan/connectivity target. Returns the normalized target string.
+
+    Accepts:
+      - IPv4 addresses                (192.168.1.1)
+      - IPv4 CIDR ranges, prefix 0-32 (10.0.0.0/24)
+      - safe hostnames / domains      (scanme.nmap.org)
+
+    Rejects empty values, whitespace, path traversal, URL schemes and any
+    shell-injection payload. Raises ValueError on an invalid target.
+    """
+    t = (target or "").strip()
+    if not t:
+        raise ValueError("Target inválido: valor vacío.")
+    if " " in t or _contains_shell_metacharacters(t):
+        raise ValueError("Target inválido. Usa una IP, rango CIDR o hostname válido.")
+    # IP / CIDR first — ipaddress enforces sane prefix bounds (0-32).
+    try:
+        if "/" in t:
+            ipaddress.ip_network(t, strict=False)
+        else:
+            ipaddress.ip_address(t)
+        return t
+    except ValueError:
+        pass
+    # Fall back to a conservative hostname check (no scheme, no traversal).
+    if _SAFE_HOST_RE.match(t):
+        return t
+    raise ValueError("Target inválido. Usa una IP, rango CIDR o hostname válido.")
+
+
+def _validate_command(command: str) -> tuple[bool, str, list[str]]:
     """
     Valida y parsea un comando contra la allowlist (Layers 1 & 2).
 
     Returns:
-        (is_valid, error_message, argv, resolved_path, binary_status)
-        Si is_valid es False, argv es [] y resolved_path/binary_status son "".
+        (is_valid, error_message, argv)
+        Si is_valid es False, argv es [].
     """
     if not command.strip():
-        return False, "Comando vacío.", [], "", ""
+        return False, "Comando vacío.", []
 
     # Layer 1a: Bloquear metacaracteres de shell antes de parsear
     if _FORBIDDEN_CHARS_RE.search(command):
@@ -248,17 +286,17 @@ def _validate_command(command: str) -> tuple[bool, str, list[str], str, str]:
             False,
             "Comando rechazado: contiene metacaracteres de shell prohibidos "
             f"({_FORBIDDEN_CHARS_RE.pattern}).",
-            [], "", "",
+            [],
         )
 
     # Layer 1b: Parseo seguro con shlex
     try:
         argv = shlex.split(command)
     except ValueError as e:
-        return False, f"Comando malformado: {e}", [], "", ""
+        return False, f"Comando malformado: {e}", []
 
     if not argv:
-        return False, "Comando vacío tras parseo.", [], "", ""
+        return False, "Comando vacío tras parseo.", []
 
     # Layer 1c: Normalizar el nombre del ejecutable (quitar ruta y .exe en Windows)
     executable = Path(argv[0]).name.lower().removesuffix(".exe")
@@ -269,9 +307,8 @@ def _validate_command(command: str) -> tuple[bool, str, list[str], str, str]:
             False,
             f"Ejecutable '{executable}' no está en la allowlist.\n"
             f"Permitidos: {', '.join(sorted(COMMAND_ALLOWLIST))}",
-            [], "", "blocked",
+            [],
         )
-    binary_status = "allowlist_ok"
 
     # Layer 1e: Bloquear flags de evasión (-EncodedCommand, python -c, etc.)
     for arg in argv[1:]:
@@ -279,17 +316,16 @@ def _validate_command(command: str) -> tuple[bool, str, list[str], str, str]:
             return (
                 False,
                 f"Flag '{arg}' bloqueado — evasión de política de ejecución.",
-                [], "", "blocked",
+                [],
             )
         if executable in _PYTHON_EXECUTABLES and arg == "-c":
             return (
                 False,
                 "python -c bloqueado — ejecución de código inline no permitida.",
-                [], "", "blocked",
+                [],
             )
 
     # Layer 2: Canonicalización de rutas — bloquear acceso a directorios del sistema
-    resolved_path = ""
     for token in argv[1:]:
         is_path_like = "/" in token or "\\" in token or (
             len(token) >= 3 and token[1:3] in (":/", ":\\")
@@ -298,18 +334,17 @@ def _validate_command(command: str) -> tuple[bool, str, list[str], str, str]:
             continue
         try:
             resolved = Path(token).resolve()
-            resolved_path = str(resolved)
             for sys_dir in _SYSTEM_DIRS:
                 if resolved == sys_dir or sys_dir in resolved.parents:
                     return (
                         False,
                         f"Ruta bloqueada: '{resolved}' apunta a un directorio del sistema.",
-                        [], resolved_path, "blocked",
+                        [],
                     )
         except Exception:
             pass
 
-    return True, "", argv, resolved_path, binary_status
+    return True, "", argv
 
 
 async def _aura_broadcast(event: dict) -> None:
@@ -437,13 +472,104 @@ class ToolExecutor:
 
     # ── Async executor gate ───────────────────────────────────────────────────
 
-    async def execute(self, tool_name: str, tool_input: dict, reasoning: str = "") -> Any:
+    def _preflight_validate(
+        self, tool_name: str, tool_input: dict, include_shell: bool = False
+    ) -> dict | None:
+        """
+        Tool-specific input validation that runs *before* the generic
+        destructive-pattern guardrail, so a precise '…inválido' message wins
+        over the broad guardrail net for injection payloads embedded in a
+        target/domain (e.g. "192.168.1.1; rm -rf /").
+
+        ``include_shell`` adds allowlist/metachar validation for
+        run_shell_command. The async path (aexecute) leaves it False so the
+        handler's static-triage / neutralization pipeline still runs on a
+        blocked command after the NATO gate.
+
+        Returns an error dict if the input is rejected, else None.
+        """
+        if include_shell and tool_name == "run_shell_command":
+            is_valid, error_msg, _ = _validate_command(str(tool_input.get("command", "")))
+            if not is_valid:
+                return {"error": f"Comando bloqueado por política de seguridad: {error_msg}"}
+        if tool_name in ("network_scan", "check_connectivity"):
+            field = "target" if tool_name == "network_scan" else "host"
+            try:
+                _validate_network_target(str(tool_input.get(field, "")))
+            except ValueError as e:
+                return {"error": str(e)}
+            if tool_name == "network_scan":
+                scan_type = str(tool_input.get("scan_type", "-sS -sV"))
+                if _contains_shell_metacharacters(scan_type):
+                    return {
+                        "error": "scan_type inválido: contiene metacaracteres de shell prohibidos."
+                    }
+        elif tool_name == "whois_lookup":
+            if not _SAFE_DOMAIN_RE.match(str(tool_input.get("domain", ""))):
+                return {
+                    "error": "Dominio inválido. Solo alfanuméricos, puntos y guiones (1-253 chars)."
+                }
+        return None
+
+    def execute(self, tool_name: str, tool_input: dict, reasoning: str = "") -> dict:
+        """
+        Synchronous execution gate — the reusable, testable public API.
+
+        Enforces every non-interactive security layer (tool-specific input
+        validation, destructive-pattern guardrails, allowlist + shell=False
+        inside each handler) and runs the handler in the calling thread.
+
+        It deliberately does NOT run the interactive NATO vocal challenge:
+        that Human-In-The-Loop gate lives in aexecute(), the async path the
+        live orchestrator uses. Use aexecute() whenever you are inside the
+        event loop and want the full authorization pipeline.
+        """
+        handler = getattr(self, f"_tool_{tool_name}", None)
+        if handler is None:
+            self._audit.log_action(
+                tool_name, reasoning, "unknown", "error", "Tool no implementada"
+            )
+            return {"error": f"Tool '{tool_name}' no implementada."}
+
+        preflight = self._preflight_validate(tool_name, tool_input, include_shell=True)
+        if preflight is not None:
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:preflight", "blocked",
+                preflight.get("error", "")[:200],
+            )
+            return preflight
+
+        guardrail_block = self._validate_guardrails(tool_name, tool_input)
+        if guardrail_block:
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:guardrail", "blocked",
+                guardrail_block.get("error", "")[:200],
+            )
+            return guardrail_block
+
+        try:
+            result = handler(**tool_input)
+        except Exception as e:
+            logger.error(f"Error en tool '{tool_name}': {e}")
+            self._audit.log_action(tool_name, reasoning, "sync", "error", str(e)[:200])
+            return {"error": str(e)}
+
+        status = "error" if isinstance(result, dict) and "error" in result else "success"
+        result = self._check_pii_output(result)
+        self._audit.log_action(
+            tool_name, reasoning, "sync", status,
+            json.dumps(result, ensure_ascii=False, default=str)[:200],
+        )
+        return result
+
+    async def aexecute(self, tool_name: str, tool_input: dict, reasoning: str = "") -> Any:
         """
         Fully async execution gate:
           1. Look up handler.
-          2. Apply guardrails.
-          3. NATO vocal challenge (Layer 3) for non-exempt tools.
-          4. Run handler in thread-pool executor (Layer 4 — no event-loop blocking).
+          2. Tool-specific pre-flight validation.
+          3. Apply guardrails.
+          4. NATO vocal challenge (Layer 3) for non-exempt tools.
+          5. Run handler in thread-pool executor (Layer 4 — no event-loop blocking).
         """
         loop = asyncio.get_running_loop()
         self._loop = loop          # expose to sync handlers for fire-and-forget broadcasts
@@ -454,6 +580,14 @@ class ToolExecutor:
                 tool_name, reasoning, "unknown", "error", "Tool no implementada"
             )
             return {"error": f"Tool '{tool_name}' no implementada."}
+
+        preflight = self._preflight_validate(tool_name, tool_input)
+        if preflight is not None:
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:preflight", "blocked",
+                preflight.get("error", "")[:200],
+            )
+            return preflight
 
         guardrail_block = self._validate_guardrails(tool_name, tool_input)
         if guardrail_block:
@@ -896,12 +1030,12 @@ class ToolExecutor:
         Authorization is handled by the outer async _challenge() NATO gate.
         This method validates the command and executes it — no blocking input().
         """
-        is_valid, error_msg, argv, resolved_path, binary_status = _validate_command(command)
+        is_valid, error_msg, argv = _validate_command(command)
         if not is_valid:
             logger.warning(f"Comando bloqueado: {command!r} — {error_msg}")
             self._audit.log_action(
                 "run_shell_command", "", "blocked:validation", "blocked", error_msg[:200],
-                command=command, resolved_path=resolved_path, binary_status=binary_status,
+                command=command,
             )
             # Static forensic triage — zero execution, analysis only
             try:
@@ -990,7 +1124,7 @@ class ToolExecutor:
             return {"error": f"Comando bloqueado por política de seguridad: {error_msg}"}
 
         # Show the canonicalized argv for operator transparency
-        print(f"\n    [EXEC] argv={argv}  resolved_path={resolved_path or 'n/a'}")
+        print(f"\n    [EXEC] argv={argv}")
         sys.stdout.flush()
 
         try:
@@ -1355,11 +1489,13 @@ class ToolExecutor:
 
     def _tool_network_scan(self, target: str, scan_type: str = "-sS -sV") -> dict:
         """[VALIDATED] Target and scan_type validated before passing to python-nmap."""
-        if not _SAFE_HOST_RE.match(target):
-            return {"error": "Invalid target. Use a valid IP, CIDR range, or hostname."}
+        try:
+            target = _validate_network_target(target)
+        except ValueError as e:
+            return {"error": str(e)}
 
-        if _FORBIDDEN_CHARS_RE.search(scan_type):
-            return {"error": "Invalid scan_type: contains forbidden shell metacharacters."}
+        if _contains_shell_metacharacters(scan_type):
+            return {"error": "scan_type inválido: contiene metacaracteres de shell prohibidos."}
 
         try:
             import nmap
