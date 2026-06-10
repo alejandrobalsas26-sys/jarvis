@@ -757,6 +757,35 @@ async def _main_async() -> None:
     except Exception:
         pass
 
+    # v58.0 COGNITIVE CORE — planner/critic/context/memory (fail-open; disabled
+    # silently if modules are unavailable, never blocks startup).
+    cognitive_engine = None
+    try:
+        from core.context_manager import ContextManager
+        from core.critic import CriticEngine
+        from core.task_memory import TaskMemory
+        from core.cognitive_engine import CognitiveEngine
+
+        cognitive_engine = CognitiveEngine(
+            tool_executor=executor,
+            llm_client=llm,
+            critic=CriticEngine(),
+            context_manager=ContextManager(),
+            memory=TaskMemory(),
+            max_steps=settings.agentic_max_cycles,
+            max_wall_seconds=settings.agentic_loop_timeout,
+        )
+        try:
+            health_watchdog.track(
+                "cognitive_core",
+                lambda: asyncio.sleep(0),  # passive: presence/health marker only
+            )
+        except Exception:
+            pass
+        logger.info("V58.0 COGNITIVE CORE: engine online")
+    except Exception as e:
+        logger.warning(f"V58.0 COGNITIVE CORE disabled: {e}")
+
     # v36.0 — Predictive Cognition wiring (model hot-swap + orchestrator + narrator)
     try:
         attach_model_swapper(llm)

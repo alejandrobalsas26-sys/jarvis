@@ -66,5 +66,7 @@ jarvis_config.yaml
 tactic_audit.jsonl
 triage_queue/
 jarvis/logs/*.jsonl
+# v58.0 COGNITIVE CORE — persistent task memory (covered by *.jsonl above; explicit)
+jarvis/logs/task_memory.jsonl
 jarvis/logs/forensics/
 jarvis/logs/grc_reports/

@@ -27,11 +27,35 @@ async def run_agentic_incident(
     tool_executor,
     broadcast_fn,
     llm_client,
+    cognitive_engine=None,
 ) -> None:
-    """ReAct loop triggered by high-confidence security events (canary, DPI, ETW)."""
+    """ReAct loop triggered by high-confidence security events (canary, DPI, ETW).
+
+    v58.0: if a CognitiveEngine is supplied, a bounded deterministic plan is
+    drafted and broadcast before the ReAct loop for traceability/triage. The
+    plan is advisory only — the existing LLM-driven ReAct loop remains the
+    execution path, so behavior is unchanged when no engine is provided.
+    """
     context    = [trigger_event]
     action_log = []
     start      = asyncio.get_event_loop().time()
+
+    # v58.0 COGNITIVE CORE — optional pre-flight plan (fail-open, non-blocking).
+    if cognitive_engine is not None:
+        try:
+            objective = (
+                f"Triage and contain security event: {trigger_event.get('type', 'unknown')}"
+            )
+            _plan = cognitive_engine.create_plan(objective, {"trigger": trigger_event})
+            await broadcast_fn(make_event(
+                "agentic_plan",
+                task_id=_plan.task_id,
+                risk_level=_plan.risk_level.value,
+                steps=[s.action for s in _plan.plan_steps],
+                confidence=_plan.confidence,
+            ))
+        except Exception as e:
+            logger.debug(f"AGENTIC: cognitive plan skipped: {e}")
 
     # v35.0 — register with cancel bus and clear prior abort flag
     register_operation("agentic_loop")

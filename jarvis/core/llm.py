@@ -612,6 +612,14 @@ class LLM:
         self.history: list[dict] = []
         self._session_prefix: str = ""
 
+        # v58.0 COGNITIVE CORE — optional context manager for secret redaction
+        # and long-context compression. Disabled gracefully if import fails.
+        try:
+            from core.context_manager import ContextManager
+            self._context_mgr = ContextManager()
+        except Exception:
+            self._context_mgr = None
+
         # v30.0: restore persisted session if recent enough
         try:
             from core.session_manager import load_session, offer_resume
@@ -1209,6 +1217,13 @@ class LLM:
 
                 logger.debug(f"Result: {result}")
                 result_str = json.dumps(result, ensure_ascii=False)
+                # v58.0 — redact secrets from tool output before it enters the
+                # prompt history (token-safe, fail-open if ContextManager absent).
+                if self._context_mgr is not None:
+                    try:
+                        result_str = self._context_mgr.redact_secrets(result_str)
+                    except Exception:
+                        pass
                 if len(result_str) > _TOOL_RESULT_MAX_CHARS:
                     result_str = json.dumps({
                         "truncated": True,
