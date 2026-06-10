@@ -56,6 +56,19 @@ logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
 
 _V4X_TASKS = []   # strong refs; asyncio only holds weak refs to tasks
 
+
+def _is_windows_admin() -> bool:
+    """True only when running elevated on Windows. Non-Windows returns False so
+    elevation-gated subsystems (ETW) stay dormant unless explicitly forced."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 # Regex para detectar final de oración — se usa en el sentence splitter
 _SENTENCE_END_RE = re.compile(r'(?<=[.!?;:])\s+')
 
@@ -618,7 +631,7 @@ async def _main_async() -> None:
     from core.process_governor import enforce_cpu_priorities
     from core.model_router import (
         check_model_availability, configure_ollama_for_hardware,
-        MODEL_FAST, MODEL_DEEP,
+        list_pulled_models, MODEL_FAST, MODEL_DEEP,
     )
     from tools.executor import ToolExecutor, _aura_broadcast
     from core.llm import LLM
@@ -730,11 +743,25 @@ async def _main_async() -> None:
             pass
     register_shutdown_callback(_flush_chroma)
 
-    # Check model availability and warn if not pulled
+    # Check model availability — clear, non-catastrophic guidance if missing.
     model_avail = await check_model_availability()
-    for model, avail in model_avail.items():
-        if not avail:
-            logger.warning(f"MODEL: {model} not pulled — run: ollama pull {model}")
+    missing = [m for m, ok in model_avail.items() if not ok]
+    if missing:
+        pulled = await list_pulled_models()
+        if not pulled:
+            logger.warning(
+                "MODEL: Ollama unreachable or no models pulled — "
+                f"start Ollama and run: ollama pull {missing[0]}"
+            )
+        else:
+            for model in missing:
+                logger.warning(f"MODEL: '{model}' not pulled — run: ollama pull {model}")
+            logger.info(
+                f"MODEL: {len(pulled)} local model(s) available as fallback: "
+                f"{', '.join(pulled[:6])}"
+            )
+        if os.environ.get("JARVIS_OLLAMA_AUTO_PULL", "").strip().lower() not in ("1", "true", "yes", "on"):
+            logger.debug("MODEL: auto-pull disabled (set JARVIS_OLLAMA_AUTO_PULL=1 to enable)")
 
     # Async bridge queue: STT threads push (text, confidence) here via
     # loop.call_soon_threadsafe; the executor's _challenge() awaits from it.
@@ -750,6 +777,11 @@ async def _main_async() -> None:
     executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
     llm = LLM(tool_executor=executor)
     tts = TTS()
+
+    # v58.2: tear down the MCP stdio session during graceful shutdown, before the
+    # blanket task-cancellation step. Closing in-task avoids the anyio
+    # "exit cancel scope in a different task" error on Ctrl+C.
+    register_shutdown_callback(llm.aclose)
 
     # v35.0: wire tts reference into STT listener for fast interrupt path
     try:
@@ -776,9 +808,12 @@ async def _main_async() -> None:
             max_wall_seconds=settings.agentic_loop_timeout,
         )
         try:
-            health_watchdog.track(
+            # Passive presence marker — the cognitive engine is driven inline by
+            # the incident/agentic flow, not a long-running coroutine. Supervising
+            # a one-shot sleep(0) made the watchdog log it "down" every cycle.
+            health_watchdog.mark_present(
                 "cognitive_core",
-                lambda: asyncio.sleep(0),  # passive: presence/health marker only
+                status_fn=lambda eng=cognitive_engine: eng is not None,
             )
         except Exception:
             pass
@@ -917,13 +952,20 @@ async def _main_async() -> None:
             except ImportError:
                 logger.warning("RF_BRIDGE: tools.rf_bridge unavailable — RF monitoring disabled")
 
-            # ETW kernel telemetry monitor
-            try:
-                from tools.etw_monitor import start_etw_monitor
-                watchdog.register("etw-monitor", lambda: start_etw_monitor(_aura_broadcast), RestartPolicy.BACKOFF)
-                logger.info("ETW: kernel telemetry monitor task queued…")
-            except ImportError:
-                logger.warning("ETW: tools.etw_monitor unavailable — kernel telemetry disabled")
+            # ETW kernel telemetry monitor — requires Administrator. Dormant by
+            # default off-elevation so we don't spin a restart loop spamming
+            # "[WinError 5] Access is denied" every backoff cycle.
+            _etw_force = os.environ.get("JARVIS_ETW_ENABLE", "").strip().lower() in ("1", "true", "yes", "on")
+            if not _is_windows_admin() and not _etw_force:
+                logger.info("ETW: disabled — requires Administrator "
+                            "(set JARVIS_ETW_ENABLE=1 to force an attempt)")
+            else:
+                try:
+                    from tools.etw_monitor import start_etw_monitor
+                    watchdog.register("etw-monitor", lambda: start_etw_monitor(_aura_broadcast), RestartPolicy.BACKOFF)
+                    logger.info("ETW: kernel telemetry monitor task queued…")
+                except ImportError:
+                    logger.warning("ETW: tools.etw_monitor unavailable — kernel telemetry disabled")
 
             # Environmental Intel — weather telemetry + NTP chrono-sync
             try:
@@ -1674,25 +1716,22 @@ async def _main_async() -> None:
 
                 # Cisco hardware watchdog (dormant when env unconfigured)
                 health_watchdog.track("cisco_controller", lambda: _cisco_ctrl.start())
-                logger.info(
-                    "CISCO_CTRL: bare-metal containment registered (%s)",
-                    "ENABLED" if _cisco_ctrl.is_enabled() else "DORMANT — set JARVIS_HW_SSH_URL/USERNAME/PASSWORD",
-                )
+                _cisco_state = "ENABLED" if _cisco_ctrl.is_enabled() \
+                    else "DORMANT — set JARVIS_HW_SSH_URL/USERNAME/PASSWORD"
+                logger.info(f"CISCO_CTRL: bare-metal containment registered ({_cisco_state})")
 
                 # GRC auditor periodic reports
                 health_watchdog.track("grc_auditor", lambda: _grc_aud.start())
-                logger.info(
-                    "GRC_AUDITOR: compliance reporting registered (%s)",
-                    "ENABLED" if _grc_aud.is_enabled() else "DISABLED — set JARVIS_GRC_ENABLED=1",
-                )
+                _grc_state = "ENABLED" if _grc_aud.is_enabled() \
+                    else "DISABLED — set JARVIS_GRC_ENABLED=1"
+                logger.info(f"GRC_AUDITOR: compliance reporting registered ({_grc_state})")
 
                 # PCAP orchestrator — passive (fires per-alert via correlator)
-                logger.info(
-                    "PCAP_ORCHESTRATOR: forensic capture registered (%s)",
-                    "ENABLED" if _pcap_orc.is_enabled() else "DISABLED — set JARVIS_PCAP_ENABLED=1",
-                )
+                _pcap_state = "ENABLED" if _pcap_orc.is_enabled() \
+                    else "DISABLED — set JARVIS_PCAP_ENABLED=1"
+                logger.info(f"PCAP_ORCHESTRATOR: forensic capture registered ({_pcap_state})")
             except Exception as _v57_err:
-                logger.warning("V57_NEXUS: initialization failed: %s", _v57_err)
+                logger.warning(f"V57_NEXUS: initialization failed: {_v57_err}")
 
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")

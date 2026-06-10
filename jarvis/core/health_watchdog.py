@@ -15,6 +15,7 @@ _INTERVAL = 30
 _RESTART_BACKOFF = 10
 _MAX_RESTARTS = 5
 _SUP = {}            # name -> {factory, task, restarts, next}
+_PASSIVE = {}        # name -> status_fn|None  (presence markers, not supervised)
 _LEGACY = None
 _correlator = None
 
@@ -29,6 +30,20 @@ def track(name, factory):
     _SUP[name] = {"factory": factory, "task": t, "restarts": 0, "next": 0.0}
     logger.info("health_watchdog: supervising %s", name)
     return t
+
+
+def mark_present(name, status_fn=None):
+    """Register a *passive* health marker for a module that has no long-running
+    supervised coroutine (e.g. an in-process engine driven by other code paths).
+
+    Passive modules are reported in audits but never supervised or restarted,
+    so they cannot trigger the spurious "module down" restart loop that a
+    one-shot coroutine (``asyncio.sleep(0)``) would. ``status_fn`` is an optional
+    callable returning a truthy value when the module is healthy; when omitted
+    the module is reported as present/healthy.
+    """
+    _PASSIVE[name] = status_fn
+    logger.info("health_watchdog: %s present (passive marker)", name)
 
 
 def attach_legacy(task_list):
@@ -136,13 +151,26 @@ def _legacy_dead():
     return dead
 
 
+def _passive_status():
+    out = {}
+    for name, fn in _PASSIVE.items():
+        try:
+            alive = bool(fn()) if callable(fn) else True
+        except Exception:
+            alive = False
+        out[name] = {"alive": alive, "restarts": 0, "passive": True}
+    return out
+
+
 async def _audit():
     checks = [_check_yara(), _check_ollama(), _check_admin(),
               _check_import("etw", "pywintrace"), _check_import("aiohttp", "aiohttp")]
+    supervised = {k: {"alive": not (v["task"] is None or v["task"].done()),
+                      "restarts": v["restarts"]} for k, v in _SUP.items()}
+    supervised.update(_passive_status())
     status = {"source": "health_watchdog", "type": "health_status", "severity": 1.0,
               "checks": [{"name": n, "ok": ok, "info": info} for n, ok, info in checks],
-              "supervised": {k: {"alive": not (v["task"] is None or v["task"].done()),
-                                 "restarts": v["restarts"]} for k, v in _SUP.items()},
+              "supervised": supervised,
               "ts": time.time()}
     _to_dashboard(status)
 

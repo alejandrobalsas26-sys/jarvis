@@ -22,6 +22,14 @@ from datetime import datetime, timezone
 from loguru import logger
 
 
+def _env_true(name: str, default: bool) -> bool:
+    """Parse a boolean-ish env var. Absent → ``default``."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 # ── Firewall rules ────────────────────────────────────────────────────────────
 
 _FIREWALL_RULES: list[dict] = [
@@ -214,22 +222,63 @@ def _harden_defender() -> None:
 
 # ── Main hardening function ───────────────────────────────────────────────────
 
+def _planned_changes() -> list[str]:
+    """Human-readable list of changes the hardener *would* make. Used for the
+    dry-run report and operator log so the action is fully triageable."""
+    planned = [f"firewall rule — {r['desc']}" for r in _FIREWALL_RULES]
+    planned += [
+        f"disable service '{svc}' — {reason}"
+        for svc, reason in _SERVICES_TO_DISABLE.items()
+        if svc not in _PROTECTED_SERVICES
+    ]
+    planned.append("bind Ollama to 127.0.0.1 (persist OLLAMA_HOST in user env)")
+    planned.append("verify Windows Defender real-time protection")
+    return planned
+
+
 async def apply_host_hardening(broadcast_fn) -> dict:
     """
     Apply all hardening measures. Idempotent — safe to run on every boot.
-    Returns hardening report.
+
+    Safe-by-default: this is a **dry-run** unless ``JARVIS_HARDENER_ENABLE=true``
+    is set. Even when enabled, ``JARVIS_HARDENER_DRY_RUN=true`` keeps it inert.
+    Dry-run logs every change it *would* make but modifies no service, firewall
+    rule, or Windows setting. Returns a hardening report.
     """
-    loop = asyncio.get_running_loop()
+    enabled = _env_true("JARVIS_HARDENER_ENABLE", False)
+    dry_run = (not enabled) or _env_true("JARVIS_HARDENER_DRY_RUN", True)
+
     report: dict = {
+        "enabled":                   enabled,
+        "dry_run":                   dry_run,
         "firewall_rules_applied":    0,
         "services_disabled":         0,
         "services_already_disabled": 0,
         "ollama_isolated":           False,
         "defender_active":           False,
+        "planned_changes":           [],
         "timestamp":                 "",
     }
 
-    logger.info("HARDENER: applying Windows 11 host hardening…")
+    if dry_run:
+        planned = _planned_changes()
+        report["planned_changes"] = planned
+        logger.warning(
+            "HARDENER: DRY-RUN — no host changes applied "
+            "(set JARVIS_HARDENER_ENABLE=true and JARVIS_HARDENER_DRY_RUN=false to enforce)"
+        )
+        for item in planned:
+            logger.info(f"HARDENER[dry-run]: would {item}")
+        report["timestamp"] = datetime.now(timezone.utc).isoformat()
+        try:
+            await broadcast_fn({"type": "hardening_dry_run", "severity": "INFO", **report})
+        except Exception as e:
+            logger.debug(f"HARDENER: broadcast failed: {e}")
+        return report
+
+    loop = asyncio.get_running_loop()
+
+    logger.warning("HARDENER: ENFORCE mode — applying real Windows 11 host hardening…")
 
     # 1. Ollama isolation
     report["ollama_isolated"] = await loop.run_in_executor(

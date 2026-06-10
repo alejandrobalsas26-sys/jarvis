@@ -76,6 +76,23 @@ async def check_model_availability() -> dict[str, bool]:
     return available
 
 
+async def list_pulled_models() -> list[str]:
+    """Names of models currently pulled in Ollama. Empty list if unreachable —
+    callers distinguish 'server down' from 'model missing' by this being empty."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/tags")
+            if r.status_code == 200:
+                return sorted(
+                    m.get("name", "")
+                    for m in r.json().get("models", [])
+                    if m.get("name")
+                )
+    except Exception:
+        pass
+    return []
+
+
 async def configure_ollama_for_hardware(hw_profile) -> None:
     """Log optimal ollama serve flags for the operator."""
     # v46.0: parallelism must match actual recommended pools — on battery

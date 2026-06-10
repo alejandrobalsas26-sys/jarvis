@@ -452,18 +452,26 @@ class ToolExecutor:
                 text, confidence = await asyncio.wait_for(
                     self._stt_queue.get(), timeout=30.0
                 )
-                granted = self._evaluate_nato_response(text, confidence, challenge_word)
-                auth_audit = (
-                    f"vocal:nato:{challenge_word}:{confidence:.2f}:"
-                    f"{'granted' if granted else 'denied'}"
-                )
-                if not granted:
-                    logger.warning(f"VAP NATO: Denegado — texto='{text}'")
-                return granted, auth_audit
+                # Empty transcript or sub-threshold confidence is NOT a denial —
+                # the operator may simply be in a noisy room or STT misfired.
+                # Fall back to keyboard confirmation instead of hard-denying.
+                if (not text or not text.strip()) or confidence < _CONFIDENCE_THRESHOLD:
+                    logger.warning("VAP NATO: low confidence — falling back to keyboard")
+                else:
+                    granted = self._evaluate_nato_response(text, confidence, challenge_word)
+                    auth_audit = (
+                        f"vocal:nato:{challenge_word}:{confidence:.2f}:"
+                        f"{'granted' if granted else 'denied'}"
+                    )
+                    if not granted:
+                        logger.warning(f"VAP NATO: Denegado — texto='{text}'")
+                    return granted, auth_audit
             except asyncio.TimeoutError:
                 logger.info("VAP: Timeout vocal — fallback a teclado.")
 
-        # Keyboard fallback — runs in thread pool so event loop stays free
+        # Keyboard fallback — runs in thread pool so event loop stays free.
+        # Reached on: STT unavailable, vocal timeout, or low-confidence transcript.
+        # Security: still requires an explicit 'y'; never auto-approves.
         auth = await loop.run_in_executor(
             None, lambda: input("  ¿Autorizar ejecución? (y/N): ")
         )

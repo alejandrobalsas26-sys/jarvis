@@ -25,6 +25,29 @@ _BASELINE_DELAY = 8         # seconds after start before baselining (let imports
 _MIN_INJECT_BYTES = 4096    # ignore new exec pages < 4KB (small extension stubs)
 _correlator = None
 
+
+def _env_true(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)).strip())
+    except Exception:
+        return default
+
+
+# Strict mode keeps every unknown private executable region at CRITICAL.
+# Otherwise, regions first seen inside the startup grace window are downgraded
+# to WARNING (JIT/extension allocations legitimately appear during boot).
+_STRICT = _env_true("JARVIS_INTEGRITY_STRICT", False)
+_STARTUP_GRACE = _env_int("JARVIS_INTEGRITY_STARTUP_GRACE_SECONDS", 120)
+_PROC_START_TS = time.time()       # process/import time ≈ start of startup window
+_exec_page_sizes: dict = {}        # base address -> RegionSize (best-effort, last walk)
+
 # Canary — written once at import time; never mutated by JARVIS
 _CANARY = b"JARVIS-INTEGRITY-CANARY-V55-\xDE\xAD\xBE\xEF\xCA\xFE\xBA\xBE\xFF\x00"
 _canary_buf = ctypes.create_string_buffer(_CANARY)
@@ -109,14 +132,16 @@ def _exec_pages():
         return set()
     MEM_COMMIT = 0x1000; MEM_PRIVATE = 0x20000
     EXEC = {0x10, 0x20, 0x40, 0x80}
-    found = set(); mbi = _MBI(); addr = 0
+    found = set(); sizes = {}; mbi = _MBI(); addr = 0
     for _ in range(200_000):
         if _k32.VirtualQuery(ctypes.c_void_p(addr), ctypes.byref(mbi),
                              ctypes.sizeof(mbi)) == 0:
             break
         if (mbi.State == MEM_COMMIT and mbi.Type == MEM_PRIVATE and
                 mbi.Protect in EXEC and mbi.RegionSize >= _MIN_INJECT_BYTES):
-            found.add(int(mbi.BaseAddress or addr))
+            base = int(mbi.BaseAddress or addr)
+            found.add(base)
+            sizes[base] = int(mbi.RegionSize)
         try:
             nxt = int(mbi.BaseAddress or addr) + mbi.RegionSize
         except Exception:
@@ -124,6 +149,9 @@ def _exec_pages():
         if nxt <= addr:
             break
         addr = nxt
+    # Cache sizes for the most recent walk so violation findings can report them.
+    global _exec_page_sizes
+    _exec_page_sizes = sizes
     return found
 
 
@@ -179,9 +207,26 @@ async def _check_loop():
             cur_pages = await loop.run_in_executor(None, _exec_pages)
             new_pages = cur_pages - _baseline_exec_pages
             if new_pages:
-                findings.append({"check": "exec_memory",
-                                 "detail": f"{len(new_pages)} new private executable region(s) — "
-                                           f"reflective injection artifact (bases={[hex(p) for p in list(new_pages)[:4]]})"})
+                in_grace = (time.time() - _PROC_START_TS) < _STARTUP_GRACE
+                downgraded = in_grace and not _STRICT
+                regions = [{
+                    "base": hex(base),
+                    "size": _exec_page_sizes.get(base),
+                    "mapping": "MEM_PRIVATE+EXECUTE (not image-backed)",
+                } for base in sorted(new_pages)[:8]]
+                findings.append({
+                    "check": "exec_memory",
+                    "severity_label": "WARNING" if downgraded else "CRITICAL",
+                    "pid": os.getpid(),
+                    "process": Path(sys.executable).name,
+                    "in_startup_grace": in_grace,
+                    "new_regions": len(new_pages),
+                    "regions": regions,
+                    "detail": (f"{len(new_pages)} new private executable region(s) — "
+                               f"reflective injection artifact"
+                               + (" (within startup grace — downgraded to WARNING)"
+                                  if downgraded else "")),
+                })
                 _baseline_exec_pages = cur_pages   # absorb after alerting (extensions legitimately grow)
         except Exception as e:
             logger.debug("self_integrity: check error: %s", e)
@@ -191,10 +236,18 @@ async def _check_loop():
                   "clean_planes": 4 - len(findings), "ts": time.time()}
         _to_dashboard(status)
         if findings:
+            # A violation is CRITICAL unless *every* finding is a grace-window
+            # downgrade. The finding is always dispatched — never suppressed —
+            # so it stays triageable in the correlator/dashboard.
+            is_critical = any(f.get("severity_label", "CRITICAL") == "CRITICAL"
+                              for f in findings)
             event = {"source": "self_integrity", "type": "self_integrity_violation",
-                     "severity": 10.0, "findings": findings,
+                     "severity": 10.0 if is_critical else 6.0, "findings": findings,
                      "attck": ["T1014", "T1055", "T1036"], "ts": time.time()}
-            logger.critical("SELF_INTEGRITY VIOLATION: %s", findings)
+            if is_critical:
+                logger.critical("SELF_INTEGRITY VIOLATION: %s", findings)
+            else:
+                logger.warning("SELF_INTEGRITY (startup grace, downgraded): %s", findings)
             await _dispatch(event)
         else:
             logger.debug("self_integrity: all 4 integrity planes clean")

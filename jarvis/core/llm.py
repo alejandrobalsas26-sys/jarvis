@@ -636,6 +636,7 @@ class LLM:
         self._mcp_initialized = False
         self._mcp_init_lock = asyncio.Lock()
         self._exit_stack = AsyncExitStack()
+        self._closed = False
 
         name = settings.assistant_name
         user = settings.user_name
@@ -1312,6 +1313,26 @@ class LLM:
     def clear_history(self) -> None:
         self.history = []
 
+    async def aclose(self) -> None:
+        """Idempotent async shutdown — tears down the MCP stdio session/exit stack.
+
+        Must run *before* the global task-cancellation step of shutdown, ideally
+        in the same task that opened the MCP session. anyio binds the stdio_client
+        cancel scope to the entering task; closing from a different task (or after
+        cancellation) raises RuntimeError("Attempted to exit cancel scope in a
+        different task than it was entered in"). That teardown error is cosmetic
+        on shutdown, so we suppress it (and CancelledError) here.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._exit_stack.aclose()
+        except (asyncio.CancelledError, RuntimeError) as e:
+            logger.debug(f"LLM: MCP exit-stack close suppressed on shutdown: {e}")
+        except Exception as e:
+            logger.debug(f"LLM: aclose error suppressed: {e}")
+
     async def close(self) -> None:
-        """Cierra la sesión MCP y libera recursos del exit stack."""
-        await self._exit_stack.aclose()
+        """Backwards-compatible alias for :meth:`aclose`."""
+        await self.aclose()
