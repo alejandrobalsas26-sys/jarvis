@@ -160,6 +160,14 @@ _HITL_EXEMPT_TOOLS: frozenset[str] = frozenset({
     "get_system_status",
     "ingest_docs",
     "query_knowledge",
+    # V59.0 APEX — new read-only / safe tools
+    "decode_payload",
+    "hash_file",
+    "port_lookup",
+    "regex_test",
+    "list_notes",
+    "git_query",
+    "save_note",
 })
 
 # Patrones SAST precompilados para _tool_analizar_codigo_sast
@@ -1744,6 +1752,326 @@ class ToolExecutor:
         result["dns"] = dns_records
 
         return result
+
+    # ── V59.0 APEX — Power Tools ──────────────────────────────────────────────
+
+    def _tool_write_file(self, path: str, content: str, mode: str = "w") -> dict:
+        """[HITL] Write text content to a file in Downloads, Documents, or project dir."""
+        p = Path(path).expanduser().resolve()
+        allowed_dirs = [
+            Path.home() / "Downloads",
+            Path.home() / "Documents",
+            Path.cwd(),
+        ]
+        if not any(p.is_relative_to(a.resolve()) for a in allowed_dirs):
+            return {"error": "Seguridad: solo puedo escribir en Downloads, Documents o el proyecto."}
+        if mode not in ("w", "a"):
+            return {"error": "mode debe ser 'w' (write/overwrite) o 'a' (append)."}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(p, mode, encoding="utf-8") as f:
+                f.write(content)
+            return {"written": str(p), "bytes": len(content.encode("utf-8")), "mode": mode}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_code_execute(self, code: str, timeout: int = 15) -> dict:
+        """[HITL] Execute a Python snippet in an isolated subprocess. Returns stdout/stderr."""
+        if len(code) > 8000:
+            return {"error": "Code too long (max 8000 chars)."}
+        import tempfile, os as _os
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
+            proc = subprocess.run(
+                [sys.executable, tmp_path],
+                capture_output=True, text=True, timeout=timeout, shell=False,
+            )
+            return {
+                "stdout": proc.stdout[:3000],
+                "stderr": proc.stderr[:1000],
+                "returncode": proc.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Timeout tras {timeout}s de ejecución."}
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            if tmp_path:
+                try:
+                    _os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    def _tool_http_request(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str = "",
+        timeout: int = 10,
+    ) -> dict:
+        """[HITL] Make an HTTP request (GET/POST/PUT/PATCH). Blocks localhost."""
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        blocked = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+        if parsed.hostname in blocked:
+            return {"error": "Peticiones a localhost bloqueadas por seguridad."}
+        method = method.upper()
+        if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
+            return {"error": f"Método HTTP inválido: {method}"}
+        try:
+            resp = requests.request(
+                method, url,
+                headers=headers or {},
+                data=body.encode("utf-8") if body else None,
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            return {
+                "status_code": resp.status_code,
+                "url": str(resp.url),
+                "headers": dict(resp.headers),
+                "body": resp.text[:4000],
+                "encoding": resp.encoding,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_decode_payload(self, payload: str, encoding: str = "auto") -> dict:
+        """[EXEMPT] Decode: base64, hex, url, rot13, jwt, or auto-detect all."""
+        import base64, binascii, urllib.parse, codecs
+
+        if len(payload) > 50_000:
+            return {"error": "Payload demasiado grande (máx 50k chars)."}
+
+        target = payload.strip()
+
+        def try_b64(s: str) -> str | None:
+            try:
+                return base64.b64decode(s + "=" * (-len(s) % 4)).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+
+        def try_hex(s: str) -> str | None:
+            try:
+                clean = s.replace(" ", "").replace("0x", "").replace("\\x", "")
+                return bytes.fromhex(clean).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+
+        def try_url(s: str) -> str | None:
+            try:
+                dec = urllib.parse.unquote(s)
+                return dec if dec != s else None
+            except Exception:
+                return None
+
+        def try_jwt(s: str) -> dict | None:
+            parts = s.split(".")
+            if len(parts) != 3:
+                return None
+            try:
+                h = try_b64(parts[0]) or ""
+                p = try_b64(parts[1]) or ""
+                return {"header": h, "payload": p, "sig_prefix": parts[2][:16] + "…"}
+            except Exception:
+                return None
+
+        results: dict = {}
+        if encoding == "auto":
+            b64 = try_b64(target)
+            if b64:
+                results["base64"] = b64
+            hx = try_hex(target)
+            if hx:
+                results["hex"] = hx
+            ur = try_url(target)
+            if ur:
+                results["url"] = ur
+            jw = try_jwt(target)
+            if jw:
+                results["jwt"] = jw
+            results["rot13"] = codecs.encode(target, "rot_13")
+        elif encoding == "base64":
+            results["base64"] = try_b64(target) or "Error decodificando base64"
+        elif encoding == "hex":
+            results["hex"] = try_hex(target) or "Error decodificando hex"
+        elif encoding == "url":
+            results["url"] = try_url(target) or target
+        elif encoding == "rot13":
+            results["rot13"] = codecs.encode(target, "rot_13")
+        elif encoding == "jwt":
+            r = try_jwt(target)
+            results["jwt"] = r if r else "No es un JWT válido (formato: header.payload.sig)"
+        else:
+            return {"error": f"Encoding desconocido: {encoding}. Usa: auto|base64|hex|url|rot13|jwt"}
+
+        if not results:
+            return {"error": "No se pudo decodificar — payload inválido para todos los esquemas."}
+        results["original_length"] = len(payload)
+        return results
+
+    def _tool_hash_file(self, path: str, algorithms: list | None = None) -> dict:
+        """[EXEMPT] Compute MD5/SHA1/SHA256/SHA512 hashes of a file."""
+        import hashlib
+        p = Path(path).expanduser().resolve()
+        if not p.exists():
+            return {"error": f"Archivo no encontrado: {path}"}
+        algos = [a.lower() for a in (algorithms or ["md5", "sha1", "sha256"])
+                 if a.lower() in {"md5", "sha1", "sha256", "sha512"}]
+        if not algos:
+            return {"error": "Algoritmos inválidos. Opciones: md5, sha1, sha256, sha512"}
+        try:
+            hashers = {a: hashlib.new(a) for a in algos}
+            with open(p, "rb") as f:
+                while chunk := f.read(65536):
+                    for h in hashers.values():
+                        h.update(chunk)
+            return {
+                "file": p.name,
+                "size_bytes": p.stat().st_size,
+                "hashes": {a: h.hexdigest() for a, h in hashers.items()},
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_save_note(self, title: str, content: str, tags: list | None = None) -> dict:
+        """[EXEMPT] Persist a markdown note to brain/notes.md."""
+        notes_path = Path(__file__).parent.parent / "brain" / "notes.md"
+        notes_path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        tag_line = f"**Tags:** {', '.join(tags)}\n" if tags else ""
+        entry = f"\n## {title}\n*{now}*\n{tag_line}\n{content}\n\n---\n"
+        try:
+            with open(notes_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+            return {"saved": True, "path": str(notes_path), "bytes": len(entry)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_list_notes(self, query: str = "", limit: int = 10) -> dict:
+        """[EXEMPT] List recent notes from brain/notes.md, optionally filtered."""
+        notes_path = Path(__file__).parent.parent / "brain" / "notes.md"
+        if not notes_path.exists():
+            return {"notes": [], "message": "No hay notas guardadas aún."}
+        try:
+            raw = notes_path.read_text(encoding="utf-8")
+            entries = [e.strip() for e in raw.split("---") if e.strip()]
+            if query:
+                q = query.lower()
+                entries = [e for e in entries if q in e.lower()]
+            entries = entries[-limit:]
+            return {"notes": entries, "total_shown": len(entries)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_git_query(self, operation: str = "status", args: str = "") -> dict:
+        """[EXEMPT] Read-only git: status, diff, log, show, branch, stash."""
+        allowed_ops = {"status", "diff", "log", "show", "branch", "stash"}
+        if operation not in allowed_ops:
+            return {"error": f"Operación inválida. Permitidas: {', '.join(sorted(allowed_ops))}"}
+        if _FORBIDDEN_CHARS_RE.search(args):
+            return {"error": "args contiene metacaracteres prohibidos."}
+
+        argv = ["git", operation]
+        if args.strip():
+            try:
+                extra = shlex.split(args)
+            except ValueError as e:
+                return {"error": f"args malformados: {e}"}
+            write_flags = {"--add", "-A", "--amend", "-m", "--force", "-f", "--delete", "-d"}
+            if any(f in write_flags for f in extra):
+                return {"error": "Flags de escritura no permitidos en modo read-only."}
+            argv.extend(extra)
+
+        if operation == "log" and "--oneline" not in argv:
+            argv.append("--oneline")
+        if operation == "log" and not any(a.startswith("-n") for a in argv):
+            argv += ["-n", "20"]
+
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=15, shell=False)
+            return {
+                "operation": operation,
+                "stdout": proc.stdout[:3000],
+                "stderr": proc.stderr[:500],
+                "returncode": proc.returncode,
+            }
+        except FileNotFoundError:
+            return {"error": "git no encontrado en el PATH del sistema."}
+        except subprocess.TimeoutExpired:
+            return {"error": "git timeout (15s)."}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_port_lookup(self, port: int | str, protocol: str = "tcp") -> dict:
+        """[EXEMPT] Resolve port number → service name + risk level."""
+        import socket as _sock
+        _WELL_KNOWN: dict[int, str] = {
+            20: "FTP-Data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+            53: "DNS", 67: "DHCP-Server", 68: "DHCP-Client", 69: "TFTP",
+            80: "HTTP", 110: "POP3", 111: "RPCBind", 123: "NTP",
+            135: "MS-RPC", 137: "NetBIOS-NS", 139: "NetBIOS-SS",
+            143: "IMAP", 161: "SNMP", 162: "SNMP-Trap",
+            389: "LDAP", 443: "HTTPS", 445: "SMB", 465: "SMTPS",
+            500: "IKE/IPsec", 514: "Syslog", 587: "SMTP-Submission",
+            636: "LDAPS", 993: "IMAPS", 995: "POP3S",
+            1080: "SOCKS", 1194: "OpenVPN", 1433: "MSSQL", 1521: "Oracle",
+            2049: "NFS", 2375: "Docker", 2376: "Docker-TLS",
+            3306: "MySQL", 3389: "RDP", 4444: "Metasploit/C2",
+            5432: "PostgreSQL", 5900: "VNC", 5985: "WinRM-HTTP",
+            5986: "WinRM-HTTPS", 6379: "Redis", 6443: "Kubernetes-API",
+            8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8888: "Jupyter/Proxy",
+            9200: "Elasticsearch", 11211: "Memcached", 27017: "MongoDB",
+        }
+        _HIGH_RISK = {4444, 31337, 1337, 5900, 3389, 445, 23, 135, 139, 161}
+        _MED_RISK  = {21, 22, 25, 80, 110, 143, 389, 636, 2375, 6379, 9200, 11211, 27017}
+
+        try:
+            p = int(port)
+        except (ValueError, TypeError):
+            return {"error": "port debe ser un número entero."}
+        if not 0 <= p <= 65535:
+            return {"error": "port fuera de rango (0-65535)."}
+
+        name = _WELL_KNOWN.get(p)
+        if not name:
+            try:
+                name = _sock.getservbyport(p, protocol.lower())
+            except OSError:
+                name = "Unknown"
+
+        risk = "HIGH" if p in _HIGH_RISK else ("MEDIUM" if p in _MED_RISK else "LOW")
+        return {"port": p, "protocol": protocol.lower(), "service": name, "risk_level": risk}
+
+    def _tool_regex_test(self, pattern: str, text: str, flags: str = "") -> dict:
+        """[EXEMPT] Test a regex against text. Returns all matches with groups."""
+        import re as _re
+        flag_map = {"i": _re.IGNORECASE, "m": _re.MULTILINE, "s": _re.DOTALL}
+        f_val = 0
+        for ch in flags.lower():
+            if ch in flag_map:
+                f_val |= flag_map[ch]
+        try:
+            rx = _re.compile(pattern, f_val)
+        except _re.error as e:
+            return {"error": f"Regex inválido: {e}"}
+        matches = list(rx.finditer(text))
+        return {
+            "pattern": pattern,
+            "flags": flags or "none",
+            "total_matches": len(matches),
+            "is_match": bool(matches),
+            "matches": [
+                {"match": m.group(0), "start": m.start(), "end": m.end(), "groups": list(m.groups())}
+                for m in matches[:25]
+            ],
+        }
 
 
 # ── RedTeamShellExecutor ──────────────────────────────────────────────────────

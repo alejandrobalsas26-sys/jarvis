@@ -561,6 +561,228 @@ TOOLS: list[dict] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    # ── V59.0 APEX — New Power Tools ─────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Write or append text content to a file in Downloads, Documents, or the project dir. "
+                "Use to create scripts, reports, configs, notes, or any text artifact. "
+                "mode='w' overwrites, mode='a' appends. Requires NATO authorization."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Target file path (absolute or relative to Downloads)"},
+                    "content": {"type": "string", "description": "Text content to write"},
+                    "mode": {"type": "string", "enum": ["w", "a"], "description": "Write (overwrite) or append"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "code_execute",
+            "description": (
+                "Execute a Python code snippet in an isolated subprocess with a timeout. "
+                "Use for: data analysis, calculations, generating charts, testing algorithms, "
+                "quick automation scripts, or verifying logic. Returns stdout/stderr/returncode. "
+                "Requires NATO authorization. Timeout default 15s."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute"},
+                    "timeout": {"type": "integer", "description": "Max seconds before kill (default 15)"},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": (
+                "Make an HTTP request to any external URL. Supports GET/POST/PUT/PATCH/DELETE. "
+                "Use for: API testing, webhook firing, fetching raw data, interacting with REST APIs, "
+                "checking HTTP response headers, or probing services during pentests. "
+                "Localhost is blocked. Requires NATO authorization."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full URL to request"},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]},
+                    "headers": {"type": "object", "description": "Optional request headers as key-value pairs"},
+                    "body": {"type": "string", "description": "Request body (for POST/PUT/PATCH)"},
+                    "timeout": {"type": "integer", "description": "Seconds before timeout (default 10)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "decode_payload",
+            "description": (
+                "Decode an encoded payload. Supports: base64, hex, URL-encoding, ROT13, JWT. "
+                "Use 'auto' to try all encodings at once and discover the format. "
+                "Essential for malware analysis, CTF challenges, and incident response. "
+                "No authorization required — pure decoding, no execution."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "The encoded string to decode"},
+                    "encoding": {
+                        "type": "string",
+                        "enum": ["auto", "base64", "hex", "url", "rot13", "jwt"],
+                        "description": "Encoding to try (auto detects all)",
+                    },
+                },
+                "required": ["payload"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hash_file",
+            "description": (
+                "Compute cryptographic hashes of a file: MD5, SHA1, SHA256, SHA512. "
+                "Use for: file integrity verification, malware analysis (VirusTotal lookup), "
+                "comparing files, CTF forensics, or confirming download integrity."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to hash"},
+                    "algorithms": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["md5", "sha1", "sha256", "sha512"]},
+                        "description": "List of hash algorithms (default: md5, sha1, sha256)",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_note",
+            "description": (
+                "Save a persistent markdown note to brain/notes.md. "
+                "Use when Alejandro says 'recuerda esto', 'anota', 'guarda esta info', "
+                "or when you discover something important worth persisting across sessions: "
+                "target IPs, credentials found (for authorized engagements), key findings, "
+                "decisions, or operational intel."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Note title (short, descriptive)"},
+                    "content": {"type": "string", "description": "Note body in markdown"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tags for filtering (e.g. ['pentest', 'finding', 'critical'])",
+                    },
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notes",
+            "description": (
+                "Retrieve saved notes from brain/notes.md. "
+                "Use when Alejandro asks to recall something, or before starting a session "
+                "to check if there are relevant prior notes. Supports keyword filtering."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional keyword to filter notes"},
+                    "limit": {"type": "integer", "description": "Max notes to return (default 10)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_query",
+            "description": (
+                "Run read-only git commands: status, diff, log, show, branch, stash. "
+                "Use to check code changes before a commit, review recent history, "
+                "or understand the current repo state during a dev session. "
+                "Never writes to the repo — purely informational."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["status", "diff", "log", "show", "branch", "stash"],
+                        "description": "Git subcommand to run",
+                    },
+                    "args": {
+                        "type": "string",
+                        "description": "Extra git arguments as a string (e.g. '--stat HEAD~3' for diff)",
+                    },
+                },
+                "required": ["operation"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "port_lookup",
+            "description": (
+                "Instantly resolve a port number to its standard service name and risk level. "
+                "Use during network scans to quickly classify open ports, "
+                "before firing nmap (to understand what you might find), "
+                "or during threat analysis to assess exposed attack surface."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "Port number (0-65535)"},
+                    "protocol": {"type": "string", "enum": ["tcp", "udp"], "description": "Protocol (default tcp)"},
+                },
+                "required": ["port"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "regex_test",
+            "description": (
+                "Test a regular expression against text. Returns all matches with positions and capture groups. "
+                "Use for: validating payloads, building detection rules, parsing log files, "
+                "CTF regex challenges, or verifying YARA-like string patterns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern (Python re syntax)"},
+                    "text": {"type": "string", "description": "Text to test against"},
+                    "flags": {"type": "string", "description": "Flags: i=ignorecase, m=multiline, s=dotall (combine: 'im')"},
+                },
+                "required": ["pattern", "text"],
+            },
+        },
+    },
 ]
 
 # Resultados de tools más grandes que esto se truncan antes de entrar al contexto del LLM
@@ -739,7 +961,34 @@ class LLM:
             "Always state the exact tool name that requires authorization. "
             "If a voice command is rejected due to low confidence, respond: "
             "'Baja señal de audio detectada — por favor, repite el comando claramente.' "
-            "Never proceed with a restricted tool until the authorization gate confirms approval."
+            "Never proceed with a restricted tool until the authorization gate confirms approval.\n\n"
+            # ── V59.0 APEX NEW TOOLS ──────────────────────────────────────────
+            "V59.0 APEX — NEW CAPABILITIES:\n"
+            "- write_file(path, content, mode='w'|'a'): Create or edit ANY text file in Downloads/Documents. "
+            "Use to produce scripts, reports, configs, markdown docs. Requires NATO auth.\n"
+            "- code_execute(code, timeout=15): Run Python directly in a subprocess. "
+            "Use for data analysis, math, automation, file processing, chart generation. "
+            "Print results — you will see stdout. Requires NATO auth.\n"
+            "- http_request(url, method='GET', headers={}, body=''): Fire HTTP calls. "
+            "Test APIs, probe endpoints, check headers, interact with webhooks. Requires NATO auth.\n"
+            "- decode_payload(payload, encoding='auto'): Instantly decode base64/hex/URL/ROT13/JWT. "
+            "ALWAYS use this in incident response when you see an encoded string. No auth needed.\n"
+            "- hash_file(path, algorithms=['md5','sha1','sha256']): Get file hashes for integrity/malware analysis.\n"
+            "- save_note(title, content, tags=[]): Persist key findings to brain/notes.md. "
+            "Use proactively when discovering something operationally important.\n"
+            "- list_notes(query='', limit=10): Recall saved notes. Check at session start.\n"
+            "- git_query(operation, args=''): Read-only git: status/diff/log/branch. "
+            "Use before any code session to understand current state.\n"
+            "- port_lookup(port, protocol='tcp'): Instant port→service mapping with risk rating. "
+            "Call this BEFORE or AFTER network_scan to classify results.\n"
+            "- regex_test(pattern, text, flags=''): Test regex in real-time. "
+            "Use for log parsing, detection rule building, CTF.\n\n"
+            "AGENTIC CHAINING EXAMPLES:\n"
+            "  'Scan this target' → port_lookup(80) + port_lookup(443) → network_scan → osint_lookup → save_note\n"
+            "  'Analyze this malware hash' → web_search → hash_file → decode_payload (if obfuscated) → save_note\n"
+            "  'Write a Python script to...' → code_execute (draft/test) → write_file (save) → open_software (VSCode)\n"
+            "  'Decode this payload' → decode_payload(auto) → regex_test (if structured) → save_note\n"
+            "  'What changed in my code?' → git_query(diff) → analizar_codigo_sast → save_note\n"
         )
 
     async def _init_mcp(self) -> None:

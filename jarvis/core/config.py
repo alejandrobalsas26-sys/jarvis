@@ -75,6 +75,18 @@ class Settings(BaseSettings):
     agentic_max_cycles:   int = 8
     agentic_loop_timeout: int = 120   # seconds
 
+    # ── Claude / Anthropic (optional — deep reasoning backend) ───────────────
+    anthropic_api_key: str = ""
+
+    # ── OpenRouter (optional — cloud model fallback, OpenAI-compatible) ──────
+    openrouter_api_key:  str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model:    str = "anthropic/claude-sonnet-4-6"
+
+    # ── Model overrides (override auto-detected fast/deep models) ────────────
+    model_fast_override: str = ""
+    model_deep_override: str = ""
+
     # ── Validators ────────────────────────────────────────────────────────────
 
     @field_validator("whisper_model")

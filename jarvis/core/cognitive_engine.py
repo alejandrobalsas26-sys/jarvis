@@ -26,14 +26,43 @@ from core.cognitive_types import (
 )
 from core.critic import CriticEngine, _DESTRUCTIVE_RE, _HIGH_RISK_TOOLS
 
-# Heuristic objective-keyword → tool hints (defensive Blue Team verbs).
+# Heuristic objective-keyword → tool hints (Blue/Purple/Red Team verbs).
 _TOOL_HINTS: list[tuple[tuple[str, ...], str]] = [
-    (("scan", "nmap", "port", "discover"), "network_scan"),
-    (("isolate", "quarantine", "contain", "block ip"), "network_quarantine"),
-    (("whois", "domain owner"), "whois_lookup"),
-    (("read", "open file", "inspect file"), "read_file"),
-    (("search", "look up", "research"), "web_search"),
-    (("capture", "pcap", "packet"), "forensic_capture"),
+    # Network recon
+    (("scan", "nmap", "port", "discover", "open ports", "service version"), "network_scan"),
+    (("ping", "reachable", "connectivity", "alive", "tcp check"), "check_connectivity"),
+    (("whois", "domain owner", "registrar", "nameserver"), "whois_lookup"),
+    (("osint", "domain recon", "dns records", "mx records"), "osint_lookup"),
+    (("port number", "what port", "service port", "which port"), "port_lookup"),
+    # Containment / response
+    (("isolate", "quarantine", "contain", "block ip", "network block"), "network_quarantine"),
+    (("capture", "pcap", "packet dump", "traffic capture"), "forensic_capture"),
+    # File operations
+    (("read", "open file", "inspect file", "view file", "show file"), "read_file"),
+    (("write", "create file", "save file", "generate file", "export"), "write_file"),
+    (("hash", "md5", "sha256", "sha1", "integrity", "file hash"), "hash_file"),
+    (("sast", "static analysis", "code review", "security review", "vulnerability code"), "analizar_codigo_sast"),
+    # Execution / automation
+    (("run code", "execute python", "run script", "calculate", "compute", "automate"), "code_execute"),
+    (("shell", "command", "terminal", "run command", "execute command"), "run_shell_command"),
+    # Intelligence
+    (("search", "look up", "research", "google", "find info"), "web_search"),
+    (("fetch", "download page", "read url", "scrape", "webpage"), "fetch_webpage"),
+    (("knowledge", "documents", "pdf", "indexed", "vault"), "query_knowledge"),
+    (("cve", "vulnerability", "exploit", "nvd", "patch"), "web_search"),
+    # Decode / analysis
+    (("decode", "base64", "hex", "obfuscated", "encoded", "jwt", "rot13"), "decode_payload"),
+    (("regex", "pattern match", "parse log", "extract pattern"), "regex_test"),
+    # Memory / notes
+    (("remember", "note", "save", "recuerda", "anota", "persist"), "save_note"),
+    (("recall", "what did", "previous", "list notes", "past notes"), "list_notes"),
+    # Dev workflow
+    (("git", "diff", "commit", "changes", "branch", "repo status"), "git_query"),
+    # HTTP / API
+    (("api call", "http", "rest", "post request", "webhook", "endpoint"), "http_request"),
+    # System
+    (("system status", "cpu", "ram usage", "memory", "performance"), "get_system_status"),
+    (("screenshot", "screen", "capture screen", "what am i looking at"), "take_screenshot"),
 ]
 
 
