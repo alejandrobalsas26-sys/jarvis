@@ -30,7 +30,7 @@ _DESTRUCTIVE_RE = re.compile(
 
 # Tools considered high-risk / irreversible without explicit operator approval.
 _HIGH_RISK_TOOLS = frozenset({
-    "offensive_rpc", "run_shell_command", "network_scan", "forensic_capture",
+    "run_shell_command", "network_scan", "forensic_capture",
     "network_quarantine", "process_governor", "windows_hardener",
 })
 

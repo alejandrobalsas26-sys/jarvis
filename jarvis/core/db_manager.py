@@ -76,6 +76,11 @@ class DBManager:
             self._redis    = None
             self._redis_ok = False
 
+    @property
+    def is_connected(self) -> bool:
+        """True when the PostgreSQL pool is available (persistent alert state active)."""
+        return self._pool is not None
+
     async def close(self) -> None:
         if self._pool:
             await self._pool.close()

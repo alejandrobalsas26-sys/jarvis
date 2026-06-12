@@ -1733,6 +1733,41 @@ async def _main_async() -> None:
             except Exception as _v57_err:
                 logger.warning(f"V57_NEXUS: initialization failed: {_v57_err}")
 
+            # ── v55.0 TITAN — persistent alert state + SIEM forwarding ───────────
+            # Background attach: never blocks boot. Each component degrades to
+            # no-op on its own (no PostgreSQL → volatile state, no SIEM_ENDPOINT
+            # → events dropped locally), so JARVIS runs identically without them.
+            try:
+                from core.db_manager     import get_db_manager
+                from core.siem_forwarder import SIEMForwarder
+
+                async def _titan_persistence_attach() -> None:
+                    try:
+                        dbm  = await get_db_manager()
+                        siem = SIEMForwarder()
+                        await siem.start()
+                        v36_correlator.attach_persistence(
+                            dbm if dbm.is_connected else None,
+                            siem if siem.is_enabled else None,
+                        )
+                        register_shutdown_callback(siem.stop)
+                        register_shutdown_callback(dbm.close)
+                        _pg_state = "ENABLED" if dbm.is_connected \
+                            else "DEGRADED — PostgreSQL unreachable, alert state volatile"
+                        _siem_state = "ENABLED" if siem.is_enabled \
+                            else "NO-OP — set SIEM_ENDPOINT to enable"
+                        logger.info(
+                            f"TITAN_PERSISTENCE: alerts={_pg_state} | siem={_siem_state}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"TITAN_PERSISTENCE: attach failed: {e}")
+
+                asyncio.create_task(
+                    _titan_persistence_attach(), name="titan-persistence"
+                )
+            except Exception as _v55_err:
+                logger.warning(f"V55_TITAN: initialization failed: {_v55_err}")
+
             # Start the task watchdog monitor
             asyncio.create_task(watchdog.start(_aura_broadcast), name="task-watchdog")
 

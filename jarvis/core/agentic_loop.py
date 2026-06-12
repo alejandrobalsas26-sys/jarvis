@@ -17,7 +17,7 @@ from core.cancel_bus import register_operation, unregister_operation
 import core.cancel_bus as _cancel_bus
 
 _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
-    "offensive_rpc", "run_shell_command",
+    "run_shell_command",
     "network_scan", "forensic_capture",
 })
 

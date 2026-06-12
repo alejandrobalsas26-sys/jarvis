@@ -48,6 +48,11 @@ class SIEMForwarder:
     def _noop(self) -> bool:
         return not self._endpoint
 
+    @property
+    def is_enabled(self) -> bool:
+        """True when SIEM_ENDPOINT is configured and events will be forwarded."""
+        return not self._noop
+
     async def start(self) -> None:
         if self._noop:
             logger.info("SIEM_FORWARDER: no-op mode (SIEM_ENDPOINT not configured)")

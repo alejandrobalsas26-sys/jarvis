@@ -39,16 +39,10 @@ class Settings(BaseSettings):
     # ── VMware / Forensics ────────────────────────────────────────────────────
     # Path to the .vmx file used for live forensic capture (canary trigger).
     vmx_target_path: str = ""
-    # Path to the vmrun.exe binary (used by forensic_volatility, resource_sentinel,
-    # deception_orchestrator).
+    # Path to the vmrun.exe binary (used by forensic_volatility, resource_sentinel).
     vmrun_path: str = r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"
     # Comma-separated list of secondary .vmx paths to suspend on resource pressure.
     secondary_vms: str = ""
-
-    # ── Offensive RPC (Metasploit) ────────────────────────────────────────────
-    msf_host:     str = "192.168.1.100"
-    msf_port:     int = 55553
-    msf_password: str = "msf"
 
     # ── Zeek DPI ──────────────────────────────────────────────────────────────
     zeek_log_dir:              str = "/mnt/zeek/logs/current"

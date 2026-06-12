@@ -12,18 +12,13 @@ _SUBSYSTEMS: list[tuple[str, str]] = [
     ("canary",                 "core.canary"),
     ("mitigation",             "core.mitigation"),
     ("executor",               "tools.executor"),
-    ("mesh_generator",         "tools.mesh_generator"),
-    ("schematic_compiler",     "tools.schematic_compiler"),
     ("rf_bridge",              "tools.rf_bridge"),
-    ("ad_graph_analyzer",      "tools.ad_graph_analyzer"),
     ("forensic_volatility",    "tools.forensic_volatility"),
     ("etw_monitor",            "tools.etw_monitor"),
     ("binary_inverter",        "tools.binary_inverter"),
-    ("deception_orchestrator", "tools.deception_orchestrator"),
     ("environmental_intel",    "tools.environmental_intel"),
     ("threat_feed_sync",       "tools.threat_feed_sync"),
     ("resource_sentinel",      "tools.resource_sentinel"),
-    ("offensive_rpc",          "tools.offensive_rpc"),
     ("zeek_dpi",               "tools.zeek_dpi"),
 ]
 

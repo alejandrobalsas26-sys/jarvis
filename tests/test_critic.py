@@ -37,7 +37,7 @@ class TestScorePlan:
 
     def test_high_risk_tool_requires_approval(self, critic):
         plan = _plan([
-            PlanStep(index=0, action="execute offensive_rpc", tool="offensive_rpc",
+            PlanStep(index=0, action="quarantine compromised host", tool="network_quarantine",
                      risk_level=RiskLevel.HIGH),
             PlanStep(index=1, action="verify outcome"),
         ])

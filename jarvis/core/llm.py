@@ -1503,7 +1503,7 @@ class LLM:
             "Respond ONLY with valid JSON in this exact format (no markdown fences):\n"
             '{"tool": "<tool_name_or_RESOLVED>", "input": {}, "reasoning": "<brief>"}\n\n'
             "Available tools: network_scan, whois_lookup, check_connectivity, "
-            "forensic_capture, run_shell_command, offensive_rpc.\n"
+            "forensic_capture, run_shell_command.\n"
             "Use RESOLVED when the incident is fully assessed or contained. "
             "Prefer information gathering before active response. "
             "Minimize tool calls — one action per cycle."
