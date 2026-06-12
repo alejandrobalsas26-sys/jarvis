@@ -25,7 +25,10 @@ try:
 except Exception:
     Observer = None; FileSystemEventHandler = object; _WD_OK = False
 
-_PLUGIN_DIR = Path(os.environ.get("JARVIS_PLUGIN_DIR", "plugins"))
+# Anchored to the package root so plugins load regardless of the CWD JARVIS
+# was launched from (repo root vs jarvis/). JARVIS_PLUGIN_DIR still overrides.
+_PKG_ROOT = Path(__file__).resolve().parent.parent
+_PLUGIN_DIR = Path(os.environ.get("JARVIS_PLUGIN_DIR", str(_PKG_ROOT / "plugins")))
 _MANIFEST = _PLUGIN_DIR / "manifest.json"
 _EXEC_TIMEOUT = 5.0
 _MIN_SEV = 7.0

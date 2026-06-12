@@ -90,6 +90,8 @@ class TestDryRun:
         monkeypatch.setenv("JARVIS_HW_DRY_RUN", "true")
         monkeypatch.setenv("JARVIS_BLACKHOLE_VLAN", "999")
         monkeypatch.setenv("JARVIS_HW_DEVICE_TYPE", device_type)
+        monkeypatch.setenv("JARVIS_HW_INTERFACE", "GigabitEthernet0/0")
+        monkeypatch.delenv("JARVIS_HW_PERSIST_CONFIG", raising=False)
 
     def test_dry_run_blackhole_mac_status(self, monkeypatch):
         self._enable(monkeypatch)
@@ -104,9 +106,17 @@ class TestDryRun:
         cmds = result["commands"]
         assert isinstance(cmds, list)
         assert "configure terminal" in cmds
-        assert "write memory" in cmds
+        # Containment is ephemeral by default: write memory only with
+        # JARVIS_HW_PERSIST_CONFIG (so emergency rules don't survive reboot).
+        assert "write memory" not in cmds
         # Verify MAC appears verbatim in one command
         assert any("aabb.ccdd.eeff" in c for c in cmds)
+
+    def test_dry_run_persist_config_appends_write_memory(self, monkeypatch):
+        self._enable(monkeypatch)
+        monkeypatch.setenv("JARVIS_HW_PERSIST_CONFIG", "true")
+        result = _run(CiscoController().blackhole_mac("aa:bb:cc:dd:ee:ff", "test"))
+        assert "write memory" in result["commands"]
 
     def test_dry_run_inject_acl_status(self, monkeypatch):
         self._enable(monkeypatch, device_type="cisco_1921")
@@ -141,6 +151,7 @@ class TestSev95Containment:
         monkeypatch.setenv("JARVIS_HW_PASSWORD", "cisco")
         monkeypatch.setenv("JARVIS_HW_DRY_RUN", "true")
         monkeypatch.setenv("JARVIS_HW_DEVICE_TYPE", "cisco_1921")
+        monkeypatch.setenv("JARVIS_HW_INTERFACE", "GigabitEthernet0/0")
         alert = {"severity_score": 9.5, "src_ip": "10.0.0.55", "type": "c2_beacon"}
         result = _run(CiscoController().contain_alert(alert))
         assert result["status"] == "ok"
