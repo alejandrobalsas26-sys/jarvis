@@ -266,6 +266,122 @@ def route(
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  V61 — Security-sensitive turn classifier (Phase 2)
+#  Pure predicate used by the live LLM path to decide whether a turn needs
+#  security-grade handling (forces verification, stricter trust treatment).
+# ════════════════════════════════════════════════════════════════════════════
+
+# Tools whose presence makes a turn security-sensitive. A superset of the
+# executor's NATO-gated set — it also covers consent-gated multimodal surfaces
+# (screen / clipboard / camera) that are HITL-exempt but whose *output* still
+# warrants scrutiny, and the input-injection tools (type_text/press_hotkey).
+_DANGEROUS_TOOLS: frozenset[str] = frozenset({
+    "run_shell_command", "code_execute", "http_request", "write_file",
+    "kill_process", "network_scan", "osint_lookup", "take_screenshot",
+    "escanear_pantalla", "get_clipboard", "set_clipboard", "type_text",
+    "press_hotkey", "open_application", "open_software", "packet_tracer_open",
+    "whois_lookup", "estudiar_tema", "desplegar_webapp", "fetch_webpage",
+    "capture_camera", "webcam_capture", "analyze_room",
+})
+
+# DFIR / incident-response / forensics vocabulary (EN + ES). Complements the
+# offensive _SECURITY_KW set above with the defensive-analysis terms.
+_DFIR_KW = {
+    "dfir", "incident response", "incident-response", "incident handling",
+    "forensic", "forensics", "threat model", "threat-model", "threat modeling",
+    "memory dump", "triage", "kill chain", "kill-chain",
+    "respuesta a incidentes", "manejo de incidentes", "forense", "forensia",
+    "modelo de amenazas", "análisis forense", "analisis forense",
+}
+
+# Bare high-signal terms the directive flags as sensitive that are not already
+# covered by _SECURITY_KW (which has "privilege escalation" but not "privilege",
+# "shell", "token", "persistence", etc.). Kept narrow to avoid false positives
+# (e.g. "key" alone is too broad — only credential-shaped "api key" qualifies).
+_SECSENS_EXTRA_KW = {
+    "shell", "powershell", "reverse shell", "token", "persistence",
+    "privilege", "credential", "credentials", "password", "passphrase",
+    "api key", "api-key", "secret key", "private key", "access key",
+    "exfiltration", "exfiltrate", "c2", "command and control", "implant",
+    "credencial", "credenciales", "contraseña", "persistencia",
+    "exfiltración", "clave api", "clave privada",
+}
+
+# Code-generation intent crossed with a dangerous capability domain →
+# security-sensitive (e.g. "write a script that opens a socket and runs shell").
+_CODEGEN_KW = {
+    "code", "script", "program", "function", "write a", "generate",
+    "implement", "snippet", "write me",
+    "código", "codigo", "programa", "función", "funcion",
+    "genera", "implementa", "escribe un", "escríbeme", "escribeme",
+}
+_DANGEROUS_DOMAIN_KW = {
+    "shell", "subprocess", "socket", "network", "auth", "authentication",
+    "login", "password", "crypto", "encrypt", "decrypt", "delete", "remove",
+    "persistence", "token", "credential", "registry", "exec", "eval",
+    "autenticación", "autenticacion", "contraseña", "cifrar", "descifrar",
+    "borrar", "eliminar", "persistencia", "credencial", "registro",
+}
+
+_SECSENS_ALL_KW = _SECURITY_KW | _DFIR_KW | _SECSENS_EXTRA_KW
+
+
+def is_security_sensitive_turn(
+    user_message: str,
+    tool_names: list[str] | None = None,
+) -> bool:
+    """Conservative predicate: does this turn warrant security-grade handling?
+
+    Returns True when:
+      * any dangerous / consent-gated tool is in play (``tool_names``), or
+      * the message hits offensive-security, DFIR/forensics, or credential/
+        shell/persistence vocabulary, or
+      * it asks for code that touches a dangerous capability domain
+        (shell / network / auth / crypto / deletion / persistence / tokens /
+        credentials).
+
+    Pure and dependency-free. Kept conservative but usable — plain chat such as
+    "what time is it?" or "tell me a joke" must NOT trip it.
+    """
+    if tool_names and any((t or "") in _DANGEROUS_TOOLS for t in tool_names):
+        return True
+    text = (user_message or "").lower()
+    if not text:
+        return False
+    if _kw_hits(text, _SECSENS_ALL_KW):
+        return True
+    if _kw_hits(text, _CODEGEN_KW) and _kw_hits(text, _DANGEROUS_DOMAIN_KW):
+        return True
+    return False
+
+
+def resolve_inference_model(decision: ModelDecision) -> str:
+    """Map a routing *decision* to a concrete, tool-call-capable Ollama model.
+
+    ``route()`` may name role-default models (qwen2.5-coder:7b, deepseek-r1:14b,
+    moondream, nomic-embed-text, …) that are either not pulled on this host or
+    unfit for the tool-use streaming path (vision/embedding models can't chat;
+    reasoning models stream <think> noise and call tools poorly). To keep the
+    live turn robust we:
+
+      1. honor an explicit per-role env override when the operator set one
+         (they opted into that exact model), else
+      2. fall back to the boot-resolved dual models (``MODEL_FAST`` /
+         ``MODEL_DEEP``) that the dependency guardian confirmed are available.
+
+    Cloud is never streamed from this local client — the live path passes
+    ``allow_cloud=False`` — so a CLOUD decision maps to the deep local model.
+    """
+    role = decision.role
+    env_key = _ROLE_ENV.get(role)
+    if env_key and os.getenv(env_key):
+        return decision.model
+    if role in (ModelRole.CODER, ModelRole.DEEP, ModelRole.CLOUD):
+        return MODEL_DEEP
+    return MODEL_FAST
+
+
 async def configure_ollama_for_hardware(hw_profile) -> None:
     """Log optimal ollama serve flags for the operator."""
     # v46.0: parallelism must match actual recommended pools — on battery

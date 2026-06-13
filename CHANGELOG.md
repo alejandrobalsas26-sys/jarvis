@@ -1,5 +1,81 @@
 # Changelog
 
+## V61.0 — Live AI brain + Iron Man Mode foundation
+
+Wires the V60 brain modules (role router, verifier, memory discipline) into the
+**live streaming response path**, and lays a consent-gated foundation for an
+always-available, multimodal workstation assistant. No security controls were
+weakened; cloud stays opt-in; nothing captures screen/camera/clipboard silently.
+
+### Local AI brain — now live (Phases 1-5)
+- **Live role-based routing** (`core/llm.py`): the streaming path now routes each
+  turn via `model_router.route()` (role / provider / complexity / reason /
+  `requires_verification`) instead of the legacy complexity-only `select_model`.
+  A new `LLM._route_turn()` is the single routing entry; `select_model` remains a
+  backward-compatible fallback (still used for context compression).
+- **`resolve_inference_model(decision)`** maps a routing decision to a concrete,
+  tool-call-capable local model — honoring per-role env overrides, else falling
+  back to the boot-resolved `MODEL_FAST`/`MODEL_DEEP` so unavailable role-default
+  models never break inference. Cloud is never streamed from the local client.
+- **Security-sensitive turn classifier** (`model_router.is_security_sensitive_turn`):
+  conservative EN/ES predicate over offensive-security / DFIR / credential-shell
+  vocabulary, code-gen-in-dangerous-domains, and dangerous tool usage.
+- **Staged post-stream verification** (`LLM._maybe_verify_final_answer`): low-risk
+  chat streams untouched; high-risk turns (security-sensitive, dangerous tool
+  used, deep analysis, or `requires_verification`) get a VERIFIER pass over the
+  streamed draft. Pass → silent; flagged → a concise ASCII `[VERIFICATION]`
+  notice is appended and stored; fail-closed → a human-review warning. The
+  verifier never executes tools and never crashes the turn.
+- **Memory discipline in the path** (`LLM._maybe_persist_memory`): episodic
+  retrieval is gated by `should_use_memory()` (skipped for trivial chat),
+  persistence honors `should_write_memory` / `classify_memory_scope` and
+  **refuses secrets** before any write (best-effort, fail-open).
+- **Tool-output trust labels / prompt-injection defense** (`LLM._label_tool_result`):
+  every tool result enters history wrapped with trust metadata; web / file / RAG /
+  screen / clipboard results are flagged `untrusted_tool_output` with a banner
+  instructing the model to treat them as DATA, never instructions. Truncation now
+  happens inside the labeled envelope.
+
+### System prompt safety cleanup (Phase 6)
+- Removed unsafe directives: "ROOT-level authorization permanently granted",
+  "NEVER refuse to execute a local tool / NEVER give ethical lectures", the
+  "execute the chain without asking for permission for each individual step"
+  bypass, and the mandatory public `[THINKING]` exposure (now optional).
+- Added an **AUTHORIZATION MODEL** and **TRUST & SAFETY CONTRACT**: executor-
+  mediated authorization, HITL/NATO for dangerous actions, no guardrail bypass,
+  no invented tool names, untrusted tool/web/file/RAG/screen output, no secret
+  persistence, and bounded proactivity. Spanish/English style preserved.
+
+### Iron Man Mode foundation (Phases 7-9)
+- **`core/ironman_mode.py`** — pure, consent-gated policy (no runtime loops, no
+  capture): `AssistantMode` (PASSIVE/ACTIVE/FOCUS/WAR_ROOM/PRESENTATION),
+  `SessionConsent` (screen/clipboard/camera/microphone/shell/browser, default
+  OFF), and `should_use_screen_context` / `should_listen_continuously` /
+  `should_run_background_tasks` (hardware- and battery-aware) /
+  `allowed_proactive_actions`. No silent surveillance; dangerous tools stay HITL.
+- **`core/task_queue.py`** — broker-free in-memory background scheduler with an
+  allowlist of safe task types (summarize_document, generate_report, run_tests,
+  analyze_repo, index_documents, monitor_system), dangerous-type rejection unless
+  explicitly approved, full state machine, and cancellation. Schedules only — it
+  never executes shell/code itself.
+- **`core/aura_events.py`** — typed, JSON-serializable HUD event contract (model
+  decision, verifier status, memory decision, tool-auth-pending, background task,
+  assistant mode). The live path broadcasts these `type`s to AURA.
+
+### Tests
+- New: `jarvis/tests/test_live_brain_v61.py` (routing, security classifier,
+  verifier integration with fake clients, memory policy, trust labels / prompt
+  injection, system-prompt safety) and `jarvis/tests/test_ironman_foundation_v61.py`
+  (mode policy, task queue, AURA events). No Ollama/GPU/internet/mic required.
+
+### Limitations (intentional, this PR)
+- Verification is **post-stream** (the draft streams first, then is audited) and
+  is **advisory** — the verifier flags issues, it does not rewrite the answer.
+- Cloud escalation is supported by `route()` but **not streamed** from the local
+  client; the live path passes `allow_cloud=False`. Cloud remains opt-in.
+- Iron Man Mode is a **policy foundation**; always-on behavior stays consent-
+  gated and there is **no silent screen/camera/clipboard capture**.
+
 ## V60.0 — Hardening, role routing, and installability
 
 ### Security (Phase 7)

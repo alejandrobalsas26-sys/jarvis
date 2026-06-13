@@ -61,6 +61,18 @@ role models, and the exact `ollama pull` commands for anything missing. It exits
 python main.py        # or: python -m jarvis
 ```
 
+### What happens each turn (V61 live brain)
+
+No new env vars are required. Each turn is routed by role (`model_router.route()`)
+to a local model; high-risk turns (security-sensitive, tool-using, deep) get a
+post-stream **verifier** pass using the `VERIFIER` role model (override with
+`JARVIS_MODEL_VERIFIER`). Tool output is trust-labeled (untrusted for
+web/file/RAG/screen) and memory writes refuse secrets. The verifier model is the
+same small local model by default — pull it like any other (see `model_doctor.py`).
+Iron Man Mode (`core/ironman_mode.py`) is a **consent-gated** foundation: screen,
+camera, clipboard, and microphone stay OFF until you explicitly enable them for a
+session — there is no silent capture.
+
 ## Docker (base text mode)
 
 ```bash

@@ -15,9 +15,12 @@ is opt-in.
 
 - **Local-first brain** — Ollama on `localhost:11434`. No prompt data leaves the
   machine unless you explicitly enable the cloud backend.
-- **Role-based model routing** — prompts are classified into cognitive roles
-  (FAST / CODER / DEEP / VISION / EMBEDDING / VERIFIER) and routed to the right
-  local model, with hardware-tier-aware recommendations.
+- **Live role-based model routing** — every turn is classified into a cognitive
+  role (FAST / CODER / DEEP / VISION / EMBEDDING / VERIFIER) and routed to the
+  right local model in the streaming path, with hardware-tier-aware
+  recommendations. High-risk turns get a post-stream **verifier** pass; tool
+  output is **trust-labeled** (untrusted web/file/RAG/screen) and memory writes
+  refuse secrets (V61).
 - **Guarded tool executor** — allowlist, `shell=False`, shell-metacharacter
   blocking, path canonicalization, NATO vocal HITL approval, SSRF defense, audit
   logging, and PII detection.
@@ -98,7 +101,11 @@ python -m pytest -q   # app suite;  (cd .. && python -m pytest tests/) for repo 
 
 - A truly minimal `base` install is tuned for text mode; some eagerly-imported
   subsystems may want the `soc`/`lab` profiles.
-- The verifier and memory-router modules are implemented and tested but not yet
-  wired into the live streaming response path (next PR).
+- Verification is **post-stream** and advisory (the draft streams first, then is
+  audited; the verifier flags issues rather than rewriting the answer).
+- Cloud escalation is supported by the router but **not streamed** from the local
+  client; cloud remains opt-in and off by default.
+- Iron Man Mode (V61) is a **consent-gated policy foundation** — always-on
+  behavior is gated, with no silent screen/camera/clipboard capture.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history and roadmap.

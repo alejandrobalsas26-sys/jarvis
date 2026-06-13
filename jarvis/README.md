@@ -12,15 +12,26 @@ guarded tool executor. This directory is the app root (flat layout — top-level
        ↓
 [STT — faster-whisper]      local transcription (voice mode; text mode skips this)
        ↓
-[Role router → Ollama]      qwen2.5-coder / deepseek-r1 etc. on localhost:11434
-       ↓                    (cloud is opt-in, off by default)
+[Role router → Ollama]      route() picks role/model per turn (FAST/CODER/DEEP/…)
+       ↓                    on localhost:11434  (cloud is opt-in, off by default)
 [Tool Executor]             allowlist + shell=False + NATO HITL + SSRF/guardrails
+       ↓                    tool output enters history TRUST-LABELED (untrusted
+       ↓                    for web/file/RAG/screen — data, never instructions)
+[Verifier (high-risk only)] post-stream audit; flags issues, fail-closed
        ↓
 [TTS — pyttsx3 / ElevenLabs]  pyttsx3 offline by default
 ```
 
 The default LLM backend is **Ollama (local)**. `ANTHROPIC_API_KEY` / OpenRouter
 are **optional** and only used when the cloud backend is explicitly enabled.
+
+### V61 live brain (`core/`)
+
+`llm.py` routes each turn through `model_router.route()`, runs a post-stream
+`verification.verify_answer()` on high-risk turns, and applies
+`memory_router` policy (secret-safe, scope-classified) before persisting.
+`ironman_mode.py` / `task_queue.py` / `aura_events.py` provide the consent-gated
+multimodal + background-task foundation. See [../CHANGELOG.md](../CHANGELOG.md).
 
 ## Quick start
 
