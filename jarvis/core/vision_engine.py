@@ -22,7 +22,6 @@ Ollama multimodal message format:
 
 import asyncio, base64, os
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from loguru import logger
 

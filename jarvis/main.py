@@ -625,15 +625,14 @@ async def _main_async() -> None:
     from core.hardware_profile import detect_hardware, set_cached_profile
     from core.dependency_guardian import ensure_all, resolve_models
     from core.shutdown_manager import (
-        install_signal_handlers, get_shutdown_event,
-        run_graceful_shutdown, register_shutdown_callback,
+        install_signal_handlers, run_graceful_shutdown, register_shutdown_callback,
     )
     from core.relevance_graph import start_pruning_loop
     from core.power_monitor import start_power_monitor
     from core.process_governor import enforce_cpu_priorities
     from core.model_router import (
         check_model_availability, configure_ollama_for_hardware,
-        list_pulled_models, MODEL_FAST, MODEL_DEEP,
+        list_pulled_models,
     )
     from tools.executor import ToolExecutor, _aura_broadcast
     from core.llm import LLM
@@ -658,8 +657,6 @@ async def _main_async() -> None:
     from core.cognitive_optimizer import start_cognitive_monitor
     # v35.0 — Real-Time Interrupt Architecture
     from core.cancel_bus     import initialize as init_cancel_bus
-    from core.voice_interrupt import is_interrupt_command, handle_interrupt
-    from core.voice_macros   import process_for_macro
     # v36.0 — Predictive Cognition & Autonomous Intelligence
     from core.agent_orchestrator  import orchestrator as v36_orchestrator
     from core.model_swapper       import attach as attach_model_swapper
@@ -684,20 +681,16 @@ async def _main_async() -> None:
     from core.vision_engine       import capture_and_save
     from core.screen_monitor      import start_screen_monitor
     # v39.0 — Deep Forensics & Autonomous Remediation
-    from tools.memory_hunter      import dump_process_memory
     from core.auto_remediator     import draft_mitigation
     # v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter
-    from core.ocr_engine          import read_screen_and_analyze
-    from tools.ghost_hands        import execute_lab_profile, list_profiles
-    from core.forensic_reporter   import generate_forensic_report
+    from tools.ghost_hands        import list_profiles
     # v41.0 — Ephemeral Docker Lab Orchestrator
-    from tools.docker_manager     import list_running_labs, _get_client as _docker_get_client
+    from tools.docker_manager     import _get_client as _docker_get_client
     # v42.0 — ARES PROTOCOL (Red Team Operator + Sensor Mesh + MITM Proxy)
     from core.red_team_operator   import ares_operator
-    from core.sensor_mesh         import start_sensor_server, get_connected_agents
+    from core.sensor_mesh         import start_sensor_server
     # v43.0 — BIFROST PROTOCOL (Purple Team Coordinator + BAS + Detection Eng + OPSEC)
     from core.purple_coordinator  import attach_llm as purple_attach_llm
-    from core.purple_coordinator  import get_coverage_summary as purple_summary
     from tools.breach_simulator   import run_full_bas_scenario  # noqa: F401
 
     # FIRST: detect hardware before any model loading or task registration
@@ -1525,7 +1518,7 @@ async def _main_async() -> None:
             # ── v46.0 OMEGA — IoT bridge, Punisher Mode, War Room auto-trigger ──
             try:
                 from core.iot_bridge import (
-                    alert_red, alert_orange, alert_clear, is_configured,
+                    alert_red, alert_orange, is_configured,
                 )
                 from core.punisher import punisher_response
 
@@ -1826,7 +1819,9 @@ async def _main_async() -> None:
 
 def main() -> None:
     try:
-        from core.config import settings  # Validación temprana de .env
+        # Imported for its side effect: loading core.config runs Settings() and
+        # validates .env early, surfacing a clear error before the event loop.
+        from core.config import settings  # noqa: F401  (early .env validation)
     except Exception as e:
         print(f"[ERROR] Configuración inválida: {e}", file=sys.stderr)
         print(

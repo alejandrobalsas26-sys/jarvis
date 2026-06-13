@@ -14,7 +14,7 @@ Supported: .py .ps1 .vbs .bat .js .c .cpp .asm .sh + binary files
 Drop folder: jarvis/analyze_inbox/
 """
 
-import asyncio, hashlib, math, os, re, struct
+import asyncio, hashlib, math, re
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger

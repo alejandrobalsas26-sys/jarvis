@@ -20,7 +20,7 @@ Hunt hypotheses:
   H12 — Supply chain (new unsigned DLL loads)
 """
 
-import asyncio, time
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger

@@ -10,11 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("jarvis.ai_reverser")
 

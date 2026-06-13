@@ -153,7 +153,6 @@ async def start(correlator=None) -> None:
     """main.py startup hook. Watchdog Pattern: dormant if no decoy port can be
     bound (e.g., 445/3389 already owned by the OS are skipped)."""
     global _servers
-    loop = asyncio.get_running_loop()
     bound = []
     for port in _PORTS:
         try:

@@ -11,7 +11,6 @@ Memory layout intent (future 64GB pool):
 """
 
 import asyncio
-import io
 import os
 import math
 import queue

@@ -14,7 +14,7 @@ Capabilities:
 Playwright installed in v37: playwright>=1.40.0 + chromium
 """
 
-import asyncio, os, re
+import asyncio, os
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger

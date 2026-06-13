@@ -10,7 +10,7 @@ Poll interval: every 6 hours.
 Minimum CVSS: 7.0 (high severity only).
 """
 
-import asyncio, os, re
+import asyncio, os
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 

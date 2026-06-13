@@ -25,8 +25,8 @@ Requires:
   JARVIS_TELEGRAM_CHAT_ID — your personal Telegram user ID
 """
 
-import asyncio, os, io
-from datetime import datetime, timezone
+import asyncio, os
+from datetime import datetime
 from loguru import logger
 
 _TOKEN   = os.getenv("JARVIS_TELEGRAM_TOKEN", "")
@@ -52,7 +52,6 @@ async def start_telegram_bridge(broadcast_fn, tts=None) -> None:
 
     try:
         from telegram.ext import Application, CommandHandler
-        from telegram     import Bot
 
         _app = (
             Application.builder()

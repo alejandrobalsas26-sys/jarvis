@@ -53,18 +53,22 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-# Pragmatic gate: correctness-critical rules (syntax errors, bad comparisons,
-# undefined names) are enforced repo-wide and CI fails on them. The broader
-# style ruleset (E/W/F401 unused-imports) is not yet clean across the legacy
-# tree — tracked as a follow-up cleanup in CHANGELOG.md. New code is held to
-# the stricter bar in review.
-select = ["E9", "F63", "F7", "F82"]
+# Gate: syntax errors (E9) + the full pyflakes ruleset (F) — real correctness
+# issues (unused imports/vars, undefined names, bad f-strings, redefinitions).
+# CI fails on these (no `|| true`). The broader pycodestyle style set (E/W,
+# excluding E501) is a separate cleanup tracked in CHANGELOG.md.
+select = ["E9", "F"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 # Code-generation template: __JARVIS_PORT__ is string-substituted at runtime by
 # sensor_mesh._generate_agent_script, so it is intentionally undefined here.
 "**/sensor_agent_template.py" = ["F821"]
+# Self-test probes import optional deps purely to confirm availability
+# (`try: import yara` → report present/absent). The bound name is intentionally
+# unused; removing the import would make every probe report success. F401 here
+# is a proven false positive for that pattern.
+"**/self_test.py" = ["F401"]
 
 # ── Pytest ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]

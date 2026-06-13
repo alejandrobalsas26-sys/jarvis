@@ -1,70 +1,79 @@
-# JARVIS — Asistente de IA Personal
+# JARVIS — application package
 
-Sistema modular de asistente de voz con LLM, inspirado en J.A.R.V.I.S.
+Modular local-first AI assistant: voice agent, SOC/DFIR automation, and a
+guarded tool executor. This directory is the app root (flat layout — top-level
+`core/`, `tools/`, `aura/`). For the project overview and install matrix see the
+[root README](../README.md) and [docs/INSTALLATION.md](../docs/INSTALLATION.md).
 
-## Arquitectura
+## Architecture (real runtime)
 
 ```
-[Tú hablas]
-     ↓
-[STT — faster-whisper]    ← Transcripción local, sin enviar audio a la nube
-     ↓
-[LLM — Claude Sonnet]     ← Razonamiento + decisión de herramientas
-     ↓
-[Tool Executor]           ← Clima, shell, GUI, WhatsApp...
-     ↓
-[TTS — ElevenLabs/pyttsx3] ← Respuesta en voz
+[You speak / type]
+       ↓
+[STT — faster-whisper]      local transcription (voice mode; text mode skips this)
+       ↓
+[Role router → Ollama]      qwen2.5-coder / deepseek-r1 etc. on localhost:11434
+       ↓                    (cloud is opt-in, off by default)
+[Tool Executor]             allowlist + shell=False + NATO HITL + SSRF/guardrails
+       ↓
+[TTS — pyttsx3 / ElevenLabs]  pyttsx3 offline by default
 ```
 
-## Setup rápido
+The default LLM backend is **Ollama (local)**. `ANTHROPIC_API_KEY` / OpenRouter
+are **optional** and only used when the cloud backend is explicitly enabled.
+
+## Quick start
 
 ```bash
+# Windows
+./scripts/install.ps1                 # base (text mode); -Profile all for everything
+.\.venv\Scripts\Activate.ps1
+
 # Linux/macOS
-chmod +x setup.sh && ./setup.sh
+./scripts/install.sh                  # base; ./scripts/install.sh all for everything
+source .venv/bin/activate
 
-# Windows (PowerShell)
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-# Edita .env con tu API key
+python scripts/doctor.py              # environment health
+ollama serve && python scripts/model_doctor.py
+python main.py                        # or: python -m jarvis
 ```
 
-## Configuración (.env)
+## Configuration (`.env`)
 
-| Variable | Descripción | Ejemplo |
+Copy `.env.example` → `.env` (the installer does this). Everything has a safe
+default — text mode runs with an empty `.env`.
+
+| Variable | Description | Default |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Tu API key de Anthropic | `sk-ant-...` |
-| `ASSISTANT_NAME` | Nombre del asistente | `Alicia` |
-| `USER_NAME` | Tu nombre | `Alejandro` |
-| `CITY` | Tu ciudad (para clima) | `Panama` |
-| `WHISPER_MODEL` | Tamaño del modelo STT | `small` |
-| `ELEVENLABS_API_KEY` | Opcional — voz de alta calidad | *(vacío = offline)* |
+| `LLM_MODEL` | Local Ollama model tag | `qwen2.5-coder` |
+| `JARVIS_MODEL_*` | Per-role model overrides (FAST/CODER/DEEP/…) | safe defaults |
+| `JARVIS_CLOUD_ENABLED` | Allow cloud escalation | `false` |
+| `ANTHROPIC_API_KEY` | Optional — only for the cloud backend | *(empty = local-only)* |
+| `JARVIS_TRUSTED_LAB` | Relax guardrails for an **isolated** lab | `false` |
+| `ASSISTANT_NAME` / `USER_NAME` / `CITY` | Persona | `Alicia` / `Alejandro` / `Panama` |
+| `WHISPER_MODEL` | STT model size (voice mode) | `small` |
 
-## Uso
+## Usage
 
 ```bash
-# Modo texto (sin micrófono — para desarrollo)
-python main.py
-
-# Modo voz completo
-python main.py --voice
-
-# Sin saludo inicial
-python main.py --no-greeting
+python main.py                 # text mode (no mic — dev default)
+python main.py --voice         # full voice mode
+python main.py --no-greeting   # skip TTS greeting
 ```
 
-## Añadir nuevas tools
+## Adding a tool (security-gated)
 
-1. Agrega la definición en `core/llm.py` → lista `TOOLS`
-2. Implementa el handler en `tools/executor.py` → método `_tool_<nombre>`
+1. Implement the handler in `tools/executor.py` → `_tool_<name>` (return a `dict`,
+   `{"error": ...}` on failure).
+2. Declare the JSON schema in `core/llm.py` → `TOOLS`.
+3. Add tests in `tests/` (security-relevant tools → assert the guardrails).
 
-El LLM automáticamente aprenderá cuándo invocar la tool nueva.
+Risky tools stay gated by the NATO/HITL challenge; never weaken the executor
+controls to make a tool easier to call. See [../SECURITY.md](../SECURITY.md).
 
-## Roadmap
+## Tests / lint
 
-- [ ] Wake word con Porcupine (siempre escuchando)
-- [ ] Módulo de seguridad WhatsApp
-- [ ] Control de GUI con pyautogui
-- [ ] Rutinas programadas (APScheduler)
-- [ ] Migración a LLM local (Ollama + Llama)
+```bash
+python -m pytest -q          # app suite
+ruff check .                 # E9 + full pyflakes gate (must pass)
+```

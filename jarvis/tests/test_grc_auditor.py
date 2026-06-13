@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 
 from core.grc_auditor import GRCAuditor, _fmt_duration, _build_recommendations
 

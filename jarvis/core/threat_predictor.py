@@ -14,7 +14,6 @@ For each prediction:
 No ML — pure ATT&CK graph traversal. Zero latency.
 """
 
-import asyncio
 from datetime import datetime, timezone
 from loguru import logger
 

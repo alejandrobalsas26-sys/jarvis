@@ -131,7 +131,6 @@ def _make_handler(port, label, banner, correlator):
 
 
 async def start(correlator=None):
-    loop = asyncio.get_running_loop()
     bound = []
     for port in _PORTS:
         label, banner = _SERVICES.get(port, ("tcp", b""))

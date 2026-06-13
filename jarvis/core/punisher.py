@@ -13,7 +13,7 @@ DESTRUCTIVE (requires NATO OTP via AURA):
 All actions logged to logs/punisher_actions.jsonl
 """
 
-import asyncio, os, subprocess, json
+import asyncio, subprocess, json
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger

@@ -18,8 +18,8 @@ Sections:
 Output: logs/journals/session_YYYYMMDD_HHMMSS.md
 """
 
-import asyncio, time
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime
 from pathlib import Path
 from loguru import logger
 

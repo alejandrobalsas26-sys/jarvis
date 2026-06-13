@@ -17,7 +17,6 @@ from core.feed_sanitizer import (
     sanitize_alert_title,
     check_content_hash,
     MAX_IOCS_PER_CYCLE,
-    SanitizationError,
 )
 
 _SIG_DIR     = Path(__file__).parent.parent / "core" / "signatures"

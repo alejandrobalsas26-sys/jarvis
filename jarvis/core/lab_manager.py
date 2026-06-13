@@ -15,7 +15,6 @@ Voice commands via macro system:
 
 import asyncio, os, subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 from loguru import logger
 
 _VMRUN = os.getenv("VMRUN_PATH", r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe")

@@ -14,7 +14,6 @@ YARA rules loaded from core/signatures/*.yar (existing YARA infrastructure).
 """
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 

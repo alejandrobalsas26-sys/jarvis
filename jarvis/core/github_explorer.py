@@ -20,7 +20,7 @@ SECURITY:
   - GitHub token optional but increases API rate limit 60→5000 req/hr
 """
 
-import asyncio, hashlib, json, os, re, shutil, subprocess, sys
+import asyncio, json, os, re, shutil, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger

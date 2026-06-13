@@ -32,6 +32,26 @@
   used `is_interrupt_command` / `handle_interrupt` / `process_for_macro` without
   importing them in scope.
 
+### Lint cleanup (Phase 12 follow-through)
+- Ruff gate expanded to **`E9` + full pyflakes (`F`)** and the tree made clean:
+  81 unused imports / empty f-strings auto-fixed, 3 unused variables removed, one
+  genuinely-unused name dropped from a multi-import.
+- **Avoided two autofix regressions** (verified, not blindly applied):
+  - `core/self_test.py` uses `try: import <dep>` as availability probes — the
+    bound name is intentionally unused. Reverted the removals and added a
+    documented per-file `F401` ignore (proven false positive).
+  - `main.py` early `.env` validation (`from core.config import settings`) is a
+    side-effect import; restored with a narrow commented `# noqa: F401`.
+- `core/sensor_agent_template.py` keeps its documented `F821` per-file ignore
+  (`__JARVIS_PORT__` is string-substituted at runtime).
+
+### Documentation drift fixed
+- Root `README.md` (new) and `jarvis/README.md` (rewritten): corrected the brain
+  from "Claude Sonnet" to **Ollama (local default)**; `ANTHROPIC_API_KEY` is
+  documented as optional/cloud-only. Removed the stale "migrate to Ollama"
+  roadmap item (already done).
+- Added `docs/TROUBLESHOOTING.md`.
+
 ### Installability & tooling (Phases 1, 2, 9, 10, 11)
 - `requirements/` profiles: `base`, `voice`, `docs`, `soc`, `lab`, `dev`, `all`.
   Base is lean enough for text mode without audio/OCR/ML/lab deps.

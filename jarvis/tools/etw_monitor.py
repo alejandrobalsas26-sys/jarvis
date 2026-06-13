@@ -24,7 +24,6 @@ v26.0 fixes:
 
 import asyncio
 import threading
-from datetime import datetime, timezone
 
 from loguru import logger
 from core.events import make_event

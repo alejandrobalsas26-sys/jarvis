@@ -19,7 +19,6 @@ import logging
 import os
 import time
 from ctypes import wintypes
-from pathlib import Path
 
 logger = logging.getLogger("jarvis.ntdll_monitor")
 

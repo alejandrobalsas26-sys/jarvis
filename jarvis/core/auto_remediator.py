@@ -190,7 +190,7 @@ async def execute_mitigation(
         })
 
         if success:
-            logger.info(f"REMEDIATOR: mitigation executed successfully")
+            logger.info("REMEDIATOR: mitigation executed successfully")
         else:
             logger.error(
                 f"REMEDIATOR: mitigation failed — "

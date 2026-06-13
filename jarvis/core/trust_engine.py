@@ -1,9 +1,8 @@
 """core/trust_engine.py — Dynamic trust scoring for command execution (v25.0)."""
 
-import asyncio, json, math, time, re
+import asyncio, json, math, time
 from enum import Enum
 from pathlib import Path
-from loguru import logger
 
 PROFILE_PATH = Path(__file__).parent / "trust_profile.json"
 

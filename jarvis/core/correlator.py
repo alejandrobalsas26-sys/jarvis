@@ -11,7 +11,7 @@ import asyncio
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from loguru import logger
 

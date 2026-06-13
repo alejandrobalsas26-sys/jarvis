@@ -152,7 +152,6 @@ def _draw_timeline(incident: dict) -> Path | None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
 
         events = incident.get("sub_events", [])[:15]
         if not events:

@@ -8,7 +8,6 @@ Combines two approaches for maximum accuracy:
 
 import asyncio, re
 from datetime import datetime, timezone
-from pathlib import Path
 from loguru import logger
 
 _reader = None   # lazy-init easyocr reader (heavy — ~500MB model)
@@ -227,8 +226,8 @@ async def read_screen_and_analyze(
     from core.vision_engine import analyze_image
     vision_desc = await analyze_image(
         image_data,
-        f"Describe what tool/application is shown and what data "
-        f"is visible. Be precise about any code, hex, or text.",
+        "Describe what tool/application is shown and what data "
+        "is visible. Be precise about any code, hex, or text.",
         ollama_client,
     )
 

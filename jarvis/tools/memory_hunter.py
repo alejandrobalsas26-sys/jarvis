@@ -10,7 +10,7 @@ Typical dump size: 5-50MB vs 2GB for MiniDumpWithFullMemory.
 After dump: triggers YARA scan + Volatility malfind automatically.
 """
 
-import asyncio, ctypes, ctypes.wintypes as wt, os
+import asyncio, ctypes, ctypes.wintypes as wt
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
@@ -314,7 +314,6 @@ async def _run_volatility_on_dump(
 ) -> None:
     """Run Volatility malfind on the captured dump."""
     try:
-        from tools.forensic_volatility import trigger_forensic_capture
         logger.info("MEM_HUNTER: triggering Volatility malfind on dump")
         await broadcast_fn({
             "type":      "volatility_queued",

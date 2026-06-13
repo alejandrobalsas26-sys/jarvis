@@ -10,7 +10,6 @@ Real-time system state injected into every conversation.
 import random
 import time
 from datetime import datetime
-from pathlib import Path
 
 _LAST_REMARK_TS  = 0.0
 _REMARK_COOLDOWN = 60.0
@@ -116,7 +115,6 @@ def get_jarvis_system_prompt(
     now      = datetime.now()
     time_str = now.strftime("%H:%M")
     date_str = now.strftime("%A, %B %d")
-    ctx      = _get_time_context()
 
     state_lines = []
     if coverage_pct > 0:

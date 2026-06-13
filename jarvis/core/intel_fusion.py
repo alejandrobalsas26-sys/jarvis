@@ -325,10 +325,10 @@ async def generate_weekly_digest(
             f"{r['technique_count']} techniques"
             for r in campaigns
         ) + "\n\n"
-        f"TOP TECHNIQUES:\n"
+        "TOP TECHNIQUES:\n"
         + "\n".join(f"  {t}: {c} times" for t, c in top_techniques)
         + "\n\n"
-        f"TOP IOCs:\n"
+        "TOP IOCs:\n"
         + "\n".join(
             f"  [{r['type']}] {r['value'][:30]} "
             f"(seen {r['seen_count']}x, score {r['threat_score']})"

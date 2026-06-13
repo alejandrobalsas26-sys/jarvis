@@ -9,7 +9,7 @@ Slow operation detector: any operation > 5 seconds is logged
 prominently and broadcast to AURA.
 """
 
-import asyncio, time
+import time
 from collections import defaultdict
 from loguru import logger
 

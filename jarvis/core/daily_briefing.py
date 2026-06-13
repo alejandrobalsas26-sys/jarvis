@@ -14,7 +14,7 @@ Covers:
   - Integrated GitHub tools
 """
 
-import asyncio, os, psutil
+import asyncio, psutil
 from datetime import datetime, timezone
 from loguru import logger
 
@@ -83,7 +83,6 @@ async def deliver_briefing(
 
     # ── CVE intel ────────────────────────────────────────────────────────────
     try:
-        from core.cve_intel import poll_nvd
         # Lightweight summary — don't do full TTS here, just count
         sections.append("CVE: monitoring active — say 'JARVIS CVE briefing' for full report")
     except Exception:

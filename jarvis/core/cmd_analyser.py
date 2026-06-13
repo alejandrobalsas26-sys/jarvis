@@ -10,7 +10,6 @@ Watchdog Pattern: dormant if non-Windows, pywin32 missing, or not elevated.
 """
 from __future__ import annotations
 import asyncio, hashlib, logging, os, re, time
-from collections import deque
 
 logger = logging.getLogger("jarvis.cmd_analyser")
 

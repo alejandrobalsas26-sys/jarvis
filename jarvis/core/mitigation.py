@@ -6,7 +6,6 @@ Isolation gate: entropy AND-gate with critical MITRE technique check before any 
 
 import asyncio
 import ipaddress
-from datetime import datetime, timezone
 
 from loguru import logger
 

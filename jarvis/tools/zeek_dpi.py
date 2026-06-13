@@ -12,7 +12,6 @@ Architecture:
 
 import asyncio
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import aiofiles

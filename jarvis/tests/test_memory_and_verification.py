@@ -13,7 +13,6 @@ import pytest
 
 from core import memory_router as mr
 from core import verification as ver
-from core.model_router import route
 
 
 # ───────────────────────────── memory_router ───────────────────────────────

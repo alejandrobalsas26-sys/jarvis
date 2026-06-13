@@ -17,7 +17,6 @@ Security layers:
 import asyncio
 import ipaddress
 import json
-import math
 import random
 import re
 import sys
@@ -505,11 +504,11 @@ class ToolExecutor:
         challenge_word = random.choice(_NATO_ALPHABET)
         bar = "=" * 62
         print(f"\n{bar}")
-        print(f"  [!] AUTORIZACIÓN NATO REQUERIDA")
+        print("  [!] AUTORIZACIÓN NATO REQUERIDA")
         print(f"      Tool      : {tool_name.upper()}")
         print(f"      Parámetros: {preview}")
         print(f"  >> DESAFÍO: Di la palabra NATO [{challenge_word.upper()}] para autorizar <<")
-        print(f"  (o presiona 'y' en el teclado | timeout: 30s)")
+        print("  (o presiona 'y' en el teclado | timeout: 30s)")
         print(f"{bar}")
         sys.stdout.flush()
 
@@ -1965,7 +1964,7 @@ class ToolExecutor:
 
     def _tool_decode_payload(self, payload: str, encoding: str = "auto") -> dict:
         """[EXEMPT] Decode: base64, hex, url, rot13, jwt, or auto-detect all."""
-        import base64, binascii, urllib.parse, codecs
+        import base64, urllib.parse, codecs
 
         if len(payload) > 50_000:
             return {"error": "Payload demasiado grande (máx 50k chars)."}
