@@ -1,0 +1,24 @@
+# requirements/lab.txt — LAB-ONLY, offensive-capable & GUI-automation tooling.
+# These modules are gated at runtime (HITL/NATO approval, allowlists, trusted-lab
+# flag). Install ONLY in an isolated, authorized homelab.
+#   pip install -r requirements/base.txt -r requirements/lab.txt
+-r base.txt
+
+docker>=7.0.0             # ephemeral lab orchestration
+opencv-python>=4.9.0      # adaptive OCR pre-processing
+mitmproxy>=10.3.0         # MITM proxy (proxy_intel) — lab traffic only
+pymetasploit3>=1.0.3      # Metasploit RPC client — authorized engagements only
+grpcio>=1.62.0            # Sliver C2 gRPC transport — lab only
+grpcio-tools>=1.62.0
+sliver-py>=0.0.19         # Sliver operator client — lab only
+playwright>=1.40.0        # headless browser OSINT
+shodan>=1.31.0            # needs SHODAN_API_KEY
+gitpython>=3.1.40
+nvdlib>=0.7.5             # NVD CVE lookups (no auth)
+qrcode>=7.4.2
+mss>=9.0.1                # fast screenshots
+pyautogui>=0.9.54         # GUI automation (Ghost Hands)
+pygetwindow>=0.0.9
+keyboard>=0.13.5          # global hotkeys
+pyperclip>=1.8.2          # clipboard intel
+python-telegram-bot>=20.7 # mobile bridge

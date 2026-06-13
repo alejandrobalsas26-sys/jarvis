@@ -245,6 +245,91 @@ def _contains_shell_metacharacters(value: str) -> bool:
     return bool(_FORBIDDEN_CHARS_RE.search(value or ""))
 
 
+def _strip_override(tool_name: str, tool_input: dict) -> dict:
+    """Return a copy of *tool_input* with any model-supplied FORCE_OVERRIDE removed.
+
+    Defense-in-depth: the LLM must never be able to pass a guardrail-bypass flag
+    into a handler. If present, it is logged as a probable injection attempt and
+    dropped before validation or execution.
+    """
+    if not isinstance(tool_input, dict) or "FORCE_OVERRIDE" not in tool_input:
+        return tool_input
+    logger.warning(
+        f"SECURITY: stripped model-supplied FORCE_OVERRIDE from tool='{tool_name}' "
+        "input (guardrail bypass via tool argument is disabled)."
+    )
+    return {k: v for k, v in tool_input.items() if k != "FORCE_OVERRIDE"}
+
+
+def _trusted_lab_enabled() -> bool:
+    """True only when the operator has explicitly enabled trusted-lab mode.
+
+    Read dynamically (config first, raw env fallback) so the value is never
+    cached from a model-generated argument and can be toggled per-process for
+    tests. This is the ONLY legitimate source of a security override — tool
+    input is never consulted.
+    """
+    try:
+        from core.config import settings
+        if settings.trusted_lab_mode:
+            return True
+    except Exception:
+        pass
+    return os.environ.get("JARVIS_TRUSTED_LAB", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _http_target_blocked(url: str) -> str | None:
+    """SSRF guard for outbound HTTP tools.
+
+    Resolves the URL host and rejects loopback, RFC1918 private, link-local
+    (incl. 169.254.169.254 cloud metadata), unique-local, multicast, and other
+    reserved ranges — unless trusted-lab mode is explicitly enabled. Returns a
+    human-readable block reason, or None if the target is permitted.
+    """
+    import socket
+    import urllib.parse
+
+    if _trusted_lab_enabled():
+        return None
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"Esquema no permitido: {parsed.scheme or '(vacío)'} (usa http/https)."
+    host = parsed.hostname
+    if not host:
+        return "URL inválida: host vacío."
+
+    # Resolve every address the host maps to; block if ANY is internal — this
+    # defeats DNS-rebinding and hostnames that alias a private/metadata IP.
+    candidates: set[str] = set()
+    try:
+        ipaddress.ip_address(host)
+        candidates.add(host)
+    except ValueError:
+        try:
+            for fam, _, _, _, sockaddr in socket.getaddrinfo(host, None):
+                candidates.add(sockaddr[0])
+        except Exception:
+            return f"No se pudo resolver el host '{host}'."
+
+    for raw_ip in candidates:
+        try:
+            ip = ipaddress.ip_address(raw_ip.split("%")[0])  # strip zone id
+        except ValueError:
+            return f"Dirección IP no válida resuelta para '{host}'."
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        ):
+            return (
+                f"Destino interno bloqueado (SSRF): {host} → {ip}. "
+                "Habilita JARVIS_TRUSTED_LAB=true para permitir rangos internos en lab aislado."
+            )
+    return None
+
+
 def _validate_network_target(target: str) -> str:
     """
     Validate a scan/connectivity target. Returns the normalized target string.
@@ -540,6 +625,7 @@ class ToolExecutor:
         live orchestrator uses. Use aexecute() whenever you are inside the
         event loop and want the full authorization pipeline.
         """
+        tool_input = _strip_override(tool_name, tool_input)
         handler = getattr(self, f"_tool_{tool_name}", None)
         if handler is None:
             self._audit.log_action(
@@ -589,6 +675,7 @@ class ToolExecutor:
         """
         loop = asyncio.get_running_loop()
         self._loop = loop          # expose to sync handlers for fire-and-forget broadcasts
+        tool_input = _strip_override(tool_name, tool_input)
         handler = getattr(self, f"_tool_{tool_name}", None)
 
         if handler is None:
@@ -665,13 +752,35 @@ class ToolExecutor:
             return {"error": str(e)}
 
     def _validate_guardrails(self, tool_name: str, tool_input: dict) -> dict | None:
-        """Returns an error dict if the action violates a security guardrail, else None."""
-        if tool_input.get("FORCE_OVERRIDE"):
-            return None
+        """Returns an error dict if the action violates a security guardrail, else None.
 
-        combined = " ".join(str(v) for v in tool_input.values())
+        SECURITY (V60.0): the destructive-pattern override is NOT taken from
+        ``tool_input`` anymore. A model-generated tool argument such as
+        ``FORCE_OVERRIDE=true`` can no longer disable these guardrails — the
+        only legitimate override is operator-set trusted-lab mode, sourced
+        exclusively from the environment / .env (see ``_trusted_lab_enabled``).
+        """
+        if "FORCE_OVERRIDE" in tool_input:
+            # An override key reached the guardrail despite being stripped at the
+            # gate — treat as an injection attempt, log loudly, and ignore it.
+            logger.warning(
+                f"Guardrail: ignored model-supplied FORCE_OVERRIDE on tool='{tool_name}' "
+                "(LLM-controlled guardrail bypass is disabled)."
+            )
+
+        lab_override = _trusted_lab_enabled()
+
+        combined = " ".join(
+            str(v) for k, v in tool_input.items() if k != "FORCE_OVERRIDE"
+        )
 
         if _GUARDRAIL_ROOT_DELETE_RE.search(combined):
+            if lab_override:
+                logger.warning(
+                    f"Guardrail: root-delete pattern ALLOWED under trusted-lab mode — "
+                    f"tool='{tool_name}' input={combined[:80]!r}"
+                )
+                return None
             logger.warning(
                 f"Guardrail: eliminación de raíz bloqueada — tool='{tool_name}' "
                 f"input={combined[:80]!r}"
@@ -679,11 +788,18 @@ class ToolExecutor:
             return {
                 "error": (
                     "GUARDRAIL: operación bloqueada — intento de eliminar un directorio raíz "
-                    "detectado. Pasa FORCE_OVERRIDE=true para anular (solo uso autorizado)."
+                    "detectado. Habilita JARVIS_TRUSTED_LAB=true en .env para anular "
+                    "(solo en un laboratorio aislado y autorizado)."
                 )
             }
 
         if _GUARDRAIL_SYSTEM_WRITE_RE.search(combined):
+            if lab_override:
+                logger.warning(
+                    f"Guardrail: system-write pattern ALLOWED under trusted-lab mode — "
+                    f"tool='{tool_name}' input={combined[:80]!r}"
+                )
+                return None
             logger.warning(
                 f"Guardrail: escritura en ruta del sistema bloqueada — tool='{tool_name}' "
                 f"input={combined[:80]!r}"
@@ -691,7 +807,8 @@ class ToolExecutor:
             return {
                 "error": (
                     "GUARDRAIL: operación bloqueada — modificación de C:\\Windows o System32 "
-                    "no permitida. Pasa FORCE_OVERRIDE=true para anular (solo uso autorizado)."
+                    "no permitida. Habilita JARVIS_TRUSTED_LAB=true en .env para anular "
+                    "(solo en un laboratorio aislado y autorizado)."
                 )
             }
 
@@ -1815,12 +1932,16 @@ class ToolExecutor:
         body: str = "",
         timeout: int = 10,
     ) -> dict:
-        """[HITL] Make an HTTP request (GET/POST/PUT/PATCH). Blocks localhost."""
-        import urllib.parse
-        parsed = urllib.parse.urlparse(url)
-        blocked = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
-        if parsed.hostname in blocked:
-            return {"error": "Peticiones a localhost bloqueadas por seguridad."}
+        """[HITL] Make an HTTP request (GET/POST/PUT/PATCH).
+
+        SSRF-hardened: blocks loopback, RFC1918 private, link-local (incl. cloud
+        metadata 169.254.169.254), multicast and reserved targets — including
+        hostnames that resolve to them — unless trusted-lab mode is enabled.
+        """
+        block_reason = _http_target_blocked(url)
+        if block_reason:
+            logger.warning(f"http_request bloqueado: {url!r} — {block_reason}")
+            return {"error": block_reason}
         method = method.upper()
         if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
             return {"error": f"Método HTTP inválido: {method}"}

@@ -1,0 +1,11 @@
+# requirements/voice.txt — voice mode (STT + TTS + VAD). Install with base.
+#   pip install -r requirements/base.txt -r requirements/voice.txt
+-r base.txt
+
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+faster-whisper>=1.0.0
+pyttsx3>=2.90
+webrtcvad>=2.0.10
+pyaudio>=0.2.14

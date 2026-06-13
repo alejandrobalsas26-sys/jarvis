@@ -175,6 +175,8 @@ async def _process_voice_input(
     Order: interrupt commands → voice macros → LLM.
     """
     from tools.executor import _aura_broadcast
+    from core.voice_interrupt import is_interrupt_command, handle_interrupt
+    from core.voice_macros import process_for_macro
 
     # v44.0 — journal the operator command (non-blocking, best-effort)
     try:
@@ -1827,7 +1829,11 @@ def main() -> None:
         from core.config import settings  # Validación temprana de .env
     except Exception as e:
         print(f"[ERROR] Configuración inválida: {e}", file=sys.stderr)
-        print("Copia .env.example → .env y configura tu ANTHROPIC_API_KEY.", file=sys.stderr)
+        print(
+            "Copia .env.example -> .env. JARVIS usa Ollama local por defecto "
+            "(ANTHROPIC_API_KEY es opcional, solo para el backend cloud).",
+            file=sys.stderr,
+        )
         sys.exit(1)
     asyncio.run(_main_async())
 

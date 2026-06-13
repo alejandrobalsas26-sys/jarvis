@@ -179,6 +179,10 @@ async def write_journal(
         )
         return f"\n## {title}\n{rows}\n"
 
+    # Built outside the f-string: backslash escapes inside f-string expression
+    # fields are a Python 3.12+ feature and would SyntaxError on 3.11.
+    summary_section = f"## Session Summary\n{llm_summary}\n" if llm_summary else ""
+
     content = f"""# JARVIS Session Journal
 **Date:** {_SESSION_START.strftime('%Y-%m-%d')}
 **Start:** {_SESSION_START.strftime('%H:%M:%S')}
@@ -186,7 +190,7 @@ async def write_journal(
 **Duration:** {hours}h {minutes}m
 **Total Events:** {len(_events)}
 
-{('## Session Summary\n' + llm_summary + '\n') if llm_summary else ''}
+{summary_section}
 {_section('Operator Commands', commands)}
 {_section('Security Incidents', incidents)}
 {_section('Canary / ETW Detections', detections)}

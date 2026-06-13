@@ -1,0 +1,9 @@
+# requirements/dev.txt — testing, linting, security scanning.
+#   pip install -r requirements/base.txt -r requirements/dev.txt
+-r base.txt
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+ruff>=0.4.0
+bandit>=1.7.0
+pip-audit>=2.7.0

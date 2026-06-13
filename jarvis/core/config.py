@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     model_fast_override: str = ""
     model_deep_override: str = ""
 
+    # ── Trusted lab mode (operator-only; NEVER set from LLM/tool input) ───────
+    # When True, the executor honors local-config security overrides and allows
+    # HTTP requests to private/loopback ranges (for an isolated homelab). This
+    # flag is read ONLY from the environment / .env (JARVIS_TRUSTED_LAB), so a
+    # model-generated tool argument can never enable it. Default: hardened off.
+    trusted_lab_mode: bool = False
+
+    @field_validator("trusted_lab_mode", mode="before")
+    @classmethod
+    def _coerce_trusted_lab(cls, v) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(v)
+
     # ── Validators ────────────────────────────────────────────────────────────
 
     @field_validator("whisper_model")
