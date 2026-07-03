@@ -169,6 +169,21 @@ _HITL_EXEMPT_TOOLS: frozenset[str] = frozenset({
     "save_note",
 })
 
+# Tools that ALWAYS require explicit HITL/NATO approval — arbitrary code / shell
+# / outbound-network execution surfaces. They can NEVER be HITL-exempt and can
+# never be auto-approved by any trust path (F4). Even if one is mistakenly added
+# to _HITL_EXEMPT_TOOLS, the aexecute gate still forces a challenge for it.
+_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({
+    "code_execute",
+    "run_shell_command",
+    "http_request",
+})
+
+# Security invariant: no always-HITL tool may ever appear in the exempt list.
+assert _ALWAYS_HITL_TOOLS.isdisjoint(_HITL_EXEMPT_TOOLS), (
+    "SECURITY: an always-HITL tool is present in _HITL_EXEMPT_TOOLS"
+)
+
 # Patrones SAST precompilados para _tool_analizar_codigo_sast
 _SAST_PATTERNS: list[tuple] = [
     (re.compile(r'eval\('),                                            "eval() detectado"),
@@ -700,7 +715,10 @@ class ToolExecutor:
             return guardrail_block
 
         auth_audit = "hitl_exempt"
-        if tool_name not in _HITL_EXEMPT_TOOLS:
+        must_challenge = (
+            tool_name in _ALWAYS_HITL_TOOLS or tool_name not in _HITL_EXEMPT_TOOLS
+        )
+        if must_challenge:
             preview = str(tool_input)
             if len(preview) > 200:
                 preview = preview[:200] + "…"
@@ -1936,29 +1954,63 @@ class ToolExecutor:
         SSRF-hardened: blocks loopback, RFC1918 private, link-local (incl. cloud
         metadata 169.254.169.254), multicast and reserved targets — including
         hostnames that resolve to them — unless trusted-lab mode is enabled.
+
+        Redirects are followed MANUALLY with a small hop cap so that EVERY hop is
+        re-validated by the SSRF guard: a public URL cannot 30x-bounce into an
+        internal/metadata address, and a malformed/relative Location fails closed.
         """
-        block_reason = _http_target_blocked(url)
-        if block_reason:
-            logger.warning(f"http_request bloqueado: {url!r} — {block_reason}")
-            return {"error": block_reason}
+        import urllib.parse
+
         method = method.upper()
         if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
             return {"error": f"Método HTTP inválido: {method}"}
+
+        _MAX_REDIRECTS = 5
+        _REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+        current_url = url
+        cur_method = method
+        cur_body = body
         try:
-            resp = requests.request(
-                method, url,
-                headers=headers or {},
-                data=body.encode("utf-8") if body else None,
-                timeout=timeout,
-                allow_redirects=True,
-            )
-            return {
-                "status_code": resp.status_code,
-                "url": str(resp.url),
-                "headers": dict(resp.headers),
-                "body": resp.text[:4000],
-                "encoding": resp.encoding,
-            }
+            for _hop in range(_MAX_REDIRECTS + 1):
+                # Re-validate the *current* target BEFORE fetching it, so every
+                # redirect hop is SSRF-checked, not just the initial URL.
+                block_reason = _http_target_blocked(current_url)
+                if block_reason:
+                    logger.warning(f"http_request bloqueado: {current_url!r} — {block_reason}")
+                    return {"error": block_reason}
+
+                resp = requests.request(
+                    cur_method, current_url,
+                    headers=headers or {},
+                    data=cur_body.encode("utf-8") if cur_body else None,
+                    timeout=timeout,
+                    allow_redirects=False,
+                )
+
+                if resp.status_code not in _REDIRECT_CODES:
+                    return {
+                        "status_code": resp.status_code,
+                        "url": str(resp.url),
+                        "headers": dict(resp.headers),
+                        "body": resp.text[:4000],
+                        "encoding": resp.encoding,
+                    }
+
+                location = resp.headers.get("Location") or resp.headers.get("location")
+                if not location or not str(location).strip():
+                    return {"error": "Redirección sin cabecera Location válida (bloqueado)."}
+
+                # Resolve relative redirects against the current URL, then loop so
+                # the new target is SSRF-checked before it is ever fetched.
+                current_url = urllib.parse.urljoin(current_url, str(location).strip())
+                # Browser/requests semantics: 301/302/303 downgrade to a bodyless
+                # GET; 307/308 preserve method and body.
+                if resp.status_code in (301, 302, 303) and cur_method not in ("GET", "HEAD"):
+                    cur_method = "GET"
+                    cur_body = ""
+
+            return {"error": f"Demasiadas redirecciones (>{_MAX_REDIRECTS}) — bloqueado."}
         except Exception as e:
             return {"error": str(e)}
 

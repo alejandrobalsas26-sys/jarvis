@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "jarvis"))
 
 import pytest
 
+import tools.executor as _executor_mod
 from tools.executor import (
     ToolExecutor,
     _http_target_blocked,
@@ -137,3 +138,112 @@ class TestReadFileSandbox:
         # /etc/passwd (Linux) or an absolute system path is outside the sandbox.
         result = executor.execute("read_file", {"path": "/etc/shadow"})
         assert "error" in result
+
+
+# ───────────────────── http_request redirect SSRF (F2) ─────────────────────
+
+class _FakeResp:
+    def __init__(self, status_code, headers=None, text="OK", url="", encoding="utf-8"):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.text = text
+        self.url = url
+        self.encoding = encoding
+
+
+class _FakeRequests:
+    """Route-table stand-in for the `requests` module used by the executor.
+
+    Records every fetched URL and refuses any URL not explicitly routed, so a
+    test fails loudly if the handler ever fetches an unchecked redirect target.
+    All targets are IP literals — _http_target_blocked never performs DNS.
+    """
+
+    def __init__(self, routes):
+        self.routes = routes
+        self.fetched: list[str] = []
+
+    def request(self, method, url, headers=None, data=None, timeout=None,
+                allow_redirects=True, **kw):
+        assert allow_redirects is False, "handler must follow redirects manually"
+        self.fetched.append(url)
+        if url not in self.routes:
+            raise AssertionError(f"unexpected (unchecked) fetch to {url!r}")
+        return self.routes[url]
+
+
+class TestSSRFRedirect:
+    def _run(self, executor, routes, monkeypatch, url="http://1.1.1.1/"):
+        fake = _FakeRequests(routes)
+        monkeypatch.setattr(_executor_mod, "requests", fake)
+        result = executor.execute("http_request", {"url": url})
+        return result, fake
+
+    def test_redirect_to_metadata_blocked(self, executor, monkeypatch):
+        target = "http://169.254.169.254/latest/meta-data/"
+        routes = {"http://1.1.1.1/": _FakeResp(302, {"Location": target})}
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert "error" in result
+        assert "SSRF" in result["error"] or "bloqueado" in result["error"].lower()
+        assert target not in fake.fetched          # never fetched the internal host
+
+    def test_redirect_to_loopback_blocked(self, executor, monkeypatch):
+        routes = {"http://1.1.1.1/": _FakeResp(302, {"Location": "http://127.0.0.1/"})}
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert "error" in result
+        assert "http://127.0.0.1/" not in fake.fetched
+
+    def test_redirect_to_private_blocked(self, executor, monkeypatch):
+        for loc in ("http://10.0.0.1/", "http://192.168.1.10/"):
+            routes = {"http://1.1.1.1/": _FakeResp(302, {"Location": loc})}
+            result, fake = self._run(executor, routes, monkeypatch)
+            assert "error" in result
+            assert loc not in fake.fetched
+
+    def test_public_to_public_redirect_allowed(self, executor, monkeypatch):
+        routes = {
+            "http://1.1.1.1/": _FakeResp(302, {"Location": "http://8.8.8.8/"}),
+            "http://8.8.8.8/": _FakeResp(200, text="FINAL", url="http://8.8.8.8/"),
+        }
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert result.get("status_code") == 200
+        assert result.get("body") == "FINAL"
+        assert "http://8.8.8.8/" in fake.fetched
+
+    def test_relative_public_redirect_allowed(self, executor, monkeypatch):
+        routes = {
+            "http://1.1.1.1/": _FakeResp(302, {"Location": "/next"}),
+            "http://1.1.1.1/next": _FakeResp(200, text="REL", url="http://1.1.1.1/next"),
+        }
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert result.get("status_code") == 200
+        assert result.get("body") == "REL"
+
+    def test_too_many_redirects_blocked(self, executor, monkeypatch):
+        routes = {
+            "http://1.1.1.1/": _FakeResp(302, {"Location": "http://8.8.8.8/"}),
+            "http://8.8.8.8/": _FakeResp(302, {"Location": "http://1.1.1.1/"}),
+        }
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert "error" in result and "redirecc" in result["error"].lower()
+        assert len(fake.fetched) <= 6              # hop count is bounded
+
+    def test_malformed_redirect_location_fails_closed(self, executor, monkeypatch):
+        routes = {"http://1.1.1.1/": _FakeResp(302, {"Location": "javascript:alert(1)"})}
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert "error" in result
+
+    def test_missing_location_header_fails_closed(self, executor, monkeypatch):
+        routes = {"http://1.1.1.1/": _FakeResp(302, {})}  # 30x with no Location
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert "error" in result
+
+    def test_trusted_lab_follows_internal_redirect(self, executor, monkeypatch):
+        monkeypatch.setenv("JARVIS_TRUSTED_LAB", "true")
+        routes = {
+            "http://1.1.1.1/": _FakeResp(302, {"Location": "http://127.0.0.1/"}),
+            "http://127.0.0.1/": _FakeResp(200, text="LAB", url="http://127.0.0.1/"),
+        }
+        result, fake = self._run(executor, routes, monkeypatch)
+        assert result.get("status_code") == 200    # trusted-lab bypass preserved
+        assert result.get("body") == "LAB"
