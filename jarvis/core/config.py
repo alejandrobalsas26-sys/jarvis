@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     model_fast_override: str = ""
     model_deep_override: str = ""
 
+    # ── AURA HUD server (loopback WebSocket telemetry / command HUD) ──────────
+    # CSWSH defense for the /ws handshake: by default only loopback origins
+    # (localhost / 127.0.0.0/8 / ::1) may open the AURA WebSocket; missing or
+    # foreign Origins are rejected. Additional trusted origins may be allowlisted
+    # here as a comma-separated list of exact Origin values (scheme://host[:port]),
+    # e.g. "http://hud.lab:8765". Operator config only — never set from LLM input.
+    aura_allowed_origins: str = ""
+
     # ── Trusted lab mode (operator-only; NEVER set from LLM/tool input) ───────
     # When True, the executor honors local-config security overrides and allows
     # HTTP requests to private/loopback ranges (for an isolated homelab). This
@@ -140,6 +148,10 @@ class Settings(BaseSettings):
     def get_secondary_vms(self) -> list[str]:
         """Parse the comma-separated secondary_vms string into a list."""
         return [v.strip() for v in self.secondary_vms.split(",") if v.strip()]
+
+    def get_aura_allowed_origins(self) -> list[str]:
+        """Parse the comma-separated aura_allowed_origins into a normalized list."""
+        return [o.strip().rstrip("/") for o in self.aura_allowed_origins.split(",") if o.strip()]
 
 
 # Singleton — import from here throughout the project

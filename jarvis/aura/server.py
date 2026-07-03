@@ -12,12 +12,14 @@ v27.0 additions:
 """
 
 import asyncio
+import ipaddress
 import json
 import re
 import psutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -69,6 +71,53 @@ _MEDIUM_RISK_HUD: frozenset[str] = frozenset({"run_nmap", "emulate_technique"})
 
 # Simple validator for scan targets / domains (no shell metacharacters)
 _TARGET_RE = re.compile(r'^[a-zA-Z0-9.\-:/\[\]_]{1,100}$')
+
+
+# ── WebSocket Origin allowlist (CSWSH defense) ───────────────────────────────
+
+def _origin_is_loopback(origin: str) -> bool:
+    """True only if the Origin's scheme is http(s) and its host is loopback."""
+    try:
+        parsed = urlparse(origin)
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    """
+    Fail-closed CSWSH gate for the AURA WebSocket handshake.
+
+      * Missing / empty / "null" Origin              -> rejected
+      * Loopback origin (localhost / 127.0.0.0/8/::1) -> allowed (the local HUD)
+      * Origin in settings.aura_allowed_origins       -> allowed (operator opt-in)
+      * Foreign host / malformed / non-http scheme    -> rejected
+
+    Browsers always send Origin on WebSocket handshakes, so a missing Origin is
+    treated as an untrusted (non-browser / cross-site) caller and rejected.
+    """
+    if not origin:
+        return False
+    candidate = origin.strip().rstrip("/")
+    if not candidate or candidate.lower() == "null":
+        return False
+    if _origin_is_loopback(candidate):
+        return True
+    try:
+        from core.config import settings
+        return candidate in set(settings.get_aura_allowed_origins())
+    except Exception:
+        return False
 
 
 class BroadcastManager:
@@ -433,6 +482,14 @@ async def _handle_hud_command(
 
 @app.websocket("/ws")
 async def _ws_endpoint(ws: WebSocket) -> None:
+    # CSWSH defense: reject the handshake unless the browser Origin is trusted
+    # (loopback by default, plus any operator-configured origins). Rejection
+    # happens BEFORE accept() so no socket is ever established for a bad Origin.
+    origin = ws.headers.get("origin")
+    if not _origin_allowed(origin):
+        logger.warning(f"AURA: rejected /ws handshake — disallowed Origin: {origin!r}")
+        await ws.close(code=1008)  # 1008 = policy violation
+        return
     await manager.connect(ws)
     try:
         await ws.send_text(json.dumps({
