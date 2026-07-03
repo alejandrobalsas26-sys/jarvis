@@ -20,6 +20,33 @@ def _shannon_entropy(text: str) -> float:
     return -sum(p * math.log2(p) for p in freq.values())
 
 
+# Genuinely low-risk / read-only binaries whose repeated, trusted use may be
+# de-escalated all the way to ChallengeLevel.NONE. Everything NOT on this
+# allowlist is treated as execution-capable / state-changing and can never drop
+# below CONFIRM on trust score alone (F5 — no high-risk auto-approval decay).
+_LOW_RISK_BINARIES: frozenset[str] = frozenset({
+    "whois", "dig", "nslookup", "host", "ping", "traceroute", "tracert",
+    "whoami", "id", "hostname", "uname", "date", "uptime",
+    "ipconfig", "ifconfig", "ip", "netstat", "ss", "arp", "route",
+    "ls", "dir", "pwd", "cat", "type", "head", "tail", "wc", "file", "stat",
+    "ps", "tasklist", "df", "free", "env", "echo",
+})
+
+
+def is_high_risk_action(binary: str, command: str = "") -> bool:
+    """
+    True unless *binary* is a known read-only / low-risk tool.
+
+    Execution- or state-capable actions (the default for anything not on the
+    read-only allowlist) can never be auto-approved down to ChallengeLevel.NONE
+    on trust score alone — they always retain at least a CONFIRM gate.
+    """
+    name = (binary or "").strip().lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name not in _LOW_RISK_BINARIES
+
+
 def calculate_trust_score(
     binary: str,
     command: str,
@@ -70,9 +97,17 @@ def get_challenge_level(
 
     score = calculate_trust_score(binary, command, profile, session_commands)
 
-    if   score >= 0.80: return ChallengeLevel.NONE,      score
-    elif score >= 0.50: return ChallengeLevel.CONFIRM,   score
-    else:               return ChallengeLevel.FULL_NATO, score
+    if   score >= 0.80: level = ChallengeLevel.NONE
+    elif score >= 0.50: level = ChallengeLevel.CONFIRM
+    else:               level = ChallengeLevel.FULL_NATO
+
+    # F5 — high-risk floor: execution / state-changing actions never de-escalate
+    # to NONE on trust score alone; they keep at least a CONFIRM gate no matter
+    # how many times they have been run successfully.
+    if level == ChallengeLevel.NONE and is_high_risk_action(binary, command):
+        level = ChallengeLevel.CONFIRM
+
+    return level, score
 
 
 async def update_profile(binary: str, profile: dict) -> dict:
