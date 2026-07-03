@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis"
-version = "60.0.0"
+version = "61.0.0"
 description = "Local-first, Ollama-powered AI workstation: voice agent, SOC/DFIR automation, and a guarded tool executor."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -73,7 +73,12 @@ ignore = ["E501"]
 # ── Pytest ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 pythonpath = [".", "brain/docs/intrusion-detection-system"]
-testpaths = ["tests"]
+# Both test trees run by default: the app suite (jarvis/tests) and the
+# repo-level suite (../tests), which holds the FORCE_OVERRIDE + SSRF executor
+# hardening regression tests (test_security_hardening.py). The repo-level suite
+# was previously not collected, so those security guardrail tests never ran in
+# the default `pytest` invocation.
+testpaths = ["tests", "../tests"]
 markers = [
     "slow: long-running tests",
     "windows: requires a Windows host",
