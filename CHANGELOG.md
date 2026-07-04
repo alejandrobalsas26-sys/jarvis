@@ -1,5 +1,35 @@
 # Changelog
 
+## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
+
+Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,
+migration plan, residual risks, performance impact).
+
+- **Security fix**: closed a live, unauthenticated arbitrary-file-write
+  vulnerability — MCP tool calls bypassed `ToolExecutor`'s allowlist/HITL
+  gate entirely (`tools.executor.aexecute_mcp`, `MCP_TOOL_ALLOWLIST`).
+- **Voice mode was structurally broken** (STT never loaded on the
+  continuous-voice path, model resolution always resolved to `""`,
+  tool-calling unreachable) — now runs through the same `chat_stream()`
+  pipeline as text, with the interrupt-command vocabulary it never had.
+- Added a multilingual foundation: `core/language_context.py`
+  (`LanguageContext`) and `core/tts.py`'s `TTSVoiceRouter`, fixing a latent
+  bug where the old Spanish-voice heuristic matched every Windows SAPI
+  voice and always picked the first one enumerated.
+- AURA HUD now receives the assistant's actual response text
+  (`AssistantResponseEvent`), not just routing/verifier/memory metadata.
+- `core.ironman_mode.SessionConsent` (previously defined, tested, but never
+  consulted anywhere) is now enforced at every real screen/camera/clipboard
+  capture site — tool handlers, voice macros, voice keyword triggers, the
+  screen monitor, Telegram `/hud`, and the incident auto-screenshot hook.
+  Added `core/consent_commands.py`, an EN/ES grant/revoke command surface.
+- Episodic memory now carries real provenance/scope metadata; closed
+  secret-redaction gaps in session snapshots and saved notes; web content
+  now passes a prompt-injection gate before vector-store ingestion.
+- `cognitive_optimizer.classify_query()`'s `force_deep` signal (computed
+  every turn, never used) now escalates FAST routing decisions to
+  DEEP + verification, without touching `ModelRole`/`route()` precedence.
+
 ## V61.0 — Live AI brain + Iron Man Mode foundation
 
 Wires the V60 brain modules (role router, verifier, memory discipline) into the
