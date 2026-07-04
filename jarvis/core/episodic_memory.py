@@ -11,12 +11,21 @@ async def store_episode(
     severity: str = "INFO",
     mitre_tags: list[str] | None = None,
     source: str = "internal",
+    scope: str = "none",
+    sensitivity: str = "normal",
 ) -> None:
     """
     Embed and store an operational episode in ChromaDB jarvis_episodic collection.
     Called after: triage manifest write, agentic_summary broadcast,
     canary_intrusion with banner, binary_inversion_complete.
     For external content (source != internal): sanitize via feed_sanitizer first.
+
+    ``scope`` (V62.0 Phase 3, e.g. session/project/long_term/none — see
+    core.memory_router.classify_memory_scope) and ``sensitivity`` are written
+    as real, filterable Chroma metadata — additive alongside any scope prefix
+    a caller already bakes into ``content`` itself. ``source`` is likewise
+    now persisted as metadata instead of being discarded after the
+    sanitization gate above, so stored episodes carry real provenance.
     """
     if source != "internal":
         from core.feed_sanitizer import sanitize_for_llm, SanitizationError
@@ -28,11 +37,14 @@ async def store_episode(
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _write_episode, {
-        "content":    content,
-        "event_type": event_type,
-        "severity":   severity,
-        "mitre_tags": ",".join(mitre_tags or []),
-        "timestamp":  datetime.now(timezone.utc).isoformat(),
+        "content":     content,
+        "event_type":  event_type,
+        "severity":    severity,
+        "mitre_tags":  ",".join(mitre_tags or []),
+        "timestamp":   datetime.now(timezone.utc).isoformat(),
+        "source":      source,
+        "scope":       scope,
+        "sensitivity": sensitivity,
     })
 
 

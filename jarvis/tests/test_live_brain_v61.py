@@ -93,6 +93,44 @@ class TestLiveRouting:
         assert resolve_inference_model(route("hi")) != ""
 
 
+# ── Phase 4 — force_deep escalation (cognitive_optimizer.classify_query) ─────
+class TestForceDeepEscalation:
+    def test_force_deep_escalates_a_fast_decision_to_deep(self):
+        # route() alone puts this at FAST; cognitive_optimizer.classify_query
+        # flags it "analysis_request" (force_deep=True) — previously computed
+        # and logged every turn but never fed into routing despite the name.
+        baseline = route("why did this happen")
+        assert baseline.role is ModelRole.FAST
+
+        escalated = LLM._route_turn("why did this happen", force_deep=True)
+        assert escalated.role is ModelRole.DEEP
+        assert escalated.requires_verification is True
+
+    def test_force_deep_false_leaves_fast_decision_unchanged(self):
+        d = LLM._route_turn("hello there", force_deep=False)
+        assert d.role is ModelRole.FAST
+
+    def test_force_deep_never_overrides_a_non_fast_role(self):
+        # "debug why this test is failing" routes CODER with force_deep=True —
+        # escalation must never clobber a role the router chose for a specific
+        # reason (coding intent here).
+        baseline = route("debug why this test is failing")
+        assert baseline.role is ModelRole.CODER
+
+        d = LLM._route_turn("debug why this test is failing", force_deep=True)
+        assert d.role is ModelRole.CODER
+
+    def test_force_deep_is_noop_when_already_deep(self):
+        d = LLM._route_turn("analyze this malware sample forensics", force_deep=True)
+        assert d.role is ModelRole.DEEP
+        assert d.requires_verification is True
+
+    def test_model_router_precedence_unaffected_by_escalation_param(self):
+        """route()'s own precedence/enum must be completely untouched — the
+        escalation lives only in LLM._route_turn's wrapper."""
+        assert route("why did this happen").role is ModelRole.FAST
+
+
 # ── Phase 2 — security-sensitive turn classifier ─────────────────────────────
 class TestSecuritySensitive:
     @pytest.mark.parametrize("msg", [
@@ -190,6 +228,74 @@ class TestMemoryPolicy:
         msg = "analyze the forensic incident root cause"
         gate = mr.should_use_memory(msg) or LLM._route_turn(msg).requires_verification
         assert gate is True
+
+
+# ── Phase 5 — response-surface foundation: assistant_response HUD broadcast ──
+class TestResponseSurfaceBroadcast:
+    def test_broadcasts_assistant_response_event(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        decision = route("tell me a joke")
+        asyncio.run(llm._maybe_broadcast_response("Hi there.", "Hi there.", decision))
+
+        assert captured["type"] == "assistant_response"
+        assert captured["text"] == "Hi there."
+        assert captured["verified"] is True
+        assert captured["model_role"] == decision.role.value
+
+    def test_verified_false_when_verifier_notice_was_appended(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        draft = "The answer is 42."
+        final = draft + "\n\n[VERIFICATION] The verifier flagged: unspecified concern."
+        asyncio.run(llm._maybe_broadcast_response(final, draft, route("simple question")))
+
+        assert captured["verified"] is False
+        assert captured["text"].startswith(draft)
+
+    def test_redacts_secrets_before_broadcasting(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        secret_answer = "Sure, here's the key: api_key = sk-ABCDEFGH12345678ZXCV"
+        asyncio.run(llm._maybe_broadcast_response(secret_answer, secret_answer, None))
+
+        assert "sk-ABCDEFGH12345678ZXCV" not in captured["text"]
+
+    def test_broadcast_failure_never_raises(self, llm, monkeypatch):
+        async def _raising_broadcast(event):
+            raise RuntimeError("AURA down")
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _raising_broadcast)
+
+        # Must not raise even though the broadcast itself fails.
+        asyncio.run(llm._maybe_broadcast_response("text", "text", None))
+
+    def test_missing_model_decision_defaults_role(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        asyncio.run(llm._maybe_broadcast_response("ok", "ok", None))
+
+        assert captured["model_role"] == "fast"
 
 
 # ── Phase 5 — tool output trust labels / prompt-injection defense ────────────

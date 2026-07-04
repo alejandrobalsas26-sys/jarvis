@@ -33,14 +33,23 @@ _TOKEN   = os.getenv("JARVIS_TELEGRAM_TOKEN", "")
 _CHAT_ID = int(os.getenv("JARVIS_TELEGRAM_CHAT_ID", "0"))
 _app     = None   # telegram.Application singleton
 _bot_ref = None   # telegram.Bot for push notifications
+_consent = None   # core.ironman_mode.SessionConsent — V62.0 Phase 6
+_state   = None   # core.assistant_state.AssistantState — V62.0 Phase 8
 
 
-async def start_telegram_bridge(broadcast_fn, tts=None) -> None:
+async def start_telegram_bridge(broadcast_fn, tts=None, consent=None, state=None) -> None:
     """
     Start the Telegram bot in background.
     Handles both polling and push notifications.
+
+    ``consent`` (core.ironman_mode.SessionConsent): gates /hud's screenshot
+    capture — a remote chat_id whitelist is authentication, not consent.
+    ``state`` (core.assistant_state.AssistantState): gates push_alert()'s
+    proactive notifications by the live AssistantMode.
     """
-    global _app, _bot_ref
+    global _app, _bot_ref, _consent, _state
+    _consent = consent
+    _state = state
 
     if not _TOKEN or not _CHAT_ID:
         logger.info(
@@ -282,6 +291,12 @@ async def _cmd_gaps(update, context) -> None:
 
 async def _cmd_hud(update, context) -> None:
     if not _auth(update): return
+    if _consent is None or not _consent.screen:
+        await update.message.reply_text(
+            "Screen access isn't enabled for this session — say "
+            "'enable screen access' to JARVIS locally to allow it."
+        )
+        return
     await update.message.reply_text("📸 Capturing AURA HUD…")
     try:
         from core.vision_engine import _capture_screen, _save_screenshot
@@ -335,6 +350,19 @@ async def _cmd_help(update, context) -> None:
     )
 
 
+def _may_notify(allowed_actions: list, severity: str) -> bool:
+    """core.ironman_mode.allowed_proactive_actions() models "notify" as the
+    general capability (ACTIVE/WAR_ROOM) and "notify_urgent" as a narrower
+    one reserved for otherwise-quiet modes (FOCUS/PRESENTATION return ONLY
+    "notify_urgent", not "notify"). "notify" is a superset — a mode that
+    grants it allows both routine and critical alerts; "notify_urgent" alone
+    allows only critical ones; neither present suppresses everything (PASSIVE).
+    """
+    if "notify" in allowed_actions:
+        return True
+    return severity == "CRITICAL" and "notify_urgent" in allowed_actions
+
+
 async def push_alert(
     alert_type: str,
     message: str,
@@ -343,7 +371,24 @@ async def push_alert(
     """
     Push a security alert to the operator's phone.
     Called from the broadcast pipeline for critical events.
+
+    V62.0 Phase 8 — gated by the live AssistantMode (core.assistant_state):
+    PASSIVE suppresses everything proactive; FOCUS/PRESENTATION suppress
+    routine notifications but still let CRITICAL alerts through; ACTIVE/
+    WAR_ROOM allow both. No state wired (state=None, e.g. a caller that
+    never went through start_telegram_bridge) fails open — push as before,
+    so this is purely additive when unconfigured.
     """
+    if _state is not None:
+        from core.ironman_mode import allowed_proactive_actions
+        allowed = allowed_proactive_actions(_state.mode, _consent)
+        if not _may_notify(allowed, severity):
+            logger.debug(
+                f"TELEGRAM: push suppressed (mode={_state.mode.value}, "
+                f"severity={severity}): {alert_type}"
+            )
+            return
+
     icon = {"CRITICAL": "🔴", "HIGH": "🟠",
             "MEDIUM": "🟡", "INFO": "🟢"}.get(severity, "⚪")
 

@@ -1,5 +1,60 @@
 # Changelog
 
+## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
+
+Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,
+migration plan, residual risks, performance impact).
+
+- **Security fix**: closed a live, unauthenticated arbitrary-file-write
+  vulnerability — MCP tool calls bypassed `ToolExecutor`'s allowlist/HITL
+  gate entirely (`tools.executor.aexecute_mcp`, `MCP_TOOL_ALLOWLIST`).
+- **Voice mode was structurally broken** (STT never loaded on the
+  continuous-voice path, model resolution always resolved to `""`,
+  tool-calling unreachable) — now runs through the same `chat_stream()`
+  pipeline as text, with the interrupt-command vocabulary it never had.
+- Added a multilingual foundation: `core/language_context.py`
+  (`LanguageContext`) and `core/tts.py`'s `TTSVoiceRouter`, fixing a latent
+  bug where the old Spanish-voice heuristic matched every Windows SAPI
+  voice and always picked the first one enumerated.
+- AURA HUD now receives the assistant's actual response text
+  (`AssistantResponseEvent`), not just routing/verifier/memory metadata.
+- `core.ironman_mode.SessionConsent` (previously defined, tested, but never
+  consulted anywhere) is now enforced at every real screen/camera/clipboard
+  capture site — tool handlers, voice macros, voice keyword triggers, the
+  screen monitor, Telegram `/hud`, and the incident auto-screenshot hook.
+  Added `core/consent_commands.py`, an EN/ES grant/revoke command surface.
+- Episodic memory now carries real provenance/scope metadata; closed
+  secret-redaction gaps in session snapshots and saved notes; web content
+  now passes a prompt-injection gate before vector-store ingestion.
+- `cognitive_optimizer.classify_query()`'s `force_deep` signal (computed
+  every turn, never used) now escalates FAST routing decisions to
+  DEEP + verification, without touching `ModelRole`/`route()` precedence.
+- **Unified Safe Action Model** (`core/risk_classes.py`): a five-tier HITL
+  risk taxonomy (READ_ONLY/LOW_IMPACT/REVERSIBLE/HIGH_IMPACT/LAB_ONLY) now
+  drives `ToolExecutor.aexecute()`/`aexecute_mcp()` for both local and MCP
+  tools — one shared classification for the whole tool gateway, replacing
+  the ad hoc `_HITL_EXEMPT_TOOLS`/`_ALWAYS_HITL_TOOLS` binary split as the
+  live decision (the legacy sets stay in place and are verified consistent
+  at import time, since 5 test files assert on them directly). Zero tools
+  changed HITL behavior — every classification was chosen and tested to
+  match the pre-retrofit gating exactly. `ToolAuthPendingEvent` (previously
+  unemitted) now broadcasts on every challenge with the real risk class and
+  a rollback hint for REVERSIBLE tools. Surfaced two pre-existing findings
+  along the way (`open_application`/`open_software`'s arbitrary-executable
+  fallback, `take_screenshot`'s unsandboxed `save_path`) — documented in
+  the architecture doc, not silently fixed alongside the taxonomy change.
+- **Behavior model** (`core/assistant_state.py`, `core/mode_commands.py`):
+  `core.ironman_mode.AssistantMode` and its policy predicates
+  (`allowed_proactive_actions`, `should_run_background_tasks`) had zero
+  production callers — no live "current mode" existed anywhere. Now a
+  session-scoped `AssistantState` (default `ACTIVE`) drives
+  `telegram_bridge.push_alert` (real "notification suppression during FOCUS
+  mode", the original spec's explicit test requirement) and
+  `hunt_scheduler.start_hunt_scheduler` (skips the 4-hourly autonomous sweep
+  under CPU/RAM/battery pressure or in a quiet mode), with an EN/ES
+  mode-switch command surface from voice and text. `ModeEvent` (previously
+  unemitted) now broadcasts on every mode change.
+
 ## V61.0 — Live AI brain + Iron Man Mode foundation
 
 Wires the V60 brain modules (role router, verifier, memory discipline) into the

@@ -205,10 +205,19 @@ class TestAuraEvents:
         e = ae.ModeEvent(mode="war_room")
         assert e.to_dict()["mode"] == "war_room"
 
+    def test_assistant_response_event(self):
+        e = ae.AssistantResponseEvent(text="Hello.", verified=False, model_role="deep")
+        d = e.to_dict()
+        assert d["type"] == "assistant_response"
+        assert d["text"] == "Hello."
+        assert d["verified"] is False
+        assert d["model_role"] == "deep"
+
     def test_all_events_json_serializable(self):
         events = [
             ae.ModelDecisionEvent(), ae.VerifierStatusEvent(), ae.MemoryDecisionEvent(),
             ae.ToolAuthPendingEvent(), ae.BackgroundTaskEvent(), ae.ModeEvent(),
+            ae.AssistantResponseEvent(),
         ]
         for e in events:
             payload = json.loads(e.to_json())
@@ -219,4 +228,5 @@ class TestAuraEvents:
         assert set(ae.EVENT_TYPES) == {
             "model_decision", "verifier_status", "memory_decision",
             "tool_auth_pending", "background_task", "assistant_mode",
+            "assistant_response",
         }

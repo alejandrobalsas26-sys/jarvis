@@ -49,10 +49,15 @@ async def start_screen_monitor(
     broadcast_fn,
     ollama_client,
     tts = None,
+    consent = None,
 ) -> None:
     """
     Background screen monitor. Disabled by default.
     Set JARVIS_SCREEN_MONITOR=1 to enable.
+
+    ``consent`` (core.ironman_mode.SessionConsent, V62.0 Phase 6): the
+    JARVIS_SCREEN_MONITOR env var opts the feature itself in, but every poll
+    still requires screen consent — env config is not operator consent.
     """
     global _last_hash
 
@@ -67,6 +72,9 @@ async def start_screen_monitor(
 
     while True:
         await asyncio.sleep(_POLL_INTERVAL)
+        if consent is None or not consent.screen:
+            logger.debug("SCREEN_MONITOR: skipped poll — screen consent not granted")
+            continue
         try:
             from core.vision_engine import _capture_screen, analyze_image
 

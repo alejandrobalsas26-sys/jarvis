@@ -39,6 +39,16 @@ from loguru import logger
 import whois
 import dns.resolver
 
+from core.ironman_mode import SessionConsent, default_consent
+from core.risk_classes import (
+    classify_tool,
+    requires_hitl,
+    requires_trusted_lab,
+    rollback_hint,
+    binary_risk_class,
+    verify_consistent_with_legacy_sets,
+)
+
 # ── NATO Vocal MFA ───────────────────────────────────────────────────────────
 _NATO_ALPHABET: tuple[str, ...] = (
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
@@ -194,6 +204,48 @@ _ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({
 assert _ALWAYS_HITL_TOOLS.isdisjoint(_HITL_EXEMPT_TOOLS), (
     "SECURITY: an always-HITL tool is present in _HITL_EXEMPT_TOOLS"
 )
+
+# V62.0 Phase 7 — the risk-class taxonomy (core/risk_classes.py) is now the
+# live gating decision in aexecute()/aexecute_mcp() below. This assertion
+# guarantees it can never silently diverge from the two legacy sets above
+# (which 5 other test files assert on directly) — a mismatch here is a
+# security bug, caught at import time, not at runtime.
+verify_consistent_with_legacy_sets(_HITL_EXEMPT_TOOLS, _ALWAYS_HITL_TOOLS)
+
+# ── MCP gateway ────────────────────────────────────────────────────────────
+# Tools proxied from an external MCP server (e.g. the packet_tracer_bridge
+# stdio bridge) are foreign, unaudited code — they must never bypass this
+# module's security gate. Allowlist-not-denylist: an MCP tool name that isn't
+# listed here is refused outright, and every allowlisted MCP tool is ALWAYS
+# HITL-challenged (no exempt tier, unlike local tools — see aexecute_mcp).
+MCP_TOOL_ALLOWLIST: frozenset[str] = frozenset({
+    "generar_laboratorio_red",
+    "abrir_packet_tracer",
+})
+
+# Argument keys whose value names a file: must resolve to a bare basename
+# with no path separators, drive letter, or traversal segments.
+_MCP_FILENAME_ARG_KEYS: frozenset[str] = frozenset({"nombre_archivo"})
+
+
+def _validate_mcp_filename(value: str) -> str | None:
+    """Reject anything that isn't a safe bare filename.
+
+    Returns a human-readable error string, or None if *value* is safe to
+    join onto a fixed base directory. Catches path traversal ('../x'),
+    absolute paths, and drive-letter/UNC prefixes by comparing against
+    Path(value).name — any of those makes the basename differ from the
+    original string.
+    """
+    if not value or not isinstance(value, str):
+        return "Nombre de archivo vacío o inválido."
+    if "\x00" in value:
+        return "Nombre de archivo contiene un byte nulo."
+    if len(value) > 255:
+        return "Nombre de archivo demasiado largo."
+    if value in (".", "..") or Path(value).name != value:
+        return f"Nombre de archivo inválido (path traversal o separadores no permitidos): '{value}'"
+    return None
 
 # Patrones SAST precompilados para _tool_analizar_codigo_sast
 _SAST_PATTERNS: list[tuple] = [
@@ -490,13 +542,26 @@ class ToolExecutor:
         self,
         stt_queue: "asyncio.Queue | None" = None,
         stt_listener=None,
+        consent: "SessionConsent | None" = None,
     ) -> None:
         self._active_web_server: socketserver.TCPServer | None = None
         self._active_web_thread: threading.Thread | None = None
         self._stt_queue = stt_queue        # asyncio.Queue[(str, float)] | None
         self._stt_listener = stt_listener  # HighPrioritySTTListener | None
+        # V62.0 Phase 6 — consent-gated sensitive surfaces. Defaults fully OFF
+        # (fail-closed) when the caller doesn't wire a shared session consent —
+        # see core.ironman_mode.SessionConsent / core.consent_commands.
+        self.consent: SessionConsent = consent if consent is not None else default_consent()
         from core.governance import TacticAuditLogger
         self._audit = TacticAuditLogger()
+
+    def _consent_error(self, surface: str, grant_phrase: str) -> dict:
+        return {
+            "error": (
+                f"Consent required for {surface} — not granted this session. "
+                f"Say '{grant_phrase}' to allow it."
+            )
+        }
 
     # ── Layer 3: NATO Vocal MFA ───────────────────────────────────────────────
 
@@ -732,14 +797,36 @@ class ToolExecutor:
             )
             return guardrail_block
 
+        # V62.0 Phase 7 — risk-class taxonomy drives the actual gating decision.
+        # classify_tool() is built to match _ALWAYS_HITL_TOOLS/_HITL_EXEMPT_TOOLS
+        # exactly for every known tool (verified at import time above); this is
+        # not a parallel decorative check, it IS the check now.
+        risk_class = classify_tool(tool_name)
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:lab_only", "blocked",
+                "LAB_ONLY tool refused — JARVIS_TRUSTED_LAB is not enabled",
+            )
+            return {
+                "error": (
+                    f"Tool '{tool_name}' es LAB_ONLY — requiere "
+                    "JARVIS_TRUSTED_LAB=true (y aun así, autorización HITL)."
+                )
+            }
+
         auth_audit = "hitl_exempt"
-        must_challenge = (
-            tool_name in _ALWAYS_HITL_TOOLS or tool_name not in _HITL_EXEMPT_TOOLS
-        )
+        must_challenge = requires_hitl(risk_class)
         if must_challenge:
             preview = str(tool_input)
             if len(preview) > 200:
                 preview = preview[:200] + "…"
+            from core.aura_events import ToolAuthPendingEvent
+            await _aura_broadcast(ToolAuthPendingEvent(
+                tool=tool_name,
+                risk=risk_class.value,
+                preview=preview,
+                rollback_hint=rollback_hint(risk_class, tool_name),
+            ).to_dict())
             granted, auth_audit = await self._challenge(tool_name, preview)
             if not granted:
                 logger.warning(f"HITL: '{tool_name}' denegada.")
@@ -785,6 +872,111 @@ class ToolExecutor:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             return {"error": str(e)}
+
+    async def aexecute_mcp(
+        self, tool_name: str, tool_input: dict, call_fn, reasoning: str = ""
+    ) -> Any:
+        """
+        Security gate for MCP-bridge tools — the counterpart to aexecute() for
+        tools implemented by an external MCP server rather than a local
+        _tool_* handler.
+
+        *call_fn* is an async callable(tool_name, tool_input) that performs the
+        actual RPC to the MCP server; it is NEVER invoked before the allowlist,
+        filename-traversal, and HITL checks below all pass. MCP tools are
+        foreign, unaudited code — allowlist-not-denylist. V62.0 Phase 7: HITL
+        policy now comes from the SAME risk-class taxonomy aexecute() uses
+        (core.risk_classes) — one gateway for both local and MCP dispatch.
+        Both currently-allowlisted MCP tools classify REVERSIBLE, which still
+        requires HITL unconditionally (no exempt tier for MCP), so this is not
+        a behavior change; an unclassified future MCP tool defaults to
+        HIGH_IMPACT (fail-closed) rather than silently skipping the challenge.
+        """
+        tool_input = _strip_override(tool_name, tool_input)
+
+        if tool_name not in MCP_TOOL_ALLOWLIST:
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:mcp_not_allowlisted", "blocked",
+                "MCP tool no está en la allowlist explícita",
+            )
+            return {"error": f"Tool MCP '{tool_name}' no está permitida."}
+
+        for key in _MCP_FILENAME_ARG_KEYS & tool_input.keys():
+            err = _validate_mcp_filename(str(tool_input[key]))
+            if err:
+                self._audit.log_action(
+                    tool_name, reasoning, "blocked:mcp_path_traversal", "blocked", err[:200],
+                )
+                return {"error": err}
+
+        risk_class = classify_tool(tool_name)
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:lab_only", "blocked",
+                "LAB_ONLY MCP tool refused — JARVIS_TRUSTED_LAB is not enabled",
+            )
+            return {
+                "error": (
+                    f"Tool MCP '{tool_name}' es LAB_ONLY — requiere "
+                    "JARVIS_TRUSTED_LAB=true (y aun así, autorización HITL)."
+                )
+            }
+
+        preview = str(tool_input)
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        auth_audit = "hitl_exempt"
+        if requires_hitl(risk_class):
+            from core.aura_events import ToolAuthPendingEvent
+            await _aura_broadcast(ToolAuthPendingEvent(
+                tool=f"mcp:{tool_name}",
+                risk=risk_class.value,
+                preview=preview,
+                rollback_hint=rollback_hint(risk_class, tool_name),
+            ).to_dict())
+            granted, auth_audit = await self._challenge(f"mcp:{tool_name}", preview)
+            if not granted:
+                logger.warning(f"HITL: MCP tool '{tool_name}' denegada.")
+                self._audit.log_action(
+                    tool_name, reasoning, auth_audit, "blocked", "Ejecución MCP cancelada por el usuario."
+                )
+                return {"error": "Ejecución cancelada por el usuario."}
+
+        await _aura_broadcast({
+            "type": "tool_invoked",
+            "tool": f"mcp:{tool_name}",
+            "auth_audit": auth_audit,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        try:
+            result = await call_fn(tool_name, tool_input)
+        except Exception as e:
+            logger.error(f"Error en tool MCP '{tool_name}': {e}")
+            self._audit.log_action(tool_name, reasoning, "mcp", "error", str(e)[:200])
+            await _aura_broadcast({
+                "type": "error",
+                "tool": f"mcp:{tool_name}",
+                "message": str(e)[:200],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"error": f"MCP error en '{tool_name}': {e}"}
+
+        status = "error" if isinstance(result, dict) and "error" in result else "success"
+        result = self._check_pii_output(result)
+        output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
+        self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
+
+        await _aura_broadcast({
+            "type": "tool_result",
+            "tool": f"mcp:{tool_name}",
+            "status": status,
+            "auth_audit": auth_audit,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": output_summary[:150],
+        })
+
+        return result
 
     def _validate_guardrails(self, tool_name: str, tool_input: dict) -> dict | None:
         """Returns an error dict if the action violates a security guardrail, else None.
@@ -1291,8 +1483,14 @@ class ToolExecutor:
                 logger.warning(f"Triage pipeline error: {_triage_exc}")
             return {"error": f"Comando bloqueado por política de seguridad: {error_msg}"}
 
-        # Show the canonicalized argv for operator transparency
-        print(f"\n    [EXEC] argv={argv}")
+        # Show the canonicalized argv for operator transparency. V62.0 Phase 7:
+        # binary_risk_class() is informational only here (audit trail) — it
+        # does not gate anything; run_shell_command itself is already
+        # unconditionally HIGH_IMPACT (see core/risk_classes.py), and
+        # _validate_command's allowlist + core/trust_engine.py's dynamic
+        # trust floor remain the sole authorities over which binaries run.
+        binary = Path(argv[0]).name.lower().removesuffix(".exe") if argv else ""
+        print(f"\n    [EXEC] argv={argv} risk={binary_risk_class(binary).value}")
         sys.stdout.flush()
 
         try:
@@ -1522,6 +1720,8 @@ class ToolExecutor:
         analyze: bool = False,
         analizar_topologia: bool = False,
     ) -> dict:
+        if not self.consent.screen:
+            return self._consent_error("screen capture", "enable screen access")
         import pyautogui
 
         screenshot = pyautogui.screenshot()
@@ -1568,6 +1768,8 @@ class ToolExecutor:
 
     def _tool_escanear_pantalla(self) -> dict:
         """[OCR] Captura la pantalla y extrae el texto visible vía pytesseract (CPU-only)."""
+        if not self.consent.screen:
+            return self._consent_error("screen capture", "enable screen access")
         _MAX_CHARS = 3000
         try:
             from PIL import ImageGrab
@@ -1625,10 +1827,14 @@ class ToolExecutor:
     # ── Clipboard ─────────────────────────────────────────────────────────────
 
     def _tool_get_clipboard(self) -> dict:
+        if not self.consent.clipboard:
+            return self._consent_error("clipboard access", "enable clipboard access")
         import pyperclip
         return {"clipboard": pyperclip.paste()}
 
     def _tool_set_clipboard(self, text: str) -> dict:
+        if not self.consent.clipboard:
+            return self._consent_error("clipboard access", "enable clipboard access")
         import pyperclip
         pyperclip.copy(text)
         return {"status": "copied", "length": len(text)}
@@ -1751,6 +1957,18 @@ class ToolExecutor:
 
         if not text.strip():
             return {"error": "No se pudo extraer texto de la URL."}
+
+        # V62.0 Phase 3 — web content is untrusted (core.memory_router.
+        # is_untrusted_source models "web"/"url" as such); reject obvious
+        # prompt-injection payloads at ingest time rather than relying solely
+        # on the retrieval-time untrusted-tool-output banner (core/llm.py's
+        # _UNTRUSTED_TOOL_SOURCES already labels consultar_base_conocimiento's
+        # results, but that's advisory — this is a hard gate before storage).
+        from core.feed_sanitizer import check_prompt_injection, SanitizationError
+        try:
+            check_prompt_injection(text, source=url)
+        except SanitizationError:
+            return {"error": f"Contenido de {url} rechazado: posible inyección de prompt detectada."}
 
         if not hasattr(self, "_memory"):
             try:
@@ -2132,11 +2350,12 @@ class ToolExecutor:
 
     def _tool_save_note(self, title: str, content: str, tags: list | None = None) -> dict:
         """[EXEMPT] Persist a markdown note to brain/notes.md."""
+        from core.memory_router import redact_secrets
         notes_path = Path(__file__).parent.parent / "brain" / "notes.md"
         notes_path.parent.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         tag_line = f"**Tags:** {', '.join(tags)}\n" if tags else ""
-        entry = f"\n## {title}\n*{now}*\n{tag_line}\n{content}\n\n---\n"
+        entry = f"\n## {redact_secrets(title)}\n*{now}*\n{tag_line}\n{redact_secrets(content)}\n\n---\n"
         try:
             with open(notes_path, "a", encoding="utf-8") as f:
                 f.write(entry)

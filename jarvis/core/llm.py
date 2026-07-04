@@ -14,6 +14,7 @@ import re
 import time as _time
 import uuid
 import asyncio
+import dataclasses
 from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
@@ -30,6 +31,7 @@ from core.model_router import (
     resolve_inference_model,
     is_security_sensitive_turn,
     ModelDecision,
+    ModelRole,
 )
 from core.verification import should_verify, verify_answer
 from core.memory_router import (
@@ -1283,6 +1285,7 @@ class LLM:
     def _route_turn(
         user_message: str,
         tool_names: list[str] | None = None,
+        force_deep: bool = False,
     ) -> ModelDecision:
         """Single source of truth for live per-turn model routing (Phase 1).
 
@@ -1290,9 +1293,24 @@ class LLM:
         for a ``ModelDecision`` (role / provider / model / complexity / reason /
         requires_verification). Cloud is never escalated from the local streaming
         client, so ``allow_cloud=False``.
+
+        V62.0 Phase 4 — ``force_deep`` (core.cognitive_optimizer.classify_query's
+        signal, computed every turn but previously never consulted for routing
+        despite the name) escalates a FAST decision to DEEP + requires_verification.
+        Escalation-only: never de-escalates, and never overrides a role the router
+        already chose for a specific reason (CODER/VISION/VERIFIER/CLOUD/DEEP).
+        model_router.py's ModelRole enum and route() precedence are untouched.
         """
         sec = is_security_sensitive_turn(user_message, tool_names)
-        return route(user_message, security_sensitive=sec, allow_cloud=False)
+        decision = route(user_message, security_sensitive=sec, allow_cloud=False)
+        if force_deep and decision.role == ModelRole.FAST:
+            decision = dataclasses.replace(
+                decision,
+                role=ModelRole.DEEP,
+                requires_verification=True,
+                reason=f"{decision.reason}; escalated by cognitive_optimizer.force_deep",
+            )
+        return decision
 
     def _label_tool_result(self, tool_name: str, result_str: str) -> str:
         """Wrap a tool result with trust metadata before it enters history (Phase 5).
@@ -1434,12 +1452,43 @@ class LLM:
                     event_type="conversation_memory",
                     severity="INFO",
                     source="internal",
+                    scope=scope,
                 )
             except Exception as e:
                 logger.debug(f"MEMORY: episodic store unavailable: {e}")
             logger.debug(f"MEMORY: persisted turn at scope={scope}")
         except Exception as e:
             logger.debug(f"MEMORY: persist policy error: {e}")
+
+    async def _maybe_broadcast_response(
+        self, final_answer: str, draft_answer: str, model_decision: ModelDecision | None
+    ) -> None:
+        """V62.0 Phase 5 — response-surface foundation.
+
+        Broadcasts the assistant's actual answer text to the AURA HUD.
+        Previously the HUD only ever received routing/verifier/memory
+        *metadata* about a turn, never the conversational content itself.
+        Fully best-effort and fail-open — a HUD/AURA outage never affects the
+        conversation. ``verified`` mirrors whether the post-stream verifier
+        left the draft unchanged (True when it passed or didn't run).
+        """
+        try:
+            from core.aura_events import AssistantResponseEvent
+            from tools.executor import _aura_broadcast
+            resp_text = final_answer
+            if self._context_mgr is not None:
+                try:
+                    resp_text = self._context_mgr.redact_secrets(resp_text)
+                except Exception:
+                    pass
+            role = getattr(model_decision, "role", None)
+            await _aura_broadcast(AssistantResponseEvent(
+                text=resp_text,
+                verified=(final_answer == draft_answer),
+                model_role=role.value if role is not None else "fast",
+            ).to_dict())
+        except Exception as e:
+            logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
 
     async def chat_stream(self, user_message: str) -> AsyncGenerator[str, None]:
         """
@@ -1489,7 +1538,7 @@ class LLM:
         # V61 Phase 1 — live role-based routing decision (computed once per turn;
         # the user message is constant across the agentic tool loop). Drives model
         # selection, verifier gating, and AURA telemetry.
-        decision = self._route_turn(user_message)
+        decision = self._route_turn(user_message, force_deep=_force_deep)
         _routed_model = resolve_inference_model(decision)
         logger.debug(
             "ROUTE: role={} provider={} model={} complexity={:.2f} "
@@ -1726,6 +1775,10 @@ class LLM:
                     save_session(self.history)
                 except Exception:
                     pass
+
+                # V62.0 Phase 5 — response-surface foundation (best-effort).
+                await self._maybe_broadcast_response(final_answer, full_text, decision)
+
                 unregister_operation("llm_stream")  # v35.0
                 break
 
@@ -1742,18 +1795,23 @@ class LLM:
                     tool_input = {}
                 logger.info(f"Tool: {tool_name}({tool_input})")
 
-                # Enrutar al MCP si la tool proviene del bridge, sino al executor local
+                # Enrutar al MCP si la tool proviene del bridge, sino al executor local.
+                # V61 hardening: MCP tools pass through ToolExecutor.aexecute_mcp() —
+                # the SAME allowlist/traversal-guard/HITL gate as local tools, never a
+                # direct, unaudited call_tool(). See tools/executor.py MCP_TOOL_ALLOWLIST.
                 if tool_name in self._mcp_tool_names and self._mcp_session:
-                    try:
-                        mcp_result = await self._mcp_session.call_tool(tool_name, tool_input)
+                    async def _call_mcp(name: str, args: dict) -> dict:
+                        mcp_result = await self._mcp_session.call_tool(name, args)
                         content = (
                             mcp_result.content[0].text
                             if mcp_result.content
                             else "Sin respuesta del bridge MCP."
                         )
-                        result = {"result": content}
-                    except Exception as e:
-                        result = {"error": f"MCP error en '{tool_name}': {e}"}
+                        return {"result": content}
+
+                    result = await self.tool_executor.aexecute_mcp(
+                        tool_name, tool_input, _call_mcp, thinking
+                    )
                 else:
                     # aexecute() is fully async — NATO gate + run_in_executor inside
                     result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
