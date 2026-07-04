@@ -1434,6 +1434,7 @@ class LLM:
                     event_type="conversation_memory",
                     severity="INFO",
                     source="internal",
+                    scope=scope,
                 )
             except Exception as e:
                 logger.debug(f"MEMORY: episodic store unavailable: {e}")

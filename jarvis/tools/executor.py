@@ -1888,6 +1888,18 @@ class ToolExecutor:
         if not text.strip():
             return {"error": "No se pudo extraer texto de la URL."}
 
+        # V62.0 Phase 3 — web content is untrusted (core.memory_router.
+        # is_untrusted_source models "web"/"url" as such); reject obvious
+        # prompt-injection payloads at ingest time rather than relying solely
+        # on the retrieval-time untrusted-tool-output banner (core/llm.py's
+        # _UNTRUSTED_TOOL_SOURCES already labels consultar_base_conocimiento's
+        # results, but that's advisory — this is a hard gate before storage).
+        from core.feed_sanitizer import check_prompt_injection, SanitizationError
+        try:
+            check_prompt_injection(text, source=url)
+        except SanitizationError:
+            return {"error": f"Contenido de {url} rechazado: posible inyección de prompt detectada."}
+
         if not hasattr(self, "_memory"):
             try:
                 from core.memory import VectorMemory
@@ -2268,11 +2280,12 @@ class ToolExecutor:
 
     def _tool_save_note(self, title: str, content: str, tags: list | None = None) -> dict:
         """[EXEMPT] Persist a markdown note to brain/notes.md."""
+        from core.memory_router import redact_secrets
         notes_path = Path(__file__).parent.parent / "brain" / "notes.md"
         notes_path.parent.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         tag_line = f"**Tags:** {', '.join(tags)}\n" if tags else ""
-        entry = f"\n## {title}\n*{now}*\n{tag_line}\n{content}\n\n---\n"
+        entry = f"\n## {redact_secrets(title)}\n*{now}*\n{tag_line}\n{redact_secrets(content)}\n\n---\n"
         try:
             with open(notes_path, "a", encoding="utf-8") as f:
                 f.write(entry)

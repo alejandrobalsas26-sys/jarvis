@@ -12,11 +12,27 @@ from pathlib import Path
 from datetime import datetime, timezone
 from loguru import logger
 
+from core.memory_router import redact_secrets
+
 SESSION_DIR   = Path("logs/sessions")
 MAX_TURNS     = 20           # turns to persist
 RESUME_WINDOW = 3600         # sessions older than this (seconds) are not offered
 
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _redact_turn(turn: dict) -> dict:
+    """Return *turn* with its content field secret-redacted (V62.0 Phase 3).
+
+    This crash-resume snapshot writes unconditionally every turn — unlike the
+    episodic-memory write path, it previously had no secret-redaction gate at
+    all, so a credential typed or returned mid-conversation persisted to disk
+    in plaintext on every turn until the session file was overwritten.
+    """
+    content = turn.get("content")
+    if isinstance(content, str) and content:
+        return {**turn, "content": redact_secrets(content)}
+    return turn
 
 
 def save_session(history: list[dict], session_id: str = "default") -> None:
@@ -27,7 +43,7 @@ def save_session(history: list[dict], session_id: str = "default") -> None:
             "session_id": session_id,
             "saved_at":   datetime.now(timezone.utc).isoformat(),
             "timestamp":  time.time(),
-            "turns":      history[-MAX_TURNS:],
+            "turns":      [_redact_turn(t) for t in history[-MAX_TURNS:]],
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2,
                                    default=str),
