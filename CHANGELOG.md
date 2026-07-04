@@ -25,6 +25,21 @@ detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
   (`HIGH_IMPACT`). Tests: `tests/test_screenshot_sandbox.py` (+ updated
   `tests/test_consent_gating.py`).
 
+### Milestone 2 — general semantic domain routing (additive)
+
+- **New `core/task_domain.py`**: a `TaskDomain` enum (GENERAL / RESEARCH /
+  CODER / ARCHITECT / MATHEMATICS / LANGUAGE / VISION / CYBER_BLUE /
+  CYBER_PURPLE / DFIR / GRC / PLANNER / CRITIC / VERIFIER) and a pure,
+  deterministic `classify_domain(prompt, tool_names)` (bilingual EN/ES keyword
+  scoring, fixed tie-break order, tool-name hints). Semantic **domain** is a
+  dimension independent of `ModelRole` (which model runs), complexity, and risk
+  — it only *advises* a preferred role. `route()`'s precedence and the
+  `ModelRole` enum are **not touched**, so every `test_model_router_roles.py` /
+  `test_live_brain_v61.py` assertion still holds. Returns a `DomainSignal`
+  (domain, confidence, preferred_role, requires_planning, prefers_agent_team,
+  reason, matched). Composition into one per-turn decision lands in M1. Tests:
+  `tests/test_task_domain.py` (13).
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,
