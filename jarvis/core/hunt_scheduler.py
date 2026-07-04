@@ -27,6 +27,7 @@ from loguru import logger
 
 _HUNT_INTERVAL_H = 4
 _HUNT_INTERVAL_S = _HUNT_INTERVAL_H * 3600
+_WARMUP_S        = 1800  # 30-minute warmup before the first sweep
 _HUNT_LOG_DIR    = Path("logs/hunt_results")
 _HUNT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -330,24 +331,57 @@ async def run_all_hunts(
     return results
 
 
+def _current_resource_state() -> tuple["bool | str", float, float]:
+    """Best-effort (battery_state, cpu_pct, ram_pct) snapshot for
+    should_run_background_tasks(). Fails open (returns 0%/plugged-in) if
+    psutil is unavailable — never blocks the hunt on a monitoring failure."""
+    try:
+        import psutil
+        cpu_pct = psutil.cpu_percent(interval=None)
+        ram_pct = psutil.virtual_memory().percent
+        battery = psutil.sensors_battery()
+        on_battery = bool(battery is not None and not battery.power_plugged)
+        return on_battery, cpu_pct, ram_pct
+    except Exception:
+        return False, 0.0, 0.0
+
+
 async def start_hunt_scheduler(
     broadcast_fn,
     ollama_client,
     model: str,
+    state=None,
 ) -> None:
     """
     Background scheduler. Runs full hypothesis sweep
     every 4 hours. First run after 30-minute warmup.
+
+    ``state`` (core.assistant_state.AssistantState, V62.0 Phase 8): gates
+    each sweep via core.ironman_mode.should_run_background_tasks — quiet
+    modes (FOCUS/PRESENTATION/PASSIVE) and CPU/RAM/battery pressure all skip
+    the sweep (rescheduled for the next interval, not cancelled outright).
+    None (no state wired) fails open — runs as before.
     """
     logger.info(
         f"HUNT_SCHEDULER: active — "
         f"sweeping every {_HUNT_INTERVAL_H}h, "
         f"first run in 30min"
     )
-    await asyncio.sleep(1800)   # 30-minute warmup
+    await asyncio.sleep(_WARMUP_S)
 
     while True:
         try:
+            if state is not None:
+                from core.ironman_mode import should_run_background_tasks
+                on_battery, cpu_pct, ram_pct = _current_resource_state()
+                if not should_run_background_tasks(state.mode, on_battery, cpu_pct, ram_pct):
+                    logger.debug(
+                        f"HUNT_SCHEDULER: skipped — mode={state.mode.value} "
+                        f"cpu={cpu_pct:.0f}% ram={ram_pct:.0f}% on_battery={on_battery}"
+                    )
+                    await asyncio.sleep(_HUNT_INTERVAL_S)
+                    continue
+
             from core.cancel_bus import get_active_operations
             # Don't hunt if ARES is actively running
             ops = get_active_operations()

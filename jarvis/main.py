@@ -139,8 +139,9 @@ async def _greeting(llm, tts, name: str, user: str) -> None:
     )
 
 
-async def _loop_text(llm, tts, name: str, consent=None) -> None:
+async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
+    from core.mode_commands import parse_mode_command, describe_mode
 
     loop = asyncio.get_running_loop()
     print("Modo texto activo. Escribe tu mensaje o 'salir' para terminar.\n")
@@ -181,15 +182,33 @@ async def _loop_text(llm, tts, name: str, consent=None) -> None:
                 print(apply_consent_command(consent, surface, grant))
                 continue
 
+        # V62.0 Phase 8 — explicit mode-switch commands, same command surface
+        # voice uses (core.mode_commands). Only way the live AssistantMode changes.
+        if state is not None:
+            requested_mode = parse_mode_command(user_input)
+            if requested_mode:
+                changed = state.set_mode(requested_mode)
+                if changed:
+                    try:
+                        from core.aura_events import ModeEvent
+                        from tools.executor import _aura_broadcast
+                        await _aura_broadcast(ModeEvent(mode=requested_mode.value).to_dict())
+                    except Exception:
+                        pass
+                print(describe_mode(requested_mode))
+                continue
+
         await _run_turn(llm, tts, user_input, name)
 
 
 async def _process_voice_input(
     user_input: str, llm, tts, name: str, lang: str | None = None, consent=None,
+    state=None,
 ) -> bool:
     """
     v35.0 — pre-process STT output. Returns True if handled (skip LLM).
-    Order: interrupt commands → consent commands → voice macros → LLM.
+    Order: interrupt commands → consent commands → mode commands → voice
+    macros → LLM.
 
     ``lang`` (V62.0 Phase 1): detected-language hint forwarded to _run_turn's
     TTS voice routing for the LLM-routed branch. The canned interrupt replies
@@ -199,11 +218,16 @@ async def _process_voice_input(
     session-scoped consent object. Forwarded to voice macros so screen/camera
     macros stay gated; also the target of explicit grant/revoke commands
     (core.consent_commands) — the only way any surface turns on.
+
+    ``state`` (V62.0 Phase 8, core.assistant_state.AssistantState): the
+    shared, session-scoped operating posture. Target of explicit mode-switch
+    commands (core.mode_commands) — the only way the live mode changes.
     """
     from tools.executor import _aura_broadcast
     from core.voice_interrupt import is_interrupt_command, handle_interrupt
     from core.voice_macros import process_for_macro
     from core.consent_commands import parse_consent_command, apply_consent_command
+    from core.mode_commands import parse_mode_command, describe_mode
 
     # v44.0 — journal the operator command (non-blocking, best-effort)
     try:
@@ -240,7 +264,21 @@ async def _process_voice_input(
             await tts.speak_async(confirmation)
             return True
 
-    # 3. Voice macros — YAML-defined shortcuts
+    # 3. Explicit mode-switch commands (V62.0 Phase 8)
+    if state is not None:
+        requested_mode = parse_mode_command(user_input)
+        if requested_mode:
+            changed = state.set_mode(requested_mode)
+            if changed:
+                try:
+                    from core.aura_events import ModeEvent
+                    await _aura_broadcast(ModeEvent(mode=requested_mode.value).to_dict())
+                except Exception:
+                    pass
+            await tts.speak_async(describe_mode(requested_mode))
+            return True
+
+    # 4. Voice macros — YAML-defined shortcuts
     try:
         is_macro = await process_for_macro(user_input, _aura_broadcast, tts, consent=consent)
         if is_macro:
@@ -248,7 +286,7 @@ async def _process_voice_input(
     except Exception as e:
         logger.debug(f"MACRO: process error: {e}")
 
-    # 4. Normal LLM routing
+    # 5. Normal LLM routing
     await _run_turn(llm, tts, user_input, name, lang=lang)
     return False
 
@@ -281,7 +319,7 @@ async def run_war_room_debate_on_last_incident(llm, tts, broadcast_fn):
     )
 
 
-async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None) -> None:
+async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None, state=None) -> None:
     """
     Iron Man JARVIS continuous voice loop (v46.0).
 
@@ -291,6 +329,10 @@ async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None) -> None
     ``consent`` (V62.0 Phase 6, core.ironman_mode.SessionConsent): shared
     session consent gating screen/camera capture — see core.consent_commands
     for the grant/revoke command surface.
+
+    ``state`` (V62.0 Phase 8, core.assistant_state.AssistantState): shared
+    session operating posture — see core.mode_commands for the mode-switch
+    command surface.
     """
     import sounddevice as sd
     import numpy as np
@@ -329,7 +371,9 @@ async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None) -> None
         asyncio.create_task(_speak(...)) pattern)."""
         _tts_speaking.set()
         try:
-            await _process_voice_input(user_text, llm, tts, name, lang=lang, consent=consent)
+            await _process_voice_input(
+                user_text, llm, tts, name, lang=lang, consent=consent, state=state,
+            )
         except Exception as e:
             logger.debug(f"VOICE: turn error: {e}")
         finally:
@@ -764,6 +808,13 @@ async def _main_async() -> None:
     # target of explicit grant/revoke commands). Defaults fully OFF.
     from core.ironman_mode import default_consent
     session_consent = default_consent()
+
+    # V62.0 Phase 8 — session-scoped operating posture, shared by the voice/
+    # text loops (mutation target of explicit mode-switch commands) and any
+    # proactive/background subsystem that wants to respect it (Telegram
+    # push_alert, the hunt scheduler). Defaults to ACTIVE.
+    from core.assistant_state import default_state
+    assistant_state = default_state()
 
     executor = ToolExecutor(
         stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
@@ -1502,7 +1553,9 @@ async def _main_async() -> None:
                 # Telegram mobile command bridge (push + pull)
                 watchdog.register(
                     "telegram-bridge",
-                    lambda: start_telegram_bridge(_fusion_broadcast, tts, consent=session_consent),
+                    lambda: start_telegram_bridge(
+                        _fusion_broadcast, tts, consent=session_consent, state=assistant_state,
+                    ),
                     RestartPolicy.BACKOFF,
                 )
                 register_shutdown_callback(stop_telegram_bridge)
@@ -1512,7 +1565,8 @@ async def _main_async() -> None:
                 watchdog.register(
                     "hunt-scheduler",
                     lambda: start_hunt_scheduler(
-                        _fusion_broadcast, llm.client, hw_profile.model_deep
+                        _fusion_broadcast, llm.client, hw_profile.model_deep,
+                        state=assistant_state,
                     ),
                     RestartPolicy.BACKOFF,
                 )
@@ -1799,9 +1853,15 @@ async def _main_async() -> None:
             await _greeting(llm, tts, settings.assistant_name, settings.user_name)
 
         if args.voice and stt is not None:
-            await _loop_voice_continuous(llm, tts, stt, settings.assistant_name, consent=session_consent)
+            await _loop_voice_continuous(
+                llm, tts, stt, settings.assistant_name,
+                consent=session_consent, state=assistant_state,
+            )
         else:
-            await _loop_text(llm, tts, settings.assistant_name, consent=session_consent)
+            await _loop_text(
+                llm, tts, settings.assistant_name,
+                consent=session_consent, state=assistant_state,
+            )
     finally:
         # v61.1: absolute hard-kill watchdog, independent of the event loop.
         # asyncio.wait_for()'s timeout is NOT a true ceiling on a coroutine

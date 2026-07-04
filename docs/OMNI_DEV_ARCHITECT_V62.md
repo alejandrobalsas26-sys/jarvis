@@ -1,11 +1,11 @@
 # V62.0 OMNI_DEV_ARCHITECT — Architecture, Migration, and Risk Report
 
-Scope: milestones 0-7 of the OMNI_DEV_ARCHITECT directive, implemented on
+Scope: milestones 0-8 of the OMNI_DEV_ARCHITECT directive, implemented on
 branch `omni-dev-architect-phase1` (`a789a73`..present, updated as of the
-Phase 7 HITL risk-taxonomy retrofit). This document is the Phase 9
-deliverable: old-path-vs-new-path call graphs, a migration plan for what's
-intentionally deferred, and residual risk / performance impact on the target
-host (AMD Ryzen 5 7430U, 15W TDP, 64GB RAM).
+Phase 8 behavior-model milestone). This document is the Phase 9 deliverable:
+old-path-vs-new-path call graphs, a migration plan for what's intentionally
+deferred, and residual risk / performance impact on the target host (AMD
+Ryzen 5 7430U, 15W TDP, 64GB RAM).
 
 No existing capability was removed. No security control was weakened. Every
 change below is backed by tests (see "Test evidence").
@@ -381,6 +381,74 @@ refuses outright without `JARVIS_TRUSTED_LAB` and still requires HITL when
 enabled). The 5 previously-flagged dependent files (81 tests) re-run
 unchanged and green.
 
+### 1.9 Behavior model — live AssistantMode (Phase 8)
+
+**Before:** `core/ironman_mode.py`'s `AssistantMode` enum and its policy
+predicates (`allowed_proactive_actions`, `should_run_background_tasks`,
+`should_listen_continuously`) were fully implemented and unit-tested — but
+had **zero production callers** anywhere in the codebase. There was no live
+"current mode" object for those predicates to be evaluated against, only the
+enum and policy tables sitting inert. Proactive Telegram alerts
+(`core.telegram_bridge.push_alert`) fired unconditionally for every severity;
+the autonomous 4-hourly threat-hunt sweep (`core.hunt_scheduler
+.start_hunt_scheduler`) ran unconditionally except for a concurrency guard
+against an active LLM/agentic operation — no notion of "quiet mode" or
+hardware pressure gated either one, despite `should_run_background_tasks`
+existing specifically for that purpose.
+
+**After:**
+```
+core/assistant_state.py:
+  AssistantState(mode: AssistantMode = ACTIVE)   # mutable, session-scoped
+  .set_mode(mode) -> bool                        # returns whether it changed
+
+core/mode_commands.py:
+  parse_mode_command(text) -> AssistantMode | None   # EN/ES phrases
+  describe_mode(mode) -> str                          # operator confirmation
+
+main._main_async:
+  assistant_state = default_state()   # ACTIVE by default
+    -> start_telegram_bridge(..., state=assistant_state)
+         -> push_alert() gated by allowed_proactive_actions(mode, consent)
+    -> start_hunt_scheduler(..., state=assistant_state)
+         -> each sweep gated by should_run_background_tasks(mode, battery, cpu%, ram%)
+    -> _loop_voice_continuous(..., state=assistant_state)
+    -> _loop_text(..., state=assistant_state)
+         -> both: parse_mode_command() -> state.set_mode() -> ModeEvent broadcast
+```
+
+`push_alert`'s gating directly implements the original spec's explicit test
+requirement — "proactive notification suppression during FOCUS mode" — using
+`allowed_proactive_actions`'s existing, already-tested policy table, not a
+new one invented for this. That table models `"notify"` (general capability,
+granted in ACTIVE/WAR_ROOM) as a superset of `"notify_urgent"` (the narrower
+capability FOCUS/PRESENTATION grant instead) — a real design detail this
+milestone's own tests caught: naively checking for `"notify_urgent"` alone
+on `CRITICAL` alerts would have silently suppressed critical alerts in
+`ACTIVE` mode, since that mode's action list contains `"notify"` but not the
+literal string `"notify_urgent"`. Fixed in `_may_notify()` before landing.
+
+`should_run_background_tasks` reads real CPU/RAM/battery state via
+`psutil` (fails open — 0%/plugged-in — if `psutil` is unavailable, never
+blocking the hunt on a monitoring failure) and skips that interval's sweep
+(rescheduled for the next one, not cancelled outright) under pressure or in
+a quiet mode.
+
+`ModeEvent` (previously zero production emitters, like `ToolAuthPendingEvent`
+before §1.8) now broadcasts on every actual mode change.
+
+Response-surface brevity (voice short, text/technical detailed — the other
+half of the original Phase 8 spec) is **not** part of this milestone: no
+mode-driven length/tone adaptation was added to `_run_turn`'s streaming
+output. This remains prompt-driven exactly as before; see the migration
+plan below.
+
+**Test evidence:** `tests/test_assistant_state.py` (4), `tests/test_mode_commands.py`
+(19), `tests/test_push_alert_mode_gating.py` (6 — including the `"notify"`
+superset regression), `tests/test_hunt_scheduler_mode_gating.py` (5),
+`tests/test_voice_parity.py` (4 new mode-command tests), `tests/test_mode_wiring.py`
+(1 source-level characterization test).
+
 ---
 
 ## 2. Migration plan — what's deferred and why
@@ -392,7 +460,8 @@ unchanged and green.
 | ~~Phase 7 full risk taxonomy~~ | **Done — §1.8** | `core/risk_classes.py`, wired into `aexecute()`/`aexecute_mcp()`, verified against the 5 dependent test files with zero behavior change | — |
 | `take_screenshot`'s unsandboxed `save_path` | Not started (flagged, not fixed) | Found during the Phase 7 tool review; deliberately not bundled with the taxonomy retrofit to avoid mixing a permission decision with a bug fix in one commit | Real, small, well-scoped — add an `allowed_dirs` check matching `read_file`/`write_file`'s existing pattern |
 | 3-store memory consolidation (episodic / KnowledgeVault / VectorMemory → one) | Not started | No existing test imports `core/memory.py` or `core/episodic_memory.py`'s storage layer directly — a regression here is invisible to CI until this gap is closed first | MEDIUM |
-| Phase 8 behavior model (state-driven, not persona-prompt-driven) | Not started | Structurally depends on Phase 6 (done — consent/mode state now exists) and Phase 7 (done — risk classes now exist for proactive actions to be checked against); the natural first step is wiring `ironman_mode.allowed_proactive_actions(mode)` into the one still-unconditional proactive hook design allows for (none currently exist post-M4 — all known capture hooks are now consent-gated) | LOW (nothing left to gate yet) |
+| ~~Phase 8 behavior model — proactive-action/background-task gating~~ | **Done — §1.9** | `core/assistant_state.py` + `core/mode_commands.py`, wired into `push_alert`/`start_hunt_scheduler`/both loops | — |
+| Phase 8 remainder — response-surface brevity/tone by mode (voice short, text/technical detailed, "aware of active projects/previous decisions" beyond memory retrieval) | Not started | No mode-driven adaptation exists in `_run_turn`'s streaming output; still 100% prompt-driven | LOW — purely additive, no invariant to break |
 | `AgentRuntime`/`InputEvent`/`ContextAssembler`/`TaskPlanner`/`CapabilityPolicy`/`ResultIntegrator`/`ResponseSurfaceRouter` as named, unified abstractions | Not started as named classes | The *behavior* these were meant to unify (voice=text pipeline, MCP=local tool gateway sharing one risk taxonomy, HUD gets conversational content) is now real (§1.1, §1.3, §1.5, §1.8) without introducing new abstraction layers on top of a codebase that already had `chat_stream()` as a working single entry point. Introducing formal wrapper classes now would be renaming working code, not fixing a gap | LOW, but real refactor cost |
 
 **Recommended next sequence** (updated — Phase 7 is done): the approach used
@@ -441,13 +510,19 @@ highest-risk path available in this codebase.
    `git blame` to commit `3e48f85`) and is unrelated to any change here — a
    platform quirk where `../../etc/passwd` resolves to a nonexistent-but-
    still-inside-Downloads path on this host, not a security bypass.
-6. **Behavior is still 100% persona-prompt-driven** (Phase 8 not started).
-   `ironman_mode.allowed_proactive_actions()` is correct and tested but has
-   no live proactive-action dispatcher consuming it yet — there's currently
-   nothing state-driven left un-gated (Phase 6 closed every known capture
-   hook), but there's also no *emergent* behavior yet, just a policy table
-   waiting for a consumer.
-7. **`take_screenshot`'s `save_path` is not sandboxed.** Found during the
+6. **Response-surface tone/brevity is still 100% persona-prompt-driven.**
+   Phase 8's proactive-action/background-work gating is done (§1.9), but
+   the "brief in voice, detailed in technical surfaces" half of the original
+   spec has no live implementation — `_run_turn`'s streaming output isn't
+   adapted by mode or surface today. See the migration plan (§2).
+7. **The default `AssistantMode` is `ACTIVE`, not gated by any onboarding
+   step.** A fresh session starts with `push_alert`/`start_hunt_scheduler`
+   fully active (matching pre-Phase-8 unconditional behavior) — this was a
+   deliberate default to avoid silently going quieter than before for
+   existing users, not an oversight. Switching to `FOCUS`/`PASSIVE` is
+   entirely manual (voice/text command) until Phase 9 adds any
+   automatic mode inference.
+8. **`take_screenshot`'s `save_path` is not sandboxed.** Found during the
    Phase 7 tool-by-tool review (§1.8): unlike `read_file`/`write_file`, it
    never checks the resolved path against an `allowed_dirs` list, so a
    caller-supplied `save_path` could write a PNG anywhere the OS user has
@@ -455,7 +530,7 @@ highest-risk path available in this codebase.
    behavior) rather than fixed in the same commit as the risk-taxonomy
    retrofit, to avoid bundling a bug fix with a classification change. See
    the migration plan (§2) — small, well-scoped, not yet done.
-8. **`open_application`/`open_software`'s arbitrary-executable fallback.**
+9. **`open_application`/`open_software`'s arbitrary-executable fallback.**
    Also found during the Phase 7 review: both tools fall back to launching
    *any* bare-alphanumeric executable name found on `PATH` when the name
    isn't in their pre-approved app map. Already classified `HIGH_IMPACT`
@@ -485,10 +560,11 @@ scope, and gated behind `--voice` exactly as before.
 | M4 — Consent enforcement (remaining sites) | `5511e9b` | 8 |
 | M5 — Memory fabric low-risk slice | `671f34d` | 15 |
 | M6 — force_deep routing escalation | `55de9b5` | 5 |
-| M7 — Phase 7 HITL risk taxonomy retrofit | (pending commit) | 105 (95 + 10) |
+| M7 — Phase 7 HITL risk taxonomy retrofit | `d00e98b` | 105 (95 + 10) |
+| M8 — Phase 8 behavior model | (pending commit) | 39 |
 
-Full suite: 734/735 passing, 15 skipped (1 pre-existing, unrelated failure —
+Full suite: 773/774 passing, 15 skipped (1 pre-existing, unrelated failure —
 see residual risk 5; skips are the equivalence test's intentional no-op for
 the 2 MCP-only tool names that have no legacy-set membership to compare
-against). `ruff check .`: clean. `py_compile` across all 218 `.py` files in
+against). `ruff check .`: clean. `py_compile` across all 225 `.py` files in
 the repo: clean.

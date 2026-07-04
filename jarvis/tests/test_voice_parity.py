@@ -181,3 +181,92 @@ def test_ordinary_message_unaffected_when_consent_is_none(monkeypatch):
 
     assert handled is False
     assert llm.calls == ["what time is it"]
+
+
+def test_mode_switch_command_short_circuits_before_llm(monkeypatch):
+    """V62.0 Phase 8: explicit mode commands must be handled before macro
+    dispatch / LLM routing, and must never leak through to chat_stream."""
+    from core.assistant_state import AssistantState
+    from core.ironman_mode import AssistantMode
+
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+    state = AssistantState()
+
+    handled = asyncio.run(_process_voice_input(
+        "focus mode", llm, tts, "Operator", state=state,
+    ))
+
+    assert handled is True
+    assert state.mode is AssistantMode.FOCUS
+    assert llm.calls == [], "a mode command must never reach chat_stream"
+    assert tts.spoken, "operator must get a confirmation"
+
+
+def test_mode_switch_broadcasts_mode_event(monkeypatch):
+    from core.assistant_state import AssistantState
+
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    events = []
+
+    async def _fake_broadcast(event):
+        events.append(event)
+
+    monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+    state = AssistantState()
+
+    asyncio.run(_process_voice_input("war room mode", llm, tts, "Operator", state=state))
+
+    mode_events = [e for e in events if e.get("type") == "assistant_mode"]
+    assert len(mode_events) == 1
+    assert mode_events[0]["mode"] == "war_room"
+
+
+def test_noop_mode_switch_does_not_rebroadcast(monkeypatch):
+    """Re-requesting the mode already active must not fire a redundant event."""
+    from core.assistant_state import AssistantState
+    from core.ironman_mode import AssistantMode
+
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    events = []
+
+    async def _fake_broadcast(event):
+        events.append(event)
+
+    monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+    state = AssistantState(mode=AssistantMode.ACTIVE)
+
+    handled = asyncio.run(_process_voice_input("active mode", llm, tts, "Operator", state=state))
+
+    assert handled is True
+    assert not [e for e in events if e.get("type") == "assistant_mode"]
+
+
+def test_ordinary_message_unaffected_when_state_is_none(monkeypatch):
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+
+    handled = asyncio.run(_process_voice_input(
+        "focus mode", llm, tts, "Operator", state=None,
+    ))
+
+    # With no state wired, "focus mode" is just an ordinary utterance that
+    # falls through to the LLM — no crash, no silent mode change.
+    assert handled is False
+    assert llm.calls == ["focus mode"]

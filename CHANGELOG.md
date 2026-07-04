@@ -43,6 +43,17 @@ migration plan, residual risks, performance impact).
   along the way (`open_application`/`open_software`'s arbitrary-executable
   fallback, `take_screenshot`'s unsandboxed `save_path`) — documented in
   the architecture doc, not silently fixed alongside the taxonomy change.
+- **Behavior model** (`core/assistant_state.py`, `core/mode_commands.py`):
+  `core.ironman_mode.AssistantMode` and its policy predicates
+  (`allowed_proactive_actions`, `should_run_background_tasks`) had zero
+  production callers — no live "current mode" existed anywhere. Now a
+  session-scoped `AssistantState` (default `ACTIVE`) drives
+  `telegram_bridge.push_alert` (real "notification suppression during FOCUS
+  mode", the original spec's explicit test requirement) and
+  `hunt_scheduler.start_hunt_scheduler` (skips the 4-hourly autonomous sweep
+  under CPU/RAM/battery pressure or in a quiet mode), with an EN/ES
+  mode-switch command surface from voice and text. `ModeEvent` (previously
+  unemitted) now broadcasts on every mode change.
 
 ## V61.0 — Live AI brain + Iron Man Mode foundation
 
