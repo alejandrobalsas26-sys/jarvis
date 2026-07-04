@@ -102,7 +102,55 @@ docstrings are intentionally left as-is.
 
 ---
 
-## Milestones 1-9 — status
+## Milestone 2 — general semantic domain routing (additive)
 
-Appended as each lands (see CHANGELOG for the running summary). Each milestone is
-committed and pushed at a green boundary.
+`core/task_domain.py`: `TaskDomain` (14 semantic domains) + pure deterministic
+`classify_domain(prompt, tool_names) -> DomainSignal`. Bilingual EN/ES keyword
+scoring, fixed tie-break order, tool-name hints. Domain is a dimension
+independent of `ModelRole` (model choice), complexity, and risk — advisory only.
+`model_router.route()` precedence and the `ModelRole` enum are untouched, so
+every `test_model_router_roles.py` / `test_live_brain_v61.py` assertion holds.
+Tests: `tests/test_task_domain.py`.
+
+## Milestone 6 — response surface router (reason once, render per surface)
+
+`core/response_surface.py`: `ResponseSurface` (VOICE/TEXT/HUD/TECHNICAL/REPORT/
+NOTIFICATION) + pure `render(text, surface)`. Lossless surfaces (TEXT/TECHNICAL/
+REPORT) are verbatim; VOICE strips Markdown while preserving prose words;
+HUD/NOTIFICATION are bounded summaries. Invariant (presentation changes,
+reasoning truth does not) is test-enforced. Wired into `main._run_turn`'s TTS
+consumer so the spoken channel renders VOICE per sentence (no markdown read
+aloud) while the console keeps TEXT — one reasoning result, rendered per surface,
+never re-reasoned. Closes the "brief in voice" half of V62 residual risk #6.
+Tests: `tests/test_response_surface.py`.
+
+## Milestone 1 — unified live agent runtime (composed per-turn decision)
+
+`core/agent_runtime.py` introduces `TaskDecision`, the composed per-turn decision
+object the V63 spine calls for once per turn:
+
+```
+chat_stream (llm.py:1541)
+  -> assemble_task_decision(user_message, force_deep, query_category, surface)
+       route_turn()            -> ModelDecision   (authoritative role + verify)
+       classify_domain()       -> TaskDomain       (M2, semantic)
+       ResponseSurface         -> presentation     (M6)
+       + requires_planning / prefers_agent_team / requires_tools advisories
+  -> decision = td.model_decision   # existing reads unchanged (byte-identical)
+  -> AURA model_decision event += td.telemetry()  # additive domain/surface
+```
+
+Single-source invariant: the FAST→DEEP `force_deep` escalation lives only in
+`route_turn`; `LLM._route_turn` delegates to it (no drift, its tests unchanged).
+`chat_stream` reads `td.model_decision` so model selection and verifier gating
+are identical to V62; the composed object adds the semantic/planning/surface
+dimensions for telemetry and future planner/agent-team routing (M3/M4). No new
+runtime bypasses chat_stream; ToolExecutor / consent / verifier / memory /
+cancellation invariants are all preserved. Tests: `tests/test_agent_runtime.py`.
+
+## Milestones 3, 4, 5, 7, 8 — status
+
+See CHANGELOG for the running summary. Each milestone is committed and pushed at
+a green boundary. Remaining higher-risk items (task-graph planner, controlled
+multi-agent team, memory-fabric facade, presence engine, project awareness)
+build on the `TaskDecision` seam above.

@@ -57,6 +57,28 @@ detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
   half of V62 residual risk #6. Tests: `tests/test_response_surface.py` (11,
   incl. a live `_run_turn` wiring test); voice-parity suite re-run green.
 
+### Milestone 1 — unified live agent runtime (composed per-turn decision)
+
+- **New `core/agent_runtime.py`**: `TaskDecision` — the composed per-turn
+  decision object (domain / complexity / risk / requires_planning /
+  requires_tools / prefers_agent_team / requires_verification /
+  preferred_model_role / response_surface) — plus `route_turn()` (the single
+  canonical routing + `force_deep` escalation) and `assemble_task_decision()`
+  which layers M2 domain + M6 surface on top of the authoritative routing
+  `ModelDecision` without side effects or tool execution.
+- **Single-source routing**: `LLM._route_turn` now delegates to
+  `agent_runtime.route_turn`, so there is exactly one FAST→DEEP escalation
+  implementation (no drift). Its tests still pass unchanged.
+- **Wired into `chat_stream`**: the live turn now calls
+  `assemble_task_decision(...)` once and reads `td.model_decision` for model
+  selection + verifier gating — **byte-identical** to before — while the AURA
+  `model_decision` event gains additive domain / surface / planning telemetry.
+  Fast path stays fast (GENERAL chat: no planning/agents/verify); `force_deep`
+  still escalates. All ToolExecutor / consent / verifier / memory / cancellation
+  invariants preserved. Tests: `tests/test_agent_runtime.py` (13, incl.
+  model_decision parity + live-wiring characterization); `test_live_brain_v61.py`
+  / `test_model_router_roles.py` re-run green.
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,

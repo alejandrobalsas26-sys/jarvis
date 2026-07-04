@@ -14,7 +14,6 @@ import re
 import time as _time
 import uuid
 import asyncio
-import dataclasses
 from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
@@ -27,11 +26,9 @@ from core.config import settings
 # V61 — live role-based routing, post-stream verification, memory discipline.
 from core.model_router import (
     select_model,
-    route,
     resolve_inference_model,
     is_security_sensitive_turn,
     ModelDecision,
-    ModelRole,
 )
 from core.verification import should_verify, verify_answer
 from core.memory_router import (
@@ -1300,17 +1297,14 @@ class LLM:
         Escalation-only: never de-escalates, and never overrides a role the router
         already chose for a specific reason (CODER/VISION/VERIFIER/CLOUD/DEEP).
         model_router.py's ModelRole enum and route() precedence are untouched.
+
+        V63 M1: the routing + force_deep escalation now live in
+        core.agent_runtime.route_turn — the single source that
+        assemble_task_decision composes. This delegates to it, so behavior is
+        byte-identical and there is exactly one routing implementation (no drift).
         """
-        sec = is_security_sensitive_turn(user_message, tool_names)
-        decision = route(user_message, security_sensitive=sec, allow_cloud=False)
-        if force_deep and decision.role == ModelRole.FAST:
-            decision = dataclasses.replace(
-                decision,
-                role=ModelRole.DEEP,
-                requires_verification=True,
-                reason=f"{decision.reason}; escalated by cognitive_optimizer.force_deep",
-            )
-        return decision
+        from core.agent_runtime import route_turn
+        return route_turn(user_message, tool_names=tool_names, force_deep=force_deep)
 
     def _label_tool_result(self, tool_name: str, result_str: str) -> str:
         """Wrap a tool result with trust metadata before it enters history (Phase 5).
@@ -1535,16 +1529,30 @@ class LLM:
 
         self.history.append({"role": "user", "content": user_message})
 
-        # V61 Phase 1 — live role-based routing decision (computed once per turn;
-        # the user message is constant across the agentic tool loop). Drives model
-        # selection, verifier gating, and AURA telemetry.
-        decision = self._route_turn(user_message, force_deep=_force_deep)
+        # V61 Phase 1 / V63 M1 — unified per-turn decision, computed once (the
+        # user message is constant across the agentic tool loop). The composed
+        # TaskDecision layers semantic domain (M2) + response surface (M6) +
+        # planning/agent advisories on top of the authoritative routing
+        # ModelDecision. `decision` below IS td.model_decision, so model
+        # selection and verifier gating are byte-identical to before.
+        from core.agent_runtime import assemble_task_decision
+        from core.response_surface import ResponseSurface
+        task_decision = assemble_task_decision(
+            user_message,
+            force_deep=_force_deep,
+            query_category=_query_category,
+            # streaming default; the VOICE surface render is applied downstream
+            # in main._run_turn's TTS consumer (M6).
+            surface=ResponseSurface.TEXT,
+        )
+        decision = task_decision.model_decision
         _routed_model = resolve_inference_model(decision)
         logger.debug(
-            "ROUTE: role={} provider={} model={} complexity={:.2f} "
-            "requires_verification={} reason={!r}".format(
-                decision.role.value, decision.provider, _routed_model,
-                decision.complexity, decision.requires_verification, decision.reason,
+            "ROUTE: role={} domain={} provider={} model={} complexity={:.2f} "
+            "requires_verification={} planning={} reason={!r}".format(
+                decision.role.value, task_decision.domain.value, decision.provider,
+                _routed_model, decision.complexity, decision.requires_verification,
+                task_decision.requires_planning, decision.reason,
             )
         )
         try:
@@ -1558,6 +1566,7 @@ class LLM:
                 "complexity": round(decision.complexity, 2),
                 "requires_verification": decision.requires_verification,
                 "reason": decision.reason,
+                **task_decision.telemetry(),
                 "timestamp": _dt.now(_tz).isoformat(),
             }))
         except Exception:
