@@ -195,6 +195,41 @@ assert _ALWAYS_HITL_TOOLS.isdisjoint(_HITL_EXEMPT_TOOLS), (
     "SECURITY: an always-HITL tool is present in _HITL_EXEMPT_TOOLS"
 )
 
+# ── MCP gateway ────────────────────────────────────────────────────────────
+# Tools proxied from an external MCP server (e.g. the packet_tracer_bridge
+# stdio bridge) are foreign, unaudited code — they must never bypass this
+# module's security gate. Allowlist-not-denylist: an MCP tool name that isn't
+# listed here is refused outright, and every allowlisted MCP tool is ALWAYS
+# HITL-challenged (no exempt tier, unlike local tools — see aexecute_mcp).
+MCP_TOOL_ALLOWLIST: frozenset[str] = frozenset({
+    "generar_laboratorio_red",
+    "abrir_packet_tracer",
+})
+
+# Argument keys whose value names a file: must resolve to a bare basename
+# with no path separators, drive letter, or traversal segments.
+_MCP_FILENAME_ARG_KEYS: frozenset[str] = frozenset({"nombre_archivo"})
+
+
+def _validate_mcp_filename(value: str) -> str | None:
+    """Reject anything that isn't a safe bare filename.
+
+    Returns a human-readable error string, or None if *value* is safe to
+    join onto a fixed base directory. Catches path traversal ('../x'),
+    absolute paths, and drive-letter/UNC prefixes by comparing against
+    Path(value).name — any of those makes the basename differ from the
+    original string.
+    """
+    if not value or not isinstance(value, str):
+        return "Nombre de archivo vacío o inválido."
+    if "\x00" in value:
+        return "Nombre de archivo contiene un byte nulo."
+    if len(value) > 255:
+        return "Nombre de archivo demasiado largo."
+    if value in (".", "..") or Path(value).name != value:
+        return f"Nombre de archivo inválido (path traversal o separadores no permitidos): '{value}'"
+    return None
+
 # Patrones SAST precompilados para _tool_analizar_codigo_sast
 _SAST_PATTERNS: list[tuple] = [
     (re.compile(r'eval\('),                                            "eval() detectado"),
@@ -785,6 +820,84 @@ class ToolExecutor:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             return {"error": str(e)}
+
+    async def aexecute_mcp(
+        self, tool_name: str, tool_input: dict, call_fn, reasoning: str = ""
+    ) -> Any:
+        """
+        Security gate for MCP-bridge tools — the counterpart to aexecute() for
+        tools implemented by an external MCP server rather than a local
+        _tool_* handler.
+
+        *call_fn* is an async callable(tool_name, tool_input) that performs the
+        actual RPC to the MCP server; it is NEVER invoked before the allowlist,
+        filename-traversal, and HITL checks below all pass. MCP tools are
+        foreign, unaudited code — allowlist-not-denylist and ALWAYS-HITL apply
+        unconditionally here (no exempt tier, unlike local tools in aexecute()).
+        """
+        tool_input = _strip_override(tool_name, tool_input)
+
+        if tool_name not in MCP_TOOL_ALLOWLIST:
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:mcp_not_allowlisted", "blocked",
+                "MCP tool no está en la allowlist explícita",
+            )
+            return {"error": f"Tool MCP '{tool_name}' no está permitida."}
+
+        for key in _MCP_FILENAME_ARG_KEYS & tool_input.keys():
+            err = _validate_mcp_filename(str(tool_input[key]))
+            if err:
+                self._audit.log_action(
+                    tool_name, reasoning, "blocked:mcp_path_traversal", "blocked", err[:200],
+                )
+                return {"error": err}
+
+        preview = str(tool_input)
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        granted, auth_audit = await self._challenge(f"mcp:{tool_name}", preview)
+        if not granted:
+            logger.warning(f"HITL: MCP tool '{tool_name}' denegada.")
+            self._audit.log_action(
+                tool_name, reasoning, auth_audit, "blocked", "Ejecución MCP cancelada por el usuario."
+            )
+            return {"error": "Ejecución cancelada por el usuario."}
+
+        await _aura_broadcast({
+            "type": "tool_invoked",
+            "tool": f"mcp:{tool_name}",
+            "auth_audit": auth_audit,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        try:
+            result = await call_fn(tool_name, tool_input)
+        except Exception as e:
+            logger.error(f"Error en tool MCP '{tool_name}': {e}")
+            self._audit.log_action(tool_name, reasoning, "mcp", "error", str(e)[:200])
+            await _aura_broadcast({
+                "type": "error",
+                "tool": f"mcp:{tool_name}",
+                "message": str(e)[:200],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"error": f"MCP error en '{tool_name}': {e}"}
+
+        status = "error" if isinstance(result, dict) and "error" in result else "success"
+        result = self._check_pii_output(result)
+        output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
+        self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
+
+        await _aura_broadcast({
+            "type": "tool_result",
+            "tool": f"mcp:{tool_name}",
+            "status": status,
+            "auth_audit": auth_audit,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": output_summary[:150],
+        })
+
+        return result
 
     def _validate_guardrails(self, tool_name: str, tool_input: dict) -> dict | None:
         """Returns an error dict if the action violates a security guardrail, else None.

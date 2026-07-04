@@ -1742,18 +1742,23 @@ class LLM:
                     tool_input = {}
                 logger.info(f"Tool: {tool_name}({tool_input})")
 
-                # Enrutar al MCP si la tool proviene del bridge, sino al executor local
+                # Enrutar al MCP si la tool proviene del bridge, sino al executor local.
+                # V61 hardening: MCP tools pass through ToolExecutor.aexecute_mcp() —
+                # the SAME allowlist/traversal-guard/HITL gate as local tools, never a
+                # direct, unaudited call_tool(). See tools/executor.py MCP_TOOL_ALLOWLIST.
                 if tool_name in self._mcp_tool_names and self._mcp_session:
-                    try:
-                        mcp_result = await self._mcp_session.call_tool(tool_name, tool_input)
+                    async def _call_mcp(name: str, args: dict) -> dict:
+                        mcp_result = await self._mcp_session.call_tool(name, args)
                         content = (
                             mcp_result.content[0].text
                             if mcp_result.content
                             else "Sin respuesta del bridge MCP."
                         )
-                        result = {"result": content}
-                    except Exception as e:
-                        result = {"error": f"MCP error en '{tool_name}': {e}"}
+                        return {"result": content}
+
+                    result = await self.tool_executor.aexecute_mcp(
+                        tool_name, tool_input, _call_mcp, thinking
+                    )
                 else:
                     # aexecute() is fully async — NATO gate + run_in_executor inside
                     result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
