@@ -1217,7 +1217,7 @@ async def _main_async() -> None:
                 watchdog.register(
                     "screen-monitor",
                     lambda: start_screen_monitor(
-                        _aura_broadcast, llm.client, tts,
+                        _aura_broadcast, llm.client, tts, consent=session_consent,
                     ),
                     RestartPolicy.BACKOFF,
                 )
@@ -1228,13 +1228,16 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not register screen-monitor: {e}")
 
-            # Auto-screenshot on critical compound incidents (for reports)
+            # Auto-screenshot on critical compound incidents (for reports).
+            # Still consent-gated (V62.0 Phase 6) — incident severity is not
+            # operator consent; grant screen access to enable evidence capture.
             try:
                 _v38_orig_broadcast = _aura_broadcast
                 async def _visual_broadcast(event: dict) -> None:
                     await _v38_orig_broadcast(event)
                     if (event.get("type") == "compound_incident" and
-                            event.get("severity_score", 0) >= 8.0):
+                            event.get("severity_score", 0) >= 8.0 and
+                            session_consent.screen):
                         try:
                             asyncio.create_task(capture_and_save(
                                 f"incident_{event.get('incident_id','unk')}"
@@ -1499,7 +1502,7 @@ async def _main_async() -> None:
                 # Telegram mobile command bridge (push + pull)
                 watchdog.register(
                     "telegram-bridge",
-                    lambda: start_telegram_bridge(_fusion_broadcast, tts),
+                    lambda: start_telegram_bridge(_fusion_broadcast, tts, consent=session_consent),
                     RestartPolicy.BACKOFF,
                 )
                 register_shutdown_callback(stop_telegram_bridge)

@@ -33,14 +33,19 @@ _TOKEN   = os.getenv("JARVIS_TELEGRAM_TOKEN", "")
 _CHAT_ID = int(os.getenv("JARVIS_TELEGRAM_CHAT_ID", "0"))
 _app     = None   # telegram.Application singleton
 _bot_ref = None   # telegram.Bot for push notifications
+_consent = None   # core.ironman_mode.SessionConsent — V62.0 Phase 6
 
 
-async def start_telegram_bridge(broadcast_fn, tts=None) -> None:
+async def start_telegram_bridge(broadcast_fn, tts=None, consent=None) -> None:
     """
     Start the Telegram bot in background.
     Handles both polling and push notifications.
+
+    ``consent`` (core.ironman_mode.SessionConsent): gates /hud's screenshot
+    capture — a remote chat_id whitelist is authentication, not consent.
     """
-    global _app, _bot_ref
+    global _app, _bot_ref, _consent
+    _consent = consent
 
     if not _TOKEN or not _CHAT_ID:
         logger.info(
@@ -282,6 +287,12 @@ async def _cmd_gaps(update, context) -> None:
 
 async def _cmd_hud(update, context) -> None:
     if not _auth(update): return
+    if _consent is None or not _consent.screen:
+        await update.message.reply_text(
+            "Screen access isn't enabled for this session — say "
+            "'enable screen access' to JARVIS locally to allow it."
+        )
+        return
     await update.message.reply_text("📸 Capturing AURA HUD…")
     try:
         from core.vision_engine import _capture_screen, _save_screenshot
