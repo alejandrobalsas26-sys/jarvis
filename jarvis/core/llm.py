@@ -14,6 +14,7 @@ import re
 import time as _time
 import uuid
 import asyncio
+import dataclasses
 from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
@@ -30,6 +31,7 @@ from core.model_router import (
     resolve_inference_model,
     is_security_sensitive_turn,
     ModelDecision,
+    ModelRole,
 )
 from core.verification import should_verify, verify_answer
 from core.memory_router import (
@@ -1283,6 +1285,7 @@ class LLM:
     def _route_turn(
         user_message: str,
         tool_names: list[str] | None = None,
+        force_deep: bool = False,
     ) -> ModelDecision:
         """Single source of truth for live per-turn model routing (Phase 1).
 
@@ -1290,9 +1293,24 @@ class LLM:
         for a ``ModelDecision`` (role / provider / model / complexity / reason /
         requires_verification). Cloud is never escalated from the local streaming
         client, so ``allow_cloud=False``.
+
+        V62.0 Phase 4 — ``force_deep`` (core.cognitive_optimizer.classify_query's
+        signal, computed every turn but previously never consulted for routing
+        despite the name) escalates a FAST decision to DEEP + requires_verification.
+        Escalation-only: never de-escalates, and never overrides a role the router
+        already chose for a specific reason (CODER/VISION/VERIFIER/CLOUD/DEEP).
+        model_router.py's ModelRole enum and route() precedence are untouched.
         """
         sec = is_security_sensitive_turn(user_message, tool_names)
-        return route(user_message, security_sensitive=sec, allow_cloud=False)
+        decision = route(user_message, security_sensitive=sec, allow_cloud=False)
+        if force_deep and decision.role == ModelRole.FAST:
+            decision = dataclasses.replace(
+                decision,
+                role=ModelRole.DEEP,
+                requires_verification=True,
+                reason=f"{decision.reason}; escalated by cognitive_optimizer.force_deep",
+            )
+        return decision
 
     def _label_tool_result(self, tool_name: str, result_str: str) -> str:
         """Wrap a tool result with trust metadata before it enters history (Phase 5).
@@ -1520,7 +1538,7 @@ class LLM:
         # V61 Phase 1 — live role-based routing decision (computed once per turn;
         # the user message is constant across the agentic tool loop). Drives model
         # selection, verifier gating, and AURA telemetry.
-        decision = self._route_turn(user_message)
+        decision = self._route_turn(user_message, force_deep=_force_deep)
         _routed_model = resolve_inference_model(decision)
         logger.debug(
             "ROUTE: role={} provider={} model={} complexity={:.2f} "
