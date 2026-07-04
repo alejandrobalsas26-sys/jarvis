@@ -103,6 +103,21 @@ detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
   lands with its own regression coverage). Tests: `tests/test_memory_fabric.py`
   (14, incl. the live `_maybe_persist_memory` wiring + secret-skip).
 
+### Milestone 8 — project & decision awareness
+
+- **New `core/project_context.py`**: records/recalls project facts (goal /
+  decision / task / blocked / question / artifact) via the M5 memory fabric at
+  `scope="project"` with provenance + timestamps — *memory retrieval, not a
+  static prompt*. `record_project_fact()`, `recall_project_context()` (bounded,
+  untrusted-excluded), `summarize_project()` (grouped by type).
+- **Two new tools** (real production callers): `project_note(kind, text)` to
+  capture a fact and `project_status(query="")` to answer "what are we building /
+  what did we decide / what's blocked". Classified `LOW_IMPACT` (write to own
+  memory, like `save_note`) and `READ_ONLY` respectively — both non-HITL; the
+  risk_classes completeness + legacy-consistency guards stay green. Also
+  gives the M5 `fabric.retrieve()` a live production caller. Tests:
+  `tests/test_project_context.py` (10); risk_classes suite re-run green.
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,

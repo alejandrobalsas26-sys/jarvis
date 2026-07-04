@@ -148,9 +148,50 @@ dimensions for telemetry and future planner/agent-team routing (M3/M4). No new
 runtime bypasses chat_stream; ToolExecutor / consent / verifier / memory /
 cancellation invariants are all preserved. Tests: `tests/test_agent_runtime.py`.
 
-## Milestones 3, 4, 5, 7, 8 — status
+## Milestone 5 — scoped memory fabric facade
 
-See CHANGELOG for the running summary. Each milestone is committed and pushed at
-a green boundary. Remaining higher-risk items (task-graph planner, controlled
-multi-agent team, memory-fabric facade, presence engine, project awareness)
-build on the `TaskDecision` seam above.
+`core/memory_fabric.py`: a policy layer unifying episodic / KnowledgeVault /
+VectorMemory behind one facade — adapters wrap the stores unchanged (no
+migration, the V62 "consolidate before adding" direction). Enforces secret
+redaction on write, untrusted-source labeling (untrusted excluded from retrieval
+by default = anti-injection), sensitivity + scope filters, bounded retrieval,
+dedup, relevance+recency ranking, provenance on every record. `store()` is wired
+into `LLM._maybe_persist_memory` (behavior-preserving); `retrieve()` is the read
+API (also used by M8). Migrating the PageRank hot-retrieval path onto it is the
+next gradual step. Tests: `tests/test_memory_fabric.py`.
+
+## Milestone 8 — project & decision awareness
+
+`core/project_context.py`: records/recalls project facts (goal / decision / task
+/ blocked / question / artifact) via the M5 fabric at `scope="project"` with
+provenance + timestamps — memory retrieval, not a static prompt. Wired as two
+real tools: `project_note` (LOW_IMPACT) and `project_status` (READ_ONLY),
+answering "what are we building / decided / blocked". Tests:
+`tests/test_project_context.py`.
+
+## Remaining milestones (M3, M4, M7) — deferred with seams identified
+
+Built on the `TaskDecision` seam (M1) and the fabric (M5):
+
+- **M3 task-graph planner** — a bounded DAG (reasoning/tool/agent/verification
+  nodes, deps, retries, timeouts, cancellation, conservative concurrency),
+  gated by `TaskDecision.requires_planning`. Not on the fast path.
+- **M4 controlled multi-agent team** — generalize `AgentOrchestrator`
+  (`SpecialistSpec` + a bounded `SharedBlackboard` with provenance + critic
+  conflict detection), gated by `TaskDecision.prefers_agent_team`. Tool-capable
+  specialists must delegate to the `ToolExecutor`-gated `CognitiveEngine.execute_step`
+  (never a second raw LLM path) to preserve the no-bypass invariant; keep
+  concurrency conservative (fast ≤2, deep ≤1) for the Ryzen 5 7430U.
+- **M7 presence engine** — extend `AssistantState`/`ironman_mode` with the
+  OBSERVE→UNDERSTAND→SUGGEST→ASK→ACT ladder; ACT must obey ToolExecutor / risk
+  taxonomy / consent / HITL (never an autonomous bypass).
+
+Recon call-graph maps for all three exist (this session's runtime recon); each is
+a self-contained, testable, committable increment.
+
+## Test / gate status (end of this session)
+
+`pytest` (jarvis/tests + ../tests): **855 passed, 1 failed, 18 skipped**. The one
+failure is the pre-existing, unrelated `test_relative_traversal_blocked` (V62
+residual risk #5 — a host path quirk), preserved as known-pre-existing.
+`ruff check .`: clean. `compileall core tools main.py`: clean.

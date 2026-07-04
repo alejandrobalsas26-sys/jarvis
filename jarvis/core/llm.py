@@ -714,6 +714,53 @@ TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "project_note",
+            "description": (
+                "Record a project fact so JARVIS stays aware of ongoing work. Use when "
+                "Alejandro states a project goal, makes an architecture/design decision, "
+                "defines a task, hits a blocker, raises an open question, or produces an "
+                "artifact worth tracking across sessions. Stored with a timestamp at "
+                "project scope (memory-backed, not a static note)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["goal", "decision", "task", "blocked", "question", "artifact"],
+                        "description": "The kind of project fact being recorded.",
+                    },
+                    "text": {"type": "string", "description": "The fact, in one concise sentence."},
+                },
+                "required": ["kind", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "project_status",
+            "description": (
+                "Recall the current project context — goals, decisions, tasks, blockers, "
+                "open questions, artifacts — grouped by type. Use to answer 'what are we "
+                "building?', 'what did we decide?', 'what's blocked?', 'what remains to do?'. "
+                "Reads project-scoped memory only; pass an optional query to focus recall."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional focus for recall (e.g. 'auth decisions'). Empty = broad status.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_notes",
             "description": (
                 "Retrieve saved notes from brain/notes.md. "

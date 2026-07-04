@@ -2431,6 +2431,37 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    def _tool_project_note(self, kind: str, text: str) -> dict:
+        """[EXEMPT] Record a project fact (goal/decision/task/blocked/question/artifact).
+
+        V63 M8 — persisted via the memory fabric at scope=project with provenance
+        + timestamp, so JARVIS stays aware of ongoing work. Writes only to
+        JARVIS's own memory (LOW_IMPACT, non-HITL — same tier as save_note).
+        """
+        import asyncio as _asyncio
+        from core.project_context import ProjectFactType, record_project_fact
+        valid = {t.value for t in ProjectFactType}
+        k = (kind or "").strip().lower()
+        if k not in valid:
+            return {"error": f"kind must be one of {sorted(valid)}"}
+        if not (text or "").strip():
+            return {"error": "text is required"}
+        try:
+            ok = _asyncio.run(record_project_fact(ProjectFactType(k), text))
+            return {"recorded": bool(ok), "kind": k}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_project_status(self, query: str = "") -> dict:
+        """[EXEMPT] Recall current project context — goals, decisions, tasks,
+        blockers, open questions, artifacts — grouped by type (READ_ONLY)."""
+        import asyncio as _asyncio
+        from core.project_context import summarize_project
+        try:
+            return _asyncio.run(summarize_project(query))
+        except Exception as e:
+            return {"error": str(e)}
+
     def _tool_git_query(self, operation: str = "status", args: str = "") -> dict:
         """[EXEMPT] Read-only git: status, diff, log, show, branch, stash."""
         allowed_ops = {"status", "diff", "log", "show", "branch", "stash"}
