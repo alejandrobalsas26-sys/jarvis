@@ -39,6 +39,8 @@ from loguru import logger
 import whois
 import dns.resolver
 
+from core.ironman_mode import SessionConsent, default_consent
+
 # ── NATO Vocal MFA ───────────────────────────────────────────────────────────
 _NATO_ALPHABET: tuple[str, ...] = (
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
@@ -525,13 +527,26 @@ class ToolExecutor:
         self,
         stt_queue: "asyncio.Queue | None" = None,
         stt_listener=None,
+        consent: "SessionConsent | None" = None,
     ) -> None:
         self._active_web_server: socketserver.TCPServer | None = None
         self._active_web_thread: threading.Thread | None = None
         self._stt_queue = stt_queue        # asyncio.Queue[(str, float)] | None
         self._stt_listener = stt_listener  # HighPrioritySTTListener | None
+        # V62.0 Phase 6 — consent-gated sensitive surfaces. Defaults fully OFF
+        # (fail-closed) when the caller doesn't wire a shared session consent —
+        # see core.ironman_mode.SessionConsent / core.consent_commands.
+        self.consent: SessionConsent = consent if consent is not None else default_consent()
         from core.governance import TacticAuditLogger
         self._audit = TacticAuditLogger()
+
+    def _consent_error(self, surface: str, grant_phrase: str) -> dict:
+        return {
+            "error": (
+                f"Consent required for {surface} — not granted this session. "
+                f"Say '{grant_phrase}' to allow it."
+            )
+        }
 
     # ── Layer 3: NATO Vocal MFA ───────────────────────────────────────────────
 
@@ -1635,6 +1650,8 @@ class ToolExecutor:
         analyze: bool = False,
         analizar_topologia: bool = False,
     ) -> dict:
+        if not self.consent.screen:
+            return self._consent_error("screen capture", "enable screen access")
         import pyautogui
 
         screenshot = pyautogui.screenshot()
@@ -1681,6 +1698,8 @@ class ToolExecutor:
 
     def _tool_escanear_pantalla(self) -> dict:
         """[OCR] Captura la pantalla y extrae el texto visible vía pytesseract (CPU-only)."""
+        if not self.consent.screen:
+            return self._consent_error("screen capture", "enable screen access")
         _MAX_CHARS = 3000
         try:
             from PIL import ImageGrab
@@ -1738,10 +1757,14 @@ class ToolExecutor:
     # ── Clipboard ─────────────────────────────────────────────────────────────
 
     def _tool_get_clipboard(self) -> dict:
+        if not self.consent.clipboard:
+            return self._consent_error("clipboard access", "enable clipboard access")
         import pyperclip
         return {"clipboard": pyperclip.paste()}
 
     def _tool_set_clipboard(self, text: str) -> dict:
+        if not self.consent.clipboard:
+            return self._consent_error("clipboard access", "enable clipboard access")
         import pyperclip
         pyperclip.copy(text)
         return {"status": "copied", "length": len(text)}

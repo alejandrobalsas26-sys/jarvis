@@ -23,6 +23,7 @@ import inspect
 
 import main
 from main import _process_voice_input, _run_turn
+from core.ironman_mode import SessionConsent
 
 
 class _FakeLLM:
@@ -60,6 +61,7 @@ def test_continuous_voice_loop_source_uses_unified_pipeline():
     assert "_ask_jarvis" not in src
     assert "chat_async" not in src
     assert "transcribe_bytes" in src
+    assert "consent" in src, "webcam/screen keyword triggers must stay consent-gated"
 
 
 def test_process_voice_input_routes_through_chat_stream(monkeypatch):
@@ -126,3 +128,56 @@ def test_interrupt_command_short_circuits_before_llm(monkeypatch):
 
     assert handled is True
     assert llm.calls == [], "an interrupt command must never reach chat_stream"
+
+
+def test_consent_grant_command_short_circuits_before_llm(monkeypatch):
+    """V62.0 Phase 6: explicit consent commands must be handled before macro
+    dispatch / LLM routing, and must never leak through to chat_stream."""
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+    consent = SessionConsent()
+
+    handled = asyncio.run(_process_voice_input(
+        "enable screen access", llm, tts, "Operator", consent=consent,
+    ))
+
+    assert handled is True
+    assert consent.screen is True
+    assert llm.calls == [], "a consent command must never reach chat_stream"
+    assert tts.spoken, "operator must get a confirmation"
+
+
+def test_consent_revoke_command_updates_shared_consent(monkeypatch):
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+    consent = SessionConsent(camera=True)
+
+    handled = asyncio.run(_process_voice_input(
+        "disable camera access", llm, tts, "Operator", consent=consent,
+    ))
+
+    assert handled is True
+    assert consent.camera is False
+
+
+def test_ordinary_message_unaffected_when_consent_is_none(monkeypatch):
+    """consent=None (e.g. a caller that never wired it) must not change
+    normal LLM routing behavior."""
+    monkeypatch.setattr("core.voice_interrupt.is_interrupt_command", _no_interrupt)
+    monkeypatch.setattr("core.voice_macros.process_for_macro", _no_macro)
+
+    llm = _FakeLLM()
+    tts = _FakeTTS()
+
+    handled = asyncio.run(_process_voice_input(
+        "what time is it", llm, tts, "Operator", consent=None,
+    ))
+
+    assert handled is False
+    assert llm.calls == ["what time is it"]

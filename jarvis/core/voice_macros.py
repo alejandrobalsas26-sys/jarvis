@@ -72,14 +72,28 @@ def match_macro(text: str) -> dict | None:
     return best_macro
 
 
+_SCREEN_CONSENT_DENIED_MSG = "Screen access isn't enabled for this session. Say 'enable screen access' to allow it."
+_CAMERA_CONSENT_DENIED_MSG = "Camera access isn't enabled for this session. Say 'enable camera access' to allow it."
+
+
+def _has_consent(consent, surface: str) -> bool:
+    return bool(consent is not None and getattr(consent, surface, False))
+
+
 async def execute_macro(
     macro: dict,
     broadcast_fn,
     tts,
+    consent=None,
 ) -> bool:
     """
     Execute a matched macro.
     Returns True if macro was executed, False if cancelled.
+
+    ``consent`` (V62.0 Phase 6, core.ironman_mode.SessionConsent) gates the
+    screen/camera-capturing actions below (analyze_screen, take_screenshot,
+    ocr_analyze_screen, vision_room, vision_screen) — None/unset means no
+    consent, fail-closed.
     """
     # Speak response acknowledgment
     response = macro.get("response", "Executing command.")
@@ -294,6 +308,10 @@ async def execute_macro(
 
         # ── v38.0 — Visual Intelligence dispatch ────────────────────────────
         elif action == "analyze_screen":
+            if not _has_consent(consent, "screen"):
+                if tts:
+                    asyncio.create_task(tts.speak_async(_SCREEN_CONSENT_DENIED_MSG))
+                return False
             try:
                 from core.vision_engine import analyze_screen
                 from core.agent_orchestrator import orchestrator
@@ -364,6 +382,10 @@ async def execute_macro(
                 logger.debug(f"MACRO: generate_qr error: {e}")
 
         elif action == "take_screenshot":
+            if not _has_consent(consent, "screen"):
+                if tts:
+                    asyncio.create_task(tts.speak_async(_SCREEN_CONSENT_DENIED_MSG))
+                return False
             try:
                 from core.vision_engine import capture_and_save
                 asyncio.create_task(capture_and_save("operator_request"))
@@ -372,6 +394,10 @@ async def execute_macro(
 
         # ── v40.0 — Omni-Vision, Ghost Hands & Forensic Reporter dispatch ──
         elif action == "ocr_analyze_screen":
+            if not _has_consent(consent, "screen"):
+                if tts:
+                    asyncio.create_task(tts.speak_async(_SCREEN_CONSENT_DENIED_MSG))
+                return False
             try:
                 from core.ocr_engine import read_screen_and_analyze
                 from core.agent_orchestrator import orchestrator
@@ -810,6 +836,10 @@ async def execute_macro(
                 logger.debug(f"MACRO: punisher_disable error: {e}")
 
         elif action == "vision_room":
+            if not _has_consent(consent, "camera"):
+                if tts:
+                    asyncio.create_task(tts.speak_async(_CAMERA_CONSENT_DENIED_MSG))
+                return False
             try:
                 from core.vision_engine import analyze_room
                 from core.agent_orchestrator import orchestrator
@@ -822,6 +852,10 @@ async def execute_macro(
                 logger.debug(f"MACRO: vision_room error: {e}")
 
         elif action == "vision_screen":
+            if not _has_consent(consent, "screen"):
+                if tts:
+                    asyncio.create_task(tts.speak_async(_SCREEN_CONSENT_DENIED_MSG))
+                return False
             try:
                 from core.vision_engine import analyze_screen_vision
                 from core.agent_orchestrator import orchestrator
@@ -861,6 +895,7 @@ async def process_for_macro(
     text: str,
     broadcast_fn,
     tts,
+    consent=None,
 ) -> bool:
     """
     Check if text matches a macro and execute it.
@@ -871,6 +906,6 @@ async def process_for_macro(
         logger.info(
             f"MACRO: matched '{macro.get('trigger')}' → '{macro.get('action')}'"
         )
-        await execute_macro(macro, broadcast_fn, tts)
+        await execute_macro(macro, broadcast_fn, tts, consent=consent)
         return True
     return False

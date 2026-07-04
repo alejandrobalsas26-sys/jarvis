@@ -139,7 +139,9 @@ async def _greeting(llm, tts, name: str, user: str) -> None:
     )
 
 
-async def _loop_text(llm, tts, name: str) -> None:
+async def _loop_text(llm, tts, name: str, consent=None) -> None:
+    from core.consent_commands import parse_consent_command, apply_consent_command
+
     loop = asyncio.get_running_loop()
     print("Modo texto activo. Escribe tu mensaje o 'salir' para terminar.\n")
 
@@ -169,23 +171,39 @@ async def _loop_text(llm, tts, name: str) -> None:
                 print(result.stderr)
             continue
 
+        # V62.0 Phase 6 — explicit consent grant/revoke, same command surface
+        # voice uses (core.consent_commands). Only way any sensitive tool
+        # surface (screenshot/OCR/clipboard/camera) turns on for the session.
+        if consent is not None:
+            consent_cmd = parse_consent_command(user_input)
+            if consent_cmd:
+                surface, grant = consent_cmd
+                print(apply_consent_command(consent, surface, grant))
+                continue
+
         await _run_turn(llm, tts, user_input, name)
 
 
 async def _process_voice_input(
-    user_input: str, llm, tts, name: str, lang: str | None = None
+    user_input: str, llm, tts, name: str, lang: str | None = None, consent=None,
 ) -> bool:
     """
     v35.0 — pre-process STT output. Returns True if handled (skip LLM).
-    Order: interrupt commands → voice macros → LLM.
+    Order: interrupt commands → consent commands → voice macros → LLM.
 
     ``lang`` (V62.0 Phase 1): detected-language hint forwarded to _run_turn's
     TTS voice routing for the LLM-routed branch. The canned interrupt replies
     below are fixed English text, so they don't take a lang hint.
+
+    ``consent`` (V62.0 Phase 6, core.ironman_mode.SessionConsent): the shared,
+    session-scoped consent object. Forwarded to voice macros so screen/camera
+    macros stay gated; also the target of explicit grant/revoke commands
+    (core.consent_commands) — the only way any surface turns on.
     """
     from tools.executor import _aura_broadcast
     from core.voice_interrupt import is_interrupt_command, handle_interrupt
     from core.voice_macros import process_for_macro
+    from core.consent_commands import parse_consent_command, apply_consent_command
 
     # v44.0 — journal the operator command (non-blocking, best-effort)
     try:
@@ -213,15 +231,24 @@ async def _process_voice_input(
             await tts.speak_async("Reset complete.")
         return True
 
-    # 2. Voice macros — YAML-defined shortcuts
+    # 2. Explicit consent grant/revoke commands (V62.0 Phase 6)
+    if consent is not None:
+        consent_cmd = parse_consent_command(user_input)
+        if consent_cmd:
+            surface, grant = consent_cmd
+            confirmation = apply_consent_command(consent, surface, grant)
+            await tts.speak_async(confirmation)
+            return True
+
+    # 3. Voice macros — YAML-defined shortcuts
     try:
-        is_macro = await process_for_macro(user_input, _aura_broadcast, tts)
+        is_macro = await process_for_macro(user_input, _aura_broadcast, tts, consent=consent)
         if is_macro:
             return True
     except Exception as e:
         logger.debug(f"MACRO: process error: {e}")
 
-    # 3. Normal LLM routing
+    # 4. Normal LLM routing
     await _run_turn(llm, tts, user_input, name, lang=lang)
     return False
 
@@ -254,12 +281,16 @@ async def run_war_room_debate_on_last_incident(llm, tts, broadcast_fn):
     )
 
 
-async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
+async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None) -> None:
     """
     Iron Man JARVIS continuous voice loop (v46.0).
 
     Always listening. Conversational memory. Real-time system state.
     TTS interruption on new speech. JARVIS persona on every response.
+
+    ``consent`` (V62.0 Phase 6, core.ironman_mode.SessionConsent): shared
+    session consent gating screen/camera capture — see core.consent_commands
+    for the grant/revoke command surface.
     """
     import sounddevice as sd
     import numpy as np
@@ -298,7 +329,7 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
         asyncio.create_task(_speak(...)) pattern)."""
         _tts_speaking.set()
         try:
-            await _process_voice_input(user_text, llm, tts, name, lang=lang)
+            await _process_voice_input(user_text, llm, tts, name, lang=lang, consent=consent)
         except Exception as e:
             logger.debug(f"VOICE: turn error: {e}")
         finally:
@@ -481,6 +512,12 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                             "look around", "what do you see",
                             "describe my room", "scan the room",
                         )):
+                            if consent is None or not consent.camera:
+                                asyncio.create_task(_speak(
+                                    "Camera access isn't enabled for this session. "
+                                    "Say 'enable camera access' to allow it."
+                                ))
+                                continue
                             asyncio.create_task(_speak(
                                 "Activating visual cortex. Stand by."
                             ))
@@ -508,6 +545,12 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                             "analyze this", "que hay en pantalla",
                             "lee la pantalla", "read the screen",
                         )):
+                            if consent is None or not consent.screen:
+                                asyncio.create_task(_speak(
+                                    "Screen access isn't enabled for this session. "
+                                    "Say 'enable screen access' to allow it."
+                                ))
+                                continue
                             asyncio.create_task(_speak("Capturing screen."))
                             from core.vision_engine import analyze_screen_vision
                             model_v = getattr(llm, "model_vision",
@@ -715,7 +758,16 @@ async def _main_async() -> None:
     audio_listener._loop_ref      = asyncio.get_event_loop()
     audio_listener._broadcast_ref = _aura_broadcast
 
-    executor = ToolExecutor(stt_queue=stt_queue, stt_listener=audio_listener)
+    # V62.0 Phase 6 — session-scoped consent, shared by ToolExecutor (gates
+    # screenshot/OCR/clipboard tools) and the voice/text loops (gates the
+    # webcam/screen keyword triggers and voice macros, and is the mutation
+    # target of explicit grant/revoke commands). Defaults fully OFF.
+    from core.ironman_mode import default_consent
+    session_consent = default_consent()
+
+    executor = ToolExecutor(
+        stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
+    )
     llm = LLM(tool_executor=executor)
     tts = TTS()
 
@@ -1744,9 +1796,9 @@ async def _main_async() -> None:
             await _greeting(llm, tts, settings.assistant_name, settings.user_name)
 
         if args.voice and stt is not None:
-            await _loop_voice_continuous(llm, tts, stt, settings.assistant_name)
+            await _loop_voice_continuous(llm, tts, stt, settings.assistant_name, consent=session_consent)
         else:
-            await _loop_text(llm, tts, settings.assistant_name)
+            await _loop_text(llm, tts, settings.assistant_name, consent=session_consent)
     finally:
         # v61.1: absolute hard-kill watchdog, independent of the event loop.
         # asyncio.wait_for()'s timeout is NOT a true ceiling on a coroutine
