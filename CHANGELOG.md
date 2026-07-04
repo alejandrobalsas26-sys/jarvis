@@ -40,6 +40,23 @@ detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
   reason, matched). Composition into one per-turn decision lands in M1. Tests:
   `tests/test_task_domain.py` (13).
 
+### Milestone 6 — response surface router (reason once, render per surface)
+
+- **New `core/response_surface.py`**: a `ResponseSurface` enum (VOICE / TEXT /
+  HUD / TECHNICAL / REPORT / NOTIFICATION) and a pure `render(text, surface)`
+  that adapts *one* reasoning result to a surface **without re-running the
+  model**. TEXT / TECHNICAL / REPORT are verbatim (lossless); VOICE strips
+  Markdown (code fences, backticks, emphasis, headers, tables, links) while
+  preserving every prose word; HUD / NOTIFICATION are bounded, single-line
+  summaries. Invariant (presentation changes, reasoning truth does not) is
+  test-enforced.
+- **Wired VOICE into the live TTS path** (`main._run_turn` consumer): the spoken
+  channel now renders `ResponseSurface.VOICE` per sentence, so TTS reads
+  naturally instead of vocalizing ``backticks``/`**asterisks**`/table pipes,
+  while the console keeps the full TEXT surface. Closes the "brief in voice"
+  half of V62 residual risk #6. Tests: `tests/test_response_surface.py` (11,
+  incl. a live `_run_turn` wiring test); voice-parity suite re-run green.
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,

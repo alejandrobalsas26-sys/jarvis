@@ -118,11 +118,18 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         await queue.put(None)  # sentinel: indica al consumer que terminó
 
     async def consumer() -> None:
+        # V63 M6 — the spoken channel is the VOICE surface: strip Markdown so TTS
+        # reads naturally instead of vocalizing `backticks`/**asterisks**/tables.
+        # The console (producer's print above) keeps the full TEXT surface — one
+        # reasoning result, rendered per surface, never re-reasoned.
+        from core.response_surface import ResponseSurface, render
         while True:
             sentence = await queue.get()
             if sentence is None:
                 break
-            await tts.speak_async(sentence, lang=lang)
+            spoken = render(sentence, ResponseSurface.VOICE)
+            if spoken:
+                await tts.speak_async(spoken, lang=lang)
 
     print(f"\n[{name}] ", end="", flush=True)
     await asyncio.gather(producer(), consumer())
