@@ -68,6 +68,26 @@ class HighPrioritySTTListener:
         self._loop_ref: Optional[asyncio.AbstractEventLoop] = None
         self._broadcast_ref = None
 
+        # V62.0 — Phase 1 multilingual core: last language-ID result from
+        # faster-whisper, refreshed by transcribe_with_confidence(). Real
+        # auto-detection only happens when whisper_language='auto'; otherwise
+        # this mirrors the fixed configured language (see core/language_context.py).
+        self.last_detected_language: Optional[str] = None
+        self.last_language_confidence: float = 0.0
+
+        # Pre-load the Whisper model now, in a dedicated high-priority daemon
+        # thread, as this class's docstring promises. This previously lived
+        # (misplaced) inside _vad_broadcast, so the model was only ever loaded
+        # as a side effect of listen_vad()'s first "listening" broadcast —
+        # never loaded at all on the continuous-voice path, which doesn't call
+        # listen_vad().
+        loader = threading.Thread(
+            target=self._load_model,
+            name="whisper-hi-prio",
+            daemon=True,
+        )
+        loader.start()
+
     def _vad_broadcast(self, state: str) -> None:
         """v32.0 — Thread-safe VAD state broadcast to AURA HUD."""
         if self._loop_ref and self._broadcast_ref:
@@ -81,13 +101,6 @@ class HighPrioritySTTListener:
                 )
             except Exception:
                 pass
-
-        loader = threading.Thread(
-            target=self._load_model,
-            name="whisper-hi-prio",
-            daemon=True,
-        )
-        loader.start()
 
     # ── Internal loader ───────────────────────────────────────────────────────
 
@@ -149,7 +162,7 @@ class HighPrioritySTTListener:
 
         try:
             lang = self._language if self._language != "auto" else None
-            segments, _ = self._model.transcribe(tmp_path, language=lang, beam_size=5)
+            segments, info = self._model.transcribe(tmp_path, language=lang, beam_size=5)
             seg_list = list(segments)
             text = " ".join(s.text.strip() for s in seg_list).strip()
             if seg_list:
@@ -157,6 +170,12 @@ class HighPrioritySTTListener:
                 confidence = math.exp(max(-10.0, avg_logprob))
             else:
                 confidence = 0.0
+            # V62.0 — Phase 1: surface faster-whisper's language-ID result so
+            # callers (core/language_context.py) can track/react to it. When
+            # self._language is fixed (not 'auto'), info.language just mirrors
+            # the forced language — this is a no-op for LanguageContext.update().
+            self.last_detected_language = getattr(info, "language", None)
+            self.last_language_confidence = float(getattr(info, "language_probability", 0.0) or 0.0)
             logger.debug(f"Audio: '{text}' confianza={confidence:.2%}")
             return text, confidence
         finally:
@@ -166,6 +185,25 @@ class HighPrioritySTTListener:
         """Backward-compatible: record + transcribe, returns text only."""
         audio = self.record(seconds)
         text, _ = self.transcribe_with_confidence(audio)
+        return text
+
+    def transcribe_bytes(self, pcm_bytes: bytes, sample_rate: int) -> str:
+        """Transcribe raw int16 PCM mono audio (as produced by main.py's
+        continuous-voice VAD loop) and return the transcript text.
+
+        Populates last_detected_language / last_language_confidence as a side
+        effect (via transcribe_with_confidence) — callers read those right
+        after this call to update a LanguageContext.
+        """
+        if self._model is None and not self.wait_ready(timeout=10.0):
+            return ""
+        audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        prev_rate = self._sample_rate
+        try:
+            self._sample_rate = sample_rate
+            text, _confidence = self.transcribe_with_confidence(audio)
+        finally:
+            self._sample_rate = prev_rate
         return text
 
     # ── v31.0 VAD-gated capture ───────────────────────────────────────────────

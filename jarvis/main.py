@@ -89,13 +89,18 @@ def _split_sentences(buffer: str) -> tuple[list[str], str]:
     return [p for p in parts[:-1] if p.strip()], parts[-1]
 
 
-async def _run_turn(llm, tts, user_input: str, name: str) -> None:
+async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = None) -> None:
     """
     Ejecuta un turno completo de conversación con el modelo Producer-Consumer.
 
     El producer consume el stream del LLM, acumula chunks en un buffer y
     encola oraciones completas. El consumer desencola y habla cada oración.
     Ambas corrutinas corren en paralelo via asyncio.gather.
+
+    ``lang`` (V62.0 Phase 1) es un hint opcional de idioma detectado — se
+    reenvía a tts.speak_async() para el voice-routing (TTSVoiceRouter). None
+    preserva el comportamiento previo (sin cambio de voz); usado por el modo
+    texto, que no tiene una fuente de detección de idioma.
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -117,7 +122,7 @@ async def _run_turn(llm, tts, user_input: str, name: str) -> None:
             sentence = await queue.get()
             if sentence is None:
                 break
-            await tts.speak_async(sentence)
+            await tts.speak_async(sentence, lang=lang)
 
     print(f"\n[{name}] ", end="", flush=True)
     await asyncio.gather(producer(), consumer())
@@ -168,11 +173,15 @@ async def _loop_text(llm, tts, name: str) -> None:
 
 
 async def _process_voice_input(
-    user_input: str, llm, tts, name: str
+    user_input: str, llm, tts, name: str, lang: str | None = None
 ) -> bool:
     """
     v35.0 — pre-process STT output. Returns True if handled (skip LLM).
     Order: interrupt commands → voice macros → LLM.
+
+    ``lang`` (V62.0 Phase 1): detected-language hint forwarded to _run_turn's
+    TTS voice routing for the LLM-routed branch. The canned interrupt replies
+    below are fixed English text, so they don't take a lang hint.
     """
     from tools.executor import _aura_broadcast
     from core.voice_interrupt import is_interrupt_command, handle_interrupt
@@ -213,7 +222,7 @@ async def _process_voice_input(
         logger.debug(f"MACRO: process error: {e}")
 
     # 3. Normal LLM routing
-    await _run_turn(llm, tts, user_input, name)
+    await _run_turn(llm, tts, user_input, name, lang=lang)
     return False
 
 
@@ -272,98 +281,28 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
         logger.error("VOICE: webrtcvad not installed — pip install webrtcvad")
         return
 
-    # ── Conversation history (rolling 10-turn window) ────────────────────
-    conversation_history: list[dict] = []
-    MAX_HISTORY_TURNS = 10
-
-    def _add_to_history(role: str, content: str) -> None:
-        conversation_history.append({"role": role, "content": content})
-        if len(conversation_history) > MAX_HISTORY_TURNS * 2:
-            # Keep system context fresh — trim oldest 2 turns
-            del conversation_history[:2]
-
-    # ── Gather real-time system state for persona ─────────────────────────
-    async def _get_system_state() -> dict:
-        state = {}
-        try:
-            from core.purple_coordinator import get_coverage_summary
-            cov = get_coverage_summary()
-            state["coverage_pct"] = cov.get("coverage_pct", 0)
-        except Exception:
-            state["coverage_pct"] = 0
-        try:
-            from core.sensor_mesh import get_connected_agents
-            state["sensor_agents"] = len(get_connected_agents())
-        except Exception:
-            state["sensor_agents"] = 0
-        try:
-            from core.correlator import get_active_incident_count
-            state["active_incidents"] = get_active_incident_count()
-        except Exception:
-            state["active_incidents"] = 0
-        return state
-
-    # ── Build messages list for LLM call ────────────────────────────────
-    async def _build_messages(user_text: str) -> list[dict]:
-        from core.personality import get_jarvis_system_prompt
-        state = await _get_system_state()
-        system_prompt = get_jarvis_system_prompt(
-            coverage_pct     = state.get("coverage_pct", 0),
-            active_incidents = state.get("active_incidents", 0),
-            sensor_agents    = state.get("sensor_agents", 0),
-            model_name       = getattr(llm, "current_model", ""),
-            operator_name    = name,
-        )
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(conversation_history)
-        messages.append({"role": "user", "content": user_text})
-        return messages
-
-    # ── LLM inference with conversation context ──────────────────────────
-    async def _ask_jarvis(user_text: str) -> str:
-        try:
-            messages = await _build_messages(user_text)
-
-            # Try full messages API first (Ollama supports this)
-            if hasattr(llm, "client") and llm.client:
-                resp = await asyncio.wait_for(
-                    llm.client.chat.completions.create(
-                        model    = getattr(llm, "current_model",
-                                           getattr(llm, "model", "")),
-                        messages = messages,
-                        stream   = False,
-                        extra_body = {"options": {
-                            "num_ctx":     2048,
-                            "temperature": 0.7,
-                        }},
-                    ),
-                    timeout=20.0,
-                )
-                return resp.choices[0].message.content.strip()
-
-            # Fallback: single-turn with context in user message
-            context_str = "\n".join(
-                f"{'User' if m['role']=='user' else 'JARVIS'}: {m['content']}"
-                for m in conversation_history[-6:]
-            )
-            full_prompt = (
-                f"[CONTEXT]\n{context_str}\n\n"
-                f"[USER]\n{user_text}"
-                if context_str else user_text
-            )
-            return await asyncio.wait_for(
-                llm.chat_async(full_prompt),
-                timeout=20.0,
-            )
-
-        except asyncio.TimeoutError:
-            return "I'm not getting a response from the model. Try again."
-        except Exception as e:
-            logger.debug(f"VOICE: LLM error: {e}")
-            return "Something went wrong on my end. Try again."
+    # Turns go through _process_voice_input() → _run_turn() → llm.chat_stream()
+    # — the same pipeline _loop_text uses, giving voice tool-calling, HITL/NATO,
+    # model routing, verification, and memory. LLM.history is the conversation
+    # store; there is no separate local history here.
+    from core.language_context import LanguageContext
+    language_context = LanguageContext()
 
     # ── TTS with interruption support ────────────────────────────────────
     _tts_speaking = asyncio.Event()
+
+    async def _handle_turn(user_text: str, lang: str | None) -> None:
+        """Run one conversational turn through the real agentic pipeline as a
+        background task (so the VAD loop keeps reading audio_q for barge-in
+        detection while JARVIS thinks/speaks — mirrors the old fire-and-forget
+        asyncio.create_task(_speak(...)) pattern)."""
+        _tts_speaking.set()
+        try:
+            await _process_voice_input(user_text, llm, tts, name, lang=lang)
+        except Exception as e:
+            logger.debug(f"VOICE: turn error: {e}")
+        finally:
+            _tts_speaking.clear()
 
     async def _speak(text: str) -> None:
         if not tts or not text:
@@ -510,6 +449,16 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                         text = text.strip()
                         print(f"\n{name}: {text}")
 
+                        # V62.0 Phase 1 — refresh language context from this
+                        # utterance's faster-whisper language-ID. No-op unless
+                        # whisper_language='auto' (fixed mode always reports
+                        # the same forced language back).
+                        language_context.update(
+                            getattr(stt, "last_detected_language", None),
+                            getattr(stt, "last_language_confidence", 0.0),
+                        )
+                        lang_hint = language_context.voice_hint()
+
                         text_lower = text.lower()
 
                         # ── v46.0 OMEGA — War Room trigger ──────────────────
@@ -543,15 +492,12 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                                 "Describe the room and environment in detail. "
                                 "Note any screens, people, objects, lighting."
                             )
-                            synthesis = await _ask_jarvis(
-                                f"Moondream visual analysis of the room: {desc}\n\n"
-                                "Summarize what you see in 2 sentences. "
-                                "Note anything unusual or security-relevant."
-                            )
-                            print(f"\n[JARVIS VISION] {synthesis}\n")
-                            asyncio.create_task(_speak(synthesis))
-                            _add_to_history("user", text)
-                            _add_to_history("assistant", synthesis)
+                            asyncio.create_task(_handle_turn(
+                                f"[Vision context — visual-model analysis of the room]: {desc}\n\n"
+                                "Summarize what you see in 2 sentences for the operator. "
+                                "Note anything unusual or security-relevant.",
+                                lang_hint,
+                            ))
                             continue
 
                         # ── v46.0 OMEGA — Screen analysis ───────────────────
@@ -577,37 +523,19 @@ async def _loop_voice_continuous(llm, tts, stt, name: str) -> None:
                             desc = await analyze_screen_vision(
                                 llm.client, model_v, query
                             )
-                            synthesis = await _ask_jarvis(
-                                f"Screen analysis: {desc}\n\n"
-                                "Give me a 2-sentence assessment. "
-                                "If it is phishing, say so clearly."
-                            )
-                            print(f"\n[JARVIS SCREEN] {synthesis}\n")
-                            asyncio.create_task(_speak(synthesis))
-                            _add_to_history("user", text)
-                            _add_to_history("assistant", synthesis)
+                            asyncio.create_task(_handle_turn(
+                                f"[Vision context — screen analysis]: {desc}\n\n"
+                                "Give me a 2-sentence assessment for the operator. "
+                                "If it is phishing, say so clearly.",
+                                lang_hint,
+                            ))
                             continue
 
-                        # Check voice macros first
-                        try:
-                            from core.voice_macros import process_for_macro
-                            from tools.executor import _aura_broadcast as _br
-                            handled = await process_for_macro(text, _br, tts)
-                            if handled:
-                                continue
-                        except Exception:
-                            pass
-
-                        # Get JARVIS response with full context
-                        response = await _ask_jarvis(text)
-
-                        if response:
-                            # Update conversation history
-                            _add_to_history("user",      text)
-                            _add_to_history("assistant", response)
-
-                            print(f"\n[JARVIS] {response}\n")
-                            asyncio.create_task(_speak(response))
+                        # Interrupt commands, voice macros, and normal LLM
+                        # routing (tool-calling, HITL/NATO, model routing,
+                        # verification, memory) all happen inside
+                        # _process_voice_input()/_run_turn().
+                        asyncio.create_task(_handle_turn(text, lang_hint))
 
     except KeyboardInterrupt:
         logger.info("VOICE: interrupted by user")
