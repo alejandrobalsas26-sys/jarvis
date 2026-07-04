@@ -36,7 +36,6 @@ from core.memory_router import (
     should_write_memory,
     classify_memory_scope,
     contains_secret,
-    redact_secrets,
 )
 # v34.0 — cognitive self-optimization
 from core.cognitive_optimizer import (
@@ -1437,16 +1436,19 @@ class LLM:
             except Exception:
                 pass
             try:
-                from core.episodic_memory import store_episode
-                payload = redact_secrets(
-                    f"[{scope}] user: {user_message}\nassistant: {final_answer}"
-                )
-                await store_episode(
+                # V63 M5 — route the write through the memory fabric so secret
+                # redaction, provenance, sensitivity, and untrusted-source labeling
+                # are applied in one place. Behavior-preserving: still an internal,
+                # scoped, redacted conversation_memory episode (the fabric redacts
+                # the payload; sensitivity was already the 'normal' default).
+                from core.memory_fabric import Sensitivity, get_fabric
+                payload = f"[{scope}] user: {user_message}\nassistant: {final_answer}"
+                await get_fabric().store(
                     payload,
-                    event_type="conversation_memory",
-                    severity="INFO",
+                    memory_type="conversation_memory",
                     source="internal",
                     scope=scope,
+                    sensitivity=Sensitivity.NORMAL,
                 )
             except Exception as e:
                 logger.debug(f"MEMORY: episodic store unavailable: {e}")

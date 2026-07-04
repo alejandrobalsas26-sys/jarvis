@@ -79,6 +79,30 @@ detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
   model_decision parity + live-wiring characterization); `test_live_brain_v61.py`
   / `test_model_router_roles.py` re-run green.
 
+### Milestone 5 — scoped memory fabric facade
+
+- **New `core/memory_fabric.py`**: a policy layer unifying the three existing
+  memory stores (episodic / KnowledgeVault / VectorMemory) behind one facade
+  **without migrating or deleting any store** (adapters wrap them unchanged —
+  the V62 "consolidate before adding" direction, residual risk #4). Enforces the
+  policy the raw stores lack: secret redaction on write, untrusted-source
+  labeling (untrusted memories excluded from retrieval by default = anti-injection),
+  sensitivity labels + scope filters, **bounded** retrieval (never a full-store
+  dump), dedup by normalized content, relevance+recency ranking, and provenance
+  preserved on every record. `Sensitivity` enum, `Provenance`/`MemoryRecord`
+  dataclasses, injectable `RetrievalAdapter`/`StorageAdapter` protocols,
+  `EpisodicAdapter` (primary, read+write) + `VectorMemoryAdapter`, and a
+  `get_fabric()` singleton.
+- **Wired `store()` into the live write path**: `LLM._maybe_persist_memory` now
+  routes the conversation-memory write through `get_fabric().store(...)`,
+  centralizing redaction/provenance/sensitivity/untrusted-labeling. Behavior-
+  preserving (still an internal, scoped, redacted `conversation_memory` episode;
+  sensitivity was already the `normal` default) and the secret-skip gate is kept.
+  `retrieve()` is the facade read API (implemented + tested); migrating the
+  PageRank hot-retrieval path onto it is the next deliberate gradual step (so it
+  lands with its own regression coverage). Tests: `tests/test_memory_fabric.py`
+  (14, incl. the live `_maybe_persist_memory` wiring + secret-skip).
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,
