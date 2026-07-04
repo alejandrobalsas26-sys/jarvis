@@ -322,6 +322,44 @@ def _contains_shell_metacharacters(value: str) -> bool:
     return bool(_FORBIDDEN_CHARS_RE.search(value or ""))
 
 
+# ── Centralized filesystem sandbox ────────────────────────────────────────────
+# Allowed write/read roots, resolved once at call time. Mirrors the inline
+# containment check that _tool_read_file / _tool_write_file already perform, so
+# every path-taking handler can share one hardened definition instead of
+# re-implementing (and drifting from) it.
+def _sandbox_allowed_dirs() -> tuple[Path, ...]:
+    return (
+        Path.home() / "Downloads",
+        Path.home() / "Documents",
+        Path.cwd(),
+    )
+
+
+def _resolve_within_allowed(path: str) -> "Path | None":
+    """Resolve *path* and return it iff it is contained within an allowed dir.
+
+    Returns ``None`` — i.e. fail-closed — on every escape attempt: relative
+    traversal (``../``), absolute paths outside the roots, drive-letter escapes,
+    or symlinks whose target lands outside (``.resolve()`` follows symlinks and
+    normalizes ``..`` *before* the containment test, so a symlink inside an
+    allowed dir pointing outside is still rejected). Any resolution failure
+    (malformed path, OS error) is likewise treated as not-allowed.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return None
+    try:
+        p = Path(path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    for allowed in _sandbox_allowed_dirs():
+        try:
+            if p.is_relative_to(allowed.resolve()):
+                return p
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return None
+
+
 def _strip_override(tool_name: str, tool_input: dict) -> dict:
     """Return a copy of *tool_input* with any model-supplied FORCE_OVERRIDE removed.
 
@@ -1722,18 +1760,32 @@ class ToolExecutor:
     ) -> dict:
         if not self.consent.screen:
             return self._consent_error("screen capture", "enable screen access")
-        import pyautogui
 
-        screenshot = pyautogui.screenshot()
+        # [SANDBOXED] Contain the caller-supplied save_path to the same allowed
+        # roots as read_file/write_file. Absent a path, default to a timestamped
+        # PNG under Downloads (an allowed root) — never the bare home dir, which
+        # is outside containment. Validate BEFORE importing/invoking pyautogui so
+        # a rejected path never captures the screen.
         if not save_path:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = str(Path.home() / f"jarvis_{ts}.png")
-        screenshot.save(save_path)
-        result: dict = {"saved": save_path}
+            target = Path.home() / "Downloads" / f"jarvis_{ts}.png"
+        else:
+            resolved = _resolve_within_allowed(save_path)
+            if resolved is None:
+                logger.warning(f"Screenshot save blocked (outside allowed dirs): {save_path!r}")
+                return {"error": "Seguridad: solo puedo guardar capturas en Downloads, Documents o el proyecto."}
+            target = resolved
+
+        import pyautogui
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        screenshot = pyautogui.screenshot()
+        screenshot.save(str(target))
+        result: dict = {"saved": str(target)}
         if analyze:
-            result["ocr"] = self._read_image_ocr(Path(save_path))[:2000]
+            result["ocr"] = self._read_image_ocr(target)[:2000]
         if analizar_topologia:
-            result["topology_analysis"] = self._analyze_topology_vlm(Path(save_path))
+            result["topology_analysis"] = self._analyze_topology_vlm(target)
         return result
 
     def _analyze_topology_vlm(self, image_path: Path) -> str:

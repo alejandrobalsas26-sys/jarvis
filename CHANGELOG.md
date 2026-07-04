@@ -1,5 +1,30 @@
 # Changelog
 
+## V63.0 — General-purpose agent runtime (in progress)
+
+Evolves JARVIS from a cyber-focused local assistant toward a general-purpose,
+memory-aware, agentic runtime, **without** removing capabilities, weakening
+security controls, or performing a big-bang rewrite. Architecture and migration
+detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
+
+### Milestone 0 — baseline & safety closure
+
+- **Package version metadata aligned** from `61.0.0` to `63.0.0` — the package
+  reported V61 while V62 was merged and documented (residual drift noted in the
+  V62 report). Historical `V6x` references in code comments/docstrings are
+  intentionally left as-is (they factually record which phase added a feature).
+- **`take_screenshot` `save_path` is now sandboxed** (closes V62 residual
+  risk #8). The caller-supplied path is contained to the same allowed roots as
+  `read_file`/`write_file` (Downloads / Documents / project cwd) via a new
+  shared `tools.executor._resolve_within_allowed` helper: paths are resolved
+  before the containment check, relative traversal / absolute escape /
+  drive-letter escape / symlink-to-outside are all rejected fail-closed, and a
+  rejected path never captures the screen (consent gate still runs first). The
+  default location moved from the bare home dir (outside containment) to a
+  timestamped PNG under Downloads. HITL classification is unchanged
+  (`HIGH_IMPACT`). Tests: `tests/test_screenshot_sandbox.py` (+ updated
+  `tests/test_consent_gating.py`).
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,

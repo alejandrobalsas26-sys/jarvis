@@ -10,6 +10,8 @@ pyautogui/pyperclip/pytesseract, and that granting consent unblocks it.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.ironman_mode import SessionConsent
 from tools.executor import ToolExecutor
 
@@ -40,12 +42,16 @@ def test_screenshot_allowed_with_screen_consent(monkeypatch, tmp_path):
         def save(self, path):
             pass
 
+    # save_path is now sandboxed to Downloads/Documents/cwd — redirect home to
+    # a temp dir and target an allowed root so the test stays hermetic.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr("pyautogui.screenshot", lambda: _FakeShot())
+    save_path = str(tmp_path / "Downloads" / "x.png")
 
-    result = te.execute("take_screenshot", {"save_path": str(tmp_path / "x.png")})
+    result = te.execute("take_screenshot", {"save_path": save_path})
 
     assert "error" not in result
-    assert result["saved"] == str(tmp_path / "x.png")
+    assert result["saved"] == save_path
 
 
 def test_ocr_scan_blocked_without_screen_consent(monkeypatch):
