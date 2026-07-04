@@ -19,6 +19,14 @@ from loguru import logger
 _shutdown_event: asyncio.Event | None = None
 _shutdown_callbacks: list[Callable[[], Coroutine]] = []
 
+# Hard ceiling on step 4 (cancel + await every remaining task). Individual
+# tasks are asked to cancel cooperatively, but a task blocked inside a
+# run_in_executor() thread cannot actually be interrupted — cancelling its
+# asyncio.Task only stops *awaiting* it once this deadline passes, it does
+# not kill the underlying OS thread. Without this ceiling, one misbehaving
+# background loop can hang the entire shutdown indefinitely.
+_TASK_DRAIN_TIMEOUT_S = 10.0
+
 
 def get_shutdown_event() -> asyncio.Event:
     global _shutdown_event
@@ -71,14 +79,20 @@ async def run_graceful_shutdown(watchdog=None) -> None:
         except Exception:
             pass
 
-    # 2. Run registered callbacks (DB flush, session save, etc.)
-    for cb in _shutdown_callbacks:
+    # 2. Run registered callbacks (DB flush, session save, etc.) concurrently —
+    # they're independent (different subsystems), so there's no reason to pay
+    # each one's worst-case latency serially.
+    async def _run_cb(cb):
+        name = getattr(cb, "__name__", repr(cb))
         try:
             await asyncio.wait_for(cb(), timeout=5.0)
         except asyncio.TimeoutError:
-            logger.debug(f"SHUTDOWN: callback {getattr(cb, '__name__', repr(cb))} timed out")
+            logger.debug(f"SHUTDOWN: callback {name} timed out")
         except Exception as e:
-            logger.debug(f"SHUTDOWN: callback {getattr(cb, '__name__', repr(cb))} error: {e}")
+            logger.debug(f"SHUTDOWN: callback {name} error: {e}")
+
+    if _shutdown_callbacks:
+        await asyncio.gather(*(_run_cb(cb) for cb in _shutdown_callbacks))
 
     # 3. Final audit log entry
     try:
@@ -94,13 +108,26 @@ async def run_graceful_shutdown(watchdog=None) -> None:
     except Exception:
         pass
 
-    # 4. Cancel all remaining tasks except the current one
+    # 4. Cancel all remaining tasks except the current one. Bounded by
+    # _TASK_DRAIN_TIMEOUT_S — a task stuck inside run_in_executor() ignores
+    # .cancel() until its thread returns, so this must not be allowed to
+    # block process exit forever.
     current = asyncio.current_task()
     tasks = [t for t in asyncio.all_tasks() if t is not current]
     for t in tasks:
         t.cancel()
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=_TASK_DRAIN_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            stuck = [t.get_name() for t in tasks if not t.done()]
+            logger.warning(
+                f"SHUTDOWN: {len(stuck)} task(s) still running after "
+                f"{_TASK_DRAIN_TIMEOUT_S}s drain deadline — forcing exit: {stuck}"
+            )
 
     elapsed = round((time.monotonic() - t0) * 1000, 1)
     logger.info(f"SHUTDOWN: complete in {elapsed}ms — goodbye")

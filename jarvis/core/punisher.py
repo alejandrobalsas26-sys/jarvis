@@ -13,7 +13,7 @@ DESTRUCTIVE (requires NATO OTP via AURA):
 All actions logged to logs/punisher_actions.jsonl
 """
 
-import asyncio, subprocess, json
+import asyncio, ipaddress, subprocess, json
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
@@ -24,6 +24,17 @@ _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 _PUNISHER_ENABLED = True   # set False to disable globally
 _AUTO_THRESHOLD   = 9.0    # severity >= this triggers auto-execute
 _BLOCKED_IPS: set[str] = set()
+
+
+def _valid_ip(ip: str) -> bool:
+    """Strict IP-literal check. Rejects anything that isn't a clean IPv4/IPv6
+    address — this is the injection gate before *ip* ever reaches a
+    subprocess argv, since involved_hosts is attacker-influenced telemetry."""
+    try:
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
 
 
 def _log_action(action: str, target: str, success: bool,
@@ -46,24 +57,27 @@ async def isolate_ip(ip: str, reason: str = "") -> bool:
     Block a hostile IP via Windows Firewall (both directions).
     Reversible: undo_isolation(ip) removes the rules.
     """
+    if not _valid_ip(ip):
+        _log_action("isolate_ip", ip, False, "rejected: not a valid IP literal")
+        return False
+
     if ip in _BLOCKED_IPS:
         logger.debug(f"PUNISHER: {ip} already blocked")
         return True
 
-    safe_ip = ip.replace(".", "_")
+    safe_ip = ip.replace(".", "_").replace(":", "_")
     cmds = [
-        f'netsh advfirewall firewall add rule '
-        f'name="JARVIS_BLOCK_{safe_ip}_OUT" '
-        f'dir=out action=block remoteip={ip} enable=yes',
-
-        f'netsh advfirewall firewall add rule '
-        f'name="JARVIS_BLOCK_{safe_ip}_IN" '
-        f'dir=in action=block remoteip={ip} enable=yes',
+        ["netsh", "advfirewall", "firewall", "add", "rule",
+         f"name=JARVIS_BLOCK_{safe_ip}_OUT",
+         "dir=out", "action=block", f"remoteip={ip}", "enable=yes"],
+        ["netsh", "advfirewall", "firewall", "add", "rule",
+         f"name=JARVIS_BLOCK_{safe_ip}_IN",
+         "dir=in", "action=block", f"remoteip={ip}", "enable=yes"],
     ]
     try:
         for cmd in cmds:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                cmd, shell=False, capture_output=True,
                 text=True, timeout=10
             )
             if result.returncode != 0:
@@ -80,16 +94,20 @@ async def isolate_ip(ip: str, reason: str = "") -> bool:
 
 async def undo_isolation(ip: str) -> bool:
     """Remove firewall block for an IP."""
-    safe_ip = ip.replace(".", "_")
+    if not _valid_ip(ip):
+        _log_action("undo_isolation", ip, False, "rejected: not a valid IP literal")
+        return False
+
+    safe_ip = ip.replace(".", "_").replace(":", "_")
     cmds = [
-        f'netsh advfirewall firewall delete rule '
-        f'name="JARVIS_BLOCK_{safe_ip}_OUT"',
-        f'netsh advfirewall firewall delete rule '
-        f'name="JARVIS_BLOCK_{safe_ip}_IN"',
+        ["netsh", "advfirewall", "firewall", "delete", "rule",
+         f"name=JARVIS_BLOCK_{safe_ip}_OUT"],
+        ["netsh", "advfirewall", "firewall", "delete", "rule",
+         f"name=JARVIS_BLOCK_{safe_ip}_IN"],
     ]
     try:
         for cmd in cmds:
-            subprocess.run(cmd, shell=True, timeout=10)
+            subprocess.run(cmd, shell=False, timeout=10)
         _BLOCKED_IPS.discard(ip)
         _log_action("undo_isolation", ip, True)
         return True
@@ -98,14 +116,51 @@ async def undo_isolation(ip: str) -> bool:
         return False
 
 
+# ── F6: HITL approval gate ────────────────────────────────────────────────────
+# Punisher offensive / state-changing responses (firewall isolation) must never
+# auto-fire on severity alone. An out-of-band operator approver (NATO / console,
+# wired via set_approval_hook — e.g. ToolExecutor._challenge) must grant each
+# response. Until one is wired, the gate fails CLOSED: detection / alerting still
+# happen, but no isolation executes.
+_APPROVAL_HOOK = None
+
+
+def set_approval_hook(fn) -> None:
+    """Wire an out-of-band approver: async fn(incident, targets) -> bool."""
+    global _APPROVAL_HOOK
+    _APPROVAL_HOOK = fn
+
+
+async def _request_approval(approval_fn, incident: dict, targets: list, broadcast_fn) -> bool:
+    """Audit + broadcast an approval request, then await the operator decision.
+    Fails closed (returns False) when no approver is wired or the approver errors."""
+    approver = approval_fn or _APPROVAL_HOOK
+    _log_action("approval_requested", ",".join(targets), True,
+                f"severity={incident.get('severity_score', 0)}")
+    await broadcast_fn({
+        "type":      "punisher_approval_required",
+        "targets":   targets,
+        "severity":  incident.get("severity_score", 0),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    if approver is None:
+        return False  # fail-closed: no operator approver wired
+    try:
+        return bool(await approver(incident, targets))
+    except Exception as e:
+        _log_action("approval_error", ",".join(targets), False, str(e)[:80])
+        return False
+
+
 async def punisher_response(
     incident: dict,
     tts,
     broadcast_fn,
+    approval_fn=None,
 ) -> None:
     """
-    Auto-execute defensive actions for high-severity incident.
-    Called from correlator when severity >= _AUTO_THRESHOLD.
+    Execute defensive actions for a high-severity incident, gated by explicit
+    operator approval. Called from correlator when severity >= _AUTO_THRESHOLD.
     """
     if not _PUNISHER_ENABLED:
         return
@@ -114,13 +169,13 @@ async def punisher_response(
     if severity < _AUTO_THRESHOLD:
         return
 
+    from core.mitigation import _is_public_ip
+
     hosts = list(incident.get("involved_hosts", set()))
-    hostile_ips = [
-        str(h) for h in hosts
-        if str(h) not in ("127.0.0.1", "::1", "localhost")
-        and not str(h).startswith("192.168.1.")
-        # Don't block local lab IPs automatically
-    ]
+    # Only ever isolate valid, public (non-RFC1918, non-loopback) IPs —
+    # never the local lab/home network, and never anything that failed
+    # to parse as an IP (which would otherwise reach isolate_ip() below).
+    hostile_ips = [str(h) for h in hosts if _is_public_ip(str(h))]
 
     if not hostile_ips:
         logger.debug("PUNISHER: no external IPs to block")
@@ -137,9 +192,25 @@ async def punisher_response(
         asyncio.create_task(tts.speak_async(
             f"Punisher mode activated. "
             f"Severity {severity:.0f}. "
-            f"Isolating {len(hostile_ips)} hostile endpoint"
-            f"{'s' if len(hostile_ips) > 1 else ''}."
+            f"{len(hostile_ips)} hostile endpoint"
+            f"{'s' if len(hostile_ips) > 1 else ''} detected. "
+            "Awaiting operator approval."
         ))
+
+    # F6 — explicit HITL/NATO gate: severity >= 9.0 escalates urgency but must
+    # NOT bypass operator approval before any offensive/state-changing response.
+    granted = await _request_approval(approval_fn, incident, hostile_ips, broadcast_fn)
+    if not granted:
+        _log_action("approval_denied", ",".join(hostile_ips), False,
+                    "operator declined or no approver wired")
+        await broadcast_fn({
+            "type":      "punisher_denied",
+            "targets":   hostile_ips,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.warning("PUNISHER: response NOT executed — approval not granted")
+        return
+    _log_action("approval_granted", ",".join(hostile_ips), True)
 
     results = []
     for ip in hostile_ips[:5]:  # cap at 5 IPs per incident
@@ -147,6 +218,7 @@ async def punisher_response(
             ip,
             reason=incident.get("kill_chain_phase", "")
         )
+        _log_action("action_executed", ip, success)
         results.append((ip, success))
         await asyncio.sleep(0.5)
 

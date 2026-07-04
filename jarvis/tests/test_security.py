@@ -200,3 +200,119 @@ def test_analyze_ignores_benign_process(monkeypatch):
     kt._analyze({"EventID": 1, "ImageName": r"C:\Windows\System32\notepad.exe",
                  "CommandLine": "notepad", "ProcessId": "99", "ParentProcessId": "4"})
     assert not emitted, "benign system-path process should not alert"
+
+
+# ─────────── active-defense command-injection hardening (post-review) ──────────
+# core.punisher / core.network_quarantine / core.vss_vaccine build OS commands
+# from attacker-influenced telemetry (incident IPs, shadow-copy IDs) and
+# auto-execute with zero human confirmation above a severity threshold. These
+# tests lock down the two guarantees that matter: (1) malformed input is
+# rejected before it ever reaches a subprocess, and (2) shell=True — which
+# would let injected metacharacters be reinterpreted as command syntax —
+# never comes back into these files.
+
+import re as _re
+
+import core.network_quarantine as nq
+import core.punisher as punisher
+import core.vss_vaccine as vss
+from core.rbac_manager import ActorContext, ClearanceLevel
+
+_INJECTION_PAYLOADS = [
+    "1.1.1.1 & calc.exe",
+    "1.1.1.1; rm -rf /",
+    '1.1.1.1" & whoami & "',
+    "8.8.8.8`nRemove-Item C:\\",
+    "not-an-ip-at-all",
+    "",
+]
+
+_SHADOW_ID_INJECTION_PAYLOADS = [
+    "'} ; Remove-Item C:\\ -Recurse -Force ; if ($true) { Write-Output '",
+    "not-a-guid",
+    "",
+]
+
+
+@pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+def test_punisher_rejects_malformed_ip_literals(payload):
+    assert punisher._valid_ip(payload) is False
+
+
+@pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+def test_network_quarantine_rejects_malformed_ip_literals(payload):
+    assert nq._valid_ip(payload) is False
+
+
+def test_valid_ip_literals_are_accepted():
+    assert punisher._valid_ip("8.8.8.8") is True
+    assert nq._valid_ip("2001:4860:4860::8888") is True
+
+
+@pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+def test_punisher_isolate_ip_never_shells_out_on_bad_input(payload, monkeypatch):
+    calls = []
+    monkeypatch.setattr(punisher.subprocess, "run",
+                        lambda *a, **kw: calls.append((a, kw)))
+    ok = asyncio.run(punisher.isolate_ip(payload, reason="test"))
+    assert ok is False
+    assert not calls, "malformed ip must be rejected before any subprocess call"
+
+
+@pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+def test_network_quarantine_release_never_shells_out_on_bad_input(payload, monkeypatch):
+    calls = []
+    monkeypatch.setattr(nq, "_run", lambda cmd: calls.append(cmd) or (0, ""))
+    res = asyncio.run(nq.release(
+        payload, actor=ActorContext(identity="test", clearance=ClearanceLevel.L3_Hunter)
+    ))
+    assert res["released"] is False
+    assert not calls, "malformed ip must be rejected before any subprocess call"
+
+
+def test_network_quarantine_rejects_malformed_ip_even_when_admin(monkeypatch):
+    """quarantine()'s admin gate runs first — force it True so the ip-validation
+    branch underneath is actually exercised regardless of the host running
+    the test suite."""
+    monkeypatch.setattr(nq, "_IS_WINDOWS", True)
+    monkeypatch.setattr(nq, "_is_admin", lambda: True)
+    calls = []
+    monkeypatch.setattr(nq, "_run", lambda cmd: calls.append(cmd) or (0, ""))
+    res = asyncio.run(nq.quarantine(
+        "1.1.1.1 & calc.exe",
+        actor=ActorContext(identity="test", clearance=ClearanceLevel.L3_Hunter),
+    ))
+    assert res["skipped"] == "invalid IP literal"
+    assert not calls
+
+
+@pytest.mark.parametrize("payload", _SHADOW_ID_INJECTION_PAYLOADS)
+def test_vss_vaccine_rejects_malformed_shadow_ids(payload):
+    assert vss._valid_shadow_id(payload) is False
+
+
+def test_vss_vaccine_accepts_real_shadow_id_shape():
+    assert vss._valid_shadow_id("{3D6BB79C-1234-4A2B-9C3D-1234567890AB}") is True
+
+
+@pytest.mark.parametrize("payload", _SHADOW_ID_INJECTION_PAYLOADS)
+def test_vss_vaccine_delete_never_shells_out_on_bad_shadow_id(payload, monkeypatch):
+    calls = []
+    monkeypatch.setattr(vss, "_run_ps", lambda *a, **kw: calls.append((a, kw)))
+    ok = vss._delete_blocking(payload)
+    assert ok is False
+    assert not calls, "malformed shadow_id must be rejected before any subprocess call"
+
+
+@pytest.mark.parametrize("mod_path", [
+    "core/punisher.py",
+    "core/network_quarantine.py",
+    "core/vss_vaccine.py",
+])
+def test_active_defense_modules_never_use_shell_true(mod_path):
+    """Regression guard: these modules auto-execute OS commands built from
+    attacker-influenced telemetry with zero HITL above a severity threshold.
+    shell=True would let injected metacharacters be reinterpreted as command
+    syntax — it must never come back."""
+    src = (Path(__file__).resolve().parent.parent / mod_path).read_text(encoding="utf-8")
+    assert not _re.search(r"shell\s*=\s*True", src), f"{mod_path} reintroduced shell=True"

@@ -92,9 +92,20 @@ def _is_protected(ip: str) -> bool:
     return False
 
 
-def _run(cmd: str):
+def _valid_ip(ip: str) -> bool:
     try:
-        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def _run(cmd: list[str]):
+    """argv-vector execution — no shell, so ip/rule-name content can never be
+    reinterpreted as command syntax. Callers must validate ip with
+    _valid_ip() before building cmd (defense in depth on top of that)."""
+    try:
+        p = subprocess.run(cmd, shell=False, capture_output=True, text=True, timeout=15)
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as e:
         return 1, str(e)
@@ -153,6 +164,8 @@ async def quarantine(ip: str, *, reason: str = "manual", correlator=None) -> dic
         res["skipped"] = "disabled"; _audit(res); return res
     if not (_IS_WINDOWS and _is_admin()):
         res["skipped"] = "no admin / unsupported"; _audit(res); return res
+    if not _valid_ip(ip):
+        res["skipped"] = "invalid IP literal"; _audit(res); return res
     if _is_protected(ip):
         res["skipped"] = "protected infra/self IP"; _audit(res); return res
 
@@ -164,10 +177,10 @@ async def quarantine(ip: str, *, reason: str = "manual", correlator=None) -> dic
         loop = asyncio.get_running_loop()
         ok = True
         for c in (
-            f'netsh advfirewall firewall add rule name="{_RULE_PREFIX}-{ip}-IN" '
-            f'dir=in action=block remoteip={ip}',
-            f'netsh advfirewall firewall add rule name="{_RULE_PREFIX}-{ip}-OUT" '
-            f'dir=out action=block remoteip={ip}',
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={_RULE_PREFIX}-{ip}-IN", "dir=in", "action=block", f"remoteip={ip}"],
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={_RULE_PREFIX}-{ip}-OUT", "dir=out", "action=block", f"remoteip={ip}"],
         ):
             rc, out = await loop.run_in_executor(None, _run, c)
             if rc != 0:
@@ -189,11 +202,15 @@ async def quarantine(ip: str, *, reason: str = "manual", correlator=None) -> dic
 @requires_clearance(ClearanceLevel.L3_Hunter)
 async def release(ip: str) -> dict:
     res = {"ip": ip, "released": False}
+    if not _valid_ip(ip):
+        res["error"] = "invalid IP literal"; return res
     if not (_IS_WINDOWS and _is_admin()):
         return res
     loop = asyncio.get_running_loop()
-    for c in (f'netsh advfirewall firewall delete rule name="{_RULE_PREFIX}-{ip}-IN"',
-              f'netsh advfirewall firewall delete rule name="{_RULE_PREFIX}-{ip}-OUT"'):
+    for c in (
+        ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={_RULE_PREFIX}-{ip}-IN"],
+        ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={_RULE_PREFIX}-{ip}-OUT"],
+    ):
         await loop.run_in_executor(None, _run, c)
     _active.pop(ip, None)
     res["released"] = True

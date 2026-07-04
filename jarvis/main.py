@@ -697,6 +697,24 @@ async def _main_async() -> None:
     hw_profile = detect_hardware()
     set_cached_profile(hw_profile)
 
+    # v61.1: surface the GPU/VRAM-tier model recommendation (LOW/MID/HIGH/
+    # EXTREME) alongside the TDP-tier profile above. Advisory only — it does
+    # NOT change routing, it just tells the operator what this host could run
+    # if they opted into bigger role models via env override. Previously this
+    # only existed in scripts/model_doctor.py; surfacing it at boot means a
+    # beefier desktop is told it's being undersold by the default 7B/14B
+    # models, same as the TDP profile already tells a weak laptop to step down.
+    try:
+        from core.hardware_model_profile import detect_model_profile
+        model_profile = detect_model_profile()
+        logger.info(
+            f"HARDWARE: GPU tier → {model_profile.tier.value} "
+            f"(GPU {model_profile.gpu_vendor} {model_profile.gpu_vram_gb}GB VRAM) — "
+            f"run scripts/model_doctor.py for the full per-role recommendation"
+        )
+    except Exception as e:
+        logger.debug(f"HARDWARE: GPU-tier probe skipped: {e}")
+
     # v30.0: dependency guardian — start Ollama, install missing packages,
     # check disk space, install jq. Concurrent — won't block boot.
     dep_results = await ensure_all(hw_profile)
@@ -777,6 +795,13 @@ async def _main_async() -> None:
     # blanket task-cancellation step. Closing in-task avoids the anyio
     # "exit cancel scope in a different task" error on Ctrl+C.
     register_shutdown_callback(llm.aclose)
+    # v61.1: TTS.stop() was never wired into shutdown — its worker lived in a
+    # dedicated ThreadPoolExecutor that the blanket task-cancellation step
+    # (run_graceful_shutdown step 4) cannot interrupt mid-utterance, so the
+    # process hung 80s+ waiting on a non-daemon 'tts-worker' thread that
+    # nobody had asked to stop. stop() sends the queue sentinel and shuts
+    # down the executor cleanly instead of abandoning it to cancellation.
+    register_shutdown_callback(tts.stop)
 
     # v35.0: wire tts reference into STT listener for fast interrupt path
     try:
@@ -1795,6 +1820,20 @@ async def _main_async() -> None:
         else:
             await _loop_text(llm, tts, settings.assistant_name)
     finally:
+        # v61.1: absolute hard-kill watchdog, independent of the event loop.
+        # asyncio.wait_for()'s timeout is NOT a true ceiling on a coroutine
+        # blocked awaiting a run_in_executor() future once the underlying
+        # thread has started (e.g. pyttsx3.runAndWait() wedged on a COM/audio
+        # issue) — cancellation is requested but wait_for itself blocks
+        # re-awaiting that same never-completing future, so the internal
+        # 5s/10s bounds in run_graceful_shutdown() can be silently defeated.
+        # This threading.Timer runs on its own OS thread and calls os._exit()
+        # directly — it owes nothing to asyncio and cannot be wedged by it.
+        import threading as _threading
+        _hard_kill_timer = _threading.Timer(30.0, lambda: os._exit(1))
+        _hard_kill_timer.daemon = True
+        _hard_kill_timer.start()
+
         # v30.0: graceful shutdown sequence — flush ChromaDB, save session,
         # cancel tasks, write audit log.
         # v46.0: broad except — MCP/anyio cancel scope errors on shutdown
@@ -1816,6 +1855,8 @@ async def _main_async() -> None:
         except (RuntimeError, asyncio.CancelledError, Exception):
             pass  # MCP/anyio cancel scope error on shutdown is cosmetic
 
+        _hard_kill_timer.cancel()
+
 
 def main() -> None:
     try:
@@ -1831,6 +1872,25 @@ def main() -> None:
         )
         sys.exit(1)
     asyncio.run(_main_async())
+
+    # v61.1: force-exit after graceful async shutdown. The many v3x-v6x
+    # sensor/monitor subsystems spawn raw non-daemon threading.Thread
+    # workers (ETW, sensor mesh, kernel telemetry, ...) that live outside
+    # asyncio.all_tasks() and don't respond to cancellation — CPython's
+    # interpreter-exit sequence blocks joining every non-daemon thread, which
+    # measured 80-170s in practice even though run_graceful_shutdown() above
+    # (DB flush, audit log, bounded task cancellation) had already finished
+    # in ~10-30s. All meaningful cleanup is done by this point, so force-exit
+    # rather than hang the terminal on threads with nothing left to do.
+    import threading
+    lingering = [t.name for t in threading.enumerate()
+                if t is not threading.main_thread() and not t.daemon]
+    if lingering:
+        logger.warning(
+            f"SHUTDOWN: {len(lingering)} non-daemon thread(s) still alive "
+            f"after graceful shutdown — forcing exit: {lingering}"
+        )
+    os._exit(0)
 
 
 if __name__ == "__main__":

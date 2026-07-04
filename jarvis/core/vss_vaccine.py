@@ -15,7 +15,7 @@ network_quarantine isolates via correlator). Watchdog: dormant if non-Windows or
 not elevated.
 """
 from __future__ import annotations
-import asyncio, json, logging, os, subprocess, time
+import asyncio, json, logging, os, re, subprocess, time
 from pathlib import Path
 
 from core.rbac_manager import ClearanceLevel, requires_clearance
@@ -30,6 +30,14 @@ _LOG_PATH = Path("logs/vss_vaccine.jsonl")
 _NO_WINDOW = 0x08000000 if _IS_WINDOWS else 0
 _TRIGGER = {"decoy_tamper", "data_encrypted", "data_destruction", "data_staging"}
 _correlator = None
+# Win32_ShadowCopy IDs are WMI GUIDs, e.g. {3D6BB79C-...}. Reject anything
+# else before it reaches a PowerShell -Command string — these IDs normally
+# come from our own WMI calls, but validating defensively costs nothing.
+_SHADOW_ID_RE = re.compile(r"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$")
+
+
+def _valid_shadow_id(sid) -> bool:
+    return isinstance(sid, str) and bool(_SHADOW_ID_RE.match(sid))
 
 
 def _is_admin():
@@ -89,6 +97,9 @@ def _create_blocking(volume):
 
 
 def _delete_blocking(shadow_id):
+    if not _valid_shadow_id(shadow_id):
+        logger.warning("vss: refusing delete — malformed shadow_id: %r", shadow_id)
+        return False
     cmd = (f"$s = Get-WmiObject -Class Win32_ShadowCopy | Where-Object {{ $_.ID -eq '{shadow_id}' }}; "
            "if ($s) {{ $s.Delete() }}")
     r = _run_ps(cmd, timeout=120)
@@ -97,7 +108,7 @@ def _delete_blocking(shadow_id):
 
 def _ensure_storage():
     try:
-        subprocess.run(f"vssadmin list shadowstorage /for={_VOLUME}", shell=True,
+        subprocess.run(["vssadmin", "list", "shadowstorage", f"/for={_VOLUME}"], shell=False,
                        capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW)
     except Exception:
         pass
@@ -137,6 +148,9 @@ async def list_snapshots():
 async def restore_to(shadow_id: str):
     """OPERATOR-ONLY. Mounts the shadow read-only at C:\\jarvis_shadow_mount so the
     operator restores selectively. Not auto-called by the module."""
+    if not _valid_shadow_id(shadow_id):
+        logger.warning("vss: refusing restore — malformed shadow_id: %r", shadow_id)
+        return False
     cmd = (f"$s = Get-WmiObject -Class Win32_ShadowCopy | Where-Object {{ $_.ID -eq '{shadow_id}' }}; "
            "if (-not $s) { Write-Error 'not found'; exit 1 }; "
            "$mount = 'C:\\jarvis_shadow_mount'; "

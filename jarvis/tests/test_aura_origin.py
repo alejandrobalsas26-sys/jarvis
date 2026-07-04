@@ -83,6 +83,10 @@ class _FakeWS:
 
     def __init__(self, origin):
         self.headers = {} if origin is None else {"origin": origin}
+        # Carry a valid session token so these cases isolate the Origin check;
+        # rejected-origin cases still reject at the Origin gate (before token).
+        self.cookies = {"aura_token": server._AURA_WS_TOKEN}
+        self.query_params: dict = {}
         self.accepted = False
         self.closed_code = None
         self.sent: list = []

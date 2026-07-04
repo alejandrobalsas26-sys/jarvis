@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import re
+import secrets
 import psutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -118,6 +119,54 @@ def _origin_allowed(origin: str | None) -> bool:
         return candidate in set(settings.get_aura_allowed_origins())
     except Exception:
         return False
+
+
+# ── WebSocket per-session token auth ─────────────────────────────────────────
+
+def _resolve_ws_token() -> str:
+    """Session token for the /ws handshake.
+
+    Uses the operator-configured token (settings.aura_ws_token) when set — a
+    trusted local-config value — otherwise a per-process random token. Never
+    sourced from LLM / tool input.
+    """
+    try:
+        from core.config import settings
+        configured = (settings.aura_ws_token or "").strip()
+        if configured:
+            return configured
+    except Exception:
+        pass
+    return secrets.token_urlsafe(32)
+
+
+_AURA_WS_TOKEN: str = _resolve_ws_token()
+
+
+def get_ws_token() -> str:
+    """Return the current session token (for the local HUD / trusted callers)."""
+    return _AURA_WS_TOKEN
+
+
+def _extract_ws_token(ws) -> "str | None":
+    """Read the session token from the handshake cookie, then the query string."""
+    try:
+        tok = ws.cookies.get("aura_token")
+        if tok:
+            return tok
+    except Exception:
+        pass
+    try:
+        return ws.query_params.get("token")
+    except Exception:
+        return None
+
+
+def _ws_token_valid(token: "str | None") -> bool:
+    """Constant-time compare against the session token; empty/absent → invalid."""
+    if not token or not _AURA_WS_TOKEN:
+        return False
+    return secrets.compare_digest(str(token), _AURA_WS_TOKEN)
 
 
 class BroadcastManager:
@@ -405,44 +454,32 @@ async def _handle_hud_command(
         })
         return
 
-    # ── High-risk: require NATO OTP ──────────────────────────────────────────
+    # ── High-risk: out-of-band operator approval (F1b) ────────────────────────
+    # NEVER accept approval over the same WebSocket that requested the dangerous
+    # action. Route the challenge to the executor's out-of-band HITL/NATO gate
+    # (operator console / voice). If no such channel exists, refuse and require
+    # out-of-band approval rather than trusting this socket.
     if cmd in _HIGH_RISK_HUD:
-        otp = None
-        if executor is not None and hasattr(executor, "_te") and hasattr(executor._te, "auth"):
-            try:
-                otp = executor._te.auth.generate_otp()
-            except Exception:
-                pass
-        if otp:
-            fut: asyncio.Future = asyncio.get_event_loop().create_future()
-            _pending_ws_responses[id(ws)] = fut
+        challenge = getattr(executor, "_challenge", None)
+        if not callable(challenge):
             await ws.send_json({
-                "type":       "hud_otp_challenge",
+                "type":       "hud_approval_required_out_of_band",
                 "request_id": req_id,
-                "otp":        otp.phonetic() if hasattr(otp, "phonetic") else str(otp),
-                "ttl":        30,
+                "cmd":        sanitize_for_hud(cmd),
+                "error":      "approval_required_out_of_band",
             })
-            try:
-                response = await asyncio.wait_for(fut, timeout=30.0)
-                spoken   = response.get("otp_response", "")
-                ok, reason = executor._te.auth.verify_otp(spoken)
-                if not ok:
-                    await ws.send_json({
-                        "type": "hud_command_error", "request_id": req_id,
-                        "error": f"OTP failed: {reason}",
-                    })
-                    return
-            except asyncio.TimeoutError:
-                _pending_ws_responses.pop(id(ws), None)
-                await ws.send_json({
-                    "type": "hud_command_error", "request_id": req_id,
-                    "error": "OTP challenge timed out",
-                })
-                return
-        else:
+            return
+        await ws.send_json({
+            "type":       "hud_approval_pending_out_of_band",
+            "request_id": req_id,
+            "cmd":        sanitize_for_hud(cmd),
+            "message":    "High-risk command requires operator approval at the JARVIS console.",
+        })
+        granted, _audit = await challenge(f"hud:{cmd}", sanitize_for_hud(str(args)[:120]))
+        if not granted:
             await ws.send_json({
                 "type": "hud_command_error", "request_id": req_id,
-                "error": "OTP subsystem unavailable for high-risk command",
+                "error": "High-risk command denied (out-of-band approval).",
             })
             return
 
@@ -490,6 +527,13 @@ async def _ws_endpoint(ws: WebSocket) -> None:
         logger.warning(f"AURA: rejected /ws handshake — disallowed Origin: {origin!r}")
         await ws.close(code=1008)  # 1008 = policy violation
         return
+    # Per-session token auth: the HUD receives an HttpOnly cookie when it loads
+    # the page (set by the index route); browsers replay it on the same-origin
+    # handshake. Non-browser clients may pass ?token=. Missing/invalid → reject.
+    if not _ws_token_valid(_extract_ws_token(ws)):
+        logger.warning("AURA: rejected /ws handshake — missing/invalid session token")
+        await ws.close(code=1008)
+        return
     await manager.connect(ws)
     try:
         await ws.send_text(json.dumps({
@@ -527,14 +571,26 @@ async def _ws_endpoint(ws: WebSocket) -> None:
 
 # ── Static UI routes ──────────────────────────────────────────────────────────
 
+def _hud_response() -> FileResponse:
+    """Serve the HUD and hand the browser the /ws session token as an HttpOnly,
+    SameSite=strict cookie — replayed automatically on the same-origin handshake
+    and unreadable to page JavaScript (XSS cannot exfiltrate it)."""
+    resp = FileResponse(_INDEX_PATH)
+    resp.set_cookie(
+        "aura_token", _AURA_WS_TOKEN,
+        httponly=True, samesite="strict", path="/",
+    )
+    return resp
+
+
 @app.get("/")
 async def _index() -> FileResponse:
-    return FileResponse(_INDEX_PATH)
+    return _hud_response()
 
 
 @app.get("/ui")
 async def _ui() -> FileResponse:
-    return FileResponse(_INDEX_PATH)
+    return _hud_response()
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

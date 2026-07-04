@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # here as a comma-separated list of exact Origin values (scheme://host[:port]),
     # e.g. "http://hud.lab:8765". Operator config only — never set from LLM input.
     aura_allowed_origins: str = ""
+    # Optional fixed per-session token for the AURA /ws handshake. When empty,
+    # the server generates a random per-process token at startup. Operator config
+    # only — never sourced from LLM/tool input.
+    aura_ws_token: str = ""
 
     # ── Trusted lab mode (operator-only; NEVER set from LLM/tool input) ───────
     # When True, the executor honors local-config security overrides and allows

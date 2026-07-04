@@ -74,6 +74,17 @@ COMMAND_ALLOWLIST: frozenset[str] = frozenset({
     "echo", "ssh", "scp", "openssl",
 })
 
+# Lab-only binaries: offensive / heavier tooling permitted through
+# RedTeamShellExecutor ONLY when trusted-lab mode is explicitly enabled, and
+# always at FULL_NATO (they are never in COMMAND_ALLOWLIST, so _classify marks
+# them unlisted_escalation → FULL_NATO). This is an explicit allowlist —
+# trusted-lab never means "run any binary".
+_LAB_COMMAND_ALLOWLIST: frozenset[str] = frozenset({
+    "masscan", "nikto", "hydra", "sqlmap", "gobuster", "ffuf", "dirb",
+    "msfconsole", "msfvenom", "sliver", "tcpdump", "tshark",
+    "hashcat", "john", "responder", "crackmapexec",
+})
+
 # ── RedTeamShellExecutor: hard-block patterns (no OTP override) ───────────────
 _CRITICAL_BLOCK: list[str] = [
     "rm -rf /",
@@ -376,9 +387,15 @@ def _validate_network_target(target: str) -> str:
     raise ValueError("Target inválido. Usa una IP, rango CIDR o hostname válido.")
 
 
-def _validate_command(command: str) -> tuple[bool, str, list[str]]:
+def _validate_command(
+    command: str, extra_allowlist: frozenset[str] = frozenset()
+) -> tuple[bool, str, list[str]]:
     """
     Valida y parsea un comando contra la allowlist (Layers 1 & 2).
+
+    ``extra_allowlist`` adds binaries to the base COMMAND_ALLOWLIST for this call
+    only (used for explicit lab binaries under trusted-lab mode). It defaults to
+    empty, so normal callers keep the exact base-allowlist behavior.
 
     Returns:
         (is_valid, error_message, argv)
@@ -408,12 +425,13 @@ def _validate_command(command: str) -> tuple[bool, str, list[str]]:
     # Layer 1c: Normalizar el nombre del ejecutable (quitar ruta y .exe en Windows)
     executable = Path(argv[0]).name.lower().removesuffix(".exe")
 
-    # Layer 1d: Verificar contra la allowlist
-    if executable not in COMMAND_ALLOWLIST:
+    # Layer 1d: Verificar contra la allowlist (+ optional lab allowlist)
+    allowed = COMMAND_ALLOWLIST | extra_allowlist
+    if executable not in allowed:
         return (
             False,
             f"Ejecutable '{executable}' no está en la allowlist.\n"
-            f"Permitidos: {', '.join(sorted(COMMAND_ALLOWLIST))}",
+            f"Permitidos: {', '.join(sorted(allowed))}",
             [],
         )
 
@@ -2315,6 +2333,18 @@ class RedTeamShellExecutor:
             for pattern in _CRITICAL_BLOCK:
                 if pattern in cmd_low:
                     raise ValueError(f"[HARD BLOCK] OS-destructive pattern: '{pattern}'")
+
+            # F3 — strict allowlist validation (same pipeline as run_shell_command).
+            # Off-allowlist binaries, shell metacharacters, encoded/inline-exec
+            # flags and system-path arguments are REFUSED here, BEFORE any trust
+            # scoring — so a high trust score (or a denylist gap like the
+            # double-space "rm  -rf  /") can never authorize an unlisted binary.
+            # Lab-only binaries pass solely via the explicit lab allowlist under
+            # trusted-lab mode; _classify then marks them unlisted → FULL_NATO.
+            extra = _LAB_COMMAND_ALLOWLIST if _trusted_lab_enabled() else frozenset()
+            ok, verr, _ = _validate_command(command, extra)
+            if not ok:
+                raise ValueError(f"[BLOCKED] {verr}")
 
             # Layer 1 — classify binary
             binary_status, _ = self._classify(command, yara_hits)
