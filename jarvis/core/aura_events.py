@@ -94,6 +94,20 @@ class ModeEvent(AuraEvent):
     mode: str = "passive"
 
 
+@dataclass
+class AssistantResponseEvent(AuraEvent):
+    """The assistant's final natural-language answer for the turn — the HUD's
+    conversational-content leg (V62.0 Phase 5). Previously the HUD only ever
+    received routing/verifier/memory *metadata* about a turn, never the
+    answer text itself. ``verified`` mirrors whether the post-stream verifier
+    (see VerifierStatusEvent) left the draft unchanged — True when
+    verification passed or didn't run (trivial/low-risk turn)."""
+    type: ClassVar[str] = "assistant_response"
+    text: str = ""
+    verified: bool = True
+    model_role: str = "fast"
+
+
 # Stable registry of the event types the HUD understands.
 EVENT_TYPES: tuple[str, ...] = (
     ModelDecisionEvent.type,
@@ -102,4 +116,5 @@ EVENT_TYPES: tuple[str, ...] = (
     ToolAuthPendingEvent.type,
     BackgroundTaskEvent.type,
     ModeEvent.type,
+    AssistantResponseEvent.type,
 )

@@ -1441,6 +1441,36 @@ class LLM:
         except Exception as e:
             logger.debug(f"MEMORY: persist policy error: {e}")
 
+    async def _maybe_broadcast_response(
+        self, final_answer: str, draft_answer: str, model_decision: ModelDecision | None
+    ) -> None:
+        """V62.0 Phase 5 — response-surface foundation.
+
+        Broadcasts the assistant's actual answer text to the AURA HUD.
+        Previously the HUD only ever received routing/verifier/memory
+        *metadata* about a turn, never the conversational content itself.
+        Fully best-effort and fail-open — a HUD/AURA outage never affects the
+        conversation. ``verified`` mirrors whether the post-stream verifier
+        left the draft unchanged (True when it passed or didn't run).
+        """
+        try:
+            from core.aura_events import AssistantResponseEvent
+            from tools.executor import _aura_broadcast
+            resp_text = final_answer
+            if self._context_mgr is not None:
+                try:
+                    resp_text = self._context_mgr.redact_secrets(resp_text)
+                except Exception:
+                    pass
+            role = getattr(model_decision, "role", None)
+            await _aura_broadcast(AssistantResponseEvent(
+                text=resp_text,
+                verified=(final_answer == draft_answer),
+                model_role=role.value if role is not None else "fast",
+            ).to_dict())
+        except Exception as e:
+            logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
+
     async def chat_stream(self, user_message: str) -> AsyncGenerator[str, None]:
         """
         Genera tokens del LLM en tiempo real via Ollama.
@@ -1726,6 +1756,10 @@ class LLM:
                     save_session(self.history)
                 except Exception:
                     pass
+
+                # V62.0 Phase 5 — response-surface foundation (best-effort).
+                await self._maybe_broadcast_response(final_answer, full_text, decision)
+
                 unregister_operation("llm_stream")  # v35.0
                 break
 

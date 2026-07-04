@@ -192,6 +192,74 @@ class TestMemoryPolicy:
         assert gate is True
 
 
+# ── Phase 5 — response-surface foundation: assistant_response HUD broadcast ──
+class TestResponseSurfaceBroadcast:
+    def test_broadcasts_assistant_response_event(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        decision = route("tell me a joke")
+        asyncio.run(llm._maybe_broadcast_response("Hi there.", "Hi there.", decision))
+
+        assert captured["type"] == "assistant_response"
+        assert captured["text"] == "Hi there."
+        assert captured["verified"] is True
+        assert captured["model_role"] == decision.role.value
+
+    def test_verified_false_when_verifier_notice_was_appended(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        draft = "The answer is 42."
+        final = draft + "\n\n[VERIFICATION] The verifier flagged: unspecified concern."
+        asyncio.run(llm._maybe_broadcast_response(final, draft, route("simple question")))
+
+        assert captured["verified"] is False
+        assert captured["text"].startswith(draft)
+
+    def test_redacts_secrets_before_broadcasting(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        secret_answer = "Sure, here's the key: api_key = sk-ABCDEFGH12345678ZXCV"
+        asyncio.run(llm._maybe_broadcast_response(secret_answer, secret_answer, None))
+
+        assert "sk-ABCDEFGH12345678ZXCV" not in captured["text"]
+
+    def test_broadcast_failure_never_raises(self, llm, monkeypatch):
+        async def _raising_broadcast(event):
+            raise RuntimeError("AURA down")
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _raising_broadcast)
+
+        # Must not raise even though the broadcast itself fails.
+        asyncio.run(llm._maybe_broadcast_response("text", "text", None))
+
+    def test_missing_model_decision_defaults_role(self, llm, monkeypatch):
+        captured = {}
+
+        async def _fake_broadcast(event):
+            captured.update(event)
+
+        monkeypatch.setattr("tools.executor._aura_broadcast", _fake_broadcast)
+
+        asyncio.run(llm._maybe_broadcast_response("ok", "ok", None))
+
+        assert captured["model_role"] == "fast"
+
+
 # ── Phase 5 — tool output trust labels / prompt-injection defense ────────────
 class TestTrustLabels:
     def test_web_output_labeled_untrusted(self, llm):
