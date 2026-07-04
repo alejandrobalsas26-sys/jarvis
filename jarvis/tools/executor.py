@@ -40,6 +40,14 @@ import whois
 import dns.resolver
 
 from core.ironman_mode import SessionConsent, default_consent
+from core.risk_classes import (
+    classify_tool,
+    requires_hitl,
+    requires_trusted_lab,
+    rollback_hint,
+    binary_risk_class,
+    verify_consistent_with_legacy_sets,
+)
 
 # ── NATO Vocal MFA ───────────────────────────────────────────────────────────
 _NATO_ALPHABET: tuple[str, ...] = (
@@ -196,6 +204,13 @@ _ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({
 assert _ALWAYS_HITL_TOOLS.isdisjoint(_HITL_EXEMPT_TOOLS), (
     "SECURITY: an always-HITL tool is present in _HITL_EXEMPT_TOOLS"
 )
+
+# V62.0 Phase 7 — the risk-class taxonomy (core/risk_classes.py) is now the
+# live gating decision in aexecute()/aexecute_mcp() below. This assertion
+# guarantees it can never silently diverge from the two legacy sets above
+# (which 5 other test files assert on directly) — a mismatch here is a
+# security bug, caught at import time, not at runtime.
+verify_consistent_with_legacy_sets(_HITL_EXEMPT_TOOLS, _ALWAYS_HITL_TOOLS)
 
 # ── MCP gateway ────────────────────────────────────────────────────────────
 # Tools proxied from an external MCP server (e.g. the packet_tracer_bridge
@@ -782,14 +797,36 @@ class ToolExecutor:
             )
             return guardrail_block
 
+        # V62.0 Phase 7 — risk-class taxonomy drives the actual gating decision.
+        # classify_tool() is built to match _ALWAYS_HITL_TOOLS/_HITL_EXEMPT_TOOLS
+        # exactly for every known tool (verified at import time above); this is
+        # not a parallel decorative check, it IS the check now.
+        risk_class = classify_tool(tool_name)
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:lab_only", "blocked",
+                "LAB_ONLY tool refused — JARVIS_TRUSTED_LAB is not enabled",
+            )
+            return {
+                "error": (
+                    f"Tool '{tool_name}' es LAB_ONLY — requiere "
+                    "JARVIS_TRUSTED_LAB=true (y aun así, autorización HITL)."
+                )
+            }
+
         auth_audit = "hitl_exempt"
-        must_challenge = (
-            tool_name in _ALWAYS_HITL_TOOLS or tool_name not in _HITL_EXEMPT_TOOLS
-        )
+        must_challenge = requires_hitl(risk_class)
         if must_challenge:
             preview = str(tool_input)
             if len(preview) > 200:
                 preview = preview[:200] + "…"
+            from core.aura_events import ToolAuthPendingEvent
+            await _aura_broadcast(ToolAuthPendingEvent(
+                tool=tool_name,
+                risk=risk_class.value,
+                preview=preview,
+                rollback_hint=rollback_hint(risk_class, tool_name),
+            ).to_dict())
             granted, auth_audit = await self._challenge(tool_name, preview)
             if not granted:
                 logger.warning(f"HITL: '{tool_name}' denegada.")
@@ -847,8 +884,13 @@ class ToolExecutor:
         *call_fn* is an async callable(tool_name, tool_input) that performs the
         actual RPC to the MCP server; it is NEVER invoked before the allowlist,
         filename-traversal, and HITL checks below all pass. MCP tools are
-        foreign, unaudited code — allowlist-not-denylist and ALWAYS-HITL apply
-        unconditionally here (no exempt tier, unlike local tools in aexecute()).
+        foreign, unaudited code — allowlist-not-denylist. V62.0 Phase 7: HITL
+        policy now comes from the SAME risk-class taxonomy aexecute() uses
+        (core.risk_classes) — one gateway for both local and MCP dispatch.
+        Both currently-allowlisted MCP tools classify REVERSIBLE, which still
+        requires HITL unconditionally (no exempt tier for MCP), so this is not
+        a behavior change; an unclassified future MCP tool defaults to
+        HIGH_IMPACT (fail-closed) rather than silently skipping the challenge.
         """
         tool_input = _strip_override(tool_name, tool_input)
 
@@ -867,16 +909,38 @@ class ToolExecutor:
                 )
                 return {"error": err}
 
+        risk_class = classify_tool(tool_name)
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:lab_only", "blocked",
+                "LAB_ONLY MCP tool refused — JARVIS_TRUSTED_LAB is not enabled",
+            )
+            return {
+                "error": (
+                    f"Tool MCP '{tool_name}' es LAB_ONLY — requiere "
+                    "JARVIS_TRUSTED_LAB=true (y aun así, autorización HITL)."
+                )
+            }
+
         preview = str(tool_input)
         if len(preview) > 200:
             preview = preview[:200] + "…"
-        granted, auth_audit = await self._challenge(f"mcp:{tool_name}", preview)
-        if not granted:
-            logger.warning(f"HITL: MCP tool '{tool_name}' denegada.")
-            self._audit.log_action(
-                tool_name, reasoning, auth_audit, "blocked", "Ejecución MCP cancelada por el usuario."
-            )
-            return {"error": "Ejecución cancelada por el usuario."}
+        auth_audit = "hitl_exempt"
+        if requires_hitl(risk_class):
+            from core.aura_events import ToolAuthPendingEvent
+            await _aura_broadcast(ToolAuthPendingEvent(
+                tool=f"mcp:{tool_name}",
+                risk=risk_class.value,
+                preview=preview,
+                rollback_hint=rollback_hint(risk_class, tool_name),
+            ).to_dict())
+            granted, auth_audit = await self._challenge(f"mcp:{tool_name}", preview)
+            if not granted:
+                logger.warning(f"HITL: MCP tool '{tool_name}' denegada.")
+                self._audit.log_action(
+                    tool_name, reasoning, auth_audit, "blocked", "Ejecución MCP cancelada por el usuario."
+                )
+                return {"error": "Ejecución cancelada por el usuario."}
 
         await _aura_broadcast({
             "type": "tool_invoked",
@@ -1419,8 +1483,14 @@ class ToolExecutor:
                 logger.warning(f"Triage pipeline error: {_triage_exc}")
             return {"error": f"Comando bloqueado por política de seguridad: {error_msg}"}
 
-        # Show the canonicalized argv for operator transparency
-        print(f"\n    [EXEC] argv={argv}")
+        # Show the canonicalized argv for operator transparency. V62.0 Phase 7:
+        # binary_risk_class() is informational only here (audit trail) — it
+        # does not gate anything; run_shell_command itself is already
+        # unconditionally HIGH_IMPACT (see core/risk_classes.py), and
+        # _validate_command's allowlist + core/trust_engine.py's dynamic
+        # trust floor remain the sole authorities over which binaries run.
+        binary = Path(argv[0]).name.lower().removesuffix(".exe") if argv else ""
+        print(f"\n    [EXEC] argv={argv} risk={binary_risk_class(binary).value}")
         sys.stdout.flush()
 
         try:

@@ -29,6 +29,20 @@ migration plan, residual risks, performance impact).
 - `cognitive_optimizer.classify_query()`'s `force_deep` signal (computed
   every turn, never used) now escalates FAST routing decisions to
   DEEP + verification, without touching `ModelRole`/`route()` precedence.
+- **Unified Safe Action Model** (`core/risk_classes.py`): a five-tier HITL
+  risk taxonomy (READ_ONLY/LOW_IMPACT/REVERSIBLE/HIGH_IMPACT/LAB_ONLY) now
+  drives `ToolExecutor.aexecute()`/`aexecute_mcp()` for both local and MCP
+  tools — one shared classification for the whole tool gateway, replacing
+  the ad hoc `_HITL_EXEMPT_TOOLS`/`_ALWAYS_HITL_TOOLS` binary split as the
+  live decision (the legacy sets stay in place and are verified consistent
+  at import time, since 5 test files assert on them directly). Zero tools
+  changed HITL behavior — every classification was chosen and tested to
+  match the pre-retrofit gating exactly. `ToolAuthPendingEvent` (previously
+  unemitted) now broadcasts on every challenge with the real risk class and
+  a rollback hint for REVERSIBLE tools. Surfaced two pre-existing findings
+  along the way (`open_application`/`open_software`'s arbitrary-executable
+  fallback, `take_screenshot`'s unsandboxed `save_path`) — documented in
+  the architecture doc, not silently fixed alongside the taxonomy change.
 
 ## V61.0 — Live AI brain + Iron Man Mode foundation
 

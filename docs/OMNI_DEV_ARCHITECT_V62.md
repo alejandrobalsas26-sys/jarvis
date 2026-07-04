@@ -1,10 +1,11 @@
 # V62.0 OMNI_DEV_ARCHITECT — Architecture, Migration, and Risk Report
 
-Scope: milestones 0-6 of the OMNI_DEV_ARCHITECT directive, implemented on
-branch `omni-dev-architect-phase1` (7 commits, `a789a73`..`55de9b5`). This
-document is the Phase 9 deliverable: old-path-vs-new-path call graphs, a
-migration plan for what's intentionally deferred, and residual risk /
-performance impact on the target host (AMD Ryzen 5 7430U, 15W TDP, 64GB RAM).
+Scope: milestones 0-7 of the OMNI_DEV_ARCHITECT directive, implemented on
+branch `omni-dev-architect-phase1` (`a789a73`..present, updated as of the
+Phase 7 HITL risk-taxonomy retrofit). This document is the Phase 9
+deliverable: old-path-vs-new-path call graphs, a migration plan for what's
+intentionally deferred, and residual risk / performance impact on the target
+host (AMD Ryzen 5 7430U, 15W TDP, 64GB RAM).
 
 No existing capability was removed. No security control was weakened. Every
 change below is backed by tests (see "Test evidence").
@@ -291,6 +292,95 @@ specific reason is never touched. `model_router.py`'s `ModelRole` enum and
 **Test evidence:** `tests/test_live_brain_v61.py::TestForceDeepEscalation`
 (5 tests), `tests/test_model_router_roles.py` (18, unchanged, still green).
 
+### 1.8 Unified Safe Action Model — HITL risk taxonomy (Phase 7)
+
+**Before:** tool risk was an ad hoc binary split in `tools/executor.py`:
+`_HITL_EXEMPT_TOOLS` (26 tools, no challenge) and `_ALWAYS_HITL_TOOLS` (3
+tools, always challenged), with every other tool implicitly challenged via
+`tool_name not in _HITL_EXEMPT_TOOLS`. 13 of the 42 local tools sat in that
+implicit "everything else" bucket with no name, no documented rationale, and
+no way to distinguish "launches a known app" from "kills every process
+matching a substring" — both were just "not exempt." MCP tools (`aexecute_mcp`,
+Phase 7's earlier MCP-gateway fix) used a *separate* unconditional-HITL rule
+with no shared classification with local tools at all. `core.aura_events
+.ToolAuthPendingEvent` existed, fully specified, with zero production
+emitters.
+
+**After:**
+```
+core/risk_classes.py:
+  RiskClass = READ_ONLY | LOW_IMPACT | REVERSIBLE | HIGH_IMPACT | LAB_ONLY
+  TOOL_RISK_CLASS: dict[str, RiskClass]   # all 42 local + 2 MCP tools, explicit
+  classify_tool(name) -> RiskClass        # unknown tool -> HIGH_IMPACT (fail-closed)
+  requires_hitl(risk_class) -> bool
+  requires_trusted_lab(risk_class) -> bool
+  rollback_hint(risk_class, name) -> str | None
+  binary_risk_class(binary) -> RiskClass  # informational, shell sub-binaries only
+  verify_consistent_with_legacy_sets(exempt, always_hitl)  # import-time guard
+
+tools/executor.py:
+  ToolExecutor.aexecute(tool_name, ...)
+    risk_class = classify_tool(tool_name)
+    if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+        return {"error": "... LAB_ONLY ..."}                    # refused outright
+    if requires_hitl(risk_class):
+        broadcast ToolAuthPendingEvent(tool, risk_class.value, preview, rollback_hint)
+        granted, auth_audit = await self._challenge(tool_name, preview)
+        ...
+  ToolExecutor.aexecute_mcp(tool_name, ...)
+    # SAME classify_tool()/requires_hitl()/requires_trusted_lab() calls —
+    # one shared risk-classification function now gates both local and MCP
+    # dispatch, realizing "all actions pass through one gateway" concretely.
+```
+
+`_HITL_EXEMPT_TOOLS`/`_ALWAYS_HITL_TOOLS` in `tools/executor.py` were **not
+removed** — 5 other test files assert on them directly by name
+(`test_security.py`, `test_redteam_allowlist.py`, `test_code_execute_gate.py`,
+`test_trust_floor.py`, `test_punisher_hitl.py`). Instead,
+`verify_consistent_with_legacy_sets()` runs at `tools/executor.py` import
+time and raises immediately if `risk_classes.py`'s classification would ever
+produce a different HITL outcome than those two sets for any tool they
+name — a drift here is now a loud import-time failure, not a silent security
+regression.
+
+Every one of the 13 previously-"implicit" tools was individually reviewed by
+reading its actual implementation (not guessed from its name) before being
+classified — this surfaced two real findings along the way:
+- `open_application`/`open_software` both have a fallback path that launches
+  *any* bare-alphanumeric executable name found on `PATH`, not just their
+  pre-approved app map — classified `HIGH_IMPACT`, not the `REVERSIBLE`
+  their names suggest.
+- `take_screenshot`'s `save_path` parameter is **not** sandboxed the way
+  `read_file`/`write_file` are (no `allowed_dirs` check) — a real,
+  pre-existing arbitrary-file-write surface. Deliberately kept `HIGH_IMPACT`
+  (unchanged from today's behavior) rather than being reclassified down to
+  `LOW_IMPACT` alongside this retrofit — fixing that path-sandboxing bug is
+  a distinct, separate change and shouldn't be bundled with a permission
+  change in the same commit. **Flagged as a residual risk below.**
+
+Net effect on existing gating: **zero tools changed HITL behavior.** Of the
+13 previously-implicit tools, 10 landed in `HIGH_IMPACT` and 3 in
+`REVERSIBLE` — both require HITL, identical to their pre-retrofit "implicitly
+challenged" status. The 26 already-exempt tools split across `READ_ONLY` (23)
+and `LOW_IMPACT` (3, matching tools that write only to JARVIS's own local
+data: `save_note`/`estudiar_tema`/`ingest_docs`) — both non-HITL, identical
+to their pre-retrofit exempt status. This equivalence is asserted by test,
+not just claimed (see `test_every_classified_tool_matches_legacy_gating_exactly`).
+
+`ToolAuthPendingEvent` (previously zero production emitters) is now broadcast
+on every HITL challenge with the real risk class and, for `REVERSIBLE` tools,
+a rollback hint — closing another gap the original recon flagged.
+
+**Test evidence:** `tests/test_risk_classes.py` (95 tests — including the
+equivalence proof against every legacy-classified tool, and a completeness
+check that every `_tool_*` handler has an explicit classification),
+`tests/test_risk_taxonomy_gating.py` (10 tests proving live `aexecute()`/
+`aexecute_mcp()` wiring: READ_ONLY/LOW_IMPACT skip the challenge,
+REVERSIBLE/HIGH_IMPACT trigger it with the correct broadcast shape, LAB_ONLY
+refuses outright without `JARVIS_TRUSTED_LAB` and still requires HITL when
+enabled). The 5 previously-flagged dependent files (81 tests) re-run
+unchanged and green.
+
 ---
 
 ## 2. Migration plan — what's deferred and why
@@ -299,17 +389,19 @@ specific reason is never touched. `model_router.py`'s `ModelRole` enum and
 |---|---|---|---|
 | Full `ModelRole`/`route()` taxonomy expansion (GENERAL/RESEARCH/ARCHITECT/MATHEMATICS/LANGUAGE/CYBER_BLUE/CYBER_PURPLE/DFIR/GRC/PLANNER) | Not started | `ModelRole` and `route()`'s precedence order are directly asserted by `tests/test_model_router_roles.py` and `tests/test_live_brain_v61.py` — a careless enum change breaks both | MEDIUM-HIGH |
 | `CognitiveEngine` / `AgentOrchestrator` merged into live per-turn routing (currently two fully parallel dispatch paths — canary/honeypot flow and AURA's `multi_agent_analyze` command respectively) | Not started | Neither has ever run inside the verification/memory-write timing assumptions around `is_plain_assistant` in `chat_stream` | HIGH |
-| Phase 7 full risk taxonomy (`READ_ONLY`/`LOW_IMPACT`/`REVERSIBLE`/`HIGH_IMPACT`/`LAB_ONLY` replacing the binary `_HITL_EXEMPT_TOOLS`/`_ALWAYS_HITL_TOOLS` split) | Not started | Those two frozensets and their disjointness invariant are directly exercised by 5 test files (`test_security.py`, `test_redteam_allowlist.py`, `test_code_execute_gate.py`, `test_trust_floor.py`, `test_punisher_hitl.py`) | **HIGH** |
+| ~~Phase 7 full risk taxonomy~~ | **Done — §1.8** | `core/risk_classes.py`, wired into `aexecute()`/`aexecute_mcp()`, verified against the 5 dependent test files with zero behavior change | — |
+| `take_screenshot`'s unsandboxed `save_path` | Not started (flagged, not fixed) | Found during the Phase 7 tool review; deliberately not bundled with the taxonomy retrofit to avoid mixing a permission decision with a bug fix in one commit | Real, small, well-scoped — add an `allowed_dirs` check matching `read_file`/`write_file`'s existing pattern |
 | 3-store memory consolidation (episodic / KnowledgeVault / VectorMemory → one) | Not started | No existing test imports `core/memory.py` or `core/episodic_memory.py`'s storage layer directly — a regression here is invisible to CI until this gap is closed first | MEDIUM |
-| Phase 8 behavior model (state-driven, not persona-prompt-driven) | Not started | Structurally depends on Phase 6 (done — consent/mode state now exists) but there's still no `AssistantMode`-reading proactive-action dispatcher to gate; the natural first step is wiring `ironman_mode.allowed_proactive_actions(mode)` into the one still-unconditional proactive hook design allows for (none currently exist post-M4 — all known capture hooks are now consent-gated) | LOW (nothing left to gate yet) |
-| `AgentRuntime`/`InputEvent`/`ContextAssembler`/`TaskPlanner`/`CapabilityPolicy`/`ResultIntegrator`/`ResponseSurfaceRouter` as named, unified abstractions | Not started as named classes | The *behavior* these were meant to unify (voice=text pipeline, MCP=local tool gateway, HUD gets conversational content) is now real (§1.1, §1.3, §1.5) without introducing new abstraction layers on top of a codebase that already had `chat_stream()` as a working single entry point. Introducing formal wrapper classes now would be renaming working code, not fixing a gap | LOW, but real refactor cost |
+| Phase 8 behavior model (state-driven, not persona-prompt-driven) | Not started | Structurally depends on Phase 6 (done — consent/mode state now exists) and Phase 7 (done — risk classes now exist for proactive actions to be checked against); the natural first step is wiring `ironman_mode.allowed_proactive_actions(mode)` into the one still-unconditional proactive hook design allows for (none currently exist post-M4 — all known capture hooks are now consent-gated) | LOW (nothing left to gate yet) |
+| `AgentRuntime`/`InputEvent`/`ContextAssembler`/`TaskPlanner`/`CapabilityPolicy`/`ResultIntegrator`/`ResponseSurfaceRouter` as named, unified abstractions | Not started as named classes | The *behavior* these were meant to unify (voice=text pipeline, MCP=local tool gateway sharing one risk taxonomy, HUD gets conversational content) is now real (§1.1, §1.3, §1.5, §1.8) without introducing new abstraction layers on top of a codebase that already had `chat_stream()` as a working single entry point. Introducing formal wrapper classes now would be renaming working code, not fixing a gap | LOW, but real refactor cost |
 
-**Recommended next sequence** (unchanged from the original recon, still
-accurate): Phase 7's MCP-style allowlist thinking could extend to a formal
-risk-class enum *without* touching the existing frozensets — add the enum as
-a parallel classification, migrate call sites gradually, then retire the
-binary split once every tool has a class assigned. Attempting a single
-big-bang replacement is the highest-risk path available in this codebase.
+**Recommended next sequence** (updated — Phase 7 is done): the approach used
+for Phase 7 — add the new classification as a parallel, verified-consistent
+layer rather than replacing the legacy sets outright — is the template for
+the still-deferred items above. Attempting a single big-bang replacement
+(e.g. deleting `_HITL_EXEMPT_TOOLS`/`_ALWAYS_HITL_TOOLS` now that
+`risk_classes.py` exists, or expanding `ModelRole` in place) remains the
+highest-risk path available in this codebase.
 
 ---
 
@@ -355,6 +447,21 @@ big-bang replacement is the highest-risk path available in this codebase.
    nothing state-driven left un-gated (Phase 6 closed every known capture
    hook), but there's also no *emergent* behavior yet, just a policy table
    waiting for a consumer.
+7. **`take_screenshot`'s `save_path` is not sandboxed.** Found during the
+   Phase 7 tool-by-tool review (§1.8): unlike `read_file`/`write_file`, it
+   never checks the resolved path against an `allowed_dirs` list, so a
+   caller-supplied `save_path` could write a PNG anywhere the OS user has
+   write access to. Deliberately left as HIGH_IMPACT (unchanged HITL
+   behavior) rather than fixed in the same commit as the risk-taxonomy
+   retrofit, to avoid bundling a bug fix with a classification change. See
+   the migration plan (§2) — small, well-scoped, not yet done.
+8. **`open_application`/`open_software`'s arbitrary-executable fallback.**
+   Also found during the Phase 7 review: both tools fall back to launching
+   *any* bare-alphanumeric executable name found on `PATH` when the name
+   isn't in their pre-approved app map. Already classified `HIGH_IMPACT`
+   (always HITL-gated) — not a new gap, just newly documented. No behavior
+   change needed; flagged here so the fallback's existence is explicit
+   rather than discovered again later.
 
 ## 4. Performance impact (AMD Ryzen 5 7430U, 15W TDP, 64GB DDR4)
 
@@ -378,7 +485,10 @@ scope, and gated behind `--voice` exactly as before.
 | M4 — Consent enforcement (remaining sites) | `5511e9b` | 8 |
 | M5 — Memory fabric low-risk slice | `671f34d` | 15 |
 | M6 — force_deep routing escalation | `55de9b5` | 5 |
+| M7 — Phase 7 HITL risk taxonomy retrofit | (pending commit) | 105 (95 + 10) |
 
-Full suite: 644/645 passing (1 pre-existing, unrelated failure — see
-residual risk 5). `ruff check .`: clean. `py_compile` across all 215 `.py`
-files in the repo: clean.
+Full suite: 734/735 passing, 15 skipped (1 pre-existing, unrelated failure —
+see residual risk 5; skips are the equivalence test's intentional no-op for
+the 2 MCP-only tool names that have no legacy-set membership to compare
+against). `ruff check .`: clean. `py_compile` across all 218 `.py` files in
+the repo: clean.

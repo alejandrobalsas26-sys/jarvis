@@ -71,11 +71,17 @@ class MemoryDecisionEvent(AuraEvent):
 
 @dataclass
 class ToolAuthPendingEvent(AuraEvent):
-    """A dangerous tool is awaiting HITL/NATO authorization."""
+    """A dangerous tool is awaiting HITL/NATO authorization.
+
+    ``risk`` (V62.0 Phase 7) is one of core.risk_classes.RiskClass's values
+    (read_only/low_impact/reversible/high_impact/lab_only). ``rollback_hint``
+    is populated for REVERSIBLE tools — see core.risk_classes.rollback_hint().
+    """
     type: ClassVar[str] = "tool_auth_pending"
     tool: str = ""
     risk: str = "HIGH"
     preview: str = ""
+    rollback_hint: str | None = None
 
 
 @dataclass
