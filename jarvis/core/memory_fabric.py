@@ -246,6 +246,22 @@ class MemoryFabric:
         safe = redact_secrets(content)
         if contains_secret(safe):
             sens = Sensitivity.SECRET.value
+        # V64 M12 — memory-write policy layer: never persist dangerous untrusted
+        # content (stored / second-order injection defense). Clean untrusted data
+        # still stores (as untrusted); only firewall-flagged content is refused.
+        if is_untrusted_source(source):
+            try:
+                from core.injection_firewall import apply_firewall, origin_for_source_class
+                fr = apply_firewall(safe, origin_for_source_class(source))
+                if fr.quarantined or not fr.assessment.memory_write_allowed:
+                    logger.warning(
+                        f"MEMORY_FABRIC: refused untrusted write from source={source} "
+                        f"(injection={fr.assessment.attack_type.value}, "
+                        f"conf={fr.assessment.confidence:.2f})"
+                    )
+                    return False
+            except Exception as e:  # noqa: BLE001 — firewall must never crash a write
+                logger.debug(f"MEMORY_FABRIC: injection screen unavailable: {e}")
         try:
             return await self.storage_adapter.store(
                 safe, memory_type=memory_type, source=source, scope=scope, sensitivity=sens,

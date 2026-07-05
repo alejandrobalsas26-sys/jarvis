@@ -37,6 +37,12 @@ from core.memory_router import (
     classify_memory_scope,
     contains_secret,
 )
+# V64 M12 — layered, origin-aware prompt-injection firewall (enforcement).
+from core.injection_firewall import (
+    apply_firewall,
+    origin_for_mcp_tool,
+    origin_for_source_class,
+)
 # v34.0 — cognitive self-optimization
 from core.cognitive_optimizer import (
     latency_tracker, classify_query,
@@ -1353,28 +1359,57 @@ class LLM:
         return route_turn(user_message, tool_names=tool_names, force_deep=force_deep)
 
     def _label_tool_result(self, tool_name: str, result_str: str) -> str:
-        """Wrap a tool result with trust metadata before it enters history (Phase 5).
+        """Wrap a tool result with trust metadata and run the V64 injection
+        firewall before it enters history (Phase 5 envelope, hardened in V64 M12).
 
-        Every result is tagged as tool output; web / file / RAG / screen /
-        clipboard sources are additionally flagged UNTRUSTED so the model treats
-        embedded text as data, never as policy (prompt-injection defense).
+        Every result is tagged as tool output. Web / file / RAG / screen /
+        clipboard sources AND every MCP tool result (Gmail/Drive/…) are UNTRUSTED:
+        they pass through the layered, origin-aware firewall (detect → neutralize
+        or quarantine). Embedded text is treated strictly as data — it can never
+        authorize a tool call, mutate authority/scope, or persist as trusted
+        memory. The firewall is fail-open (never crashes the tool loop) but
+        fail-closed on ambiguity (high-severity untrusted content is quarantined).
         Truncation is applied AFTER labeling so the envelope is never dropped.
         """
         source = _UNTRUSTED_TOOL_SOURCES.get(tool_name)
-        if source is None:
+        is_mcp = tool_name in self._mcp_tool_names
+        if source is None and not is_mcp:
             wrapper: dict = {"_trust": "tool_output", "tool": tool_name, "content": result_str}
         else:
+            origin = origin_for_mcp_tool(tool_name) if is_mcp else origin_for_source_class(source)
+            try:
+                fr = apply_firewall(result_str, origin, max_chars=_TOOL_RESULT_MAX_CHARS)
+                content = fr.safe_content
+                fw_meta = {
+                    "detected": fr.assessment.detected,
+                    "attack_type": fr.assessment.attack_type.value,
+                    "confidence": round(fr.assessment.confidence, 2),
+                    "quarantined": fr.quarantined,
+                    "tool_influence_allowed": fr.assessment.tool_influence_allowed,
+                    "memory_write_allowed": fr.assessment.memory_write_allowed,
+                }
+                if fr.quarantined:
+                    logger.warning(
+                        f"INJECTION_FIREWALL: quarantined {origin.value} content from "
+                        f"'{tool_name}' (attack={fr.assessment.attack_type.value}, "
+                        f"conf={fr.assessment.confidence:.2f})"
+                    )
+            except Exception as e:  # noqa: BLE001 — firewall must never crash the turn
+                logger.warning(f"INJECTION_FIREWALL: assess failed for {tool_name}: {e}")
+                content = result_str
+                fw_meta = {"detected": False, "error": "firewall_unavailable"}
             wrapper = {
                 "_trust": "untrusted_tool_output",
-                "_source": source,
+                "_source": source or origin.value,
                 "_warning": _UNTRUSTED_BANNER,
+                "_firewall": fw_meta,
                 "tool": tool_name,
-                "content": result_str,
+                "content": content,
             }
         out = json.dumps(wrapper, ensure_ascii=False)
         if len(out) > _TOOL_RESULT_MAX_CHARS:
             budget = max(_TOOL_RESULT_MAX_CHARS - _TRUST_ENVELOPE_RESERVE, 0)
-            wrapper["content"] = result_str[:budget]
+            wrapper["content"] = str(wrapper.get("content", ""))[:budget]
             wrapper["truncated"] = True
             wrapper["original_len"] = len(result_str)
             out = json.dumps(wrapper, ensure_ascii=False)

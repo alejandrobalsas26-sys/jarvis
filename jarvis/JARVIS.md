@@ -218,7 +218,87 @@ JARVIS_TELEGRAM_CHAT_ID = <your Telegram user ID from @userinfobot>
 
 ---
 
+## V64 — Intelligence, Trust & Learning Fabric
+
+V64 makes JARVIS *evidence-grounded, injection-resistant, and measurable*. It
+adds a content-trust axis, a defense-in-depth injection firewall, evidence-first
+research, and (later milestones) evaluation + curated failure datasets — the
+scaffolding that must exist **before** any fine-tuning.
+
+```
+ User / Event / Agent Task → TaskDecision → Context Assembly
+        │
+        ▼
+   Trusted Research Runtime (M11)         core/research_runtime.py
+        │  query decomposition → search plan → source discovery
+        ▼
+   Source Trust Policy (M10)              core/source_trust.py
+   PRIMARY · TRUSTED_SECONDARY ·          domain rules + structural signals,
+   COMMUNITY · UNTRUSTED · BLOCKED        operator allow/blocklist, reputation
+        │
+        ▼
+   Fetch / Retrieve → Prompt Injection Firewall (M12)   core/injection_firewall.py
+        │  6 layers: source-trust · lexical · semantic (de-obfuscation) ·
+        │  context-role · tool-isolation · memory-write
+        ▼
+   Claim Extraction → Cross-Source Correlation → Evidence Blackboard
+        │
+        ▼
+   Specialist Agents → Critic → Verifier → Cited Synthesis
+        │
+        ▼
+   Eval Logger (M14) → Failure Repository (M16) → Curated Dataset
+        → LoRA/SFT (M17) → Offline Evals → Promotion Gate → Model Registry
+```
+
+### Cross-cutting: three orthogonal trust axes
+
+JARVIS now distinguishes **three** independent trust questions, each with its own
+module — none is a substitute for another:
+
+| Axis | Question | Module |
+|------|----------|--------|
+| Execution trust | May this *command* run without a challenge? | `core/trust_engine.py` |
+| Authority/scope | May we *act on this target*? | `core/authority.py` |
+| **Content trust** | How much should this *source/data* be believed & obeyed? | `core/source_trust.py` + `core/injection_firewall.py` |
+
+### M10 — Trusted Source Registry (`core/source_trust.py`)
+
+Deterministic, pure classification of a fetched URL into a `SourceTrustTier`.
+Operator blocklist is absolute; allowlist overrides; **unknown ⇒ UNTRUSTED**
+(never COMMUNITY). Structural caps (IP host, non-HTTPS, firewall injection flag)
+only ever *lower* a tier — reputation is a soft ranking prior and never promotes.
+`CitationRecord` is valid only if the source was *actually fetched* (no invented
+citations); critical claims require an authoritative source **and** ≥2 distinct
+corroborations. Operator-only config knobs (`source_trust_allowlist/blocklist`,
+`source_require_https`), env/.env only.
+
+### M12 — Prompt Injection Firewall (`core/injection_firewall.py`)
+
+**Origin-aware** defense-in-depth. The same text is a benign question from
+`OPERATOR_INPUT` but an attack from `WEB_UNTRUSTED`; the firewall combines
+attack-typed lexical + semantic detection (NFKC + zero-width strip + base64/hex
+de-obfuscation) with a `TrustOrigin`, so benign mentions are not quarantined
+while real injections are. **Enforcement is structural, not detection-dependent:**
+
+- Untrusted/ingested content can **never** authorize a tool call
+  (`tool_influence_allowed` is False for every non-operator/non-system origin).
+- Firewall-flagged untrusted content is **never persisted** to memory
+  (`memory_fabric.store` refuses it — stored/second-order injection defense).
+- The firewall **cannot** mutate authority or scope — it imports nothing from
+  `core.authority` and never calls `set_mode`/`add_scope` (test-asserted).
+
+Wired at the single tool-loop choke point (`llm.py::_label_tool_result`, covering
+both local **and** MCP results — MCP is now correctly labeled untrusted) and at
+the memory-write path. High-severity untrusted content is quarantined
+(replaced with a neutral, observable stub) even at moderate confidence.
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
 
 *V63 — the one thing became a general agent: bounded, gated, resource-aware,
 operator-controlled.*
+
+*V64 — the general agent learned what to trust: evidence-grounded,
+injection-resistant, and measurable.*
