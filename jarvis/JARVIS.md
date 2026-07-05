@@ -293,6 +293,25 @@ both local **and** MCP results — MCP is now correctly labeled untrusted) and a
 the memory-write path. High-severity untrusted content is quarantined
 (replaced with a neutral, observable stub) even at moderate confidence.
 
+### M11 — Trusted Research Runtime (`core/research_runtime.py`)
+
+Evidence-grounded research that **drives** existing pieces rather than adding
+parallel infra: query decomposition → source discovery → **M10** trust
+classification → fetch (guarded `ToolExecutor.aexecute`, never raw `requests`) →
+**M12** injection scan → claim extraction → `SharedBlackboard` evidence →
+cross-source correlation → conflict detection → optional verifier → cited
+synthesis. Emits a structured `ResearchResult` (claims, evidence, sources,
+conflicts, confidence, unresolved_questions, citations).
+
+Guarantees: **no invented citations** (a `CitationRecord` exists only for an
+actually-fetched source), bounded queries/sources/content, BLOCKED sources are
+never fetched, and injected pages are **quarantined and excluded from evidence**
+(never become a claim). The claim/correlate/conflict/synthesis stages are pure,
+so a research run is reproducible offline (no live Ollama/network) — search/fetch
+are injectable; production attaches them to the guarded executor at boot
+(`attach_research_runtime` in `main.py`) with the fail-closed verifier as the
+verify hook.
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*

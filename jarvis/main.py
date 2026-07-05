@@ -941,6 +941,23 @@ async def _main_async() -> None:
         logger.info("V63 M3: agent_planner attached")
     except Exception as e:
         logger.debug(f"V63 M4/M3: team_runtime/planner attach failed: {e}")
+
+    # V64 M11 — trusted research runtime over the SAME guarded ToolExecutor
+    # (web_search/fetch_webpage route through risk-class/HITL/SSRF/audit; every
+    # fetched page is trust-classified (M10) and injection-scanned (M12), and no
+    # citation is ever emitted for a source that was not actually fetched).
+    try:
+        from core.research_runtime import attach_research_runtime
+        from core.verification import verify_answer as _verify_answer
+
+        async def _research_verify(question: str, synthesis: str):
+            vr = await _verify_answer(llm.client, question, synthesis)
+            return vr.verified
+
+        attach_research_runtime(executor, verify_fn=_research_verify)
+        logger.info("V64 M11: trusted_research_runtime attached")
+    except Exception as e:
+        logger.debug(f"V64 M11: research_runtime attach failed: {e}")
     try:
         v36_correlator.attach_llm(
             tts           = tts,
