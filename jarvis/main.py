@@ -823,8 +823,17 @@ async def _main_async() -> None:
     from core.assistant_state import default_state
     assistant_state = default_state()
 
+    # V63 — operator authority + authorized-scope posture. Defaults to STANDARD
+    # with no scopes (scope enforcement inactive → existing risk/HITL gate
+    # governs unchanged). Mutated only by explicit operator commands; a scoped
+    # mode (CTF / TRUSTED_LAB / PURPLE_TEAM / INCIDENT_RESPONSE) makes target
+    # actions fail-closed outside the registered scope.
+    from core.authority import default_authority
+    authority_state = default_authority()
+
     executor = ToolExecutor(
         stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
+        authority=authority_state,
     )
     llm = LLM(tool_executor=executor)
     tts = TTS()

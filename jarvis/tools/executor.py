@@ -39,6 +39,7 @@ from loguru import logger
 import whois
 import dns.resolver
 
+from core.authority import AuthorityState, authorize_action, default_authority
 from core.ironman_mode import SessionConsent, default_consent
 from core.risk_classes import (
     classify_tool,
@@ -581,6 +582,7 @@ class ToolExecutor:
         stt_queue: "asyncio.Queue | None" = None,
         stt_listener=None,
         consent: "SessionConsent | None" = None,
+        authority: "AuthorityState | None" = None,
     ) -> None:
         self._active_web_server: socketserver.TCPServer | None = None
         self._active_web_thread: threading.Thread | None = None
@@ -590,6 +592,12 @@ class ToolExecutor:
         # (fail-closed) when the caller doesn't wire a shared session consent —
         # see core.ironman_mode.SessionConsent / core.consent_commands.
         self.consent: SessionConsent = consent if consent is not None else default_consent()
+        # V63 — operator authority + authorized-scope posture. Defaults to
+        # STANDARD with no scopes, so scope enforcement is INACTIVE and the
+        # pre-existing risk/HITL gate governs unchanged. When the operator sets a
+        # scoped mode / registers a scope, target actions become fail-closed
+        # outside that scope (see core.authority.authorize_action).
+        self.authority: AuthorityState = authority if authority is not None else default_authority()
         from core.governance import TacticAuditLogger
         self._audit = TacticAuditLogger()
 
@@ -834,6 +842,30 @@ class ToolExecutor:
                 guardrail_block.get("error", "")[:200],
             )
             return guardrail_block
+
+        # V63 — operator authority / authorized-scope preflight. Additive and
+        # fail-closed: it PRECEDES (never replaces) the risk/HITL gate below.
+        # For a target-bound action under an active scoped authority posture, a
+        # target outside the authorized scope (or a missing/malformed target) is
+        # refused here before any challenge. Under the default STANDARD posture
+        # with no scopes, enforcement is inactive and this is a no-op — the
+        # existing gate is untouched. Authority is server-side only; it is never
+        # read from tool_input, so untrusted content cannot widen it.
+        auth_decision = authorize_action(self.authority, tool_name, tool_input)
+        if not auth_decision.allowed:
+            logger.warning(f"AUTHORITY: '{tool_name}' refused — {auth_decision.reason}")
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:scope", "blocked",
+                auth_decision.reason[:200],
+            )
+            await _aura_broadcast({
+                "type": "authority_refused",
+                "tool": tool_name,
+                "target": auth_decision.target,
+                "reason": auth_decision.reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"error": f"Fuera de alcance autorizado: {auth_decision.reason}"}
 
         # V62.0 Phase 7 — risk-class taxonomy drives the actual gating decision.
         # classify_tool() is built to match _ALWAYS_HITL_TOOLS/_HITL_EXEMPT_TOOLS
