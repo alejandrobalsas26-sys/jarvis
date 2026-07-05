@@ -379,6 +379,40 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             asyncio.create_task(_run_controlled_team())
             return {"status": "started", "agents": agents}
 
+        elif cmd == "plan_task":
+            # V63 M3 — operator-triggered bounded task-graph planning. Builds a
+            # per-turn TaskDecision from the objective, and only runs a graph when
+            # planning is actually warranted (fast path is never forced through it).
+            objective = str(args.get("objective", args.get("task", "")))[:400].strip()
+            if not objective:
+                return {"error": "plan_task requires an 'objective'"}
+            from core.agent_planner import agent_planner, should_plan
+            from core.agent_runtime import assemble_task_decision
+            td = assemble_task_decision(objective)
+            explicit = bool(args.get("force"))
+            if not should_plan(td, explicit=explicit):
+                return {"status": "skipped",
+                        "reason": "objective does not warrant multi-step planning",
+                        "domain": td.domain.value}
+
+            async def _run_plan() -> None:
+                try:
+                    result = await agent_planner.plan_and_run(objective, td)
+                    await broadcast_fn({
+                        "type": "plan_complete",
+                        "objective": objective[:120],
+                        "graph_status": result.status,
+                        "completed": result.completed,
+                        "failed": result.failed,
+                        "elapsed_s": result.elapsed_s,
+                    })
+                except Exception as exc:
+                    logger.debug(f"AURA: plan_task error: {exc}")
+
+            asyncio.create_task(_run_plan())
+            return {"status": "started", "domain": td.domain.value,
+                    "planning": True}
+
         elif cmd == "generate_report":
             from core.correlator        import correlator
             from core.incident_reporter import generate_incident_report

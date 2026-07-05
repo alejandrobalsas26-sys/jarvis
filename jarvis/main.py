@@ -909,8 +909,24 @@ async def _main_async() -> None:
             broadcast_fn  = _aura_broadcast,
         )
         logger.info("V63 M4: specialist_team_runtime attached")
+
+        # V63 M3 — bounded task-graph planner over the same shared client, the
+        # controlled team runtime (AGENT nodes), the protected executor (TOOL
+        # nodes) and the fail-closed verifier (VERIFY nodes). Only planning-worthy
+        # turns are ever routed here; the fast path never plans.
+        from core.agent_planner import agent_planner as v63_planner
+        v63_planner.attach(
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+            llm_client    = llm,
+            tool_executor = executor,
+            team_runtime  = v63_team_runtime,
+            broadcast_fn  = _aura_broadcast,
+        )
+        logger.info("V63 M3: agent_planner attached")
     except Exception as e:
-        logger.debug(f"V63 M4: team_runtime attach failed: {e}")
+        logger.debug(f"V63 M4/M3: team_runtime/planner attach failed: {e}")
     try:
         v36_correlator.attach_llm(
             tts           = tts,
