@@ -75,6 +75,87 @@ JARVIS is your Purple Team analyst. It:
 
 ---
 
+## V63 — Unified General Agent Runtime
+
+V63 turns JARVIS from a Purple-Team platform into a **general-purpose, local,
+operator-controlled agent runtime** without losing any security capability. One
+per-turn decision object drives everything, and every autonomous component is
+bounded, gated, and resource-aware.
+
+```
+ Operator / Voice / Text / Vision / Event
+                 │
+                 ▼
+        Unified Agent Runtime            core/agent_runtime.py
+                 │
+                 ▼
+           TaskDecision                  domain · complexity · risk ·
+      (composed once per turn)           planning · agents · tools ·
+                 │                        verification · surface
+                 ▼
+          Context Assembly               memory fabric (M5) · project (M8)
+                 │
+                 ▼
+        Bounded Task Graph Planner       core/task_graph.py  (M3)
+     REASON·TOOL·AGENT·VERIFY·           cycle-safe · capped · timed ·
+     SYNTHESIZE·WAIT·HUMAN_APPROVAL      cancellable · partial-failure
+                 │
+                 ▼
+        Controlled Specialist Team       core/specialist_runtime.py (M4)
+       ┌─────────┼─────────┐             ≤2 FAST · ≤1 DEEP · resource back-off
+   Specialist Specialist Specialist      14 capability roles, one shared model
+       └─────────┼─────────┘
+                 ▼
+          Shared Blackboard              bounded · deduped · provenance ·
+                 │                        structured conflict detection
+                 ▼
+          Critic → Conflict → Verifier   evidence-driven fan-in
+                 ▼
+          Result Integrator (Synthesis)
+                 │
+                 ▼
+       Response Surface Router (M6)       voice · text · hud · report …
+                 │
+                 ▼
+       Memory Persistence (M5)           scoped · redacted · provenance
+                 │
+                 ▼
+       Presence Engine (M7)              OBSERVE→UNDERSTAND→SUGGEST→ASK→ACT
+```
+
+### Cross-cutting control planes
+
+- **Operator Authority + Scope** (`core/authority.py`) — *Reasoning Freedom ≠
+  Execution Authority.* JARVIS reasons freely about exploits, malware, and
+  offensive technique; *acting on a target* is gated by an operator-selected
+  authority mode (STANDARD / ADMIN_LOCAL / RESEARCH / CTF / TRUSTED_LAB /
+  PURPLE_TEAM / INCIDENT_RESPONSE) and a fail-closed `ScopePolicy`. Out-of-scope
+  or expired-scope target actions are refused before any challenge. Authority is
+  server-side only — untrusted content can never widen it.
+
+- **Typed Security Capability Registry** (`core/capabilities.py`) — an honest,
+  gated inventory of external tooling. Availability/version probes report what is
+  actually installed; shipped adapters (dns_lookup via nslookup, cert_inspect via
+  openssl) build validated `shell=False` argv vectors, parse to structured
+  results, capture hashed evidence artifacts, and route through
+  `ToolExecutor.run_capability` (authority + risk/HITL + audit). Tools that are
+  not present are inventory-only descriptors — never fake wrappers.
+
+### Non-negotiable invariants
+
+- **No bypass.** Every world-effect — specialist tool call, task-graph TOOL node,
+  capability adapter — delegates to `ToolExecutor.aexecute` (risk class · HITL ·
+  authority scope · audit). There is no `shell=True`, `os.system`, direct-MCP, or
+  raw-handler path anywhere in the new runtime.
+- **Bounded.** Agent teams, task graphs, blackboards, retries, and background
+  work all have hard caps and timeouts; nothing fans out or loops unbounded.
+- **Resource-aware.** Concurrency and background work back off under CPU/RAM
+  pressure and on battery — the Rule of Silicon holds on the 15W host.
+- **Fast path preserved.** Simple chat still routes `TaskDecision → direct
+  inference`; teams/graphs/presence only engage when genuinely warranted.
+
+---
+
 ## Voice Commands
 
 JARVIS responds to spoken macros (defined in `core/macros.yaml`). A selection:
@@ -138,3 +219,6 @@ JARVIS_TELEGRAM_CHAT_ID = <your Telegram user ID from @userinfobot>
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
+
+*V63 — the one thing became a general agent: bounded, gated, resource-aware,
+operator-controlled.*
