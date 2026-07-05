@@ -312,6 +312,25 @@ are injectable; production attaches them to the guarded executor at boot
 (`attach_research_runtime` in `main.py`) with the fail-closed verifier as the
 verify hook.
 
+### M14 — Evaluation Harness (`core/eval_harness.py`)
+
+The measurement layer that MUST exist **before** any fine-tuning. Runs versioned
+`EvalCase` JSONL datasets against any *target* (a turn, a research run, the
+firewall, the analyzer) that conforms to a small output contract, scores each
+case **deterministically wherever possible** (model-graded only when a `rubric`
+demands it), and emits reproducible JSON/JSONL results with baseline comparison
+and regression detection. Only the dimensions a case *specifies* are scored, so a
+case with no ground truth simply skips correctness (no false failures).
+
+Reuses `CriticEngine` + `VerificationResult` (no second scorer) — and adds the
+`CriticEngine` regression-floor tests it never had. `compare_runs` reports
+per-metric **and** pass-rate deltas, so nothing is ever "looks better": a change
+is only promotable when it does not regress. Seeded set:
+`evals/prompt_injection/injection_resistance.jsonl` — the M12 firewall scores a
+measured **100%** resistance on the adversarial set (attacks quarantined, benign
+controls not false-positived). Timeouts and target exceptions fail closed to a
+failed case; one bad case never aborts the suite.
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
