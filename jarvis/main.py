@@ -894,6 +894,23 @@ async def _main_async() -> None:
         logger.info("V36: agent_orchestrator attached")
     except Exception as e:
         logger.debug(f"V36: orchestrator attach failed: {e}")
+
+    # V63 M4 — controlled specialist team runtime. Shares ONE inference client
+    # and the SAME protected ToolExecutor as the live turn (no tool bypass), so
+    # specialists reason on the shared models and any world-effect still passes
+    # the risk-class / HITL / audit gate. Conservative, resource-aware defaults.
+    try:
+        from core.specialist_runtime import team_runtime as v63_team_runtime
+        v63_team_runtime.attach(
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+            tool_executor = executor,
+            broadcast_fn  = _aura_broadcast,
+        )
+        logger.info("V63 M4: specialist_team_runtime attached")
+    except Exception as e:
+        logger.debug(f"V63 M4: team_runtime attach failed: {e}")
     try:
         v36_correlator.attach_llm(
             tts           = tts,

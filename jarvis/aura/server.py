@@ -363,7 +363,20 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             agents = [str(a)[:40] for a in agents][:5]
             incidents = correlator.get_active_incidents()
             ctx       = incidents[0] if incidents else {}
-            asyncio.create_task(orchestrator.run_task(task, agents, ctx))
+
+            # V63 M4 — prefer the controlled specialist team runtime (bounded
+            # concurrency, shared blackboard, structured conflict detection,
+            # provenance). Falls back to the legacy sequential orchestrator on
+            # any error so this live command never regresses.
+            async def _run_controlled_team() -> None:
+                try:
+                    from core.specialist_runtime import team_runtime
+                    await team_runtime.run_legacy_agents(task, agents, ctx)
+                except Exception as exc:
+                    logger.debug(f"AURA: team_runtime fallback → orchestrator: {exc}")
+                    await orchestrator.run_task(task, agents, ctx)
+
+            asyncio.create_task(_run_controlled_team())
             return {"status": "started", "agents": agents}
 
         elif cmd == "generate_report":
