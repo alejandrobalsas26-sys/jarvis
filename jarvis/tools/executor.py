@@ -943,6 +943,46 @@ class ToolExecutor:
             })
             return {"error": str(e)}
 
+    async def run_capability(self, name: str, params: dict, reasoning: str = "") -> dict:
+        """V63 — execute a typed security capability (core.capabilities) through
+        the SAME gates every action passes: operator-authority scope (fail-closed
+        for target-bound tools), the risk-class NATO/HITL challenge, and the audit
+        trail. This is NOT a parallel shell path — it runs only a *registered*,
+        *installed* capability via a validated ``shell=False`` argv vector; the
+        registry refuses unknown / inventory-only / uninstalled tools.
+        """
+        from core.capabilities import execute_capability, registry as _cap_registry
+
+        cap = _cap_registry.get(name)
+        if cap is None:
+            return {"error": f"unknown capability '{name}'"}
+        if not cap.executable:
+            return {"error": f"capability '{name}' is inventory-only (no adapter)"}
+        if not cap.available():
+            return {"error": f"capability '{name}' tool not installed on this host"}
+
+        # Risk-class HITL challenge, mirroring aexecute()'s gate exactly.
+        risk_class = cap.risk_class
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(f"capability:{name}", reasoning, "blocked:lab_only",
+                                   "blocked", "LAB_ONLY capability — trusted lab disabled")
+            return {"error": f"capability '{name}' is LAB_ONLY — requires JARVIS_TRUSTED_LAB=true"}
+        if requires_hitl(risk_class):
+            preview = f"{name} {params}"
+            if len(preview) > 200:
+                preview = preview[:200] + "…"
+            granted, _audit = await self._challenge(f"capability:{name}", preview)
+            if not granted:
+                self._audit.log_action(f"capability:{name}", reasoning, _audit,
+                                       "blocked", "capability execution cancelled")
+                return {"error": "Ejecución de capacidad cancelada por el usuario."}
+
+        result = await execute_capability(
+            _cap_registry, name, params,
+            authority=self.authority, audit=self._audit,
+        )
+        return result.to_dict()
+
     async def aexecute_mcp(
         self, tool_name: str, tool_input: dict, call_fn, reasoning: str = ""
     ) -> Any:

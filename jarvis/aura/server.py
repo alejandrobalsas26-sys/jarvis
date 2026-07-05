@@ -413,6 +413,28 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             return {"status": "started", "domain": td.domain.value,
                     "planning": True}
 
+        elif cmd == "capability_inventory":
+            # V63 — honest report of which security tools are installed here.
+            from core.capabilities import registry as _cap_registry
+            inv = _cap_registry.inventory()
+            return {"capabilities": inv,
+                    "available": [c["name"] for c in inv if c["available"]],
+                    "executable": [c["name"] for c in inv
+                                   if c["available"] and c["executable"]]}
+
+        elif cmd == "run_capability":
+            # V63 — operator-triggered typed security capability, routed through
+            # the ToolExecutor's authority/HITL/audit gates (no shell bypass).
+            name = str(args.get("name", "")).strip()
+            params = args.get("params") or {}
+            if not name or not isinstance(params, dict):
+                return {"error": "run_capability requires 'name' and dict 'params'"}
+            tex = executor or _executor_ref
+            if tex is None:
+                return {"error": "tool executor unavailable"}
+            result = await tex.run_capability(name, params, "aura:run_capability")
+            return {"result": result}
+
         elif cmd == "generate_report":
             from core.correlator        import correlator
             from core.incident_reporter import generate_incident_report
