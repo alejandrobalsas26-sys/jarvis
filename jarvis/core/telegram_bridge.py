@@ -350,19 +350,6 @@ async def _cmd_help(update, context) -> None:
     )
 
 
-def _may_notify(allowed_actions: list, severity: str) -> bool:
-    """core.ironman_mode.allowed_proactive_actions() models "notify" as the
-    general capability (ACTIVE/WAR_ROOM) and "notify_urgent" as a narrower
-    one reserved for otherwise-quiet modes (FOCUS/PRESENTATION return ONLY
-    "notify_urgent", not "notify"). "notify" is a superset — a mode that
-    grants it allows both routine and critical alerts; "notify_urgent" alone
-    allows only critical ones; neither present suppresses everything (PASSIVE).
-    """
-    if "notify" in allowed_actions:
-        return True
-    return severity == "CRITICAL" and "notify_urgent" in allowed_actions
-
-
 async def push_alert(
     alert_type: str,
     message: str,
@@ -380,9 +367,10 @@ async def push_alert(
     so this is purely additive when unconfigured.
     """
     if _state is not None:
-        from core.ironman_mode import allowed_proactive_actions
-        allowed = allowed_proactive_actions(_state.mode, _consent)
-        if not _may_notify(allowed, severity):
+        from core.presence import mode_permits_notification, urgency_from_severity
+        if not mode_permits_notification(
+            _state.mode, _consent, urgency_from_severity(severity)
+        ):
             logger.debug(
                 f"TELEGRAM: push suppressed (mode={_state.mode.value}, "
                 f"severity={severity}): {alert_type}"

@@ -831,6 +831,11 @@ async def _main_async() -> None:
     from core.authority import default_authority
     authority_state = default_authority()
 
+    # V63 M7 — Presence Engine: the state-driven OBSERVE→UNDERSTAND→SUGGEST→ASK→
+    # ACT ladder over the live mode / consent / authority / resource state. Shares
+    # the same session state so its decisions track the operator's real posture.
+    from core.presence import presence as presence_engine
+
     executor = ToolExecutor(
         stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
         authority=authority_state,
@@ -980,6 +985,13 @@ async def _main_async() -> None:
     try:
         from aura.server import attach_executor
         attach_executor(executor)
+    except ImportError:
+        pass
+
+    # V63 M7: wire the Presence Engine + live AssistantState for presence_status.
+    try:
+        from aura.server import attach_presence
+        attach_presence(presence_engine, assistant_state)
     except ImportError:
         pass
 

@@ -210,11 +210,23 @@ _pending_ws_responses: dict[int, asyncio.Future] = {}
 # Executor reference injected by main.py
 _executor_ref = None
 
+# V63 M7 — Presence Engine + shared AssistantState references injected by main.py.
+_presence_ref = None
+_presence_state_ref = None
+
 
 def attach_executor(executor) -> None:
     """Store a reference to the ToolExecutor for HUD command dispatch."""
     global _executor_ref
     _executor_ref = executor
+
+
+def attach_presence(engine, state) -> None:
+    """Store the Presence Engine + live AssistantState for the presence_status
+    HUD command (V63 M7)."""
+    global _presence_ref, _presence_state_ref
+    _presence_ref = engine
+    _presence_state_ref = state
 
 
 async def telemetry_broadcaster() -> None:
@@ -434,6 +446,30 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 return {"error": "tool executor unavailable"}
             result = await tex.run_capability(name, params, "aura:run_capability")
             return {"result": result}
+
+        elif cmd == "presence_status":
+            # V63 M7 — report the current proactive-presence posture (which
+            # ladder rungs the live mode / consent / authority / resources permit).
+            if _presence_ref is None or _presence_state_ref is None:
+                return {"error": "presence engine not attached"}
+            from core.presence import PresenceSignal
+            tex = executor or _executor_ref
+            try:
+                vm = psutil.virtual_memory()
+                batt = psutil.sensors_battery()
+                on_batt = bool(batt is not None and not batt.power_plugged)
+                cpu = psutil.cpu_percent(interval=None)
+            except Exception:
+                vm, on_batt, cpu = None, False, 0.0
+            signal = PresenceSignal(
+                mode=_presence_state_ref.mode,
+                consent=getattr(tex, "consent", None) or PresenceSignal().consent,
+                authority=getattr(tex, "authority", None),
+                cpu_pct=cpu,
+                ram_pct=(vm.percent if vm else 0.0),
+                on_battery=on_batt,
+            )
+            return {"presence": _presence_ref.snapshot(signal)}
 
         elif cmd == "generate_report":
             from core.correlator        import correlator
