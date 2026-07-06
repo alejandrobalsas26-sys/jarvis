@@ -118,11 +118,18 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         await queue.put(None)  # sentinel: indica al consumer que terminó
 
     async def consumer() -> None:
+        # V63 M6 — the spoken channel is the VOICE surface: strip Markdown so TTS
+        # reads naturally instead of vocalizing `backticks`/**asterisks**/tables.
+        # The console (producer's print above) keeps the full TEXT surface — one
+        # reasoning result, rendered per surface, never re-reasoned.
+        from core.response_surface import ResponseSurface, render
         while True:
             sentence = await queue.get()
             if sentence is None:
                 break
-            await tts.speak_async(sentence, lang=lang)
+            spoken = render(sentence, ResponseSurface.VOICE)
+            if spoken:
+                await tts.speak_async(spoken, lang=lang)
 
     print(f"\n[{name}] ", end="", flush=True)
     await asyncio.gather(producer(), consumer())
@@ -816,8 +823,22 @@ async def _main_async() -> None:
     from core.assistant_state import default_state
     assistant_state = default_state()
 
+    # V63 — operator authority + authorized-scope posture. Defaults to STANDARD
+    # with no scopes (scope enforcement inactive → existing risk/HITL gate
+    # governs unchanged). Mutated only by explicit operator commands; a scoped
+    # mode (CTF / TRUSTED_LAB / PURPLE_TEAM / INCIDENT_RESPONSE) makes target
+    # actions fail-closed outside the registered scope.
+    from core.authority import default_authority
+    authority_state = default_authority()
+
+    # V63 M7 — Presence Engine: the state-driven OBSERVE→UNDERSTAND→SUGGEST→ASK→
+    # ACT ladder over the live mode / consent / authority / resource state. Shares
+    # the same session state so its decisions track the operator's real posture.
+    from core.presence import presence as presence_engine
+
     executor = ToolExecutor(
         stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
+        authority=authority_state,
     )
     llm = LLM(tool_executor=executor)
     tts = TTS()
@@ -887,6 +908,56 @@ async def _main_async() -> None:
         logger.info("V36: agent_orchestrator attached")
     except Exception as e:
         logger.debug(f"V36: orchestrator attach failed: {e}")
+
+    # V63 M4 — controlled specialist team runtime. Shares ONE inference client
+    # and the SAME protected ToolExecutor as the live turn (no tool bypass), so
+    # specialists reason on the shared models and any world-effect still passes
+    # the risk-class / HITL / audit gate. Conservative, resource-aware defaults.
+    try:
+        from core.specialist_runtime import team_runtime as v63_team_runtime
+        v63_team_runtime.attach(
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+            tool_executor = executor,
+            broadcast_fn  = _aura_broadcast,
+        )
+        logger.info("V63 M4: specialist_team_runtime attached")
+
+        # V63 M3 — bounded task-graph planner over the same shared client, the
+        # controlled team runtime (AGENT nodes), the protected executor (TOOL
+        # nodes) and the fail-closed verifier (VERIFY nodes). Only planning-worthy
+        # turns are ever routed here; the fast path never plans.
+        from core.agent_planner import agent_planner as v63_planner
+        v63_planner.attach(
+            ollama_client = llm.client,
+            fast_model    = hw_profile.model_fast,
+            deep_model    = hw_profile.model_deep,
+            llm_client    = llm,
+            tool_executor = executor,
+            team_runtime  = v63_team_runtime,
+            broadcast_fn  = _aura_broadcast,
+        )
+        logger.info("V63 M3: agent_planner attached")
+    except Exception as e:
+        logger.debug(f"V63 M4/M3: team_runtime/planner attach failed: {e}")
+
+    # V64 M11 — trusted research runtime over the SAME guarded ToolExecutor
+    # (web_search/fetch_webpage route through risk-class/HITL/SSRF/audit; every
+    # fetched page is trust-classified (M10) and injection-scanned (M12), and no
+    # citation is ever emitted for a source that was not actually fetched).
+    try:
+        from core.research_runtime import attach_research_runtime
+        from core.verification import verify_answer as _verify_answer
+
+        async def _research_verify(question: str, synthesis: str):
+            vr = await _verify_answer(llm.client, question, synthesis)
+            return vr.verified
+
+        attach_research_runtime(executor, verify_fn=_research_verify)
+        logger.info("V64 M11: trusted_research_runtime attached")
+    except Exception as e:
+        logger.debug(f"V64 M11: research_runtime attach failed: {e}")
     try:
         v36_correlator.attach_llm(
             tts           = tts,
@@ -931,6 +1002,13 @@ async def _main_async() -> None:
     try:
         from aura.server import attach_executor
         attach_executor(executor)
+    except ImportError:
+        pass
+
+    # V63 M7: wire the Presence Engine + live AssistantState for presence_status.
+    try:
+        from aura.server import attach_presence
+        attach_presence(presence_engine, assistant_state)
     except ImportError:
         pass
 

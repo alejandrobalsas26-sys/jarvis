@@ -39,6 +39,7 @@ from loguru import logger
 import whois
 import dns.resolver
 
+from core.authority import AuthorityState, authorize_action, default_authority
 from core.ironman_mode import SessionConsent, default_consent
 from core.risk_classes import (
     classify_tool,
@@ -322,6 +323,44 @@ def _contains_shell_metacharacters(value: str) -> bool:
     return bool(_FORBIDDEN_CHARS_RE.search(value or ""))
 
 
+# ── Centralized filesystem sandbox ────────────────────────────────────────────
+# Allowed write/read roots, resolved once at call time. Mirrors the inline
+# containment check that _tool_read_file / _tool_write_file already perform, so
+# every path-taking handler can share one hardened definition instead of
+# re-implementing (and drifting from) it.
+def _sandbox_allowed_dirs() -> tuple[Path, ...]:
+    return (
+        Path.home() / "Downloads",
+        Path.home() / "Documents",
+        Path.cwd(),
+    )
+
+
+def _resolve_within_allowed(path: str) -> "Path | None":
+    """Resolve *path* and return it iff it is contained within an allowed dir.
+
+    Returns ``None`` — i.e. fail-closed — on every escape attempt: relative
+    traversal (``../``), absolute paths outside the roots, drive-letter escapes,
+    or symlinks whose target lands outside (``.resolve()`` follows symlinks and
+    normalizes ``..`` *before* the containment test, so a symlink inside an
+    allowed dir pointing outside is still rejected). Any resolution failure
+    (malformed path, OS error) is likewise treated as not-allowed.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return None
+    try:
+        p = Path(path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    for allowed in _sandbox_allowed_dirs():
+        try:
+            if p.is_relative_to(allowed.resolve()):
+                return p
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return None
+
+
 def _strip_override(tool_name: str, tool_input: dict) -> dict:
     """Return a copy of *tool_input* with any model-supplied FORCE_OVERRIDE removed.
 
@@ -543,6 +582,7 @@ class ToolExecutor:
         stt_queue: "asyncio.Queue | None" = None,
         stt_listener=None,
         consent: "SessionConsent | None" = None,
+        authority: "AuthorityState | None" = None,
     ) -> None:
         self._active_web_server: socketserver.TCPServer | None = None
         self._active_web_thread: threading.Thread | None = None
@@ -552,6 +592,12 @@ class ToolExecutor:
         # (fail-closed) when the caller doesn't wire a shared session consent —
         # see core.ironman_mode.SessionConsent / core.consent_commands.
         self.consent: SessionConsent = consent if consent is not None else default_consent()
+        # V63 — operator authority + authorized-scope posture. Defaults to
+        # STANDARD with no scopes, so scope enforcement is INACTIVE and the
+        # pre-existing risk/HITL gate governs unchanged. When the operator sets a
+        # scoped mode / registers a scope, target actions become fail-closed
+        # outside that scope (see core.authority.authorize_action).
+        self.authority: AuthorityState = authority if authority is not None else default_authority()
         from core.governance import TacticAuditLogger
         self._audit = TacticAuditLogger()
 
@@ -797,6 +843,30 @@ class ToolExecutor:
             )
             return guardrail_block
 
+        # V63 — operator authority / authorized-scope preflight. Additive and
+        # fail-closed: it PRECEDES (never replaces) the risk/HITL gate below.
+        # For a target-bound action under an active scoped authority posture, a
+        # target outside the authorized scope (or a missing/malformed target) is
+        # refused here before any challenge. Under the default STANDARD posture
+        # with no scopes, enforcement is inactive and this is a no-op — the
+        # existing gate is untouched. Authority is server-side only; it is never
+        # read from tool_input, so untrusted content cannot widen it.
+        auth_decision = authorize_action(self.authority, tool_name, tool_input)
+        if not auth_decision.allowed:
+            logger.warning(f"AUTHORITY: '{tool_name}' refused — {auth_decision.reason}")
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:scope", "blocked",
+                auth_decision.reason[:200],
+            )
+            await _aura_broadcast({
+                "type": "authority_refused",
+                "tool": tool_name,
+                "target": auth_decision.target,
+                "reason": auth_decision.reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"error": f"Fuera de alcance autorizado: {auth_decision.reason}"}
+
         # V62.0 Phase 7 — risk-class taxonomy drives the actual gating decision.
         # classify_tool() is built to match _ALWAYS_HITL_TOOLS/_HITL_EXEMPT_TOOLS
         # exactly for every known tool (verified at import time above); this is
@@ -872,6 +942,46 @@ class ToolExecutor:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             return {"error": str(e)}
+
+    async def run_capability(self, name: str, params: dict, reasoning: str = "") -> dict:
+        """V63 — execute a typed security capability (core.capabilities) through
+        the SAME gates every action passes: operator-authority scope (fail-closed
+        for target-bound tools), the risk-class NATO/HITL challenge, and the audit
+        trail. This is NOT a parallel shell path — it runs only a *registered*,
+        *installed* capability via a validated ``shell=False`` argv vector; the
+        registry refuses unknown / inventory-only / uninstalled tools.
+        """
+        from core.capabilities import execute_capability, registry as _cap_registry
+
+        cap = _cap_registry.get(name)
+        if cap is None:
+            return {"error": f"unknown capability '{name}'"}
+        if not cap.executable:
+            return {"error": f"capability '{name}' is inventory-only (no adapter)"}
+        if not cap.available():
+            return {"error": f"capability '{name}' tool not installed on this host"}
+
+        # Risk-class HITL challenge, mirroring aexecute()'s gate exactly.
+        risk_class = cap.risk_class
+        if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
+            self._audit.log_action(f"capability:{name}", reasoning, "blocked:lab_only",
+                                   "blocked", "LAB_ONLY capability — trusted lab disabled")
+            return {"error": f"capability '{name}' is LAB_ONLY — requires JARVIS_TRUSTED_LAB=true"}
+        if requires_hitl(risk_class):
+            preview = f"{name} {params}"
+            if len(preview) > 200:
+                preview = preview[:200] + "…"
+            granted, _audit = await self._challenge(f"capability:{name}", preview)
+            if not granted:
+                self._audit.log_action(f"capability:{name}", reasoning, _audit,
+                                       "blocked", "capability execution cancelled")
+                return {"error": "Ejecución de capacidad cancelada por el usuario."}
+
+        result = await execute_capability(
+            _cap_registry, name, params,
+            authority=self.authority, audit=self._audit,
+        )
+        return result.to_dict()
 
     async def aexecute_mcp(
         self, tool_name: str, tool_input: dict, call_fn, reasoning: str = ""
@@ -1722,18 +1832,32 @@ class ToolExecutor:
     ) -> dict:
         if not self.consent.screen:
             return self._consent_error("screen capture", "enable screen access")
-        import pyautogui
 
-        screenshot = pyautogui.screenshot()
+        # [SANDBOXED] Contain the caller-supplied save_path to the same allowed
+        # roots as read_file/write_file. Absent a path, default to a timestamped
+        # PNG under Downloads (an allowed root) — never the bare home dir, which
+        # is outside containment. Validate BEFORE importing/invoking pyautogui so
+        # a rejected path never captures the screen.
         if not save_path:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = str(Path.home() / f"jarvis_{ts}.png")
-        screenshot.save(save_path)
-        result: dict = {"saved": save_path}
+            target = Path.home() / "Downloads" / f"jarvis_{ts}.png"
+        else:
+            resolved = _resolve_within_allowed(save_path)
+            if resolved is None:
+                logger.warning(f"Screenshot save blocked (outside allowed dirs): {save_path!r}")
+                return {"error": "Seguridad: solo puedo guardar capturas en Downloads, Documents o el proyecto."}
+            target = resolved
+
+        import pyautogui
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        screenshot = pyautogui.screenshot()
+        screenshot.save(str(target))
+        result: dict = {"saved": str(target)}
         if analyze:
-            result["ocr"] = self._read_image_ocr(Path(save_path))[:2000]
+            result["ocr"] = self._read_image_ocr(target)[:2000]
         if analizar_topologia:
-            result["topology_analysis"] = self._analyze_topology_vlm(Path(save_path))
+            result["topology_analysis"] = self._analyze_topology_vlm(target)
         return result
 
     def _analyze_topology_vlm(self, image_path: Path) -> str:
@@ -2376,6 +2500,37 @@ class ToolExecutor:
                 entries = [e for e in entries if q in e.lower()]
             entries = entries[-limit:]
             return {"notes": entries, "total_shown": len(entries)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_project_note(self, kind: str, text: str) -> dict:
+        """[EXEMPT] Record a project fact (goal/decision/task/blocked/question/artifact).
+
+        V63 M8 — persisted via the memory fabric at scope=project with provenance
+        + timestamp, so JARVIS stays aware of ongoing work. Writes only to
+        JARVIS's own memory (LOW_IMPACT, non-HITL — same tier as save_note).
+        """
+        import asyncio as _asyncio
+        from core.project_context import ProjectFactType, record_project_fact
+        valid = {t.value for t in ProjectFactType}
+        k = (kind or "").strip().lower()
+        if k not in valid:
+            return {"error": f"kind must be one of {sorted(valid)}"}
+        if not (text or "").strip():
+            return {"error": "text is required"}
+        try:
+            ok = _asyncio.run(record_project_fact(ProjectFactType(k), text))
+            return {"recorded": bool(ok), "kind": k}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _tool_project_status(self, query: str = "") -> dict:
+        """[EXEMPT] Recall current project context — goals, decisions, tasks,
+        blockers, open questions, artifacts — grouped by type (READ_ONLY)."""
+        import asyncio as _asyncio
+        from core.project_context import summarize_project
+        try:
+            return _asyncio.run(summarize_project(query))
         except Exception as e:
             return {"error": str(e)}
 

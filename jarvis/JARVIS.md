@@ -75,6 +75,87 @@ JARVIS is your Purple Team analyst. It:
 
 ---
 
+## V63 — Unified General Agent Runtime
+
+V63 turns JARVIS from a Purple-Team platform into a **general-purpose, local,
+operator-controlled agent runtime** without losing any security capability. One
+per-turn decision object drives everything, and every autonomous component is
+bounded, gated, and resource-aware.
+
+```
+ Operator / Voice / Text / Vision / Event
+                 │
+                 ▼
+        Unified Agent Runtime            core/agent_runtime.py
+                 │
+                 ▼
+           TaskDecision                  domain · complexity · risk ·
+      (composed once per turn)           planning · agents · tools ·
+                 │                        verification · surface
+                 ▼
+          Context Assembly               memory fabric (M5) · project (M8)
+                 │
+                 ▼
+        Bounded Task Graph Planner       core/task_graph.py  (M3)
+     REASON·TOOL·AGENT·VERIFY·           cycle-safe · capped · timed ·
+     SYNTHESIZE·WAIT·HUMAN_APPROVAL      cancellable · partial-failure
+                 │
+                 ▼
+        Controlled Specialist Team       core/specialist_runtime.py (M4)
+       ┌─────────┼─────────┐             ≤2 FAST · ≤1 DEEP · resource back-off
+   Specialist Specialist Specialist      14 capability roles, one shared model
+       └─────────┼─────────┘
+                 ▼
+          Shared Blackboard              bounded · deduped · provenance ·
+                 │                        structured conflict detection
+                 ▼
+          Critic → Conflict → Verifier   evidence-driven fan-in
+                 ▼
+          Result Integrator (Synthesis)
+                 │
+                 ▼
+       Response Surface Router (M6)       voice · text · hud · report …
+                 │
+                 ▼
+       Memory Persistence (M5)           scoped · redacted · provenance
+                 │
+                 ▼
+       Presence Engine (M7)              OBSERVE→UNDERSTAND→SUGGEST→ASK→ACT
+```
+
+### Cross-cutting control planes
+
+- **Operator Authority + Scope** (`core/authority.py`) — *Reasoning Freedom ≠
+  Execution Authority.* JARVIS reasons freely about exploits, malware, and
+  offensive technique; *acting on a target* is gated by an operator-selected
+  authority mode (STANDARD / ADMIN_LOCAL / RESEARCH / CTF / TRUSTED_LAB /
+  PURPLE_TEAM / INCIDENT_RESPONSE) and a fail-closed `ScopePolicy`. Out-of-scope
+  or expired-scope target actions are refused before any challenge. Authority is
+  server-side only — untrusted content can never widen it.
+
+- **Typed Security Capability Registry** (`core/capabilities.py`) — an honest,
+  gated inventory of external tooling. Availability/version probes report what is
+  actually installed; shipped adapters (dns_lookup via nslookup, cert_inspect via
+  openssl) build validated `shell=False` argv vectors, parse to structured
+  results, capture hashed evidence artifacts, and route through
+  `ToolExecutor.run_capability` (authority + risk/HITL + audit). Tools that are
+  not present are inventory-only descriptors — never fake wrappers.
+
+### Non-negotiable invariants
+
+- **No bypass.** Every world-effect — specialist tool call, task-graph TOOL node,
+  capability adapter — delegates to `ToolExecutor.aexecute` (risk class · HITL ·
+  authority scope · audit). There is no `shell=True`, `os.system`, direct-MCP, or
+  raw-handler path anywhere in the new runtime.
+- **Bounded.** Agent teams, task graphs, blackboards, retries, and background
+  work all have hard caps and timeouts; nothing fans out or loops unbounded.
+- **Resource-aware.** Concurrency and background work back off under CPU/RAM
+  pressure and on battery — the Rule of Silicon holds on the 15W host.
+- **Fast path preserved.** Simple chat still routes `TaskDecision → direct
+  inference`; teams/graphs/presence only engage when genuinely warranted.
+
+---
+
 ## Voice Commands
 
 JARVIS responds to spoken macros (defined in `core/macros.yaml`). A selection:
@@ -137,4 +218,187 @@ JARVIS_TELEGRAM_CHAT_ID = <your Telegram user ID from @userinfobot>
 
 ---
 
+## V64 — Intelligence, Trust & Learning Fabric
+
+V64 makes JARVIS *evidence-grounded, injection-resistant, and measurable*. It
+adds a content-trust axis, a defense-in-depth injection firewall, evidence-first
+research, and (later milestones) evaluation + curated failure datasets — the
+scaffolding that must exist **before** any fine-tuning.
+
+```
+ User / Event / Agent Task → TaskDecision → Context Assembly
+        │
+        ▼
+   Trusted Research Runtime (M11)         core/research_runtime.py
+        │  query decomposition → search plan → source discovery
+        ▼
+   Source Trust Policy (M10)              core/source_trust.py
+   PRIMARY · TRUSTED_SECONDARY ·          domain rules + structural signals,
+   COMMUNITY · UNTRUSTED · BLOCKED        operator allow/blocklist, reputation
+        │
+        ▼
+   Fetch / Retrieve → Prompt Injection Firewall (M12)   core/injection_firewall.py
+        │  6 layers: source-trust · lexical · semantic (de-obfuscation) ·
+        │  context-role · tool-isolation · memory-write
+        ▼
+   Claim Extraction → Cross-Source Correlation → Evidence Blackboard
+        │
+        ▼
+   Specialist Agents → Critic → Verifier → Cited Synthesis
+        │  (code artifacts) → Security Analyzer (M13)  core/security_analyzer.py
+        │                     AST taint pass → SQLi/RCE/SSRF/… findings
+        ▼
+   Eval Logger (M14) → Failure Repository (M16) → Curated Dataset
+        → LoRA/SFT (M17) → Offline Evals → Promotion Gate → Model Registry
+```
+
+### Cross-cutting: three orthogonal trust axes
+
+JARVIS now distinguishes **three** independent trust questions, each with its own
+module — none is a substitute for another:
+
+| Axis | Question | Module |
+|------|----------|--------|
+| Execution trust | May this *command* run without a challenge? | `core/trust_engine.py` |
+| Authority/scope | May we *act on this target*? | `core/authority.py` |
+| **Content trust** | How much should this *source/data* be believed & obeyed? | `core/source_trust.py` + `core/injection_firewall.py` |
+
+### M10 — Trusted Source Registry (`core/source_trust.py`)
+
+Deterministic, pure classification of a fetched URL into a `SourceTrustTier`.
+Operator blocklist is absolute; allowlist overrides; **unknown ⇒ UNTRUSTED**
+(never COMMUNITY). Structural caps (IP host, non-HTTPS, firewall injection flag)
+only ever *lower* a tier — reputation is a soft ranking prior and never promotes.
+`CitationRecord` is valid only if the source was *actually fetched* (no invented
+citations); critical claims require an authoritative source **and** ≥2 distinct
+corroborations. Operator-only config knobs (`source_trust_allowlist/blocklist`,
+`source_require_https`), env/.env only.
+
+### M12 — Prompt Injection Firewall (`core/injection_firewall.py`)
+
+**Origin-aware** defense-in-depth. The same text is a benign question from
+`OPERATOR_INPUT` but an attack from `WEB_UNTRUSTED`; the firewall combines
+attack-typed lexical + semantic detection (NFKC + zero-width strip + base64/hex
+de-obfuscation) with a `TrustOrigin`, so benign mentions are not quarantined
+while real injections are. **Enforcement is structural, not detection-dependent:**
+
+- Untrusted/ingested content can **never** authorize a tool call
+  (`tool_influence_allowed` is False for every non-operator/non-system origin).
+- Firewall-flagged untrusted content is **never persisted** to memory
+  (`memory_fabric.store` refuses it — stored/second-order injection defense).
+- The firewall **cannot** mutate authority or scope — it imports nothing from
+  `core.authority` and never calls `set_mode`/`add_scope` (test-asserted).
+
+Wired at the single tool-loop choke point (`llm.py::_label_tool_result`, covering
+both local **and** MCP results — MCP is now correctly labeled untrusted) and at
+the memory-write path. High-severity untrusted content is quarantined
+(replaced with a neutral, observable stub) even at moderate confidence.
+
+### M11 — Trusted Research Runtime (`core/research_runtime.py`)
+
+Evidence-grounded research that **drives** existing pieces rather than adding
+parallel infra: query decomposition → source discovery → **M10** trust
+classification → fetch (guarded `ToolExecutor.aexecute`, never raw `requests`) →
+**M12** injection scan → claim extraction → `SharedBlackboard` evidence →
+cross-source correlation → conflict detection → optional verifier → cited
+synthesis. Emits a structured `ResearchResult` (claims, evidence, sources,
+conflicts, confidence, unresolved_questions, citations).
+
+Guarantees: **no invented citations** (a `CitationRecord` exists only for an
+actually-fetched source), bounded queries/sources/content, BLOCKED sources are
+never fetched, and injected pages are **quarantined and excluded from evidence**
+(never become a claim). The claim/correlate/conflict/synthesis stages are pure,
+so a research run is reproducible offline (no live Ollama/network) — search/fetch
+are injectable; production attaches them to the guarded executor at boot
+(`attach_research_runtime` in `main.py`) with the fail-closed verifier as the
+verify hook.
+
+### M14 — Evaluation Harness (`core/eval_harness.py`)
+
+The measurement layer that MUST exist **before** any fine-tuning. Runs versioned
+`EvalCase` JSONL datasets against any *target* (a turn, a research run, the
+firewall, the analyzer) that conforms to a small output contract, scores each
+case **deterministically wherever possible** (model-graded only when a `rubric`
+demands it), and emits reproducible JSON/JSONL results with baseline comparison
+and regression detection. Only the dimensions a case *specifies* are scored, so a
+case with no ground truth simply skips correctness (no false failures).
+
+Reuses `CriticEngine` + `VerificationResult` (no second scorer) — and adds the
+`CriticEngine` regression-floor tests it never had. `compare_runs` reports
+per-metric **and** pass-rate deltas, so nothing is ever "looks better": a change
+is only promotable when it does not regress. Seeded set:
+`evals/prompt_injection/injection_resistance.jsonl` — the M12 firewall scores a
+measured **100%** resistance on the adversarial set (attacks quarantined, benign
+controls not false-positived). Timeouts and target exceptions fail closed to a
+failed case; one bad case never aborts the suite.
+
+### M13 — Code & Query Security Analyzer (`core/security_analyzer.py`)
+
+A deterministic **AST** analyzer that answers "is this generated/reviewed code
+insecure?" without executing it — so JARVIS can catch its own (and others')
+dangerous code before it ships. A two-pass design first approximates taint
+(`request.*`, `input()`, `os.environ`, and any name flowing from an external
+source or dynamic-string build), then visits call/assignment sites to classify
+findings across 11 `VulnCategory` families: `SQL_INJECTION`,
+`COMMAND_INJECTION`, `INSECURE_SUBPROCESS`, `PATH_TRAVERSAL`, `SSRF`,
+`UNSAFE_DESERIALIZATION`, `TEMPLATE_INJECTION`, `PROMPT_INJECTION_SINK`,
+`DYNAMIC_CODE_EXECUTION`, `CREDENTIAL_LEAKAGE`, `WEAK_CRYPTO`.
+
+**False-positive discipline is the point.** SQLi flags *dynamic-string
+construction reaching a query sink* — concatenation, f-strings, `.format()`,
+`%`, and `sqlalchemy.text()` misuse — while parameterized queries (`?`/`%s`
+with a params tuple), ORM filters, stored-procedure calls, and fully-static
+constant queries are left clean. Tainted input escalates severity to
+`CRITICAL`; a merely dynamic (but not externally-tainted) query is `HIGH`.
+Every `SecurityFinding` carries `confidence`, `evidence`, `data_flow`,
+`remediation`, a suggested `regression_test`, and a CWE id. A `SyntaxError`
+yields **no** findings (never a crash). Exposed as a pure `analyze_code()`,
+scored through the M14 harness via `security_analyzer_eval_target()`, and
+regression-locked by `evals/sql_injection/sqli.jsonl` (vulnerable + safe
+controls, **100%** correct classification).
+
+### M16 — Failure Dataset Pipeline (`core/dataset_pipeline.py`)
+
+The *data* half of "eval-infra-before-training": it turns **M14 evaluation
+failures** into training-candidate examples and forces each through a
+fail-closed gauntlet before it can ever reach fine-tuning (M17):
+
+```
+eval failure → candidate → dedup → PII/secret scan → injection scan →
+source-trust check → quality filter → verifier review → HUMAN-APPROVAL → versioned JSONL
+```
+
+Each gate **reuses** an existing trust primitive rather than duplicating it —
+secret/PII from `memory_router` + `dlp_sensor`, content-trust of supporting
+refs from **M10** `source_trust`, injection screening from **M12**
+`injection_firewall`, the failing run from **M14** `eval_harness`, and an
+injectable verifier (production wires the VERIFIER-role `verify_answer`). The
+non-negotiables are structural, not advisory:
+
+- **Nothing auto-approves.** `evaluate()`/`curate()` can at best mark a candidate
+  `PENDING_REVIEW`; only an explicit human `approve(example, approver)` yields
+  `APPROVED`, and `write_dataset()` writes **only** `APPROVED` rows.
+- **Model text is never ground truth.** A `MODEL_GENERATED` target cannot pass
+  without *both* a verifier verdict (≥ confidence floor) *and* a trusted
+  corroborating source — no verifier ⇒ fail-closed reject.
+- **No raw-internet training.** A `BLOCKED` source is fatal; a model target with
+  only untrusted support is rejected. Targets are never fabricated — a failure
+  with no trustworthy ideal is left for human authoring, logged, not invented.
+- **No secrets in datasets.** Any secret/PII or injection match **quarantines**
+  the candidate out of the trainable pool.
+- **Reproducible + versioned + honest.** IDs are content hashes, timestamps are
+  injected (`now_ts`), datasets are written to **immutable** `<version>/` dirs
+  with a content-hash `manifest.json`, and every gate verdict (including
+  rejections and skipped-unapproved counts) is recorded — regressions are never
+  hidden. Tests: `tests/test_dataset_pipeline.py` (35).
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
+
+*V63 — the one thing became a general agent: bounded, gated, resource-aware,
+operator-controlled.*
+
+*V64 — the general agent learned what to trust: evidence-grounded,
+injection-resistant, measurable, and able to curate its own failures into
+vetted, human-approved training data.*

@@ -1,5 +1,123 @@
 # Changelog
 
+## V63.0 — General-purpose agent runtime (in progress)
+
+Evolves JARVIS from a cyber-focused local assistant toward a general-purpose,
+memory-aware, agentic runtime, **without** removing capabilities, weakening
+security controls, or performing a big-bang rewrite. Architecture and migration
+detail: `docs/OMNI_DEV_ARCHITECT_V63.md`.
+
+### Milestone 0 — baseline & safety closure
+
+- **Package version metadata aligned** from `61.0.0` to `63.0.0` — the package
+  reported V61 while V62 was merged and documented (residual drift noted in the
+  V62 report). Historical `V6x` references in code comments/docstrings are
+  intentionally left as-is (they factually record which phase added a feature).
+- **`take_screenshot` `save_path` is now sandboxed** (closes V62 residual
+  risk #8). The caller-supplied path is contained to the same allowed roots as
+  `read_file`/`write_file` (Downloads / Documents / project cwd) via a new
+  shared `tools.executor._resolve_within_allowed` helper: paths are resolved
+  before the containment check, relative traversal / absolute escape /
+  drive-letter escape / symlink-to-outside are all rejected fail-closed, and a
+  rejected path never captures the screen (consent gate still runs first). The
+  default location moved from the bare home dir (outside containment) to a
+  timestamped PNG under Downloads. HITL classification is unchanged
+  (`HIGH_IMPACT`). Tests: `tests/test_screenshot_sandbox.py` (+ updated
+  `tests/test_consent_gating.py`).
+
+### Milestone 2 — general semantic domain routing (additive)
+
+- **New `core/task_domain.py`**: a `TaskDomain` enum (GENERAL / RESEARCH /
+  CODER / ARCHITECT / MATHEMATICS / LANGUAGE / VISION / CYBER_BLUE /
+  CYBER_PURPLE / DFIR / GRC / PLANNER / CRITIC / VERIFIER) and a pure,
+  deterministic `classify_domain(prompt, tool_names)` (bilingual EN/ES keyword
+  scoring, fixed tie-break order, tool-name hints). Semantic **domain** is a
+  dimension independent of `ModelRole` (which model runs), complexity, and risk
+  — it only *advises* a preferred role. `route()`'s precedence and the
+  `ModelRole` enum are **not touched**, so every `test_model_router_roles.py` /
+  `test_live_brain_v61.py` assertion still holds. Returns a `DomainSignal`
+  (domain, confidence, preferred_role, requires_planning, prefers_agent_team,
+  reason, matched). Composition into one per-turn decision lands in M1. Tests:
+  `tests/test_task_domain.py` (13).
+
+### Milestone 6 — response surface router (reason once, render per surface)
+
+- **New `core/response_surface.py`**: a `ResponseSurface` enum (VOICE / TEXT /
+  HUD / TECHNICAL / REPORT / NOTIFICATION) and a pure `render(text, surface)`
+  that adapts *one* reasoning result to a surface **without re-running the
+  model**. TEXT / TECHNICAL / REPORT are verbatim (lossless); VOICE strips
+  Markdown (code fences, backticks, emphasis, headers, tables, links) while
+  preserving every prose word; HUD / NOTIFICATION are bounded, single-line
+  summaries. Invariant (presentation changes, reasoning truth does not) is
+  test-enforced.
+- **Wired VOICE into the live TTS path** (`main._run_turn` consumer): the spoken
+  channel now renders `ResponseSurface.VOICE` per sentence, so TTS reads
+  naturally instead of vocalizing ``backticks``/`**asterisks**`/table pipes,
+  while the console keeps the full TEXT surface. Closes the "brief in voice"
+  half of V62 residual risk #6. Tests: `tests/test_response_surface.py` (11,
+  incl. a live `_run_turn` wiring test); voice-parity suite re-run green.
+
+### Milestone 1 — unified live agent runtime (composed per-turn decision)
+
+- **New `core/agent_runtime.py`**: `TaskDecision` — the composed per-turn
+  decision object (domain / complexity / risk / requires_planning /
+  requires_tools / prefers_agent_team / requires_verification /
+  preferred_model_role / response_surface) — plus `route_turn()` (the single
+  canonical routing + `force_deep` escalation) and `assemble_task_decision()`
+  which layers M2 domain + M6 surface on top of the authoritative routing
+  `ModelDecision` without side effects or tool execution.
+- **Single-source routing**: `LLM._route_turn` now delegates to
+  `agent_runtime.route_turn`, so there is exactly one FAST→DEEP escalation
+  implementation (no drift). Its tests still pass unchanged.
+- **Wired into `chat_stream`**: the live turn now calls
+  `assemble_task_decision(...)` once and reads `td.model_decision` for model
+  selection + verifier gating — **byte-identical** to before — while the AURA
+  `model_decision` event gains additive domain / surface / planning telemetry.
+  Fast path stays fast (GENERAL chat: no planning/agents/verify); `force_deep`
+  still escalates. All ToolExecutor / consent / verifier / memory / cancellation
+  invariants preserved. Tests: `tests/test_agent_runtime.py` (13, incl.
+  model_decision parity + live-wiring characterization); `test_live_brain_v61.py`
+  / `test_model_router_roles.py` re-run green.
+
+### Milestone 5 — scoped memory fabric facade
+
+- **New `core/memory_fabric.py`**: a policy layer unifying the three existing
+  memory stores (episodic / KnowledgeVault / VectorMemory) behind one facade
+  **without migrating or deleting any store** (adapters wrap them unchanged —
+  the V62 "consolidate before adding" direction, residual risk #4). Enforces the
+  policy the raw stores lack: secret redaction on write, untrusted-source
+  labeling (untrusted memories excluded from retrieval by default = anti-injection),
+  sensitivity labels + scope filters, **bounded** retrieval (never a full-store
+  dump), dedup by normalized content, relevance+recency ranking, and provenance
+  preserved on every record. `Sensitivity` enum, `Provenance`/`MemoryRecord`
+  dataclasses, injectable `RetrievalAdapter`/`StorageAdapter` protocols,
+  `EpisodicAdapter` (primary, read+write) + `VectorMemoryAdapter`, and a
+  `get_fabric()` singleton.
+- **Wired `store()` into the live write path**: `LLM._maybe_persist_memory` now
+  routes the conversation-memory write through `get_fabric().store(...)`,
+  centralizing redaction/provenance/sensitivity/untrusted-labeling. Behavior-
+  preserving (still an internal, scoped, redacted `conversation_memory` episode;
+  sensitivity was already the `normal` default) and the secret-skip gate is kept.
+  `retrieve()` is the facade read API (implemented + tested); migrating the
+  PageRank hot-retrieval path onto it is the next deliberate gradual step (so it
+  lands with its own regression coverage). Tests: `tests/test_memory_fabric.py`
+  (14, incl. the live `_maybe_persist_memory` wiring + secret-skip).
+
+### Milestone 8 — project & decision awareness
+
+- **New `core/project_context.py`**: records/recalls project facts (goal /
+  decision / task / blocked / question / artifact) via the M5 memory fabric at
+  `scope="project"` with provenance + timestamps — *memory retrieval, not a
+  static prompt*. `record_project_fact()`, `recall_project_context()` (bounded,
+  untrusted-excluded), `summarize_project()` (grouped by type).
+- **Two new tools** (real production callers): `project_note(kind, text)` to
+  capture a fact and `project_status(query="")` to answer "what are we building /
+  what did we decide / what's blocked". Classified `LOW_IMPACT` (write to own
+  memory, like `save_note`) and `READ_ONLY` respectively — both non-HITL; the
+  risk_classes completeness + legacy-consistency guards stay green. Also
+  gives the M5 `fabric.retrieve()` a live production caller. Tests:
+  `tests/test_project_context.py` (10); risk_classes suite re-run green.
+
 ## V62.0 — Voice/text runtime unification, consent enforcement, MCP gateway hardening
 
 Full details: `docs/OMNI_DEV_ARCHITECT_V62.md` (old-vs-new call graphs,

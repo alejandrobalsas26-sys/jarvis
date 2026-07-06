@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis"
-version = "61.0.0"
+version = "63.0.0"
 description = "Local-first, Ollama-powered AI workstation: voice agent, SOC/DFIR automation, and a guarded tool executor."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -14,7 +14,6 @@ import re
 import time as _time
 import uuid
 import asyncio
-import dataclasses
 from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
@@ -27,11 +26,9 @@ from core.config import settings
 # V61 — live role-based routing, post-stream verification, memory discipline.
 from core.model_router import (
     select_model,
-    route,
     resolve_inference_model,
     is_security_sensitive_turn,
     ModelDecision,
-    ModelRole,
 )
 from core.verification import should_verify, verify_answer
 from core.memory_router import (
@@ -39,7 +36,12 @@ from core.memory_router import (
     should_write_memory,
     classify_memory_scope,
     contains_secret,
-    redact_secrets,
+)
+# V64 M12 — layered, origin-aware prompt-injection firewall (enforcement).
+from core.injection_firewall import (
+    apply_firewall,
+    origin_for_mcp_tool,
+    origin_for_source_class,
 )
 # v34.0 — cognitive self-optimization
 from core.cognitive_optimizer import (
@@ -718,6 +720,53 @@ TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "project_note",
+            "description": (
+                "Record a project fact so JARVIS stays aware of ongoing work. Use when "
+                "Alejandro states a project goal, makes an architecture/design decision, "
+                "defines a task, hits a blocker, raises an open question, or produces an "
+                "artifact worth tracking across sessions. Stored with a timestamp at "
+                "project scope (memory-backed, not a static note)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["goal", "decision", "task", "blocked", "question", "artifact"],
+                        "description": "The kind of project fact being recorded.",
+                    },
+                    "text": {"type": "string", "description": "The fact, in one concise sentence."},
+                },
+                "required": ["kind", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "project_status",
+            "description": (
+                "Recall the current project context — goals, decisions, tasks, blockers, "
+                "open questions, artifacts — grouped by type. Use to answer 'what are we "
+                "building?', 'what did we decide?', 'what's blocked?', 'what remains to do?'. "
+                "Reads project-scoped memory only; pass an optional query to focus recall."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional focus for recall (e.g. 'auth decisions'). Empty = broad status.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_notes",
             "description": (
                 "Retrieve saved notes from brain/notes.md. "
@@ -1300,41 +1349,67 @@ class LLM:
         Escalation-only: never de-escalates, and never overrides a role the router
         already chose for a specific reason (CODER/VISION/VERIFIER/CLOUD/DEEP).
         model_router.py's ModelRole enum and route() precedence are untouched.
+
+        V63 M1: the routing + force_deep escalation now live in
+        core.agent_runtime.route_turn — the single source that
+        assemble_task_decision composes. This delegates to it, so behavior is
+        byte-identical and there is exactly one routing implementation (no drift).
         """
-        sec = is_security_sensitive_turn(user_message, tool_names)
-        decision = route(user_message, security_sensitive=sec, allow_cloud=False)
-        if force_deep and decision.role == ModelRole.FAST:
-            decision = dataclasses.replace(
-                decision,
-                role=ModelRole.DEEP,
-                requires_verification=True,
-                reason=f"{decision.reason}; escalated by cognitive_optimizer.force_deep",
-            )
-        return decision
+        from core.agent_runtime import route_turn
+        return route_turn(user_message, tool_names=tool_names, force_deep=force_deep)
 
     def _label_tool_result(self, tool_name: str, result_str: str) -> str:
-        """Wrap a tool result with trust metadata before it enters history (Phase 5).
+        """Wrap a tool result with trust metadata and run the V64 injection
+        firewall before it enters history (Phase 5 envelope, hardened in V64 M12).
 
-        Every result is tagged as tool output; web / file / RAG / screen /
-        clipboard sources are additionally flagged UNTRUSTED so the model treats
-        embedded text as data, never as policy (prompt-injection defense).
+        Every result is tagged as tool output. Web / file / RAG / screen /
+        clipboard sources AND every MCP tool result (Gmail/Drive/…) are UNTRUSTED:
+        they pass through the layered, origin-aware firewall (detect → neutralize
+        or quarantine). Embedded text is treated strictly as data — it can never
+        authorize a tool call, mutate authority/scope, or persist as trusted
+        memory. The firewall is fail-open (never crashes the tool loop) but
+        fail-closed on ambiguity (high-severity untrusted content is quarantined).
         Truncation is applied AFTER labeling so the envelope is never dropped.
         """
         source = _UNTRUSTED_TOOL_SOURCES.get(tool_name)
-        if source is None:
+        is_mcp = tool_name in self._mcp_tool_names
+        if source is None and not is_mcp:
             wrapper: dict = {"_trust": "tool_output", "tool": tool_name, "content": result_str}
         else:
+            origin = origin_for_mcp_tool(tool_name) if is_mcp else origin_for_source_class(source)
+            try:
+                fr = apply_firewall(result_str, origin, max_chars=_TOOL_RESULT_MAX_CHARS)
+                content = fr.safe_content
+                fw_meta = {
+                    "detected": fr.assessment.detected,
+                    "attack_type": fr.assessment.attack_type.value,
+                    "confidence": round(fr.assessment.confidence, 2),
+                    "quarantined": fr.quarantined,
+                    "tool_influence_allowed": fr.assessment.tool_influence_allowed,
+                    "memory_write_allowed": fr.assessment.memory_write_allowed,
+                }
+                if fr.quarantined:
+                    logger.warning(
+                        f"INJECTION_FIREWALL: quarantined {origin.value} content from "
+                        f"'{tool_name}' (attack={fr.assessment.attack_type.value}, "
+                        f"conf={fr.assessment.confidence:.2f})"
+                    )
+            except Exception as e:  # noqa: BLE001 — firewall must never crash the turn
+                logger.warning(f"INJECTION_FIREWALL: assess failed for {tool_name}: {e}")
+                content = result_str
+                fw_meta = {"detected": False, "error": "firewall_unavailable"}
             wrapper = {
                 "_trust": "untrusted_tool_output",
-                "_source": source,
+                "_source": source or origin.value,
                 "_warning": _UNTRUSTED_BANNER,
+                "_firewall": fw_meta,
                 "tool": tool_name,
-                "content": result_str,
+                "content": content,
             }
         out = json.dumps(wrapper, ensure_ascii=False)
         if len(out) > _TOOL_RESULT_MAX_CHARS:
             budget = max(_TOOL_RESULT_MAX_CHARS - _TRUST_ENVELOPE_RESERVE, 0)
-            wrapper["content"] = result_str[:budget]
+            wrapper["content"] = str(wrapper.get("content", ""))[:budget]
             wrapper["truncated"] = True
             wrapper["original_len"] = len(result_str)
             out = json.dumps(wrapper, ensure_ascii=False)
@@ -1443,16 +1518,19 @@ class LLM:
             except Exception:
                 pass
             try:
-                from core.episodic_memory import store_episode
-                payload = redact_secrets(
-                    f"[{scope}] user: {user_message}\nassistant: {final_answer}"
-                )
-                await store_episode(
+                # V63 M5 — route the write through the memory fabric so secret
+                # redaction, provenance, sensitivity, and untrusted-source labeling
+                # are applied in one place. Behavior-preserving: still an internal,
+                # scoped, redacted conversation_memory episode (the fabric redacts
+                # the payload; sensitivity was already the 'normal' default).
+                from core.memory_fabric import Sensitivity, get_fabric
+                payload = f"[{scope}] user: {user_message}\nassistant: {final_answer}"
+                await get_fabric().store(
                     payload,
-                    event_type="conversation_memory",
-                    severity="INFO",
+                    memory_type="conversation_memory",
                     source="internal",
                     scope=scope,
+                    sensitivity=Sensitivity.NORMAL,
                 )
             except Exception as e:
                 logger.debug(f"MEMORY: episodic store unavailable: {e}")
@@ -1535,16 +1613,30 @@ class LLM:
 
         self.history.append({"role": "user", "content": user_message})
 
-        # V61 Phase 1 — live role-based routing decision (computed once per turn;
-        # the user message is constant across the agentic tool loop). Drives model
-        # selection, verifier gating, and AURA telemetry.
-        decision = self._route_turn(user_message, force_deep=_force_deep)
+        # V61 Phase 1 / V63 M1 — unified per-turn decision, computed once (the
+        # user message is constant across the agentic tool loop). The composed
+        # TaskDecision layers semantic domain (M2) + response surface (M6) +
+        # planning/agent advisories on top of the authoritative routing
+        # ModelDecision. `decision` below IS td.model_decision, so model
+        # selection and verifier gating are byte-identical to before.
+        from core.agent_runtime import assemble_task_decision
+        from core.response_surface import ResponseSurface
+        task_decision = assemble_task_decision(
+            user_message,
+            force_deep=_force_deep,
+            query_category=_query_category,
+            # streaming default; the VOICE surface render is applied downstream
+            # in main._run_turn's TTS consumer (M6).
+            surface=ResponseSurface.TEXT,
+        )
+        decision = task_decision.model_decision
         _routed_model = resolve_inference_model(decision)
         logger.debug(
-            "ROUTE: role={} provider={} model={} complexity={:.2f} "
-            "requires_verification={} reason={!r}".format(
-                decision.role.value, decision.provider, _routed_model,
-                decision.complexity, decision.requires_verification, decision.reason,
+            "ROUTE: role={} domain={} provider={} model={} complexity={:.2f} "
+            "requires_verification={} planning={} reason={!r}".format(
+                decision.role.value, task_decision.domain.value, decision.provider,
+                _routed_model, decision.complexity, decision.requires_verification,
+                task_decision.requires_planning, decision.reason,
             )
         )
         try:
@@ -1558,6 +1650,7 @@ class LLM:
                 "complexity": round(decision.complexity, 2),
                 "requires_verification": decision.requires_verification,
                 "reason": decision.reason,
+                **task_decision.telemetry(),
                 "timestamp": _dt.now(_tz).isoformat(),
             }))
         except Exception:

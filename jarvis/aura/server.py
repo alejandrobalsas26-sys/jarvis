@@ -210,11 +210,23 @@ _pending_ws_responses: dict[int, asyncio.Future] = {}
 # Executor reference injected by main.py
 _executor_ref = None
 
+# V63 M7 — Presence Engine + shared AssistantState references injected by main.py.
+_presence_ref = None
+_presence_state_ref = None
+
 
 def attach_executor(executor) -> None:
     """Store a reference to the ToolExecutor for HUD command dispatch."""
     global _executor_ref
     _executor_ref = executor
+
+
+def attach_presence(engine, state) -> None:
+    """Store the Presence Engine + live AssistantState for the presence_status
+    HUD command (V63 M7)."""
+    global _presence_ref, _presence_state_ref
+    _presence_ref = engine
+    _presence_state_ref = state
 
 
 async def telemetry_broadcaster() -> None:
@@ -363,8 +375,101 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             agents = [str(a)[:40] for a in agents][:5]
             incidents = correlator.get_active_incidents()
             ctx       = incidents[0] if incidents else {}
-            asyncio.create_task(orchestrator.run_task(task, agents, ctx))
+
+            # V63 M4 — prefer the controlled specialist team runtime (bounded
+            # concurrency, shared blackboard, structured conflict detection,
+            # provenance). Falls back to the legacy sequential orchestrator on
+            # any error so this live command never regresses.
+            async def _run_controlled_team() -> None:
+                try:
+                    from core.specialist_runtime import team_runtime
+                    await team_runtime.run_legacy_agents(task, agents, ctx)
+                except Exception as exc:
+                    logger.debug(f"AURA: team_runtime fallback → orchestrator: {exc}")
+                    await orchestrator.run_task(task, agents, ctx)
+
+            asyncio.create_task(_run_controlled_team())
             return {"status": "started", "agents": agents}
+
+        elif cmd == "plan_task":
+            # V63 M3 — operator-triggered bounded task-graph planning. Builds a
+            # per-turn TaskDecision from the objective, and only runs a graph when
+            # planning is actually warranted (fast path is never forced through it).
+            objective = str(args.get("objective", args.get("task", "")))[:400].strip()
+            if not objective:
+                return {"error": "plan_task requires an 'objective'"}
+            from core.agent_planner import agent_planner, should_plan
+            from core.agent_runtime import assemble_task_decision
+            td = assemble_task_decision(objective)
+            explicit = bool(args.get("force"))
+            if not should_plan(td, explicit=explicit):
+                return {"status": "skipped",
+                        "reason": "objective does not warrant multi-step planning",
+                        "domain": td.domain.value}
+
+            async def _run_plan() -> None:
+                try:
+                    result = await agent_planner.plan_and_run(objective, td)
+                    await broadcast_fn({
+                        "type": "plan_complete",
+                        "objective": objective[:120],
+                        "graph_status": result.status,
+                        "completed": result.completed,
+                        "failed": result.failed,
+                        "elapsed_s": result.elapsed_s,
+                    })
+                except Exception as exc:
+                    logger.debug(f"AURA: plan_task error: {exc}")
+
+            asyncio.create_task(_run_plan())
+            return {"status": "started", "domain": td.domain.value,
+                    "planning": True}
+
+        elif cmd == "capability_inventory":
+            # V63 — honest report of which security tools are installed here.
+            from core.capabilities import registry as _cap_registry
+            inv = _cap_registry.inventory()
+            return {"capabilities": inv,
+                    "available": [c["name"] for c in inv if c["available"]],
+                    "executable": [c["name"] for c in inv
+                                   if c["available"] and c["executable"]]}
+
+        elif cmd == "run_capability":
+            # V63 — operator-triggered typed security capability, routed through
+            # the ToolExecutor's authority/HITL/audit gates (no shell bypass).
+            name = str(args.get("name", "")).strip()
+            params = args.get("params") or {}
+            if not name or not isinstance(params, dict):
+                return {"error": "run_capability requires 'name' and dict 'params'"}
+            tex = executor or _executor_ref
+            if tex is None:
+                return {"error": "tool executor unavailable"}
+            result = await tex.run_capability(name, params, "aura:run_capability")
+            return {"result": result}
+
+        elif cmd == "presence_status":
+            # V63 M7 — report the current proactive-presence posture (which
+            # ladder rungs the live mode / consent / authority / resources permit).
+            if _presence_ref is None or _presence_state_ref is None:
+                return {"error": "presence engine not attached"}
+            from core.presence import PresenceSignal
+            tex = executor or _executor_ref
+            try:
+                vm = psutil.virtual_memory()
+                batt = psutil.sensors_battery()
+                on_batt = bool(batt is not None and not batt.power_plugged)
+                cpu = psutil.cpu_percent(interval=None)
+            except Exception:
+                vm, on_batt, cpu = None, False, 0.0
+            signal = PresenceSignal(
+                mode=_presence_state_ref.mode,
+                consent=getattr(tex, "consent", None) or PresenceSignal().consent,
+                authority=getattr(tex, "authority", None),
+                cpu_pct=cpu,
+                ram_pct=(vm.percent if vm else 0.0),
+                on_battery=on_batt,
+            )
+            return {"presence": _presence_ref.snapshot(signal)}
 
         elif cmd == "generate_report":
             from core.correlator        import correlator

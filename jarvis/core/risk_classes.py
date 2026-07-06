@@ -59,12 +59,14 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "consultar_base_conocimiento", "get_system_status", "query_knowledge",
     "decode_payload", "hash_file", "port_lookup", "regex_test",
     "list_notes", "git_query",
+    "project_status",   # V63 M8 — reads project-scoped memory only
 })
 
 # ── Tools that mutate only JARVIS's own local data stores (notes, vector
 #    store) — never the OS, network, or an external system ─────────────────
 _LOW_IMPACT_TOOLS: frozenset[str] = frozenset({
     "save_note", "estudiar_tema", "ingest_docs",
+    "project_note",   # V63 M8 — writes a project fact to JARVIS's own memory
 })
 
 # ── Tools that change local host/application state in an easily-undoable

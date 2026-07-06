@@ -107,6 +107,25 @@ class Settings(BaseSettings):
             return v.strip().lower() in {"1", "true", "yes", "on"}
         return bool(v)
 
+    # ── Source Trust Registry (V64 M10) — operator-only content-trust knobs ───
+    # Tune how retrieved *sources* are trusted as evidence — a separate axis from
+    # trusted_lab_mode / authority. NEVER set from LLM/tool input (env/.env only).
+    #   source_trust_allowlist : CSV of "domain" (→ trusted_secondary) or
+    #       "domain=tier" (primary|trusted_secondary|community|untrusted|blocked).
+    #   source_trust_blocklist : CSV of domains forced to BLOCKED (fail-closed).
+    #   source_require_https   : demote non-HTTPS sources to at most COMMUNITY
+    #       (auto-relaxed under trusted_lab_mode for isolated http homelabs).
+    source_trust_allowlist: str = ""
+    source_trust_blocklist: str = ""
+    source_require_https:   bool = True
+
+    @field_validator("source_require_https", mode="before")
+    @classmethod
+    def _coerce_source_https(cls, v) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(v)
+
     # ── Validators ────────────────────────────────────────────────────────────
 
     @field_validator("whisper_model")
