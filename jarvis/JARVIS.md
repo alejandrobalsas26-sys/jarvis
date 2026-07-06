@@ -529,6 +529,30 @@ per-domain leaderboard plus a `RoutingRecommendation` (`by_domain` / `by_role`,
 mapped through the M15 skill profiles) that is explicitly **advisory**
 (`auto_applied: false`). Tests: `tests/test_model_tournament.py` (12).
 
+### Self-Debugging Runtime (`core/self_debug.py`)
+
+When a tool/operation fails, this runtime diagnoses *why* and proposes a
+**bounded, safety-constrained** repair — a couple of retries at most, and only
+for failures a retry can legitimately fix (transient timeout, malformed output,
+correctable arguments). It diagnoses and *decides*; it never reaches a tool
+directly — execution stays with the caller's injected `attempt_fn` through the
+normal `ToolExecutor` gate, so no new execution path is created. The hard rules
+are structural:
+
+- **No infinite retry** — a hard retry cap (default 2, ceiling 3).
+- **No destructive auto-retry** — a destructive operation gets exactly one
+  attempt, then stops and escalates.
+- **No authority/scope expansion, no HITL bypass, no security-policy change** — a
+  repair may only adjust ordinary tool arguments; any proposed argument touching
+  an authority/scope/consent/force key is **rejected fail-closed**, and
+  scope-denied / auth failures escalate to a human instead of being retried.
+- **No silent error hiding** — every attempt, diagnosis, and the final error are
+  recorded in the `RepairOutcome`; an "ok" result that fails post-verification is
+  never silently accepted. Tests: `tests/test_self_debug.py` (17).
+
+*V65 completes the loop: measure → curate → train → register → promote by
+evidence → route → observe → roll back — bounded, reproducible, reversible.*
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
