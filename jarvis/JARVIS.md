@@ -487,6 +487,33 @@ baseline for that role, governed by a fail-closed `PromotionPolicy`.
   artifacts are hash-verified on registration; the registry round-trips to JSON.
   Tests: `tests/test_model_registry.py` (17).
 
+### M18 — Continuous Improvement Loop (`core/improvement_loop.py`)
+
+M18 is a **coordinator, not a new engine** — it sequences the systems already
+built and duplicates none of them (no second evaluator, curator, trainer, or
+router). It enforces the central discipline: **fine-tuning is not the answer to
+every failure.** A deterministic classifier maps each M14 failure to the cheapest
+adequate remedy:
+
+| Failure | Category | Remedy (not training) |
+|---------|----------|-----------------------|
+| injection not resisted | `PROMPT_INJECTION_FAILURE` | firewall / adversarial eval |
+| wrong/ missing tool | `TOOL_SELECTION_ERROR` | tool schema / examples |
+| forbidden tool used | `SCOPE_POLICY_ERROR` | human scope-policy review |
+| bad routing | `ROUTING_ERROR` | routing policy / eval data |
+| invalid citation | `CITATION_ERROR` | trusted RAG |
+| evidence-domain miss | `KNOWLEDGE_GAP` | trusted RAG |
+| timeout / OOM | `TIMEOUT` / `RESOURCE_PRESSURE` | scheduling policy |
+| genuine reasoning/hallucination gap | `REASONING_ERROR` / `HALLUCINATION` | **training candidate** |
+
+Only genuine reasoning/hallucination failures **with a trustworthy target**
+become training candidates — and even then they flow through **M16 curation**,
+stopping at `PENDING_REVIEW`; the coordinator **never approves, trains, or
+promotes** (all remain explicit and human-gated). A training-warranted failure
+with no trustworthy target routes to human authoring rather than fabricating a
+target. Cycles are **bounded** (excess events deferred and *counted*, never
+silently dropped). Tests: `tests/test_improvement_loop.py` (16).
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
