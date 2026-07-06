@@ -394,6 +394,52 @@ non-negotiables are structural, not advisory:
 
 ---
 
+## V65 — Adaptive Learning Runtime
+
+V65 closes the adaptive-intelligence lifecycle: JARVIS learns *what specialist
+skills are expected*, *measures* them, and — only on measured evidence — decides
+whether a failure needs better retrieval, tools, routing, planning, prompts,
+training, or a stronger model. The lifecycle is **measurable, reproducible, and
+reversible** end-to-end:
+
+```
+real interaction → evaluation → failure classification → M16 curated candidate →
+trust/secret/injection/quality gates → human approval → versioned dataset →
+training experiment → candidate artifact → offline eval → baseline comparison →
+promotion gate ─┬─ promote → route model → observe → detect regression → rollback
+                └─ reject → archive
+```
+
+### M15 — Agent Skill Profiles (`core/skill_profiles.py`)
+
+A **SkillProfile is an evaluation + operating contract** for a specialist role —
+not another prompt directory and not another agent runtime. It sits on top of the
+existing `SpecialistSpec` (the single source of truth for a role's model tier,
+tool categories, context budget, and memory scope) and adds the missing
+measurable-quality layer: owned `TaskDomain`s, preferred `ModelRole` (advisory —
+`route()` stays authoritative), **evidence** and **verification** policies, the
+eval datasets that benchmark the role, per-role quality metrics with minimum
+**promotion thresholds**, and latency/resource budgets. One profile per role for
+all **15** specialist roles.
+
+**A profile can only ever *narrow* a spec.** `validate_against_spec` rejects any
+profile that grants a tool category the spec lacks, raises the context budget
+above the spec, or changes the tier — and `_build_default_registry` runs that
+validation **fail-closed at construction**, so a capability-widening profile can
+never ship. A profile therefore *cannot* weaken ToolExecutor, authority, or
+scope: it has no channel to.
+
+The registry is a **real production caller**, not documentation — it is wired
+into `AgentTeamSelector`: a high-risk domain's profile (RESEARCH, DFIR,
+CYBER_PURPLE, GRC, CYBER_BLUE) **forces the VERIFIER into the team**, additively
+(it can add verification, never remove a role or grant a capability), respecting
+the global agent cap. `SkillEvaluationSummary.from_eval_run` scores a role
+against a real M14 `EvalRun`, so promotability is *measured* against the profile's
+thresholds (an absent gating metric fails closed), never asserted. Tests:
+`tests/test_skill_profiles.py` (25).
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
 
 *V63 — the one thing became a general agent: bounded, gated, resource-aware,
@@ -402,3 +448,6 @@ operator-controlled.*
 *V64 — the general agent learned what to trust: evidence-grounded,
 injection-resistant, measurable, and able to curate its own failures into
 vetted, human-approved training data.*
+
+*V65 — the agent learned what skills it owes, how to measure them, and how to
+improve on evidence: reproducible, promotable, reversible.*
