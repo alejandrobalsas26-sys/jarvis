@@ -464,6 +464,29 @@ explicit (`execute(config, confirm=run_id)`), never automatic, never on the chat
 loop; and a `run_id` can never silently overwrite another. Metadata lives under a
 versioned `training/` tree. Tests: `tests/test_training_pipeline.py` (23).
 
+### Model Registry + Promotion/Rollback (`core/model_registry.py`)
+
+The system of record for model artifacts and the **only** path by which a model
+becomes ACTIVE for a role. A model is never promoted because "it feels smarter":
+promotion is an evidence-based comparison of a candidate's
+`ModelEvaluationSnapshot` (built from a real M14 `EvalRun`) against the current
+baseline for that role, governed by a fail-closed `PromotionPolicy`.
+
+- **No promotion without evaluation** — a candidate with no snapshot is rejected.
+- **Critical regressions always block** — a drop on any safety dimension
+  (injection resistance, tool safety, forbidden-output, verification, citation
+  validity) blocks promotion regardless of gains elsewhere; the overall pass-rate
+  may not fall past the regression budget.
+- **Role-specific promotion** — assignments are per `ModelRole`; a coder candidate
+  can win CODER (measured on its target domains) without displacing FAST/general.
+  Tradeoffs are allowed within budget — one model need not win every domain.
+- **Reversible** — every activation records a `RollbackPointer` to the model it
+  replaced; `rollback(role)` restores it, deprecating the regressor. Promotion
+  history is append-only and never rewritten — regressions are never hidden.
+- Model versions are immutable identities (duplicate `model_id` refused); adapter
+  artifacts are hash-verified on registration; the registry round-trips to JSON.
+  Tests: `tests/test_model_registry.py` (17).
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
