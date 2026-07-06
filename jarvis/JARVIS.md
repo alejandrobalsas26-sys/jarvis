@@ -357,6 +357,41 @@ scored through the M14 harness via `security_analyzer_eval_target()`, and
 regression-locked by `evals/sql_injection/sqli.jsonl` (vulnerable + safe
 controls, **100%** correct classification).
 
+### M16 — Failure Dataset Pipeline (`core/dataset_pipeline.py`)
+
+The *data* half of "eval-infra-before-training": it turns **M14 evaluation
+failures** into training-candidate examples and forces each through a
+fail-closed gauntlet before it can ever reach fine-tuning (M17):
+
+```
+eval failure → candidate → dedup → PII/secret scan → injection scan →
+source-trust check → quality filter → verifier review → HUMAN-APPROVAL → versioned JSONL
+```
+
+Each gate **reuses** an existing trust primitive rather than duplicating it —
+secret/PII from `memory_router` + `dlp_sensor`, content-trust of supporting
+refs from **M10** `source_trust`, injection screening from **M12**
+`injection_firewall`, the failing run from **M14** `eval_harness`, and an
+injectable verifier (production wires the VERIFIER-role `verify_answer`). The
+non-negotiables are structural, not advisory:
+
+- **Nothing auto-approves.** `evaluate()`/`curate()` can at best mark a candidate
+  `PENDING_REVIEW`; only an explicit human `approve(example, approver)` yields
+  `APPROVED`, and `write_dataset()` writes **only** `APPROVED` rows.
+- **Model text is never ground truth.** A `MODEL_GENERATED` target cannot pass
+  without *both* a verifier verdict (≥ confidence floor) *and* a trusted
+  corroborating source — no verifier ⇒ fail-closed reject.
+- **No raw-internet training.** A `BLOCKED` source is fatal; a model target with
+  only untrusted support is rejected. Targets are never fabricated — a failure
+  with no trustworthy ideal is left for human authoring, logged, not invented.
+- **No secrets in datasets.** Any secret/PII or injection match **quarantines**
+  the candidate out of the trainable pool.
+- **Reproducible + versioned + honest.** IDs are content hashes, timestamps are
+  injected (`now_ts`), datasets are written to **immutable** `<version>/` dirs
+  with a content-hash `manifest.json`, and every gate verdict (including
+  rejections and skipped-unapproved counts) is recorded — regressions are never
+  hidden. Tests: `tests/test_dataset_pipeline.py` (35).
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
@@ -365,4 +400,5 @@ controls, **100%** correct classification).
 operator-controlled.*
 
 *V64 — the general agent learned what to trust: evidence-grounded,
-injection-resistant, and measurable.*
+injection-resistant, measurable, and able to curate its own failures into
+vetted, human-approved training data.*
