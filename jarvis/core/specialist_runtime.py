@@ -632,8 +632,21 @@ class AgentTeamSelector:
     only when it is actually warranted, and is always capped at
     ``policy.max_total_agents`` including the CRITIC/VERIFIER fan-in roles."""
 
-    def __init__(self, policy: TeamExecutionPolicy | None = None) -> None:
+    def __init__(self, policy: TeamExecutionPolicy | None = None, registry=None) -> None:
         self.policy = policy or TeamExecutionPolicy()
+        # M15 skill-profile registry (lazy default). Consulted only to ADD
+        # verification for high-risk domains — it can never remove a role or grant
+        # a capability, so it cannot weaken any control.
+        self._registry = registry
+
+    def _skill_registry(self):
+        if self._registry is None:
+            try:
+                from core.skill_profiles import get_skill_registry
+                self._registry = get_skill_registry()
+            except Exception:  # noqa: BLE001 — profiles are advisory; never block selection
+                return None
+        return self._registry
 
     def should_form_team(self, task_decision) -> bool:
         return bool(
@@ -652,8 +665,17 @@ class AgentTeamSelector:
             or getattr(task_decision, "requires_planning", False)
         if complex_turn and SpecialistRole.CRITIC not in roles:
             roles.append(SpecialistRole.CRITIC)
-        if getattr(task_decision, "requires_verification", False) \
-                or getattr(task_decision, "security_sensitive", False):
+
+        # M15: the domain's skill profile can REQUIRE verification (e.g. RESEARCH,
+        # DFIR, CYBER_PURPLE, GRC). This only ever adds the VERIFIER — additive,
+        # never a removal or a capability grant.
+        registry = self._skill_registry()
+        profile_requires_verify = bool(
+            registry is not None and registry.requires_verification_for_domain(domain)
+        )
+        if (getattr(task_decision, "requires_verification", False)
+                or getattr(task_decision, "security_sensitive", False)
+                or profile_requires_verify):
             if SpecialistRole.VERIFIER not in roles:
                 roles.append(SpecialistRole.VERIFIER)
 

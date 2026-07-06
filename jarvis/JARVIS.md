@@ -394,6 +394,167 @@ non-negotiables are structural, not advisory:
 
 ---
 
+## V65 — Adaptive Learning Runtime
+
+V65 closes the adaptive-intelligence lifecycle: JARVIS learns *what specialist
+skills are expected*, *measures* them, and — only on measured evidence — decides
+whether a failure needs better retrieval, tools, routing, planning, prompts,
+training, or a stronger model. The lifecycle is **measurable, reproducible, and
+reversible** end-to-end:
+
+```
+real interaction → evaluation → failure classification → M16 curated candidate →
+trust/secret/injection/quality gates → human approval → versioned dataset →
+training experiment → candidate artifact → offline eval → baseline comparison →
+promotion gate ─┬─ promote → route model → observe → detect regression → rollback
+                └─ reject → archive
+```
+
+### M15 — Agent Skill Profiles (`core/skill_profiles.py`)
+
+A **SkillProfile is an evaluation + operating contract** for a specialist role —
+not another prompt directory and not another agent runtime. It sits on top of the
+existing `SpecialistSpec` (the single source of truth for a role's model tier,
+tool categories, context budget, and memory scope) and adds the missing
+measurable-quality layer: owned `TaskDomain`s, preferred `ModelRole` (advisory —
+`route()` stays authoritative), **evidence** and **verification** policies, the
+eval datasets that benchmark the role, per-role quality metrics with minimum
+**promotion thresholds**, and latency/resource budgets. One profile per role for
+all **15** specialist roles.
+
+**A profile can only ever *narrow* a spec.** `validate_against_spec` rejects any
+profile that grants a tool category the spec lacks, raises the context budget
+above the spec, or changes the tier — and `_build_default_registry` runs that
+validation **fail-closed at construction**, so a capability-widening profile can
+never ship. A profile therefore *cannot* weaken ToolExecutor, authority, or
+scope: it has no channel to.
+
+The registry is a **real production caller**, not documentation — it is wired
+into `AgentTeamSelector`: a high-risk domain's profile (RESEARCH, DFIR,
+CYBER_PURPLE, GRC, CYBER_BLUE) **forces the VERIFIER into the team**, additively
+(it can add verification, never remove a role or grant a capability), respecting
+the global agent cap. `SkillEvaluationSummary.from_eval_run` scores a role
+against a real M14 `EvalRun`, so promotability is *measured* against the profile's
+thresholds (an absent gating metric fails closed), never asserted. Tests:
+`tests/test_skill_profiles.py` (25).
+
+### M17 — Reproducible Training Pipeline (`core/training_pipeline.py`)
+
+A *practical* training-experiment system for the local host (Ryzen 5 7430U,
+64 GB, no GPU). It does **not** pretrain from scratch and it **never fakes a
+training run**: with no available backend, an experiment plans and validates but
+reports honestly that it did not execute. Backends are pluggable
+(`TrainingBackend` protocol) so Transformers/PEFT/TRL/Unsloth/Axolotl can each be
+an adapter — but only adapters whose dependencies are actually installed report
+`available=True`. On this host torch + transformers are present while
+`peft`/`trl`/`bitsandbytes` are absent, so SFT/LoRA/QLoRA/DPO are *planned but not
+executable*, and the pipeline records an honest `FAILED` run rather than a
+fabricated success.
+
+The **safety contract** is enforced before any run: `verify_dataset` accepts
+**only** an M16 dataset (or an equivalently manifested import) and re-checks
+existence, manifest, pinned version, **content-hash match** (via the shared
+`dataset_content_hash` — one source of truth with M16), all-`APPROVED` status, no
+quarantined/rejected/secret-bearing records (re-scanned with `memory_router` +
+`dlp_sensor`), schema, and a minimum sample count. A **dry run** reports estimated
+examples/tokens, sequence length, a deterministic memory-pressure estimate,
+backend availability, and the expected artifact path — without executing.
+Backends emit **argv lists** (`shell=False`), never shell strings; execution is
+explicit (`execute(config, confirm=run_id)`), never automatic, never on the chat
+loop; and a `run_id` can never silently overwrite another. Metadata lives under a
+versioned `training/` tree. Tests: `tests/test_training_pipeline.py` (23).
+
+### Model Registry + Promotion/Rollback (`core/model_registry.py`)
+
+The system of record for model artifacts and the **only** path by which a model
+becomes ACTIVE for a role. A model is never promoted because "it feels smarter":
+promotion is an evidence-based comparison of a candidate's
+`ModelEvaluationSnapshot` (built from a real M14 `EvalRun`) against the current
+baseline for that role, governed by a fail-closed `PromotionPolicy`.
+
+- **No promotion without evaluation** — a candidate with no snapshot is rejected.
+- **Critical regressions always block** — a drop on any safety dimension
+  (injection resistance, tool safety, forbidden-output, verification, citation
+  validity) blocks promotion regardless of gains elsewhere; the overall pass-rate
+  may not fall past the regression budget.
+- **Role-specific promotion** — assignments are per `ModelRole`; a coder candidate
+  can win CODER (measured on its target domains) without displacing FAST/general.
+  Tradeoffs are allowed within budget — one model need not win every domain.
+- **Reversible** — every activation records a `RollbackPointer` to the model it
+  replaced; `rollback(role)` restores it, deprecating the regressor. Promotion
+  history is append-only and never rewritten — regressions are never hidden.
+- Model versions are immutable identities (duplicate `model_id` refused); adapter
+  artifacts are hash-verified on registration; the registry round-trips to JSON.
+  Tests: `tests/test_model_registry.py` (17).
+
+### M18 — Continuous Improvement Loop (`core/improvement_loop.py`)
+
+M18 is a **coordinator, not a new engine** — it sequences the systems already
+built and duplicates none of them (no second evaluator, curator, trainer, or
+router). It enforces the central discipline: **fine-tuning is not the answer to
+every failure.** A deterministic classifier maps each M14 failure to the cheapest
+adequate remedy:
+
+| Failure | Category | Remedy (not training) |
+|---------|----------|-----------------------|
+| injection not resisted | `PROMPT_INJECTION_FAILURE` | firewall / adversarial eval |
+| wrong/ missing tool | `TOOL_SELECTION_ERROR` | tool schema / examples |
+| forbidden tool used | `SCOPE_POLICY_ERROR` | human scope-policy review |
+| bad routing | `ROUTING_ERROR` | routing policy / eval data |
+| invalid citation | `CITATION_ERROR` | trusted RAG |
+| evidence-domain miss | `KNOWLEDGE_GAP` | trusted RAG |
+| timeout / OOM | `TIMEOUT` / `RESOURCE_PRESSURE` | scheduling policy |
+| genuine reasoning/hallucination gap | `REASONING_ERROR` / `HALLUCINATION` | **training candidate** |
+
+Only genuine reasoning/hallucination failures **with a trustworthy target**
+become training candidates — and even then they flow through **M16 curation**,
+stopping at `PENDING_REVIEW`; the coordinator **never approves, trains, or
+promotes** (all remain explicit and human-gated). A training-warranted failure
+with no trustworthy target routes to human authoring rather than fabricating a
+target. Cycles are **bounded** (excess events deferred and *counted*, never
+silently dropped). Tests: `tests/test_improvement_loop.py` (16).
+
+### Model Tournament (`core/model_tournament.py`)
+
+Evaluates registered models on the **same** eval basis and produces *empirical,
+reviewable* routing recommendations — it never re-routes production by itself
+(promotion stays governed by the registry's evaluation gate). Bounded to
+`max_participants` (never an unbounded sweep); the tournament scores injected
+snapshots (produced one-model-at-a-time upstream, so N models are never resident
+at once). Ranking is **deterministic** (score desc, then `model_id` asc), and the
+composite score is **domain-aware** with a latency/resource penalty and a safety
+weighting — so a fast-but-injection-weak model cannot top a leaderboard on speed
+alone, and a coder model can win CODER without winning every domain. Output is a
+per-domain leaderboard plus a `RoutingRecommendation` (`by_domain` / `by_role`,
+mapped through the M15 skill profiles) that is explicitly **advisory**
+(`auto_applied: false`). Tests: `tests/test_model_tournament.py` (12).
+
+### Self-Debugging Runtime (`core/self_debug.py`)
+
+When a tool/operation fails, this runtime diagnoses *why* and proposes a
+**bounded, safety-constrained** repair — a couple of retries at most, and only
+for failures a retry can legitimately fix (transient timeout, malformed output,
+correctable arguments). It diagnoses and *decides*; it never reaches a tool
+directly — execution stays with the caller's injected `attempt_fn` through the
+normal `ToolExecutor` gate, so no new execution path is created. The hard rules
+are structural:
+
+- **No infinite retry** — a hard retry cap (default 2, ceiling 3).
+- **No destructive auto-retry** — a destructive operation gets exactly one
+  attempt, then stops and escalates.
+- **No authority/scope expansion, no HITL bypass, no security-policy change** — a
+  repair may only adjust ordinary tool arguments; any proposed argument touching
+  an authority/scope/consent/force key is **rejected fail-closed**, and
+  scope-denied / auth failures escalate to a human instead of being retried.
+- **No silent error hiding** — every attempt, diagnosis, and the final error are
+  recorded in the `RepairOutcome`; an "ok" result that fails post-verification is
+  never silently accepted. Tests: `tests/test_self_debug.py` (17).
+
+*V65 completes the loop: measure → curate → train → register → promote by
+evidence → route → observe → roll back — bounded, reproducible, reversible.*
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
 
 *V63 — the one thing became a general agent: bounded, gated, resource-aware,
@@ -402,3 +563,6 @@ operator-controlled.*
 *V64 — the general agent learned what to trust: evidence-grounded,
 injection-resistant, measurable, and able to curate its own failures into
 vetted, human-approved training data.*
+
+*V65 — the agent learned what skills it owes, how to measure them, and how to
+improve on evidence: reproducible, promotable, reversible.*
