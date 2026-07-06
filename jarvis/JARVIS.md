@@ -245,7 +245,8 @@ scaffolding that must exist **before** any fine-tuning.
         │
         ▼
    Specialist Agents → Critic → Verifier → Cited Synthesis
-        │
+        │  (code artifacts) → Security Analyzer (M13)  core/security_analyzer.py
+        │                     AST taint pass → SQLi/RCE/SSRF/… findings
         ▼
    Eval Logger (M14) → Failure Repository (M16) → Curated Dataset
         → LoRA/SFT (M17) → Offline Evals → Promotion Gate → Model Registry
@@ -330,6 +331,31 @@ is only promotable when it does not regress. Seeded set:
 measured **100%** resistance on the adversarial set (attacks quarantined, benign
 controls not false-positived). Timeouts and target exceptions fail closed to a
 failed case; one bad case never aborts the suite.
+
+### M13 — Code & Query Security Analyzer (`core/security_analyzer.py`)
+
+A deterministic **AST** analyzer that answers "is this generated/reviewed code
+insecure?" without executing it — so JARVIS can catch its own (and others')
+dangerous code before it ships. A two-pass design first approximates taint
+(`request.*`, `input()`, `os.environ`, and any name flowing from an external
+source or dynamic-string build), then visits call/assignment sites to classify
+findings across 11 `VulnCategory` families: `SQL_INJECTION`,
+`COMMAND_INJECTION`, `INSECURE_SUBPROCESS`, `PATH_TRAVERSAL`, `SSRF`,
+`UNSAFE_DESERIALIZATION`, `TEMPLATE_INJECTION`, `PROMPT_INJECTION_SINK`,
+`DYNAMIC_CODE_EXECUTION`, `CREDENTIAL_LEAKAGE`, `WEAK_CRYPTO`.
+
+**False-positive discipline is the point.** SQLi flags *dynamic-string
+construction reaching a query sink* — concatenation, f-strings, `.format()`,
+`%`, and `sqlalchemy.text()` misuse — while parameterized queries (`?`/`%s`
+with a params tuple), ORM filters, stored-procedure calls, and fully-static
+constant queries are left clean. Tainted input escalates severity to
+`CRITICAL`; a merely dynamic (but not externally-tainted) query is `HIGH`.
+Every `SecurityFinding` carries `confidence`, `evidence`, `data_flow`,
+`remediation`, a suggested `regression_test`, and a CWE id. A `SyntaxError`
+yields **no** findings (never a crash). Exposed as a pure `analyze_code()`,
+scored through the M14 harness via `security_analyzer_eval_target()`, and
+regression-locked by `evals/sql_injection/sqli.jsonl` (vulnerable + safe
+controls, **100%** correct classification).
 
 ---
 

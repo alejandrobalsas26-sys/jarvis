@@ -447,3 +447,25 @@ def firewall_eval_target() -> TargetFn:
         }
 
     return target
+
+
+def security_analyzer_eval_target() -> TargetFn:
+    """A target that runs the M13 security analyzer on each case's ``context.code``
+    and reports the detected vulnerability categories in ``answer`` — so a case's
+    ``expect.contains`` / ``expect.not_contains`` can assert on categories (e.g.
+    vulnerable cases must contain ``sql_injection``; safe cases must not)."""
+    from core.security_analyzer import analyze_code
+
+    async def target(case: EvalCase) -> dict:
+        code = str(case.context.get("code", case.prompt))
+        findings = analyze_code(code, filename=case.id)
+        cats = sorted({f.category.value for f in findings})
+        return {
+            "answer": ",".join(cats) or "clean",
+            "domain": "sql_injection",
+            "confidence": max((f.confidence for f in findings), default=1.0),
+            "tools_used": [],
+            "_ts": time.time(),
+        }
+
+    return target
