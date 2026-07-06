@@ -438,6 +438,32 @@ against a real M14 `EvalRun`, so promotability is *measured* against the profile
 thresholds (an absent gating metric fails closed), never asserted. Tests:
 `tests/test_skill_profiles.py` (25).
 
+### M17 — Reproducible Training Pipeline (`core/training_pipeline.py`)
+
+A *practical* training-experiment system for the local host (Ryzen 5 7430U,
+64 GB, no GPU). It does **not** pretrain from scratch and it **never fakes a
+training run**: with no available backend, an experiment plans and validates but
+reports honestly that it did not execute. Backends are pluggable
+(`TrainingBackend` protocol) so Transformers/PEFT/TRL/Unsloth/Axolotl can each be
+an adapter — but only adapters whose dependencies are actually installed report
+`available=True`. On this host torch + transformers are present while
+`peft`/`trl`/`bitsandbytes` are absent, so SFT/LoRA/QLoRA/DPO are *planned but not
+executable*, and the pipeline records an honest `FAILED` run rather than a
+fabricated success.
+
+The **safety contract** is enforced before any run: `verify_dataset` accepts
+**only** an M16 dataset (or an equivalently manifested import) and re-checks
+existence, manifest, pinned version, **content-hash match** (via the shared
+`dataset_content_hash` — one source of truth with M16), all-`APPROVED` status, no
+quarantined/rejected/secret-bearing records (re-scanned with `memory_router` +
+`dlp_sensor`), schema, and a minimum sample count. A **dry run** reports estimated
+examples/tokens, sequence length, a deterministic memory-pressure estimate,
+backend availability, and the expected artifact path — without executing.
+Backends emit **argv lists** (`shell=False`), never shell strings; execution is
+explicit (`execute(config, confirm=run_id)`), never automatic, never on the chat
+loop; and a `run_id` can never silently overwrite another. Metadata lives under a
+versioned `training/` tree. Tests: `tests/test_training_pipeline.py` (23).
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*

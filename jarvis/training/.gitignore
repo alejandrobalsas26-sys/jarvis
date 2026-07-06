@@ -1,0 +1,11 @@
+# Generated training artifacts — never commit run outputs, adapters, or logs.
+runs/
+adapters/
+logs/
+configs/*.json
+datasets/
+manifests/*.json
+
+# Keep the directory structure and docs tracked.
+!README.md
+!.gitignore

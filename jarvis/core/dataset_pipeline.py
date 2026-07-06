@@ -523,6 +523,16 @@ def _counts(examples: list[TrainingExample], key: Callable[[TrainingExample], st
     return dict(sorted(out.items()))
 
 
+def dataset_content_hash(examples: list[TrainingExample]) -> str:
+    """Deterministic content hash over a dataset's (id, normalized target) pairs.
+    The single source of truth for dataset identity — M17 re-derives it to verify
+    a pinned dataset version has not drifted."""
+    return hashlib.sha256(
+        "\n".join(f"{e.id}:{_norm(e.ideal_output)}" for e in sorted(examples, key=lambda e: e.id))
+        .encode("utf-8", "ignore")
+    ).hexdigest()
+
+
 def write_dataset(
     examples: list[TrainingExample], out_dir: str | Path, *,
     version: str, now_ts: float = 0.0, allow_overwrite: bool = False,
@@ -543,8 +553,7 @@ def write_dataset(
     lines = [json.dumps(e.to_dict(), ensure_ascii=False, sort_keys=True) for e in approved]
     train_path.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
 
-    content_sha = hashlib.sha256("\n".join(f"{e.id}:{_norm(e.ideal_output)}" for e in approved)
-                                 .encode("utf-8", "ignore")).hexdigest()
+    content_sha = dataset_content_hash(approved)
     manifest = DatasetManifest(
         version=version, count=len(approved), content_sha256=content_sha,
         provenance_counts=_counts(approved, lambda e: e.provenance),
