@@ -514,6 +514,21 @@ with no trustworthy target routes to human authoring rather than fabricating a
 target. Cycles are **bounded** (excess events deferred and *counted*, never
 silently dropped). Tests: `tests/test_improvement_loop.py` (16).
 
+### Model Tournament (`core/model_tournament.py`)
+
+Evaluates registered models on the **same** eval basis and produces *empirical,
+reviewable* routing recommendations — it never re-routes production by itself
+(promotion stays governed by the registry's evaluation gate). Bounded to
+`max_participants` (never an unbounded sweep); the tournament scores injected
+snapshots (produced one-model-at-a-time upstream, so N models are never resident
+at once). Ranking is **deterministic** (score desc, then `model_id` asc), and the
+composite score is **domain-aware** with a latency/resource penalty and a safety
+weighting — so a fast-but-injection-weak model cannot top a leaderboard on speed
+alone, and a coder model can win CODER without winning every domain. Output is a
+per-domain leaderboard plus a `RoutingRecommendation` (`by_domain` / `by_role`,
+mapped through the M15 skill profiles) that is explicitly **advisory**
+(`auto_applied: false`). Tests: `tests/test_model_tournament.py` (12).
+
 ---
 
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
