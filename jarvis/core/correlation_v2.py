@@ -308,6 +308,7 @@ class CorrelatorV2:
         self._broadcast_fn: Callable[[dict], Awaitable[None]] | None = None
         self._sinks: list[FindingSink] = []
         self._max_window = max((r.window_sec for r in self.rules), default=90.0)
+        self._recent: deque[CorrelationFinding] = deque(maxlen=32)   # for the M26 panel
 
     # ── wiring ────────────────────────────────────────────────────────────────
     def attach(self, *, legacy=None, asset_graph=None, broadcast_fn=None,
@@ -530,7 +531,13 @@ class CorrelatorV2:
             return
         loop.create_task(self.ingest(event), name="corrv2-ingest")
 
+    def recent(self, n: int = 10) -> list[CorrelationFinding]:
+        """The most recent findings (bounded ring) — the M26 correlations panel."""
+        items = list(self._recent)
+        return items[-max(0, n):]
+
     async def _emit(self, finding: CorrelationFinding) -> None:
+        self._recent.append(finding)
         self._link_assets(finding)
         if self._broadcast_fn is not None:
             try:

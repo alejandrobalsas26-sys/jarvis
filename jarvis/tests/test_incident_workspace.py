@@ -171,7 +171,7 @@ def test_execute_proposal_is_the_only_execution_path():
     assert case.status is IncidentStatus.CONTAINED
 
 
-def test_execute_proposal_blocked_by_authority():
+def test_execute_proposal_blocked_by_authority(monkeypatch):
     class _Deny:
         allowed = False
         reason = "target out of scope"
@@ -182,23 +182,15 @@ def test_execute_proposal_blocked_by_authority():
         async def aexecute(self, tool, args, reasoning=""):
             raise AssertionError("must not execute when authority denies")
 
-    import core.incident_workspace as iw
     ws = IncidentWorkspace()
     case = ws.add_case(IncidentCase(incident_id="inc1", status=IncidentStatus.INVESTIGATING))
     p = case.propose_containment("network_scan", {"target": "8.8.8.8"})
 
-    def fake_authorize(state, tool, args):
-        return _Deny()
-
-    orig = iw.__dict__.get("authorize_action")
-    # patch the lazily-imported symbol via monkeypatching core.authority
-    import core.authority as authmod
-    authmod.authorize_action = fake_authorize  # type: ignore
-    try:
-        action = asyncio.run(ws.execute_proposal(case, p, _Executor()))
-    finally:
-        if orig is not None:
-            authmod.authorize_action = orig  # type: ignore
+    # execute_proposal imports authorize_action lazily from core.authority; patch it
+    # there (monkeypatch auto-restores after the test — no cross-test pollution).
+    monkeypatch.setattr("core.authority.authorize_action",
+                        lambda state, tool, args: _Deny())
+    action = asyncio.run(ws.execute_proposal(case, p, _Executor()))
     assert action.status == "blocked"
     assert p.status is ProposalStatus.REJECTED
 
