@@ -225,8 +225,16 @@ class TestAuraEvents:
             assert "timestamp" in payload
 
     def test_event_types_registry_complete(self):
-        assert set(ae.EVENT_TYPES) == {
+        # The V61 conversational-turn contract must remain present…
+        assert {
             "model_decision", "verifier_status", "memory_decision",
             "tool_auth_pending", "background_task", "assistant_mode",
             "assistant_response",
-        }
+        } <= set(ae.EVENT_TYPES)
+        # …alongside the V66 M26 operational-view contract.
+        assert {
+            "asset_graph_updated", "asset_conflict", "service_health",
+            "correlation_finding", "incident_case_updated", "drift_finding",
+            "situation_snapshot", "runbook_plan", "runbook_execution",
+            "verification_outcome",
+        } <= set(ae.EVENT_TYPES)
