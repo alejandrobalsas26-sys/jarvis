@@ -732,6 +732,16 @@ async def broadcast(event: dict) -> None:
     except Exception:
         pass
 
+    # V66 M21 — canonical evidence-linked correlation layer. Fed the SAME event
+    # stream but only normalizes operational telemetry types (HUD/model noise is
+    # ignored) and drives NO legacy ingest (the line above owns that), so there is
+    # no double-ingest. Fire-and-forget; never blocks or breaks the broadcast.
+    try:
+        from core.correlation_v2 import correlator_v2
+        correlator_v2.feed(event)
+    except Exception:
+        pass
+
     await manager.broadcast(event)
 
 
