@@ -961,6 +961,19 @@ async def _main_async() -> None:
     except Exception as e:
         logger.debug(f"V66 M21: correlator_v2 attach failed: {e}")
 
+    # V66 M24 — guarded runbook engine. Every runbook world-effect compiles to a
+    # TaskGraph node that routes through the SAME protected executor (authority /
+    # scope / risk / HITL / audit) — no second executor, no bypass. Wiring the live
+    # ToolExecutor here is what lets a runbook actually run; until wired it fails
+    # closed.
+    try:
+        from core.runbook_engine import engine as v66_runbook_engine
+        v66_runbook_engine.attach(tool_executor=executor, broadcast_fn=_aura_broadcast)
+        logger.info(f"V66 M24: runbook_engine attached "
+                    f"({len(v66_runbook_engine.registry.names())} runbooks)")
+    except Exception as e:
+        logger.debug(f"V66 M24: runbook_engine attach failed: {e}")
+
     # V64 M11 — trusted research runtime over the SAME guarded ToolExecutor
     # (web_search/fetch_webpage route through risk-class/HITL/SSRF/audit; every
     # fetched page is trust-classified (M10) and injection-scanned (M12), and no
