@@ -555,6 +555,98 @@ evidence → route → observe → roll back — bounded, reproducible, reversib
 
 ---
 
+## V66 — Operational State & Security Fusion Runtime
+
+V66 unifies JARVIS's many strong-but-separate operational/security subsystems into
+one coherent **operational intelligence spine**. It adds *no* parallel platform:
+each milestone extends or wraps an existing anchor (correlator, playbooks,
+incident reporters, intel fusion, the AURA event bus) rather than duplicating it.
+
+```
+ TELEMETRY  (Sysmon · Zeek · Sensor Mesh · Network Baseline · internal)
+      │
+      ▼  M19  core/ops_events.py — canonical, provenance-aware event model
+ CANONICAL EVENT  (typed · deterministic id · untrusted-text screened by M12)
+      │
+      ▼  M20  core/asset_graph.py — evidence-backed asset & service graph
+ ASSET & SERVICE GRAPH  (no fact without provenance · conflicts surfaced, never overwritten)
+      │
+      ▼  M21  core/correlation_v2.py — evidence-linked findings over TemporalCorrelator
+ CORRELATION FINDING  (structured entities · explanation · evidence refs · asset links)
+      │
+      ▼  M22  core/incident_workspace.py — persistent incident case facade
+ INCIDENT CASE  (timeline · hypotheses · IOCs · decisions · proposals — proposals never auto-execute)
+      │
+      ▼  M23  core/digital_twin.py — observed vs expected vs desired
+ DRIFT FINDING  (SERVICE_MISSING · WORKLOAD_STOPPED · EXPOSURE · SENSOR · VERSION · unknown stays unknown)
+      │
+      ▼  M25  core/situation_engine.py — deterministic situation model
+ SITUATION SNAPSHOT  (what's happening · what changed · what matters · what's uncertain)
+      │
+      ▼  M24  core/runbook_engine.py — guarded, TaskGraph-backed runbooks
+ RUNBOOK PLAN → TASK GRAPH → ToolExecutor → Authority/Scope/Risk/HITL/Audit
+      │
+      ▼  EXECUTION → RE-OBSERVATION → VERIFICATION → timeline update
+      │
+      ▼  M26  core/ops_views.py + core/aura_events.py — bounded, redacted AURA panels
+ AURA  (asset · incidents · drift · sensors · correlations · runbooks · situation)
+```
+
+### Milestones
+
+- **M19 Canonical event model** (`core/ops_events.py`) — a typed
+  provenance-preserving envelope that the heterogeneous producer dicts normalize
+  into, with an adapter per real integration anchor. Deterministic content-hash
+  identity + bounded dedup; external free-text fields labeled untrusted and
+  screened through the M12 injection firewall before any LLM/memory projection;
+  compact `EvidenceReference` pointers instead of raw-payload duplication. The
+  live tap is `aura.server.broadcast` (first consumer: M21).
+- **M20 Asset & service graph** (`core/asset_graph.py`) — the largest missing
+  abstraction. Represents the operator's homelab shape only when observed or
+  declared; every `AssetObservation` carries source/type/observer/timestamp/
+  confidence/evidence/hash; conflicting values are both preserved and surfaced;
+  operator declarations are distinguishable and outrank machine observation by
+  confidence (never silent overwrite); bounded neighbor traversal; compact
+  scoped retrieval is the only graph→prompt path; local-first JSON persistence.
+- **M21 Correlator V2** (`core/correlation_v2.py`) — a compatibility layer over
+  `TemporalCorrelator` (which keeps flowing untouched — no double ingest). Adds
+  structured-entity matching, seven transparent deterministic patterns (no fake
+  ML), and a `CorrelationFinding` that explains *why* it matched and links its
+  entities into the asset graph. Correlation is evidence, kept separate from
+  incident truth.
+- **M22 Incident case workspace** (`core/incident_workspace.py`) — a canonical
+  `IncidentCase` facade over the existing incident pieces (CompoundIncident,
+  incident_reporter, intel_fusion). Full status lifecycle; a **containment
+  proposal never executes because an incident exists** — the only execution path
+  drives authority → scope → risk → HITL → ToolExecutor → re-observe → verify.
+- **M23 Digital twin & drift** (`core/digital_twin.py`) — observed vs expected vs
+  desired state → typed `DriftFinding`s. Drift is never automatically an attack
+  and never auto-remediates (always `verification_required`); unknown state stays
+  unknown (`STATE_UNKNOWN`, not a false SERVICE_MISSING).
+- **M24 Guarded runbooks** (`core/runbook_engine.py`) — modernizes
+  `playbook_engine` into TaskGraph-backed runbooks. Every world-effect routes
+  through the single ToolExecutor gate (no second executor); legacy YAML
+  direct-side-effect actions are migrated onto the guarded path (fail-closed, not
+  bypass). Dry-run, preconditions/postconditions, scope/risk/HITL, timeouts,
+  cancellation, rollback hints, audit, and bounded SelfDebug retries.
+- **M25 Situation engine** (`core/situation_engine.py`) — one deterministic
+  `SituationSnapshot` over graph + findings + incidents + drift + sensors +
+  presence + resource pressure. Facts come from evidence-backed state only; an
+  LLM may explain but is handed strictly the snapshot's facts.
+- **M26 AURA operational views** (`core/ops_views.py`, `core/aura_events.py`) —
+  ten typed operational events + seven bounded, redacted HUD panels over the
+  existing WebSocket surface. No raw PCAP/logs/credentials/tokens/command history
+  ever leave; every free-text field is redacted and every list length-capped.
+
+*V66 — the subsystems became one spine: I observed these events, I know which
+assets they refer to and what evidence backs each fact, I know which observations
+conflict, I know what correlations exist and why, which incident case they belong
+to, what the expected state was and what changed, what is uncertain, which runbook
+applies and which steps need approval — and I execute only through the guarded
+path, re-observe, and verify.*
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
 
 *V63 — the one thing became a general agent: bounded, gated, resource-aware,
