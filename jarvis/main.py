@@ -942,6 +942,38 @@ async def _main_async() -> None:
     except Exception as e:
         logger.debug(f"V63 M4/M3: team_runtime/planner attach failed: {e}")
 
+    # V66 M21 — evidence-linked correlation layer. Fed the live event stream by
+    # aura.server.broadcast (operational telemetry only; no legacy double-ingest),
+    # it emits explainable CorrelationFinding signals to the HUD and links involved
+    # entities into the M20 asset graph. main wires the broadcast surface + the
+    # M22 incident-case sink so a finding can open/append an incident case.
+    try:
+        from core.correlation_v2 import correlator_v2 as v66_correlator_v2
+        from core.correlator import correlator as _legacy_corr
+        v66_correlator_v2.attach(legacy=_legacy_corr, broadcast_fn=_aura_broadcast)
+        try:
+            from core.incident_workspace import incident_finding_sink
+            v66_correlator_v2.add_sink(incident_finding_sink)
+            logger.info("V66 M22: incident-case sink attached to correlator_v2")
+        except Exception as e:
+            logger.debug(f"V66 M22: incident sink attach deferred: {e}")
+        logger.info("V66 M21: correlator_v2 attached (evidence-linked findings)")
+    except Exception as e:
+        logger.debug(f"V66 M21: correlator_v2 attach failed: {e}")
+
+    # V66 M24 — guarded runbook engine. Every runbook world-effect compiles to a
+    # TaskGraph node that routes through the SAME protected executor (authority /
+    # scope / risk / HITL / audit) — no second executor, no bypass. Wiring the live
+    # ToolExecutor here is what lets a runbook actually run; until wired it fails
+    # closed.
+    try:
+        from core.runbook_engine import engine as v66_runbook_engine
+        v66_runbook_engine.attach(tool_executor=executor, broadcast_fn=_aura_broadcast)
+        logger.info(f"V66 M24: runbook_engine attached "
+                    f"({len(v66_runbook_engine.registry.names())} runbooks)")
+    except Exception as e:
+        logger.debug(f"V66 M24: runbook_engine attach failed: {e}")
+
     # V64 M11 — trusted research runtime over the SAME guarded ToolExecutor
     # (web_search/fetch_webpage route through risk-class/HITL/SSRF/audit; every
     # fetched page is trust-classified (M10) and injection-scanned (M12), and no
