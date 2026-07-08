@@ -165,26 +165,34 @@ def _disable_service(service_name: str, reason: str) -> bool:
 
 def _harden_ollama() -> bool:
     """
-    Set OLLAMA_HOST=127.0.0.1 in Windows user environment.
-    Persists across reboots; ensures Ollama never binds externally.
+    Bind Ollama to loopback via the Windows user environment.
+
+    V66.1: persist a FULL normalized URL (``http://127.0.0.1:11434``), not a bare
+    ``127.0.0.1``. The bare form was interpreted by callers doing
+    ``f"{OLLAMA_HOST}/api/tags"`` as the invalid URL ``127.0.0.1/api/tags``,
+    breaking every Ollama diagnostic. Loopback still blocks external binding.
     """
+    _LOOPBACK = "http://127.0.0.1:11434"
     try:
-        current = os.environ.get("OLLAMA_HOST", "")
-        if current == "127.0.0.1":
+        current = (os.environ.get("OLLAMA_HOST", "") or "").strip()
+        # Already loopback-bound (bare or full form) → normalize in-process, done.
+        if current in ("127.0.0.1", "127.0.0.1:11434", _LOOPBACK,
+                       "http://localhost:11434", "localhost", "localhost:11434"):
+            os.environ["OLLAMA_HOST"] = _LOOPBACK
             return True
 
         # Set for current process
-        os.environ["OLLAMA_HOST"] = "127.0.0.1"
+        os.environ["OLLAMA_HOST"] = _LOOPBACK
 
         # Persist in Windows user environment
         subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "[System.Environment]::SetEnvironmentVariable("
-             "'OLLAMA_HOST','127.0.0.1','User')"],
+             f"'OLLAMA_HOST','{_LOOPBACK}','User')"],
             capture_output=True, text=True, timeout=10,
             shell=False,
         )
-        logger.info("HARDENER: Ollama bound to 127.0.0.1 — external API access blocked")
+        logger.info("HARDENER: Ollama bound to 127.0.0.1:11434 — external API access blocked")
         return True
     except Exception as e:
         logger.debug(f"HARDENER: Ollama isolation failed: {e}")

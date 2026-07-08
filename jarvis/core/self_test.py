@@ -11,6 +11,53 @@ import asyncio, importlib, os, time
 from pathlib import Path
 from loguru import logger
 
+
+def _ollama_base() -> str:
+    """Normalized Ollama base URL (shared with the runtime resolver)."""
+    try:
+        from core.model_router import normalize_ollama_host
+        return normalize_ollama_host()
+    except Exception:
+        return "http://127.0.0.1:11434"
+
+
+def _configured_role_model(role_name: str, default: str) -> str:
+    """Resolve a role's configured model via the unified resolver (env → central).
+    Never raises — falls back to *default* so the self-test always runs."""
+    try:
+        from core.model_router import ModelRole, resolve_role_model
+        return resolve_role_model(ModelRole(role_name))
+    except Exception:
+        return default
+
+
+def classify_result(passed: bool, category: str, detail: str) -> str:
+    """Map a self-test outcome to the operational taxonomy:
+
+      OK        — subsystem present and working
+      DORMANT   — configured/known but not yet active (binding, warming, lazy)
+      OPTIONAL  — optional integration not configured/installed (expected)
+      DEGRADED  — working with reduced capability
+      FAILED    — a required subsystem is genuinely broken
+
+    Optional, unconfigured integrations are NEVER FAILED — they are OPTIONAL or
+    DORMANT so they don't read as critical startup failures.
+    """
+    d = (detail or "").lower()
+    dormant_hints = ("in progress", "binding", "will create", "warming",
+                     "not ready", "lazy", "pending")
+    if passed:
+        if any(h in d for h in dormant_hints):
+            return "DORMANT"
+        return "OK"
+    if category == "optional":
+        if any(h in d for h in dormant_hints) or "offline" in d:
+            return "DORMANT"
+        return "OPTIONAL"
+    if any(h in d for h in dormant_hints):
+        return "DORMANT"
+    return "FAILED"
+
 _TESTS = [
     # ── Core subsystems ──────────────────────────────────────────────────────
     {"id": "ollama",      "name": "Ollama LLM Server",         "category": "core"},
@@ -27,7 +74,9 @@ _TESTS = [
     {"id": "correlator",  "name": "Temporal Correlator",       "category": "detection"},
 
     # ── Intelligence ──────────────────────────────────────────────────────────
-    {"id": "vision",      "name": "Vision Engine (Moondream)", "category": "intel"},
+    # V66.1: name is generic — the test resolves and probes the CONFIGURED
+    # VISION-role model (JARVIS_MODEL_VISION), not a hardcoded legacy model.
+    {"id": "vision",      "name": "Vision Engine",             "category": "intel"},
     {"id": "ocr",         "name": "OCR Engine",                "category": "intel"},
     {"id": "intel_fusion","name": "Intel Fusion Database",     "category": "intel"},
     {"id": "predictor",   "name": "Threat Predictor",          "category": "intel"},
@@ -56,23 +105,35 @@ async def run_self_test(broadcast_fn=None) -> dict:
             **test,
             "passed":  success,
             "detail":  detail,
+            "status":  classify_result(success, test["category"], detail),
         })
 
     duration = round(time.monotonic() - start, 2)
 
     passed   = [r for r in results if r["passed"]]
-    failed   = [r for r in results
-                if not r["passed"] and r["category"] != "optional"]
+    # V66.1: 'failed' now means a GENUINE failure (status FAILED), so an
+    # optional/dormant condition (Docker offline, ETW needs Administrator,
+    # Telegram unconfigured) is never reported as a startup failure. 'optional
+    # missing' groups the expected-absent integrations (OPTIONAL + DORMANT).
+    failed   = [r for r in results if r["status"] == "FAILED"]
     optional = [r for r in results
-                if not r["passed"] and r["category"] == "optional"]
+                if not r["passed"] and r["status"] in ("OPTIONAL", "DORMANT")]
+
+    # Explicit operational taxonomy (OK/DORMANT/OPTIONAL/DEGRADED/FAILED).
+    classification: dict[str, int] = {}
+    for r in results:
+        classification[r["status"]] = classification.get(r["status"], 0) + 1
 
     report = {
         "total":           len(results),
         "passed":          len(passed),
         "failed":          len(failed),
         "optional_missing":len(optional),
+        "classification":  classification,
         "duration_s":      duration,
         "results":         results,
+        # Health is DEGRADED only on a genuine FAILED (required subsystem broken)
+        # — never merely because an optional integration is unconfigured.
         "health":          "OK" if not failed else "DEGRADED",
     }
 
@@ -108,13 +169,28 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
             import aiohttp
             async with aiohttp.ClientSession() as s:
                 async with s.get(
-                    "http://127.0.0.1:11434/api/tags",
+                    f"{_ollama_base()}/api/tags",
                     timeout=aiohttp.ClientTimeout(total=3),
                 ) as r:
                     if r.status == 200:
                         data   = await r.json()
                         models = [m.get("name","") for m in data.get("models", [])]
-                        return True, f"{len(models)} models loaded"
+                        # V66.1: verify the CONFIGURED FAST/DEEP role models are
+                        # pulled — not just that some models exist.
+                        fast = _configured_role_model("fast", "qwen3:8b")
+                        deep = _configured_role_model("deep", "qwen3:14b")
+                        try:
+                            from core.model_router import _model_installed
+                            fast_ok = _model_installed(fast, models)
+                            deep_ok = _model_installed(deep, models)
+                        except Exception:
+                            fast_ok = any(fast.split(":")[0] in m for m in models)
+                            deep_ok = any(deep.split(":")[0] in m for m in models)
+                        miss = [m for m, ok in ((fast, fast_ok), (deep, deep_ok)) if not ok]
+                        if miss:
+                            return False, (f"{len(models)} models; MISSING role model(s): "
+                                           f"{', '.join(miss)}")
+                        return True, f"{len(models)} models; fast={fast} deep={deep}"
             return False, "Ollama not responding"
 
         elif test_id == "chromadb":
@@ -202,18 +278,27 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
                 return False, "correlator import error"
 
         elif test_id == "vision":
+            # V66.1: probe the CONFIGURED VISION-role model (e.g. gemma3:4b),
+            # NOT a hardcoded legacy moondream. If VISION == gemma3:4b, this
+            # tests gemma3:4b.
             import aiohttp
+            vision_model = _configured_role_model("vision", "gemma3:4b")
             async with aiohttp.ClientSession() as s:
                 async with s.get(
-                    "http://127.0.0.1:11434/api/tags",
+                    f"{_ollama_base()}/api/tags",
                     timeout=aiohttp.ClientTimeout(total=3),
                 ) as r:
                     if r.status == 200:
                         data   = await r.json()
                         models = [m.get("name","") for m in data.get("models", [])]
-                        if any("moondream" in m for m in models):
-                            return True, "moondream loaded"
-                        return False, "moondream not pulled"
+                        try:
+                            from core.model_router import _model_installed
+                            present = _model_installed(vision_model, models)
+                        except Exception:
+                            present = any(vision_model.split(":")[0] in m for m in models)
+                        if present:
+                            return True, f"{vision_model} loaded"
+                        return False, f"{vision_model} not pulled (run: ollama pull {vision_model})"
             return False, "Ollama unavailable"
 
         elif test_id == "ocr":

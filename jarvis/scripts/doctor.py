@@ -33,6 +33,39 @@ _rows: list[tuple[str, str, str]] = []
 _base_failed = False
 
 
+def _load_env() -> None:
+    """Load jarvis/.env (stdlib-only) so OLLAMA_HOST etc. match the live runtime.
+    Never overrides an already-set real environment variable."""
+    env_path = _JARVIS_DIR / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            val = val.split("#", 1)[0].strip().strip('"').strip("'")
+            os.environ.setdefault(key.strip(), val)
+    except Exception:
+        pass
+
+
+def _normalize_host(raw: str) -> str:
+    """Bare host (127.0.0.1) → http://127.0.0.1:11434. Stdlib-only."""
+    from urllib.parse import urlparse
+    val = (raw or "").strip()
+    if not val:
+        return "http://127.0.0.1:11434"
+    if "://" not in val:
+        val = "http://" + val
+    p = urlparse(val)
+    return f"{p.scheme or 'http'}://{p.hostname or '127.0.0.1'}:{p.port or 11434}"
+
+
+_load_env()
+
+
 def _record(name: str, status: str, detail: str = "") -> None:
     global _base_failed
     _rows.append((name, status, detail))
@@ -100,7 +133,7 @@ def _check_profile_imports() -> None:
 
 
 def _check_ollama() -> None:
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    host = _normalize_host(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
     try:
         with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as r:
             data = json.loads(r.read().decode("utf-8"))
