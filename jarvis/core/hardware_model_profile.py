@@ -5,11 +5,21 @@ Complements core/hardware_profile.py (which tunes Ollama runtime flags) by
 mapping best-effort hardware capability to a concrete set of recommended models
 per cognitive ROLE, plus the `ollama pull` commands to obtain them.
 
-Tiers:
-  LOW      — laptop / CPU-only / no useful VRAM   → small quantized models
+GPU tiers (dedicated-VRAM capability — an ADVISORY axis only):
+  LOW      — laptop / CPU-only / no useful dedicated VRAM
   MID      — 12–16 GB VRAM                         → 7B–14B comfortably
   HIGH     — 24–32 GB VRAM                         → 14B–32B
   EXTREME  — 48 GB+ VRAM                           → 32B–70B class
+
+V66.1: a LOW GPU tier does NOT mean a weak machine. On an integrated-GPU host
+with abundant system RAM (e.g. Ryzen 5 7430U + 64 GB), inference runs on the
+CPU and *system RAM* — not VRAM — is the model-capacity ceiling. So when the GPU
+is not accel-capable we recommend by a separate CPU/RAM policy instead of the
+anemic LOW-VRAM set, and we NEVER pretend 64 GB of RAM is useless.
+
+These are RECOMMENDATIONS only. The operator's explicit JARVIS_MODEL_* config
+(resolved by core.model_router) always overrides them; this module never selects
+a live model.
 
 Detection is best-effort and NEVER raises: missing GPU info degrades to LOW.
 """
@@ -29,41 +39,95 @@ class HardwareTier(str, Enum):
     EXTREME = "EXTREME"
 
 
-# Per-tier recommended model set, keyed by router role name.
+_ROLES = ("fast", "coder", "deep", "vision", "embedding", "verifier")
+
+# Per-GPU-tier recommended model set, keyed by router role name. Modernized in
+# V66.1 to the qwen3 / qwen2.5-coder / gemma3 family the runtime actually
+# defaults to (no legacy deepseek-r1 / moondream / llava recommendations).
 _TIER_MODELS: dict[HardwareTier, dict[str, str]] = {
     HardwareTier.LOW: {
-        "fast":      "qwen2.5-coder:7b",
-        "coder":     "qwen2.5-coder:7b",
-        "deep":      "qwen2.5:7b-instruct",
-        "vision":    "moondream",
-        "embedding": "nomic-embed-text",
-        "verifier":  "qwen2.5-coder:7b",
+        "fast":      "qwen3:8b",
+        "coder":     "qwen2.5-coder:latest",
+        "deep":      "qwen3:8b",
+        "vision":    "gemma3:4b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:8b",
     },
     HardwareTier.MID: {
-        "fast":      "qwen2.5-coder:7b",
-        "coder":     "qwen2.5-coder:14b",
-        "deep":      "deepseek-r1:14b",
-        "vision":    "llava:13b",
-        "embedding": "nomic-embed-text",
-        "verifier":  "qwen2.5-coder:7b",
+        "fast":      "qwen3:8b",
+        "coder":     "qwen2.5-coder:latest",
+        "deep":      "qwen3:14b",
+        "vision":    "gemma3:4b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:8b",
     },
     HardwareTier.HIGH: {
-        "fast":      "qwen2.5-coder:7b",
+        "fast":      "qwen3:8b",
         "coder":     "qwen2.5-coder:32b",
-        "deep":      "deepseek-r1:32b",
+        "deep":      "qwen3:32b",
         "vision":    "llama3.2-vision:11b",
-        "embedding": "nomic-embed-text",
-        "verifier":  "qwen2.5-coder:14b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:14b",
     },
     HardwareTier.EXTREME: {
-        "fast":      "qwen2.5-coder:14b",
+        "fast":      "qwen3:14b",
         "coder":     "qwen2.5-coder:32b",
-        "deep":      "deepseek-r1:70b",
+        "deep":      "qwen3:32b",
         "vision":    "llama3.2-vision:11b",
-        "embedding": "nomic-embed-text",
-        "verifier":  "qwen2.5-coder:32b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:32b",
     },
 }
+
+
+class RamTier(str, Enum):
+    """System-RAM capacity tier — the model-capacity ceiling for CPU inference."""
+    CONSTRAINED = "CONSTRAINED"   # < 16 GB
+    AMPLE = "AMPLE"               # 16–48 GB
+    ABUNDANT = "ABUNDANT"         # >= 48 GB
+
+
+def _classify_ram(total_ram_gb: float) -> RamTier:
+    if total_ram_gb >= 48:
+        return RamTier.ABUNDANT
+    if total_ram_gb >= 16:
+        return RamTier.AMPLE
+    return RamTier.CONSTRAINED
+
+
+# CPU-inference recommendation by system-RAM tier. Used when the GPU is NOT
+# accel-capable (LOW tier) — so a 64 GB iGPU laptop gets the full qwen3 pair
+# rather than the anemic small-VRAM set.
+_CPU_RAM_MODELS: dict[RamTier, dict[str, str]] = {
+    RamTier.ABUNDANT: {
+        "fast":      "qwen3:8b",
+        "coder":     "qwen2.5-coder:latest",
+        "deep":      "qwen3:14b",
+        "vision":    "gemma3:4b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:8b",
+    },
+    RamTier.AMPLE: {
+        "fast":      "qwen3:8b",
+        "coder":     "qwen2.5-coder:latest",
+        "deep":      "qwen3:8b",
+        "vision":    "gemma3:4b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:8b",
+    },
+    RamTier.CONSTRAINED: {
+        "fast":      "qwen3:8b",
+        "coder":     "qwen2.5-coder:latest",
+        "deep":      "qwen3:8b",
+        "vision":    "gemma3:4b",
+        "embedding": "nomic-embed-text:latest",
+        "verifier":  "qwen3:8b",
+    },
+}
+
+# Dedicated VRAM (MB) below which the GPU is treated as non-accel-capable and
+# inference is assumed CPU-bound.
+_GPU_ACCEL_MIN_VRAM_GB = 4.0
 
 
 @dataclass
@@ -76,6 +140,19 @@ class HardwareModelProfile:
     gpu_vram_gb: float
     on_battery: bool
     recommended_models: dict[str, str] = field(default_factory=dict)
+    # V66.1 — explicit, separable capability axes (advisory).
+    gpu_accel_capable: bool = False       # dedicated VRAM >= _GPU_ACCEL_MIN_VRAM_GB
+    ram_tier: RamTier = RamTier.AMPLE
+    inference_mode: str = "cpu"           # "gpu" | "cpu"
+
+    def capability_summary(self) -> str:
+        return (
+            f"inference={self.inference_mode} | "
+            f"gpu={'accel' if self.gpu_accel_capable else 'iGPU/shared'} "
+            f"({self.gpu_vendor} {self.gpu_vram_gb}GB VRAM) | "
+            f"system-RAM={self.total_ram_gb}GB [{self.ram_tier.value}] | "
+            f"{self.cpu_cores} cores"
+        )
 
     def pull_commands(self) -> list[str]:
         """Deduplicated `ollama pull` commands for the recommended set."""
@@ -159,6 +236,18 @@ def detect_model_profile() -> HardwareModelProfile:
 
     gpu_vendor, gpu_vram_gb = _probe_gpu()
     tier = _classify_tier(gpu_vram_gb)
+    ram_tier = _classify_ram(total_ram_gb)
+    gpu_accel = gpu_vram_gb >= _GPU_ACCEL_MIN_VRAM_GB
+
+    # When the GPU is accel-capable, recommend by its VRAM tier. Otherwise
+    # inference is CPU-bound and system RAM is the ceiling — recommend by the
+    # CPU/RAM policy so an iGPU host with abundant RAM is not undersold.
+    if gpu_accel:
+        recommended = dict(_TIER_MODELS[tier])
+        inference_mode = "gpu"
+    else:
+        recommended = dict(_CPU_RAM_MODELS[ram_tier])
+        inference_mode = "cpu"
 
     return HardwareModelProfile(
         tier=tier,
@@ -168,9 +257,17 @@ def detect_model_profile() -> HardwareModelProfile:
         gpu_vendor=gpu_vendor,
         gpu_vram_gb=gpu_vram_gb,
         on_battery=on_battery,
-        recommended_models=dict(_TIER_MODELS[tier]),
+        recommended_models=recommended,
+        gpu_accel_capable=gpu_accel,
+        ram_tier=ram_tier,
+        inference_mode=inference_mode,
     )
 
 
 def recommended_models_for_tier(tier: HardwareTier) -> dict[str, str]:
     return dict(_TIER_MODELS[tier])
+
+
+def recommended_models_for_cpu_ram(total_ram_gb: float) -> dict[str, str]:
+    """CPU-inference recommendation keyed by system-RAM tier (advisory)."""
+    return dict(_CPU_RAM_MODELS[_classify_ram(total_ram_gb)])
