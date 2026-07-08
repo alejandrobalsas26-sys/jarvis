@@ -202,8 +202,11 @@ class TemporalCorrelator:
         # v36.0 — references for autonomous narration & predictions
         self._tts_ref       = None
         self._ollama_client = None
-        self._fast_model    = "qwen2.5:7b-instruct-q5_K_M"
-        self._deep_model    = "qwen2.5:14b-instruct-q4_K_M"
+        # V66.1: unified role resolver default (env → central config); overridden
+        # by attach_llm() with the boot-resolved pair in the live path.
+        from core.model_router import resolve_fast_model, resolve_deep_model
+        self._fast_model    = resolve_fast_model()
+        self._deep_model    = resolve_deep_model()
         # V55.0 TITAN — optional persistent state + SIEM forwarding
         self._db_manager     = None  # core.db_manager.DBManager | None
         self._siem_forwarder = None  # core.siem_forwarder.SIEMForwarder | None

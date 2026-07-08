@@ -111,8 +111,12 @@ class AgentOrchestrator:
     def __init__(self) -> None:
         self._broadcast_fn  = None
         self._ollama_client = None
-        self._fast_model    = "qwen2.5:7b-instruct-q5_K_M"
-        self._deep_model    = "qwen2.5:14b-instruct-q4_K_M"
+        # V66.1: default to the unified role resolver (env → central config) so a
+        # standalone/un-attached orchestrator never falls back to a legacy model.
+        # main.py's attach() still supplies the boot-resolved pair.
+        from core.model_router import resolve_fast_model, resolve_deep_model
+        self._fast_model    = resolve_fast_model()
+        self._deep_model    = resolve_deep_model()
         self._running       = False
 
     def attach(
