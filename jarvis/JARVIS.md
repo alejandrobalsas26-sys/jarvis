@@ -647,6 +647,87 @@ path, re-observe, and verify.*
 
 ---
 
+## V66.1 — Runtime Configuration Unification & Startup Reliability
+
+A stabilization release: one coherent source of truth for model roles, and a
+clean, bounded startup/shutdown. No new subsystems, no weakened controls.
+
+### Unified model resolution (`core/model_router.py`)
+
+`resolve_role_model(role, *, installed=None, hw_recommendation=None)` is the
+single ladder every consumer resolves through. **Precedence (highest first):**
+
+1. explicit `JARVIS_MODEL_*` env override — the operator opted in, so it always
+   wins (even if not currently pulled; a warning is logged).
+2. central role config (`_ROLE_DEFAULTS`) — modern CPU/RAM-friendly defaults:
+   FAST `qwen3:8b`, CODER `qwen2.5-coder:latest`, DEEP `qwen3:14b`, VISION
+   `gemma3:4b`, EMBEDDING `nomic-embed-text:latest`, VERIFIER `qwen3:8b`.
+3. hardware-aware recommendation — **advisory only**, never overrides config.
+4. installed-compatible fallback (first pulled model in the role family).
+5. safe final fallback.
+
+The root cause fixed here: `_model_installed()` is now a **precise repo+tag
+match**. The old family-prefix heuristic (`p.startswith(name.split(':')[0])`)
+falsely reported non-installed legacy `qwen2.5:*-instruct` models as present
+because `qwen2.5-coder` shares the `qwen2.5` prefix — which leaked a legacy
+fast/deep pair into `dependency_guardian.resolve_models` and, from there, into
+`hw_profile.model_fast/deep` and every subsystem (specialist runtime, planner,
+orchestrator, correlator, ARES, purple coordinator, cognitive engine), while the
+live LLM turn correctly used Qwen3. That split-brain is gone: **the guardian now
+resolves the FAST/DEEP pair through the unified ladder**, so what the operator
+configures is what actually runs, end to end. `vision_engine` also now reads the
+unified `JARVIS_MODEL_VISION` role instead of a mis-named `JARVIS_VISION_MODEL`
+that always fell back to moondream.
+
+### Hardware profiling is advisory (`core/hardware_profile.py`, `hardware_model_profile.py`)
+
+Model identity comes from the unified resolver; the TDP tier now contributes only
+throughput tuning (pools/ctx) and an advisory `fast_quant_hint`. A boot
+`CAPABILITY` line separates the axes it used to conflate — GPU-accel capability,
+**system RAM (the model-capacity ceiling for CPU inference, NOT VRAM)**, CPU
+cores, thermal, battery — so a 64 GB integrated-GPU host is never mistaken for a
+weak machine. A LOW GPU tier with abundant RAM is recommended the full qwen3
+pair via a CPU/RAM policy (`RamTier` CONSTRAINED/AMPLE/ABUNDANT). Power
+transitions re-resolve through the unified layer, never swap in a TDP default.
+
+### Diagnostics (`scripts/model_doctor.py`, `scripts/doctor.py`, `core/self_test.py`)
+
+- `model_doctor`/`doctor` now **load `jarvis/.env`** so they read the same config
+  as the live runtime, and normalize `OLLAMA_HOST` (a bare `127.0.0.1` becomes
+  `http://127.0.0.1:11434` — `windows_hardener` also persists the full URL now).
+- `model_doctor`'s smoke test is **thinking-model aware**: `think=false` with a
+  CPU-realistic timeout, and it distinguishes ok / empty-visible / missing /
+  timeout / unreachable / malformed (the old `num_predict=5` probe returned empty
+  visible text for qwen3 even though generation succeeded).
+- `self_test` probes the **configured** VISION role (e.g. `gemma3:4b`), not a
+  hardcoded moondream, and verifies the configured FAST/DEEP models are pulled.
+  Results carry an **OK / DORMANT / OPTIONAL / DEGRADED / FAILED** taxonomy so an
+  unconfigured optional integration (Docker offline, ETW needs Administrator,
+  Telegram unset) is never reported as a startup failure — while genuine
+  failures still surface.
+
+### TTS graceful shutdown (`core/tts.py`)
+
+Replaced the non-daemon `ThreadPoolExecutor` (whose stuck `runAndWait()` could
+block interpreter exit for ~80s and orphan a `tts-worker_0`) with a single
+**dedicated daemon worker thread** draining a thread-safe queue. `stop()` is
+bounded and idempotent; a shared `_teardown()` cancels active + queued speech and
+signals exit; `engine.stop()` is the cross-thread interrupt (called without the
+engine lock the worker holds during `runAndWait()`). `stop_sync()` serves
+non-async call sites; the voice barge-in path uses `interrupt()` (silence current
+utterance, keep TTS alive) rather than shutdown.
+
+### Ollama host & CPU posture (Ryzen 5 7430U / 64 GB)
+
+`OLLAMA_HOST` is normalized to `scheme://host:port` everywhere. CPU inference is
+expected; recommended Ollama posture is conservative — `OLLAMA_NUM_PARALLEL=1`,
+`OLLAMA_MAX_LOADED_MODELS=1`. See `.env.example` for the full role config.
+
+*V66.1 — one config, honored everywhere; hardware advises but never overrides;
+diagnostics tell the truth; startup and shutdown are bounded.*
+
+---
+
 *GENESIS — v46.0. The collection of subsystems became one thing: JARVIS.*
 
 *V63 — the one thing became a general agent: bounded, gated, resource-aware,
