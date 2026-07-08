@@ -402,10 +402,13 @@ async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None, state=N
             _tts_speaking.clear()
 
     def _stop_tts() -> None:
+        # Barge-in: silence the CURRENT utterance when the user starts speaking,
+        # but keep the TTS engine alive for the reply. interrupt() (not stop()/
+        # stop_sync(), which are for permanent shutdown) is the right primitive —
+        # the previous calls here were no-ops (async stop() left unawaited; no
+        # _engine attribute exists), so barge-in silence never actually fired.
         try:
-            if hasattr(tts, "stop"):       tts.stop()
-            if hasattr(tts, "stop_sync"):  tts.stop_sync()
-            if hasattr(tts, "_engine"):    tts._engine.stop()
+            tts.interrupt()
         except Exception:
             pass
         _tts_speaking.clear()
