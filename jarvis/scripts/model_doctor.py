@@ -26,7 +26,48 @@ from pathlib import Path
 _JARVIS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_JARVIS_DIR))
 
-_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+def _load_env() -> None:
+    """Load jarvis/.env so the doctor reads the SAME configuration as the live
+    runtime (main.py calls load_dotenv() at boot; standalone scripts didn't, so
+    JARVIS_MODEL_* / OLLAMA_HOST were previously invisible here). Existing real
+    environment variables are never overridden — matching load_dotenv semantics.
+    """
+    env_path = _JARVIS_DIR / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+        return
+    except Exception:
+        pass
+    # stdlib-only fallback parser (dotenv unavailable)
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            val = val.split("#", 1)[0].strip().strip('"').strip("'")
+            os.environ.setdefault(key.strip(), val)
+    except Exception:
+        pass
+
+
+_load_env()
+
+# Normalized Ollama base URL — tolerates bare hosts (e.g. 127.0.0.1) that the
+# runtime's model_router also normalizes, so a bare OLLAMA_HOST from the Windows
+# user environment can't produce an invalid "127.0.0.1/api/tags".
+try:
+    from core.model_router import normalize_ollama_host, _model_installed
+    _HOST = normalize_ollama_host()
+except Exception:  # pragma: no cover — never block the doctor on import issues
+    _HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    if "://" not in _HOST:
+        _HOST = "http://" + _HOST
+    _model_installed = None  # type: ignore
 
 
 def _get_tags() -> list[str] | None:
@@ -39,28 +80,77 @@ def _get_tags() -> list[str] | None:
 
 
 def _model_present(model: str, pulled: list[str]) -> bool:
-    """A role model matches if its base name (before ':') is pulled in any tag."""
+    """True iff a pulled model satisfies *model* (precise repo+tag match, shared
+    with the runtime's resolver so the doctor agrees with live selection)."""
+    if _model_installed is not None:
+        return _model_installed(model, pulled)
     base = model.split(":")[0]
     return any(p == model or p.split(":")[0] == base for p in pulled)
 
 
-def _tiny_generate(model: str) -> tuple[bool, str]:
+# CPU inference on first use pays a model-load penalty, so the smoke timeout must
+# be generous but still bounded.
+_SMOKE_TIMEOUT_S = 120
+
+
+def _smoke_generate(model: str, timeout: int = _SMOKE_TIMEOUT_S) -> tuple[str, str]:
+    """Fire ONE tiny prompt at *model* and classify the outcome. Returns
+    (status, detail) where status is one of:
+
+      ok            — visible text generated
+      empty_visible — HTTP 200 but no visible text (e.g. a thinking model that
+                      emitted only hidden reasoning) — generation still works
+      missing       — model not pulled (HTTP 404 / 'not found')
+      timeout       — no response within the (CPU-realistic) deadline
+      unreachable   — Ollama not answering
+      malformed     — non-JSON / unexpected response
+      error         — other HTTP error
+
+    ``think: false`` disables qwen3-style reasoning so a thinking model returns
+    a non-empty visible answer instead of spending the token budget on hidden
+    <think> content (the old num_predict=5 test returned empty for qwen3).
+    """
     payload = json.dumps({
         "model": model,
-        "prompt": "Reply with the single word: OK",
+        "prompt": "Reply with exactly: OK",
         "stream": False,
-        "options": {"num_predict": 5},
+        "think": False,
+        "options": {"num_predict": 24, "temperature": 0.0},
     }).encode("utf-8")
     req = urllib.request.Request(
         f"{_HOST}/api/generate", data=payload,
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        return True, (data.get("response", "") or "").strip()[:40]
-    except Exception as e:  # noqa: BLE001
-        return False, str(e)[:60]
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "ignore")
+        except Exception:
+            pass
+        if e.code == 404 or "not found" in body.lower():
+            return "missing", f"model not found (HTTP {e.code})"
+        return "error", f"HTTP {e.code}: {body[:80]}"
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            return "timeout", f"no response in {timeout}s (CPU load latency?)"
+        return "unreachable", f"Ollama unreachable: {str(reason)[:60]}"
+    except (TimeoutError, OSError) as e:
+        return "timeout", f"no response in {timeout}s ({str(e)[:40]})"
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return "malformed", "non-JSON response from /api/generate"
+    text = (data.get("response") or "").strip()
+    if text:
+        return "ok", text[:60]
+    thinking = (data.get("thinking") or "").strip()
+    if thinking:
+        return "empty_visible", f"only hidden reasoning ({len(thinking)} chars), no visible text"
+    return "empty_visible", "HTTP 200 but empty visible response"
 
 
 def main() -> int:
@@ -125,18 +215,23 @@ def main() -> int:
     else:
         print("  [ OK ] all configured role models are pulled.\n")
 
-    # Tiny smoke prompts against FAST + VERIFIER when present.
+    # Bounded smoke prompts against FAST + VERIFIER when present. Thinking-model
+    # aware: a model that generates only hidden reasoning is reported distinctly
+    # (WARN, not FAIL) from a real failure (missing / timeout / unreachable).
     rc = 0
     for role in ("fast", "verifier"):
         model = roles[role]
         if not _model_present(model, pulled):
             print(f"  [WARN] {role} smoke test skipped - {model} not pulled.")
             continue
-        ok, out = _tiny_generate(model)
-        if ok:
-            print(f"  [ OK ] {role} ({model}) responded: {out!r}")
+        status, detail = _smoke_generate(model)
+        if status == "ok":
+            print(f"  [ OK ] {role} ({model}) responded: {detail!r}")
+        elif status == "empty_visible":
+            print(f"  [WARN] {role} ({model}) generated but no visible text: {detail}")
         else:
-            print(f"  [WARN] {role} ({model}) did not respond: {out}")
+            print(f"  [{'FAIL' if require_ollama else 'WARN'}] "
+                  f"{role} ({model}) {status}: {detail}")
             if require_ollama:
                 rc = 1
     print()

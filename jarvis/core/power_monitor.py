@@ -65,7 +65,13 @@ async def start_power_monitor(broadcast_fn, hw_profile) -> None:
 
 
 def _apply_power_config(hw_profile, on_ac: bool, pct: float) -> None:
-    """Mutate hw_profile in place when power state changes."""
+    """Mutate hw_profile in place when power state changes.
+
+    V66.1: power state tunes THROUGHPUT (pools / ctx / quant hint) only. The
+    active fast/deep model identity is the operator's unified role config and
+    stays constant across AC↔battery transitions — a power event must never
+    silently swap the model back to a legacy TDP default.
+    """
     from core.hardware_profile import TDP_CONFIGS, BATTERY_OVERRIDE
 
     if on_ac:
@@ -75,7 +81,7 @@ def _apply_power_config(hw_profile, on_ac: bool, pct: float) -> None:
         hw_profile.on_battery        = False
         hw_profile.recommended_pools = cfg["pools"]
         hw_profile.recommended_ctx   = cfg["ctx"]
-        hw_profile.model_fast        = cfg["model_fast"]
+        hw_profile.fast_quant_hint   = cfg.get("model_fast", "")
         logger.info(
             f"POWER: AC restored → pools={hw_profile.recommended_pools} "
             f"ctx={hw_profile.recommended_ctx} "
@@ -87,18 +93,23 @@ def _apply_power_config(hw_profile, on_ac: bool, pct: float) -> None:
         hw_profile.battery_percent   = pct
         hw_profile.recommended_pools = BATTERY_OVERRIDE["pools"]
         hw_profile.recommended_ctx   = BATTERY_OVERRIDE["ctx"]
-        hw_profile.model_fast        = BATTERY_OVERRIDE["model_fast"]
+        hw_profile.fast_quant_hint   = BATTERY_OVERRIDE.get("model_fast", "")
         logger.warning(
             f"POWER: on battery ({pct:.0f}%) → power-save mode — "
             f"pools={hw_profile.recommended_pools} "
             f"ctx={hw_profile.recommended_ctx}"
         )
 
-    # Propagate to model router
+    # Re-resolve the model identity through the unified role resolver so an
+    # explicit operator override is always honored (never a TDP default).
     try:
         import core.model_router as mr
+        hw_profile.model_fast = mr.resolve_fast_model()
+        hw_profile.model_deep = mr.resolve_deep_model()
         if hasattr(mr, "MODEL_FAST"):
             mr.MODEL_FAST = hw_profile.model_fast
+        if hasattr(mr, "MODEL_DEEP"):
+            mr.MODEL_DEEP = hw_profile.model_deep
     except Exception:
         pass
 

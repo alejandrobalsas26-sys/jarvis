@@ -56,13 +56,38 @@ default — text mode runs with an empty `.env`.
 
 | Variable | Description | Default |
 |---|---|---|
-| `LLM_MODEL` | Local Ollama model tag | `qwen2.5-coder` |
-| `JARVIS_MODEL_*` | Per-role model overrides (FAST/CODER/DEEP/…) | safe defaults |
+| `OLLAMA_HOST` | Ollama base URL (bare host auto-normalized) | `http://127.0.0.1:11434` |
+| `LLM_MODEL` | Local Ollama model tag | `qwen3:8b` |
+| `JARVIS_MODEL_*` | Per-role model overrides (FAST/CODER/DEEP/VISION/EMBEDDING/VERIFIER) | see below |
 | `JARVIS_CLOUD_ENABLED` | Allow cloud escalation | `false` |
 | `ANTHROPIC_API_KEY` | Optional — only for the cloud backend | *(empty = local-only)* |
 | `JARVIS_TRUSTED_LAB` | Relax guardrails for an **isolated** lab | `false` |
 | `ASSISTANT_NAME` / `USER_NAME` / `CITY` | Persona | `Alicia` / `Alejandro` / `Panama` |
 | `WHISPER_MODEL` | STT model size (voice mode) | `small` |
+
+### Model roles (V66.1 — one source of truth)
+
+Every subsystem resolves models through one precedence ladder: **explicit
+`JARVIS_MODEL_*` override → central role config → hardware recommendation
+(advisory only) → installed-compatible fallback → safe fallback**. What you set
+in `.env` is what actually runs — hardware profiling advises but never overrides.
+
+| Role | Env var | Default |
+|---|---|---|
+| FAST (chat) | `JARVIS_MODEL_FAST` | `qwen3:8b` |
+| CODER | `JARVIS_MODEL_CODER` | `qwen2.5-coder:latest` |
+| DEEP (architecture/DFIR) | `JARVIS_MODEL_DEEP` | `qwen3:14b` |
+| VISION | `JARVIS_MODEL_VISION` | `gemma3:4b` |
+| EMBEDDING | `JARVIS_MODEL_EMBEDDING` | `nomic-embed-text:latest` |
+| VERIFIER | `JARVIS_MODEL_VERIFIER` | `qwen3:8b` |
+
+`python scripts/model_doctor.py` reads this same `.env` config, reports the
+hardware tier's advisory recommendation, checks each role model is pulled, and
+fires a bounded thinking-model-aware smoke test at FAST/VERIFIER.
+
+**CPU-only inference (Ryzen 5 7430U / 64 GB):** system RAM — not the integrated
+GPU's VRAM — is the model-capacity ceiling. Keep Ollama conservative:
+`OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`.
 
 ## Usage
 

@@ -75,6 +75,10 @@ class HardwareProfile:
     recommended_ctx:   int
     model_fast:        str
     model_deep:        str        = MODEL_DEEP
+    # Advisory TDP-tier quantization hint (e.g. "qwen2.5:7b-instruct-q5_K_M").
+    # NOT the active model — the active fast/deep pair is resolved by the
+    # unified role resolver. Surfaced only for operator visibility in logs.
+    fast_quant_hint:   str        = ""
 
 
 # ── WMI query helper ──────────────────────────────────────────────────────────
@@ -264,6 +268,15 @@ def detect_hardware() -> HardwareProfile:
     pool_adj = _storage_pool_bonus(storage_type)
     cfg["pools"] = max(1, cfg["pools"] + pool_adj)
 
+    # V66.1: the concrete fast/deep models come from the UNIFIED resolver
+    # (explicit JARVIS_MODEL_* env override → central role config), NOT the
+    # TDP-tier quantization hint below. The tier's cfg["model_fast"] is now a
+    # pure quantization/latency advisory (see _log_profile). Installed-model
+    # validation happens downstream in dependency_guardian.resolve_models.
+    from core.model_router import resolve_fast_model, resolve_deep_model
+    model_fast = resolve_fast_model()
+    model_deep = resolve_deep_model()
+
     p = HardwareProfile(
         total_ram_gb      = total_gb,
         is_dual_channel   = dual,
@@ -283,9 +296,11 @@ def detect_hardware() -> HardwareProfile:
         has_alfa_adapter  = has_alfa,
         recommended_pools = cfg["pools"],
         recommended_ctx   = cfg["ctx"],
-        model_fast        = cfg["model_fast"],
-        model_deep        = MODEL_DEEP,
+        model_fast        = model_fast,
+        model_deep        = model_deep,
     )
+    # Stash the TDP quant hint for advisory logging (not a model selection).
+    p.fast_quant_hint = cfg.get("model_fast", "")
 
     _log_profile(p)
 
@@ -313,10 +328,24 @@ def _log_profile(p: HardwareProfile) -> None:
         f"GPU: {p.gpu_name} ({p.gpu_vram_mb}MB VRAM) | "
         f"Storage: {p.storage_type}"
     )
+    # V66.1: distinguish the axes explicitly so a low dedicated-VRAM iGPU host
+    # with abundant system RAM is not mistaken for a weak machine. Inference
+    # here is CPU-bound (Ollama on CPU); system RAM — not VRAM — is the model
+    # capacity ceiling.
+    dedicated_vram = p.gpu_vram_mb >= 2048
+    gpu_capability = "GPU-accelerated" if dedicated_vram else "iGPU/shared (CPU inference)"
+    logger.info(
+        f"HARDWARE: CAPABILITY → inference=CPU | {gpu_capability} | "
+        f"system-RAM={p.total_ram_gb:.0f}GB (model capacity, NOT VRAM) | "
+        f"cores={p.cpu_cores}"
+        + (" | thermal-limited(U-series 15W)" if p.is_u_series else "")
+        + (f" | ON-BATTERY {p.battery_percent:.0f}%" if p.on_battery else "")
+    )
     logger.info(
         f"HARDWARE: CONFIG → pools={p.recommended_pools} "
         f"ctx={p.recommended_ctx} "
-        f"fast={p.model_fast}"
+        f"fast={p.model_fast} deep={p.model_deep} "
+        f"(quant-hint={p.fast_quant_hint or 'n/a'})"
         + (" [BATTERY]" if p.on_battery else "")
         + (" [VM]"      if p.is_vm_guest else "")
     )

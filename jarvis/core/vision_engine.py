@@ -20,12 +20,19 @@ Ollama multimodal message format:
   ]}
 """
 
-import asyncio, base64, os
+import asyncio, base64
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_VISION_MODEL  = os.getenv("JARVIS_VISION_MODEL", "moondream:latest")
+from core.model_router import ModelRole, resolve_role_model
+
+# V66.1: resolve the VISION model through the unified role resolver. The legacy
+# code read the mis-named env var ``JARVIS_VISION_MODEL`` (note: NOT the unified
+# ``JARVIS_MODEL_VISION`` every other role uses), so an operator who correctly
+# set ``JARVIS_MODEL_VISION=gemma3:4b`` still got the hardcoded moondream default.
+# Now the whole system shares ONE VISION role (env override → central default).
+_VISION_MODEL = resolve_role_model(ModelRole.VISION)
 _VISION_SYSTEM = (
     "You are JARVIS's visual cortex — an expert security analyst "
     "analyzing images. Be precise and technical. Extract all text "
@@ -233,11 +240,11 @@ async def capture_webcam_frame() -> bytes | None:
 
 async def analyze_room(
     ollama_client,
-    model_vision: str = "moondream:latest",
+    model_vision: str = _VISION_MODEL,
     query: str = "Describe everything you see in detail.",
 ) -> str:
     """
-    Capture webcam frame and analyze with Moondream.
+    Capture webcam frame and analyze with the configured VISION-role model.
     Returns natural language description of the room/environment.
     """
     import base64, aiohttp, time
@@ -284,11 +291,11 @@ async def analyze_room(
 
 async def analyze_screen_vision(
     ollama_client,
-    model_vision: str = "moondream:latest",
+    model_vision: str = _VISION_MODEL,
     query: str = "Describe what you see on this screen in detail.",
 ) -> str:
     """
-    Capture screen and analyze with Moondream.
+    Capture screen and analyze with the configured VISION-role model.
     Returns natural language description of screen content.
     """
     import base64, aiohttp, io

@@ -10,13 +10,49 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
-MODEL_FAST = os.getenv("JARVIS_MODEL_FAST", "qwen2.5:7b-instruct-q4_K_M")
-MODEL_DEEP = os.getenv("JARVIS_MODEL_DEEP", "qwen2.5:14b-instruct-q4_K_M")
-OLLAMA_URL = os.getenv("OLLAMA_HOST",       "http://localhost:11434")
+# ── Central role-model configuration (precedence level 2) ────────────────────
+# Modern, CPU/RAM-friendly local defaults for the Ryzen-class homelab host.
+# Explicit ``JARVIS_MODEL_*`` env overrides (level 1) always win. Kept as plain
+# strings so the legacy ``MODEL_FAST``/``MODEL_DEEP`` globals and the
+# ``ModelRole`` map below share ONE source of truth (no drift).
+_DEFAULT_FAST      = "qwen3:8b"
+_DEFAULT_CODER     = "qwen2.5-coder:latest"
+_DEFAULT_DEEP      = "qwen3:14b"
+_DEFAULT_VISION    = "gemma3:4b"
+_DEFAULT_EMBEDDING = "nomic-embed-text:latest"
+_DEFAULT_VERIFIER  = "qwen3:8b"
+
+_DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
+
+
+def normalize_ollama_host(raw: str | None = None) -> str:
+    """Return a well-formed ``scheme://host:port`` Ollama base URL.
+
+    Tolerates the bare forms operators (and ``windows_hardener``) sometimes set,
+    e.g. ``127.0.0.1`` or ``localhost:11434``, which would otherwise produce an
+    invalid ``127.0.0.1/api/tags`` when a caller does ``f"{host}/api/tags"``.
+    Missing scheme defaults to ``http``; missing port defaults to ``11434``.
+    """
+    val = (raw if raw is not None else os.getenv("OLLAMA_HOST", "") or "").strip()
+    if not val:
+        return _DEFAULT_OLLAMA_HOST
+    if "://" not in val:
+        val = "http://" + val
+    parsed = urlparse(val)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 11434
+    return f"{scheme}://{host}:{port}"
+
+
+MODEL_FAST = os.getenv("JARVIS_MODEL_FAST", _DEFAULT_FAST)
+MODEL_DEEP = os.getenv("JARVIS_MODEL_DEEP", _DEFAULT_DEEP)
+OLLAMA_URL = normalize_ollama_host()
 COMPLEXITY_THRESHOLD = 0.6
 
 _TECH_TERMS = {
@@ -114,14 +150,16 @@ class ModelRole(str, Enum):
 
 
 # Safe local-first defaults (overridable via env). Chosen to run on modest,
-# CPU-bound homelab hardware — small fast model, mid coder, reasoning deep.
+# CPU-bound homelab hardware with ample system RAM — small fast model, dedicated
+# coder, reasoning deep, small VLM. Single source of truth = the _DEFAULT_*
+# constants near the top of this module (shared with MODEL_FAST/MODEL_DEEP).
 _ROLE_DEFAULTS: dict[ModelRole, str] = {
-    ModelRole.FAST:      "qwen2.5-coder:7b",
-    ModelRole.CODER:     "qwen2.5-coder:14b",
-    ModelRole.DEEP:      "deepseek-r1:14b",
-    ModelRole.VISION:    "moondream",
-    ModelRole.EMBEDDING: "nomic-embed-text",
-    ModelRole.VERIFIER:  "qwen2.5-coder:7b",
+    ModelRole.FAST:      _DEFAULT_FAST,
+    ModelRole.CODER:     _DEFAULT_CODER,
+    ModelRole.DEEP:      _DEFAULT_DEEP,
+    ModelRole.VISION:    _DEFAULT_VISION,
+    ModelRole.EMBEDDING: _DEFAULT_EMBEDDING,
+    ModelRole.VERIFIER:  _DEFAULT_VERIFIER,
 }
 
 _ROLE_ENV: dict[ModelRole, str] = {
@@ -147,6 +185,118 @@ def cloud_enabled() -> bool:
     return os.getenv("JARVIS_CLOUD_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  V66.1 — Unified role-model resolution (single source of truth)
+#  One precedence ladder every live consumer resolves through, so the operator's
+#  explicit config always wins and hardware profiling stays advisory.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _norm_installed(installed) -> set[str]:
+    return {str(m).strip() for m in (installed or []) if str(m).strip()}
+
+
+def _model_installed(name: str, installed) -> bool:
+    """True iff *name* is satisfied by a pulled model in *installed*.
+
+    Precise ``repo`` + ``tag`` match — deliberately stricter than the historical
+    ``p.startswith(name.split(':')[0])`` heuristic, which wrongly reported e.g.
+    ``qwen2.5:7b-instruct-q5_K_M`` as present merely because the unrelated
+    ``qwen2.5-coder:latest`` shares the ``qwen2.5`` family prefix. That false
+    match is the root cause of the legacy Qwen2.5 fast/deep pair leaking into the
+    runtime, so it must never come back.
+    """
+    if not name:
+        return False
+    inst = _norm_installed(installed)
+    if name in inst:
+        return True
+    repo, _, tag = name.partition(":")
+    for p in inst:
+        p_repo, _, p_tag = p.partition(":")
+        if p_repo != repo:
+            continue
+        if not tag:                      # untagged name → any tag of this repo counts
+            return True
+        if p_tag == tag or p_tag.startswith(tag + "-") or p_tag.startswith(tag + "."):
+            return True
+        if "latest" in (p_tag, tag):     # 'latest' is treated as compatible
+            return True
+    return False
+
+
+def resolve_role_model(
+    role: "ModelRole | str",
+    *,
+    installed=None,
+    hw_recommendation: str | None = None,
+) -> str:
+    """Resolve the concrete model for *role* under the unified precedence:
+
+      1. explicit ``JARVIS_MODEL_*`` env override — operator opted in, so it
+         always wins (even if not currently pulled; a warning is logged when
+         *installed* is known and it is absent).
+      2. central role-model configuration (``_ROLE_DEFAULTS``).
+      3. hardware-aware recommendation (advisory; TDP / VRAM tier hint).
+      4. installed-compatible fallback (first pulled model in the role family).
+      5. safe final fallback (the central default).
+
+    *installed* (list of pulled model names) gates levels 2-4 so a model the host
+    cannot run is never handed back — EXCEPT an explicit env override, honored
+    verbatim. Pass ``installed=None`` for pure config resolution (no Ollama
+    query), which resolves env → central and never emits noise.
+    """
+    role = role if isinstance(role, ModelRole) else ModelRole(role)
+    inst = _norm_installed(installed) if installed is not None else None
+
+    # 1) explicit env override — always wins.
+    env_key = _ROLE_ENV.get(role)
+    env_val = (os.getenv(env_key) or "").strip() if env_key else ""
+    if env_val:
+        if inst is not None and not _model_installed(env_val, inst):
+            logger.warning(
+                f"MODEL_RESOLVE: {role.value} override '{env_val}' is not pulled — "
+                f"honoring operator config; run: ollama pull {env_val}"
+            )
+        return env_val
+
+    central = _ROLE_DEFAULTS.get(role, _DEFAULT_FAST)
+
+    # No installed set → pure config resolution (env → central).
+    if inst is None:
+        return central
+
+    # 2) central config, if actually installed.
+    if _model_installed(central, inst):
+        return central
+    # 3) hardware recommendation, if installed.
+    if hw_recommendation and _model_installed(hw_recommendation, inst):
+        return hw_recommendation
+    # 4) installed-compatible fallback: first pulled model sharing the role family.
+    fam = central.partition(":")[0]
+    for p in sorted(inst):
+        if p.partition(":")[0] == fam:
+            return p
+    # 5) safe final fallback — central default (guardian surfaces the pull hint).
+    logger.warning(
+        f"MODEL_RESOLVE: no pulled model for {role.value} (central='{central}') — "
+        f"falling back to central default"
+    )
+    return central
+
+
+def resolve_fast_model(installed=None, hw_recommendation: str | None = None) -> str:
+    """FAST-role model via the unified precedence (see ``resolve_role_model``)."""
+    return resolve_role_model(ModelRole.FAST, installed=installed,
+                              hw_recommendation=hw_recommendation)
+
+
+def resolve_deep_model(installed=None, hw_recommendation: str | None = None) -> str:
+    """DEEP-role model via the unified precedence (see ``resolve_role_model``)."""
+    return resolve_role_model(ModelRole.DEEP, installed=installed,
+                              hw_recommendation=hw_recommendation)
 
 
 # ── Bilingual (EN + ES) routing keyword sets ─────────────────────────────────

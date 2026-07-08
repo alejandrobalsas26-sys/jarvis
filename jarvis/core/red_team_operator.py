@@ -112,7 +112,10 @@ class AresOperator:
         self._campaigns:    dict[str, AresCampaign] = {}
         self._broadcast_fn  = None
         self._ollama_client = None
-        self._deep_model    = "qwen2.5:14b-instruct-q4_K_M"
+        # V66.1: unified DEEP-role resolver default (env → central config);
+        # attach() supplies the boot-resolved deep model in the live path.
+        from core.model_router import resolve_deep_model
+        self._deep_model    = resolve_deep_model()
         self._tool_executor = None
         self._tts           = None
 

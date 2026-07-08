@@ -7,7 +7,6 @@ Python packages — all before JARVIS tries to use any of them.
 """
 
 import asyncio
-import os
 import shutil
 import subprocess
 import sys
@@ -15,10 +14,15 @@ from pathlib import Path
 from loguru import logger
 import psutil
 
-OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+from core.model_router import normalize_ollama_host
+
+OLLAMA_HOST  = normalize_ollama_host()
 MIN_DISK_GB  = 10.0
 
-# Ordered fallback chain — first available wins
+# Legacy ordered fallback chains — retained for backward compatibility only.
+# The live path now resolves models through core.model_router.resolve_role_model
+# (env override → central role config → hardware hint → installed-compatible →
+# safe fallback), so these are no longer consulted for the fast/deep pair.
 MODEL_FAST_CHAIN = [
     "qwen2.5:7b-instruct-q5_K_M",
     "qwen2.5:7b-instruct-q4_K_M",
@@ -67,42 +71,43 @@ async def ensure_all(hw_profile=None) -> dict:
 
 async def resolve_models(hw_profile) -> tuple[str, str]:
     """
-    Query Ollama for available models and select the best
-    from the fallback chain for fast and deep inference.
-    Returns (model_fast, model_deep).
+    Resolve the concrete FAST and DEEP models through the unified precedence in
+    core.model_router (explicit JARVIS_MODEL_* env override → central role config
+    → hardware recommendation → installed-compatible fallback → safe fallback),
+    validated against the models actually pulled in Ollama.
+
+    Returns (model_fast, model_deep). The operator's explicit env config always
+    wins; the hardware profile is advisory only. When Ollama is unreachable the
+    installed set is unknown, so env/central config is honored without noise.
     """
+    from core.model_router import (
+        ModelRole, resolve_role_model, _model_installed,
+    )
+
     loop = asyncio.get_running_loop()
     pulled = await loop.run_in_executor(None, _get_pulled_models)
+    installed = sorted(pulled) if pulled else None  # None → skip install-checking
 
-    fast = _pick_from_chain(
-        MODEL_FAST_CHAIN,
-        pulled,
-        hw_profile.model_fast if hw_profile else None,
-    )
-    deep = _pick_from_chain(
-        MODEL_DEEP_CHAIN,
-        pulled,
-        hw_profile.model_deep if hw_profile else None,
-    )
+    hw_fast = getattr(hw_profile, "model_fast", None) if hw_profile else None
+    hw_deep = getattr(hw_profile, "model_deep", None) if hw_profile else None
 
-    if fast:
-        logger.info(f"GUARDIAN: fast model → {fast}")
-    else:
-        # v46.0: WARNING not ERROR — missing model is recoverable
-        # via auto-pull or operator action, not a critical infra failure.
-        logger.warning(
-            f"GUARDIAN: no fast model found — "
-            f"run: ollama pull {MODEL_FAST_CHAIN[0]}"
-        )
-        fast = MODEL_FAST_CHAIN[0]
+    fast = resolve_role_model(ModelRole.FAST, installed=installed, hw_recommendation=hw_fast)
+    deep = resolve_role_model(ModelRole.DEEP, installed=installed, hw_recommendation=hw_deep)
 
-    if deep:
-        logger.info(f"GUARDIAN: deep model → {deep}")
-    else:
-        logger.warning(
-            f"GUARDIAN: no deep model found — falling back to fast model {fast}"
-        )
-        deep = fast
+    for role_name, chosen in (("fast", fast), ("deep", deep)):
+        if installed is None:
+            # Ollama unreachable — cannot verify. WARN (recoverable), not ERROR.
+            logger.warning(
+                f"GUARDIAN: {role_name} model → {chosen} "
+                f"(Ollama unreachable — availability not verified)"
+            )
+        elif _model_installed(chosen, installed):
+            logger.info(f"GUARDIAN: {role_name} model → {chosen}")
+        else:
+            logger.warning(
+                f"GUARDIAN: {role_name} model → {chosen} "
+                f"(NOT pulled — run: ollama pull {chosen})"
+            )
 
     return fast, deep
 
