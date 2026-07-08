@@ -7,7 +7,6 @@ Python packages — all before JARVIS tries to use any of them.
 """
 
 import asyncio
-import os
 import shutil
 import subprocess
 import sys

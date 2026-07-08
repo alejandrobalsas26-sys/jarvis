@@ -15,7 +15,6 @@ import io
 import json
 import urllib.error
 
-import pytest
 
 
 # ── self_test classification taxonomy ────────────────────────────────────────

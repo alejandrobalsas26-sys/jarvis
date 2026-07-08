@@ -18,7 +18,6 @@ import asyncio
 import threading
 import time
 
-import pytest
 
 from core.tts import TTS
 

@@ -20,7 +20,7 @@ Ollama multimodal message format:
   ]}
 """
 
-import asyncio, base64, os
+import asyncio, base64
 from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
