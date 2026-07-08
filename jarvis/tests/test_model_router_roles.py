@@ -65,11 +65,15 @@ class TestRouting:
 
 class TestModelResolution:
     def test_default_models(self):
-        assert model_for_role(ModelRole.FAST) == "qwen2.5-coder:7b"
-        assert model_for_role(ModelRole.CODER) == "qwen2.5-coder:14b"
-        assert model_for_role(ModelRole.DEEP) == "deepseek-r1:14b"
-        assert model_for_role(ModelRole.VISION) == "moondream"
-        assert model_for_role(ModelRole.EMBEDDING) == "nomic-embed-text"
+        # V66.1: central defaults modernized to the qwen3 / qwen2.5-coder /
+        # gemma3 family the CPU/RAM homelab actually runs (single source of
+        # truth with MODEL_FAST/MODEL_DEEP).
+        assert model_for_role(ModelRole.FAST) == "qwen3:8b"
+        assert model_for_role(ModelRole.CODER) == "qwen2.5-coder:latest"
+        assert model_for_role(ModelRole.DEEP) == "qwen3:14b"
+        assert model_for_role(ModelRole.VISION) == "gemma3:4b"
+        assert model_for_role(ModelRole.EMBEDDING) == "nomic-embed-text:latest"
+        assert model_for_role(ModelRole.VERIFIER) == "qwen3:8b"
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("JARVIS_MODEL_CODER", "qwen2.5-coder:32b")
