@@ -327,3 +327,155 @@ def build_live_system_status(*, sensors: dict | None = None) -> dict:
         pass
     return system_status_panel(graph=graph, open_cases=incidents, twin_snapshot=twin_snap,
                                sensors=sensors or {}, findings=findings, situation=situation)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  V67 M31 — live operator command center (composes existing panels + new sources)
+# ══════════════════════════════════════════════════════════════════════════════
+def collectors_panel(fabric=None) -> dict:
+    """COLLECTORS panel from the V67 collector fabric (already bounded/redacted).
+    Read-only; reflects lifecycle/health, never a command line or secret."""
+    try:
+        if fabric is None:
+            from core.collector_fabric import fabric as _fab
+            fabric = _fab
+        panel = fabric.aura_panel()
+    except Exception:  # noqa: BLE001 — an absent/half-wired fabric never breaks AURA
+        return {"panel": "collectors", "metrics": {}, "collectors": []}
+    panel["panel"] = "collectors"
+    panel["collectors"] = panel.get("collectors", [])[:_MAX_LIST]
+    return panel
+
+
+def environments_panel(registry=None) -> dict:
+    """ENVIRONMENTS panel from the V67 enrollment registry. NEVER emits the
+    credentials reference — only whether credentials are configured."""
+    try:
+        if registry is None:
+            from core.environment_registry import env_registry as registry
+        panel = registry.to_aura_panel()
+    except Exception:  # noqa: BLE001
+        return {"panel": "environments", "total": 0, "authorized": 0, "environments": []}
+    rows = panel.get("environments", [])[:_MAX_LIST]
+    # defence in depth: strip any credentials_ref that slipped through a projection
+    for row in rows:
+        row.pop("credentials_ref", None)
+    return {"panel": "environments", "total": panel.get("total", 0),
+            "authorized": panel.get("authorized", 0), "environments": rows}
+
+
+def model_runtime_panel(settings=None) -> dict:
+    """MODEL / RUNTIME panel: the resolved concrete model per cognitive role. Pure
+    config view — does NOT query Ollama (no I/O, never blocks the event loop)."""
+    try:
+        if settings is None:
+            from core.config import settings as settings
+        roles = settings.resolved_role_models()   # installed=None → no Ollama query
+        host = _redact(getattr(settings, "ollama_host", "") or getattr(settings, "ollama_url", ""))
+    except Exception:  # noqa: BLE001
+        return {"panel": "model_runtime", "roles": {}, "host": "", "probe": "not_checked"}
+    return {"panel": "model_runtime",
+            "roles": {r: _redact(m) for r, m in list(roles.items())[:_MAX_LIST]},
+            "host": host, "probe": "not_checked"}   # reachability is an M34 concern
+
+
+def operational_digest(situation) -> dict:
+    """The operator's five questions, derived ONLY from the situation snapshot:
+    WHAT IS HAPPENING / WHAT CHANGED / WHAT MATTERS / WHAT IS UNCERTAIN / WHAT
+    SHOULD I DO NEXT. Empty state is honest — 'no evidence of an active incident',
+    never 'everything is secure' (unknown != safe)."""
+    d = _as_dict(situation)
+    summary = d.get("summary", {}) or {}
+    priorities = d.get("priorities", []) or []
+    changed = d.get("what_changed", {}) or {}
+    uncertainties = [_redact(u) for u in d.get("uncertainties", [])[:_MAX_LIST]]
+    recs = d.get("recommendations", []) or []
+    severity = d.get("severity", "calm")
+    open_inc = summary.get("open_incidents", 0)
+    top = summary.get("top_priority")
+
+    if not priorities and not open_inc:
+        happening = f"Situation {severity.upper()}: no active operational priorities."
+        do_next = ("Monitor. I do not have evidence of an active incident "
+                   "(absence of evidence is not proof of safety).")
+    else:
+        happening = (f"Situation {severity.upper()}: {open_inc} open incident(s), "
+                     f"{len(priorities)} active priorit{'y' if len(priorities) == 1 else 'ies'}.")
+        do_next = (f"{recs[0].get('runbook', 'monitor')} ({recs[0].get('mode', 'dry_run')}) — "
+                   f"{_redact(recs[0].get('rationale', ''))}") if recs else "Monitor."
+
+    return {
+        "happening": happening,
+        "changed": {"new": list(changed.get("new", []))[:_MAX_LIST],
+                    "resolved": list(changed.get("resolved", []))[:_MAX_LIST],
+                    "baseline": bool(changed.get("baseline", False))},
+        "matters": (_scrub(top) if top else None),
+        "uncertain": uncertainties,
+        "do_next": do_next,
+    }
+
+
+def command_center(*, graph=None, open_cases=None, twin_snapshot=None, sensors=None,
+                   findings=None, situation=None, fabric=None, environments=None,
+                   settings=None, runbook_engine=None) -> dict:
+    """The unified live operator command center. Composes the EXISTING bounded panels
+    with the V67 collector/environment/model sources plus the five-question digest.
+    Pure function of injected objects (or live singletons) — testable without a HUD."""
+    return {
+        "panel": "command_center",
+        "situation": situation_panel(situation) if situation is not None else {},
+        "digest": operational_digest(situation) if situation is not None else {},
+        "panels": {
+            "system_status": system_status_panel(
+                graph=graph, open_cases=open_cases, twin_snapshot=twin_snapshot,
+                sensors=sensors or {}, findings=findings, situation=situation),
+            "assets": asset_status_panel(graph) if graph is not None else {},
+            "incidents": incidents_panel(open_cases or []),
+            "drift": drift_panel(twin_snapshot) if twin_snapshot is not None else {"count": 0},
+            "sensors": sensor_health_panel(sensors or {}),
+            "correlations": correlations_panel(findings or []),
+            "runbooks": runbooks_panel(runbook_engine) if runbook_engine is not None
+            else {"panel": "runbooks", "available": [], "count": 0},
+            "collectors": collectors_panel(fabric),
+            "environments": environments_panel(environments),
+            "model_runtime": model_runtime_panel(settings),
+        },
+    }
+
+
+def build_live_command_center(*, sensors: dict | None = None) -> dict:
+    """Assemble the command center from the live singletons. Read-only; bounded; no
+    I/O beyond the pure in-memory spine — safe to call while a DEEP inference runs."""
+    graph = incidents = twin_snap = findings = situation = runbook_engine = None
+    try:
+        from core.asset_graph import graph as graph
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from core.incident_workspace import workspace
+        incidents = workspace.open_cases()
+    except Exception:  # noqa: BLE001
+        incidents = []
+    try:
+        from core.digital_twin import twin
+        twin_snap = twin.compute_drift()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from core.correlation_v2 import correlator_v2
+        findings = correlator_v2.recent(_MAX_LIST)
+    except Exception:  # noqa: BLE001
+        findings = []
+    try:
+        from core.runbook_engine import engine as runbook_engine
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from core.situation_engine import engine as _sit
+        situation = _sit.build(asset_graph=graph, incidents=incidents, drift=twin_snap,
+                               correlation_findings=findings, sensor_health=sensors or {})
+    except Exception:  # noqa: BLE001
+        pass
+    return command_center(graph=graph, open_cases=incidents, twin_snapshot=twin_snap,
+                          sensors=sensors or {}, findings=findings, situation=situation,
+                          runbook_engine=runbook_engine)

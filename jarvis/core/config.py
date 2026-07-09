@@ -176,6 +176,25 @@ class Settings(BaseSettings):
         """Parse the comma-separated aura_allowed_origins into a normalized list."""
         return [o.strip().rstrip("/") for o in self.aura_allowed_origins.split(",") if o.strip()]
 
+    # ── Role-model view (V67 M27) ─────────────────────────────────────────────
+    # NOTE: role→model configuration deliberately stays authoritative in
+    # core.model_router (``_ROLE_DEFAULTS`` + ``JARVIS_MODEL_*`` env, resolved by
+    # ``resolve_role_model``). Promoting those into Settings fields would create a
+    # SECOND source of truth and re-introduce the V66.1 split-brain. This is a
+    # read-THROUGH facade only — it delegates to the one resolver so the config
+    # layer can *report* the active role models (doctors / AURA) without owning
+    # or duplicating them. env override → central default precedence is unchanged.
+    def resolved_role_models(self, *, installed=None) -> dict[str, str]:
+        """Resolved concrete model per cognitive role (read-through to the router).
+
+        Pass ``installed`` (pulled model names) to gate against availability; omit
+        for a pure config view (env override → central default, no Ollama query).
+        """
+        from core.model_router import ModelRole, resolve_role_model
+        roles = (ModelRole.FAST, ModelRole.CODER, ModelRole.DEEP,
+                 ModelRole.VISION, ModelRole.EMBEDDING, ModelRole.VERIFIER)
+        return {r.value: resolve_role_model(r, installed=installed) for r in roles}
+
 
 # Singleton — import from here throughout the project
 settings = Settings()
