@@ -78,7 +78,7 @@ class RuntimeHealthSnapshot:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Subsystem builders (pure — take already-fetched raw data)
 # ══════════════════════════════════════════════════════════════════════════════
-def _collectors_subsystem(fm: dict) -> SubsystemHealth:
+def _collectors_subsystem(fm: dict, telemetry: dict | None = None) -> SubsystemHealth:
     fm = fm or {}
     total, active = fm.get("total", 0), fm.get("active", 0)
     failed, backp = fm.get("failed", 0), fm.get("backpressure", 0)
@@ -92,12 +92,36 @@ def _collectors_subsystem(fm: dict) -> SubsystemHealth:
         status = HealthStatus.DORMANT
     events, drops = fm.get("events_emitted", 0), fm.get("drops", 0)
     drop_ratio = round(drops / max(1, events + drops), 4)
+    metrics = {"total": total, "active": active, "dormant": fm.get("dormant", 0),
+               "degraded": fm.get("degraded", 0), "failed": failed, "backpressure": backp,
+               "events_emitted": events, "queue_drops": drops, "drop_ratio": drop_ratio}
+    tel_extra = _telemetry_rollup(telemetry)
+    if tel_extra:
+        metrics.update(tel_extra)
     return SubsystemHealth(
         "collectors", status,
         f"{active} active / {fm.get('dormant', 0)} dormant / {failed} failed of {total}",
-        {"total": total, "active": active, "dormant": fm.get("dormant", 0),
-         "degraded": fm.get("degraded", 0), "failed": failed, "backpressure": backp,
-         "events_emitted": events, "queue_drops": drops, "drop_ratio": drop_ratio})
+        metrics)
+
+
+def _telemetry_rollup(telemetry: dict | None) -> dict:
+    """M39: fold per-collector telemetry into a bounded fabric-wide summary — a count
+    per derived state and the peak event rate / lag — without unbounded per-collector
+    fan-out into the metrics map."""
+    if not telemetry:
+        return {}
+    states: dict[str, int] = {}
+    peak_eps = 0.0
+    max_lag = 0.0
+    for snap in telemetry.values():
+        if not isinstance(snap, dict):
+            continue
+        st = snap.get("state", "unknown")
+        states[st] = states.get(st, 0) + 1
+        peak_eps = max(peak_eps, snap.get("events_per_second") or 0.0)
+        max_lag = max(max_lag, snap.get("median_lag_s") or 0.0)
+    return {"telemetry_states": states, "telemetry_peak_eps": round(peak_eps, 4),
+            "telemetry_max_lag_s": round(max_lag, 3)}
 
 
 def _resource_subsystem(res: dict | None) -> SubsystemHealth:
@@ -183,7 +207,8 @@ def _pick_stat(stats: dict, keys: tuple[str, ...]) -> dict | None:
 def collect_runtime_health(*, fabric_metrics: dict | None = None,
                            watchdog_status: dict | None = None,
                            resource: dict | None = None, profiler: dict | None = None,
-                           model: dict | None = None, spine: dict | None = None
+                           model: dict | None = None, spine: dict | None = None,
+                           telemetry: dict | None = None
                            ) -> RuntimeHealthSnapshot:
     """Compose one health snapshot from already-fetched raw data. Every arg may be
     injected (tests) or left None to read the live source (guarded)."""
@@ -193,9 +218,10 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
     prof = profiler if profiler is not None else _live_profiler()
     mdl = model if model is not None else _live_model()
     sp = spine if spine is not None else _live_spine()
+    tel = telemetry if telemetry is not None else _live_telemetry()
 
     subsystems = [
-        _collectors_subsystem(fm), _resource_subsystem(res), _tasks_subsystem(ws),
+        _collectors_subsystem(fm, tel), _resource_subsystem(res), _tasks_subsystem(ws),
         _inference_subsystem(prof), _model_subsystem(mdl), _spine_subsystem(sp),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
@@ -217,6 +243,14 @@ def _live_fabric_metrics() -> dict:
     try:
         from core.collector_fabric import fabric
         return fabric.metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_telemetry() -> dict:
+    try:
+        from core.collector_fabric import fabric
+        return fabric.telemetry_snapshot()
     except Exception:  # noqa: BLE001
         return {}
 

@@ -133,3 +133,8 @@ class TaskWatchdog:
             )
             for name, e in self._registry.items()
         }
+
+    def restart_counts(self) -> dict[str, int]:
+        """Cumulative restart count per supervised task (for M39 telemetry flapping
+        detection). Read-only snapshot; the caller diffs it to derive a rate."""
+        return {name: int(e["restart_count"]) for name, e in self._registry.items()}
