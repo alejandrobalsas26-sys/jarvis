@@ -67,6 +67,8 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "ops_command_center",
     # V67 M32 — grounded natural-language operational query (READ-ONLY)
     "ops_query",
+    # V67 M34 — unified runtime & collector health snapshot (READ-ONLY)
+    "runtime_health",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -293,6 +295,12 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             question = str(args.get("question", ""))[:200]
             sensors = args.get("sensors") if isinstance(args.get("sensors"), dict) else None
             return answer_question(question, sensors=sensors).to_dict()
+
+        if cmd == "runtime_health":
+            # V67 M34 — read-only unified health. Composes existing diagnostics; a single
+            # non-blocking CPU/RAM sample, no self-test, no Ollama probe. Never blocks.
+            from core.runtime_health import build_live_runtime_health
+            return build_live_runtime_health()
 
         if cmd == "aura_get_incidents":
             from core.correlator import correlator
