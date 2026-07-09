@@ -63,6 +63,8 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "deploy_sigma_rule",
     "run_bas_scenario",
     "get_coverage",
+    # V67 M31 — live operator command center (READ-ONLY, bounded, redacted)
+    "ops_command_center",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -274,6 +276,13 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) -> dict:
     """Route validated HUD commands to appropriate tool functions."""
     try:
+        if cmd == "ops_command_center":
+            # V67 M31 — read-only live command center. Pure in-memory assembly of the
+            # bounded/redacted panels; no world-effect, no Ollama query, never blocks.
+            from core.ops_views import build_live_command_center
+            sensors = args.get("sensors") if isinstance(args.get("sensors"), dict) else None
+            return build_live_command_center(sensors=sensors)
+
         if cmd == "aura_get_incidents":
             from core.correlator import correlator
             return {"incidents": correlator.get_active_incidents()}
