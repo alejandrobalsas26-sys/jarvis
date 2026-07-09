@@ -10,10 +10,14 @@ import os
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
+
+if TYPE_CHECKING:
+    from core.model_capabilities import InferenceSurface
 
 # ── Central role-model configuration (precedence level 2) ────────────────────
 # Modern, CPU/RAM-friendly local defaults for the Ryzen-class homelab host.
@@ -506,30 +510,100 @@ def is_security_sensitive_turn(
     return False
 
 
-def resolve_inference_model(decision: ModelDecision) -> str:
-    """Map a routing *decision* to a concrete, tool-call-capable Ollama model.
+def resolve_inference_model(
+    decision: ModelDecision,
+    *,
+    surface: "InferenceSurface | None" = None,
+) -> str:
+    """Map a routing *decision* to a concrete model for a given inference *surface*.
 
-    ``route()`` may name role-default models (qwen2.5-coder:7b, deepseek-r1:14b,
-    moondream, nomic-embed-text, …) that are either not pulled on this host or
-    unfit for the tool-use streaming path (vision/embedding models can't chat;
-    reasoning models stream <think> noise and call tools poorly). To keep the
-    live turn robust we:
+    ROLE SELECTION (which :class:`ModelRole` this turn is) is decided upstream by
+    ``route()``; this function enforces INFERENCE SURFACE CAPABILITY — the model
+    it returns is guaranteed to support *surface*. Default surface is
+    ``InferenceSurface.CHAT``: the live tool-use streaming path
+    (``llm.chat_stream``), which ALWAYS passes ``tools`` and streams natural
+    language.
 
-      1. honor an explicit per-role env override when the operator set one
-         (they opted into that exact model), else
-      2. fall back to the boot-resolved dual models (``MODEL_FAST`` /
-         ``MODEL_DEEP``) that the dependency guardian confirmed are available.
+    V67 M27 invariant: a VISION/EMBEDDING role model — or any operator override
+    that is embedding-only / vision-only / weak-tool — is NEVER returned for the
+    CHAT surface. Embedding-only models cannot chat at all; vision-first models
+    cannot drive tool-use streaming. Visual understanding and vector generation
+    use their dedicated surfaces (:func:`resolve_vision_model` /
+    :func:`resolve_embedding_model`), not the chat stream.
 
-    Cloud is never streamed from this local client — the live path passes
-    ``allow_cloud=False`` — so a CLOUD decision maps to the deep local model.
+    Precedence for CHAT (unchanged for the well-configured qwen3 / qwen2.5-coder
+    host): honor an explicit, chat-capable per-role env override, else fall back
+    to the boot-resolved dual models (``MODEL_FAST`` / ``MODEL_DEEP``) the
+    dependency guardian confirmed are available. Cloud is never streamed from the
+    local client (live path passes ``allow_cloud=False``) so CLOUD → ``MODEL_DEEP``.
     """
+    from core.model_capabilities import InferenceSurface, is_chat_safe
+
+    surface = surface or InferenceSurface.CHAT
+    if surface is InferenceSurface.EMBEDDING:
+        return resolve_embedding_model()
+    if surface is InferenceSurface.VISION:
+        return resolve_vision_model()
+
+    # ── CHAT surface — conversational + tool-use streaming ────────────────────
     role = decision.role
     env_key = _ROLE_ENV.get(role)
-    if env_key and os.getenv(env_key):
-        return decision.model
+    env_model = (os.getenv(env_key) or "").strip() if env_key else ""
+    if env_model:
+        # Honor the operator's explicit override ONLY when it can actually drive
+        # the tool-use chat stream. An embedding/vision/weak-tool override set for
+        # the VISION/EMBEDDING role must not leak into chat (the M27 leak).
+        if is_chat_safe(env_model):
+            return env_model
+        logger.warning(
+            f"MODEL_RESOLVE: {role.value} override '{env_model}' is not chat/tool "
+            f"capable — using a chat-capable model for the conversational surface"
+        )
     if role in (ModelRole.CODER, ModelRole.DEEP, ModelRole.CLOUD):
         return MODEL_DEEP
     return MODEL_FAST
+
+
+def resolve_vision_model(installed=None, hw_recommendation: str | None = None) -> str:
+    """VISION-surface model via the unified precedence, guaranteed image-capable.
+
+    Returns the VISION-role model (:func:`resolve_role_model`) when it can accept
+    images; if the operator misconfigured the VISION role with a non-vision model
+    it falls back to the central vision default rather than a model that cannot
+    see. Never returns an embedding-only or text-only model.
+    """
+    from core.model_capabilities import InferenceSurface, supports_surface
+
+    model = resolve_role_model(ModelRole.VISION, installed=installed,
+                               hw_recommendation=hw_recommendation)
+    if supports_surface(model, InferenceSurface.VISION):
+        return model
+    logger.warning(
+        f"MODEL_RESOLVE: VISION model '{model}' cannot accept images — "
+        f"falling back to central vision default '{_DEFAULT_VISION}'"
+    )
+    return _DEFAULT_VISION
+
+
+def resolve_embedding_model(installed=None, hw_recommendation: str | None = None) -> str:
+    """EMBEDDING-surface model via the unified precedence, guaranteed to embed.
+
+    Returns the EMBEDDING-role model when it actually produces vectors; if
+    misconfigured with a chat/vision model it falls back to the central embedding
+    default. This is the ONLY correct place to obtain an Ollama embedding model —
+    it must never be used for chat completion (M27).
+    """
+    from core.model_capabilities import InferenceSurface, supports_surface
+
+    model = resolve_role_model(ModelRole.EMBEDDING, installed=installed,
+                               hw_recommendation=hw_recommendation)
+    if supports_surface(model, InferenceSurface.EMBEDDING):
+        return model
+    logger.warning(
+        f"MODEL_RESOLVE: EMBEDDING model '{model}' does not produce embeddings — "
+        f"falling back to central embedding default '{_DEFAULT_EMBEDDING}'"
+    )
+    return _DEFAULT_EMBEDDING
 
 
 async def configure_ollama_for_hardware(hw_profile) -> None:

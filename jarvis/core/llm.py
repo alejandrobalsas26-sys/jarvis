@@ -27,8 +27,10 @@ from core.config import settings
 from core.model_router import (
     select_model,
     resolve_inference_model,
+    resolve_role_model,
     is_security_sensitive_turn,
     ModelDecision,
+    ModelRole,
 )
 from core.verification import should_verify, verify_answer
 from core.memory_router import (
@@ -921,6 +923,16 @@ class LLM:
         self.tool_executor = tool_executor
         self.history: list[dict] = []
         self._session_prefix: str = ""
+
+        # V67 M27 — resolve the VISION-role model ONCE through the unified role
+        # resolver so the operator's JARVIS_MODEL_VISION (gemma3:4b) is honored on
+        # the vision paths. Before V67 main.py's voice handlers read
+        # getattr(llm, "model_vision", "moondream:latest") but this attr was never
+        # set, so the hardcoded moondream fallback silently overrode the config.
+        try:
+            self.model_vision = resolve_role_model(ModelRole.VISION)
+        except Exception:
+            self.model_vision = "gemma3:4b"
 
         # v58.0 COGNITIVE CORE — optional context manager for secret redaction
         # and long-context compression. Disabled gracefully if import fails.
