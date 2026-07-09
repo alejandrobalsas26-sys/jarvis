@@ -54,6 +54,14 @@ async def start_sensor_server(broadcast_fn) -> None:
                 "os":         reg.get("os", ""),
                 "connected":  datetime.now(timezone.utc).isoformat(),
                 "events_received": 0,
+                "last_event_at": None,
+                # Trust inputs (M41). Reported as declared, never assumed verified: the
+                # transport is localhost SSH-tunnel; a signature is only present if the
+                # agent actually sent one.
+                "transport":  "localhost-tunnel",
+                "signed":     bool(reg.get("signed")),
+                "capabilities": sorted(reg.get("capabilities", []))
+                                if isinstance(reg.get("capabilities"), list) else [],
             }
 
             logger.info(
@@ -78,6 +86,15 @@ async def start_sensor_server(broadcast_fn) -> None:
                 except Exception:
                     continue
                 _connected_agents[agent_id]["events_received"] += 1
+                _connected_agents[agent_id]["last_event_at"] = \
+                    datetime.now(timezone.utc).isoformat()
+                # M39/M41: feed the telemetry engine so sensor freshness/rate/lag and the
+                # derived sensor-health state are computed by the same bounded machinery.
+                try:
+                    from core.telemetry_intel import telemetry
+                    telemetry.record(f"sensor:{agent_id}", event=event)
+                except Exception:  # noqa: BLE001 — observability, never load-bearing
+                    pass
 
                 # Add agent context to event
                 event["agent_id"]   = agent_id

@@ -118,10 +118,10 @@ def assess_field_readiness(*, probe_ollama: bool = True) -> FieldReadinessReport
     # ── assets ────────────────────────────────────────────────────────────────
     lines.append(ReadinessLine("ASSETS", f"{_asset_count()} OBSERVED", _VALUE))
 
-    # ── sensors ───────────────────────────────────────────────────────────────
-    n_sensors = _sensor_count()
-    lines.append(ReadinessLine("SENSORS", f"{n_sensors} CONNECTED",
-                               _VALUE if n_sensors else _DORMANT))
+    # ── sensors (M41: connection is not health is not trust) ──────────────────
+    sm = _sensor_summary()
+    lines.append(ReadinessLine("SENSORS", sm["value"],
+                               _VALUE if sm["connected"] else _DORMANT))
 
     # ── aura ──────────────────────────────────────────────────────────────────
     lines.append(ReadinessLine("AURA", _READY if _aura_available() else _ABSENT,
@@ -188,12 +188,18 @@ def _asset_count() -> int:
         return 0
 
 
-def _sensor_count() -> int:
+def _sensor_summary() -> dict:
+    # M41: report connection AND health AND trust as distinct facts — a live socket is
+    # not a producing sensor, and a producing sensor is not a trusted one.
     try:
-        from core.sensor_mesh import get_connected_agents
-        return len(get_connected_agents())
+        from core.sensor_intel import assess_mesh
+        m = assess_mesh()
+        n = m.connected
+        val = (f"{n} CONNECTED / {m.producing} PRODUCING / {m.trusted} TRUSTED"
+               if n else "0 CONNECTED")
+        return {"connected": n, "value": val}
     except Exception:  # noqa: BLE001
-        return 0
+        return {"connected": 0, "value": "0 CONNECTED"}
 
 
 def _aura_available() -> bool:
