@@ -1,0 +1,6 @@
+
+# V68 M38 — durable operational state (runtime, never committed)
+data/operational_state.db
+data/operational_state.db-wal
+data/operational_state.db-shm
+data/
