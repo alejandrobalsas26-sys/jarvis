@@ -701,6 +701,21 @@
     #ops-result { margin-top: 8px; font-size: 10px; color: #44aa66;
       max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
 
+    /* ── V68 M37 cognitive command center ── */
+    .cc2-btn { background:#00221a; border:1px solid #00aa88; color:#7fffd4;
+      font-family:monospace; font-size:10px; padding:3px 8px; border-radius:3px;
+      cursor:pointer; letter-spacing:1px; }
+    .cc2-btn:hover { background:#004433; }
+    .cc2-row { display:flex; justify-content:space-between; gap:8px;
+      border-bottom:1px solid #06251a; padding:2px 0; }
+    .cc2-k { color:#4d9980; } .cc2-v { color:#9fffe0; text-align:right; }
+    .cc2-badge { display:inline-block; padding:1px 5px; border-radius:3px;
+      font-size:9px; margin-right:3px; }
+    .cc2-ok { background:#04331f; color:#66ffaa; border:1px solid #0a7a44; }
+    .cc2-warn { background:#332600; color:#ffcc55; border:1px solid #886600; }
+    .cc2-bad { background:#330a0a; color:#ff7777; border:1px solid #883333; }
+    .cc2-h { color:#00ff41; font-size:9px; letter-spacing:2px; margin:6px 0 3px; }
+
     /* ── v27.0 HUD OTP challenge overlay ── */
     #hud-otp-overlay {
       display: none; position: fixed; inset: 0; z-index: 850;
@@ -1695,11 +1710,39 @@
       <option value="emulate_chain">emulate chain</option>
       <option value="get_coverage">get ATT&amp;CK coverage</option>
       <option value="export_stix">export STIX 2.1</option>
+      <option value="ops_command_center">ops command center</option>
+      <option value="collector_telemetry">collector telemetry (V68)</option>
+      <option value="sensor_intel">sensor intel (V68)</option>
+      <option value="causal_timeline">causal timeline (V68)</option>
+      <option value="operational_state_health">state health (V68)</option>
     </select>
     <input id="ops-target-input" type="text" placeholder="target / domain / empty">
     <button id="ops-execute-btn">EXECUTE</button>
   </div>
   <div id="ops-result"></div>
+</div>
+
+<!-- V68 M37 — COGNITIVE COMMAND CENTER (read-only, bounded, redacted panels) -->
+<div id="cc2-panel" style="display:none;position:fixed;right:14px;top:64px;width:430px;
+     max-height:78vh;overflow:auto;background:#04120c;border:1px solid #00aa88;
+     border-radius:6px;padding:10px;font-family:monospace;font-size:11px;color:#7fffd4;
+     z-index:9000;box-shadow:0 0 18px #00332288">
+  <div style="color:#00ff41;font-size:9px;letter-spacing:3px;font-weight:bold;
+       margin-bottom:6px">◈ COGNITIVE COMMAND CENTER <span style="color:#448866">V68</span></div>
+  <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+    <button class="cc2-btn" data-cc2="collector_telemetry">TELEMETRY</button>
+    <button class="cc2-btn" data-cc2="sensor_intel">SENSORS</button>
+    <button class="cc2-btn" data-cc2="causal_timeline">TIMELINE</button>
+    <button class="cc2-btn" data-cc2="operational_state_health">STATE</button>
+    <button class="cc2-btn" data-cc2="runtime_health">RUNTIME</button>
+    <button class="cc2-btn" data-cc2="cognitive_synthesis">SYNTH</button>
+  </div>
+  <input id="cc2-question" type="text" placeholder="question for SYNTH (grounded)"
+     style="width:100%;box-sizing:border-box;background:#001108;border:1px solid #005544;
+     color:#7fffd4;font-family:monospace;font-size:11px;padding:4px;margin-bottom:8px">
+  <div id="cc2-body" style="white-space:normal;line-height:1.45">
+    <span style="color:#557766">Select a panel. All panels are read-only and bounded.</span>
+  </div>
 </div>
 
 <!-- v27.0 HUD OTP Challenge -->
@@ -3654,6 +3697,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   }
 
   function handleHudCommandResult(msg) {
+    // V68 M37: route cognitive-command-center payloads to the rich panel renderer.
+    const r = msg && msg.result;
+    const isCC2 = (msg && CC2_PANELS.has(msg.cmd)) ||
+      (r && typeof r === 'object' && r.panel && CC2_PANELS.has(r.panel));
+    if (isCC2) {
+      const p = document.getElementById('cc2-panel');
+      if (p && p.style.display === 'none') p.style.display = 'block';
+      renderCC2(r);
+      return;
+    }
     const el = document.getElementById('ops-result');
     el.style.color   = '#44aa66';
     el.textContent   = JSON.stringify(msg.result, null, 2).slice(0, 600);
@@ -3672,6 +3725,137 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       ws.send(JSON.stringify({ confirmed, request_id: msg.request_id }));
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // V68 M37 — COGNITIVE COMMAND CENTER (read-only bounded panels)
+  // ═══════════════════════════════════════════════════════════════════
+  const CC2_PANELS = new Set(['collector_telemetry','sensor_intel','causal_timeline',
+    'operational_state_health','runtime_health','cognitive_synthesis','decision_support',
+    'field_readiness']);
+  let _cc2LastCmd = null;
+
+  function cc2Send(cmd, args) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    _cc2LastCmd = cmd;
+    document.getElementById('cc2-body').innerHTML =
+      '<span style="color:#557766">[ loading ' + escapeHtml(cmd) + ' ... ]</span>';
+    ws.send(JSON.stringify({ cmd, args: args || {}, request_id: 'cc2_' + Date.now() }));
+  }
+
+  function cc2Badge(txt, cls) {
+    return '<span class="cc2-badge ' + cls + '">' + escapeHtml(String(txt)) + '</span>';
+  }
+  function cc2StateClass(s) {
+    s = String(s || '').toLowerCase();
+    if (['healthy','producing','covered','ok','durable','verified'].some(x => s.includes(x))) return 'cc2-ok';
+    if (['fail','stale','silent','blind','backpress','flap','untrusted','refuted','volatile','uncovered'].some(x => s.includes(x))) return 'cc2-bad';
+    return 'cc2-warn';
+  }
+  function cc2Row(k, v) {
+    return '<div class="cc2-row"><span class="cc2-k">' + escapeHtml(k) +
+      '</span><span class="cc2-v">' + escapeHtml(String(v)) + '</span></div>';
+  }
+
+  function renderCC2(result) {
+    const body = document.getElementById('cc2-body');
+    if (!result || typeof result !== 'object') { body.textContent = '(no data)'; return; }
+    const panel = result.panel || _cc2LastCmd || '';
+    let h = '';
+    try {
+      if (panel === 'collector_telemetry') {
+        const cols = result.collectors || {};
+        const ids = Object.keys(cols);
+        h += '<div class="cc2-h">COLLECTOR TELEMETRY (' + ids.length + ')</div>';
+        if (!ids.length) h += '<span style="color:#557766">no collectors reporting</span>';
+        ids.slice(0, 40).forEach(id => {
+          const c = cols[id] || {};
+          h += '<div class="cc2-row"><span class="cc2-k">' + escapeHtml(id) + '</span><span class="cc2-v">' +
+            cc2Badge(c.state, cc2StateClass(c.state)) +
+            escapeHtml((c.events_per_second || 0) + ' eps  lag ' + (c.median_lag_s == null ? '-' : c.median_lag_s) + 's') +
+            '</span></div>';
+        });
+      } else if (panel === 'sensor_intel') {
+        h += '<div class="cc2-h">SENSOR TRUST / HEALTH / COVERAGE</div>';
+        h += cc2Row('connected', result.connected + ' / ' + result.total);
+        h += cc2Row('producing', result.producing);
+        h += cc2Row('trusted for action', result.trusted_for_action);
+        h += cc2Row('coverage', Math.round((result.coverage_ratio || 0) * 100) + '%  (' + (result.uncovered || 0) + ' uncovered)');
+        (result.sensors || []).slice(0, 20).forEach(s => {
+          h += '<div class="cc2-row"><span class="cc2-k">' + escapeHtml(s.agent_id) + '</span><span class="cc2-v">' +
+            cc2Badge(s.connection, cc2StateClass(s.connection)) +
+            cc2Badge(s.health, cc2StateClass(s.health)) +
+            cc2Badge(s.trust, cc2StateClass(s.trust)) + '</span></div>';
+        });
+      } else if (panel === 'causal_timeline') {
+        const c = result.counts || {};
+        h += '<div class="cc2-h">CAUSAL TIMELINE</div>';
+        h += cc2Row('entries', c.entries || 0);
+        h += cc2Row('hypotheses / verified / refuted',
+          (c.hypotheses || 0) + ' / ' + (c.verified || 0) + ' / ' + (c.refuted || 0));
+        (result.entries || []).slice(-14).forEach(e => {
+          h += '<div class="cc2-row"><span class="cc2-k">' +
+            cc2Badge(e.epistemic, cc2StateClass(e.epistemic)) + '</span><span class="cc2-v">' +
+            escapeHtml((e.at_iso || '').slice(11, 19) + ' ' + (e.title || '')) + '</span></div>';
+        });
+        (result.links || []).slice(0, 10).forEach(l => {
+          h += '<div style="color:#4d9980;padding:2px 0">' +
+            cc2Badge(l.verdict, cc2StateClass(l.epistemic)) + escapeHtml(l.basis || '') + '</div>';
+        });
+      } else if (panel === 'operational_state_health') {
+        h += '<div class="cc2-h">DURABLE OPERATIONAL STATE</div>';
+        h += '<div class="cc2-row"><span class="cc2-k">persistence</span><span class="cc2-v">' +
+          cc2Badge(result.durable ? 'DURABLE' : 'VOLATILE', result.durable ? 'cc2-ok' : 'cc2-bad') +
+          escapeHtml(result.backend || '') + '</span></div>';
+        if (result.degraded_reason) h += cc2Row('note', result.degraded_reason);
+        h += cc2Row('schema version', result.schema_version);
+        h += cc2Row('domains', (result.domains == null ? '-' : result.domains));
+        h += cc2Row('journal rows', (result.journal_rows == null ? '-' : result.journal_rows));
+        h += cc2Row('corrupt reads', (result.corrupt_reads == null ? 0 : result.corrupt_reads));
+      } else if (panel === 'cognitive_synthesis') {
+        h += '<div class="cc2-h">GROUNDED SYNTHESIS</div>';
+        h += '<div style="margin-bottom:4px">' +
+          cc2Badge(result.grounded ? 'GROUNDED' : 'UNGROUNDED', result.grounded ? 'cc2-ok' : 'cc2-bad') +
+          cc2Badge(result.source, result.source === 'llm' ? 'cc2-ok' : 'cc2-warn') +
+          cc2Badge('coverage ' + Math.round((result.coverage || 0) * 100) + '%', 'cc2-warn') + '</div>';
+        h += '<div style="color:#cfffe8;padding:4px 0">' + escapeHtml(result.text || '(no answer)') + '</div>';
+        const g = result.grounding || {};
+        if ((g.invented_specifics || []).length)
+          h += '<div style="color:#ff7777">invented (rejected): ' + escapeHtml((g.invented_specifics || []).join(', ')) + '</div>';
+      } else if (panel === 'runtime_health') {
+        h += '<div class="cc2-h">RUNTIME HEALTH</div>';
+        h += '<div style="margin-bottom:4px">' + cc2Badge(result.overall, cc2StateClass(result.overall)) + '</div>';
+        (result.subsystems || []).forEach(s => {
+          h += '<div class="cc2-row"><span class="cc2-k">' + escapeHtml(s.name) +
+            '</span><span class="cc2-v">' + cc2Badge(s.status, cc2StateClass(s.status)) + '</span></div>';
+        });
+      } else {
+        h += '<pre style="white-space:pre-wrap;color:#7fffd4">' +
+          escapeHtml(JSON.stringify(result, null, 2).slice(0, 1200)) + '</pre>';
+      }
+    } catch (err) {
+      h = '<span style="color:#ff7777">render error: ' + escapeHtml(String(err)) + '</span>';
+    }
+    body.innerHTML = h;
+  }
+
+  document.querySelectorAll('.cc2-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cmd = btn.getAttribute('data-cc2');
+      if (cmd === 'cognitive_synthesis') {
+        const q = (document.getElementById('cc2-question').value || 'what is happening?').slice(0, 200);
+        cc2Send(cmd, { question: q });
+      } else {
+        cc2Send(cmd, {});
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'K' || e.key === 'k')) {
+      const p = document.getElementById('cc2-panel');
+      p.style.display = p.style.display === 'none' ? 'block' : 'none';
+    }
+  });
 
   // ═══════════════════════════════════════════════════════════════════
   // v32.0 — METRICS SPARKLINES (Canvas 2D, zero dependencies)

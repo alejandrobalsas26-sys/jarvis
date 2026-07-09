@@ -344,3 +344,22 @@ def timeline_from_facts(*, events=(), findings=(), drifts=(),
         basis = v[3] if len(v) > 3 else ""
         entries.append(entry_from_verification(entity, verified, at=at, basis=basis))
     return build_timeline(entries, **kw)
+
+
+def build_live_causal_timeline() -> dict:
+    """Bounded, HUD/CLI-safe live causal timeline assembled from the live spine (recent
+    correlation findings + digital-twin drift). Read-only; guarded — any missing source
+    degrades to fewer facts, never an error. No verifications are asserted from thin air."""
+    findings: list = []
+    drifts: list = []
+    try:
+        from core.ops_query import build_live_context
+        ctx = build_live_context()
+        findings = [f.to_dict() if hasattr(f, "to_dict") else f for f in (ctx.findings or [])]
+        snap = ctx.twin_snapshot
+        if snap is not None:
+            snap_findings = getattr(snap, "findings", None) or []
+            drifts = [d.to_dict() if hasattr(d, "to_dict") else d for d in snap_findings]
+    except Exception:  # noqa: BLE001
+        pass
+    return timeline_from_facts(findings=findings, drifts=drifts).to_dict()

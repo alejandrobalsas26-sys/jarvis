@@ -213,6 +213,21 @@ async def synthesize(bundle, *, synthesizer=None, deterministic_answer: str | No
     return GroundedSynthesis(det, False, "degraded", rep, facts)
 
 
+async def build_live_synthesis(question: str, *, sensors: dict | None = None,
+                               synthesizer=None) -> dict:
+    """Answer a live operator question and return a grounded synthesis dict. Bounded and
+    non-blocking-by-degradation: if no model is reachable it returns the deterministic
+    grounded answer instantly. Read-only over the spine."""
+    try:
+        from core.ops_query import answer_question
+        bundle = answer_question(str(question or "")[:200], sensors=sensors)
+    except Exception:  # noqa: BLE001
+        return {"panel": "cognitive_synthesis", "text": "", "grounded": True,
+                "source": "deterministic", "facts": []}
+    out = await synthesize(bundle, synthesizer=synthesizer)
+    return out.to_dict()
+
+
 def _live_synthesizer():
     """Return an async synthesizer bound to the live role model, or None if unavailable.
     Guarded: any import/wiring failure degrades to the deterministic answer."""

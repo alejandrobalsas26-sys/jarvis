@@ -69,6 +69,13 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "ops_query",
     # V67 M34 — unified runtime & collector health snapshot (READ-ONLY)
     "runtime_health",
+    # V68 M37 — cognitive command center panels (all READ-ONLY, bounded, redacted)
+    "collector_telemetry",   # M39 rolling rate/lag/reliability intelligence
+    "sensor_intel",          # M41 sensor trust / health / coverage
+    "causal_timeline",       # M42 evidence-conscious causal & change timeline
+    "cognitive_synthesis",   # M40 evidence-grounded narrative (degrades to deterministic)
+    "decision_support",      # M43 transparent advisory over operator-supplied options
+    "operational_state_health",  # M38 durable state honesty (durable vs volatile)
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -277,6 +284,35 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # ── HUD Command Handlers ──────────────────────────────────────────────────────
 
+def _hud_level(o: dict, key: str):
+    from core.decision_support import Level
+    try:
+        return Level(str(o.get(key, "unknown")).lower())
+    except ValueError:
+        return Level.UNKNOWN
+
+
+def _dispatch_decision_support(args: dict) -> dict:
+    """V68 M43 — build a transparent, advisory-only ranking over operator-supplied
+    candidate options. Never executes anything. Malformed options are skipped, not run."""
+    from core.decision_support import DecisionOption, rank_options
+    raw_opts = args.get("options") if isinstance(args.get("options"), list) else []
+    options: list = []
+    for i, o in enumerate(raw_opts[:32]):
+        if not isinstance(o, dict):
+            continue
+        options.append(DecisionOption(
+            option_id=str(o.get("option_id", f"opt-{i}"))[:64],
+            title=str(o.get("title", o.get("option_id", f"opt-{i}")))[:160],
+            risk=_hud_level(o, "risk"), impact=_hud_level(o, "impact"),
+            reversibility=_hud_level(o, "reversibility"),
+            info_gain=_hud_level(o, "info_gain"),
+            uncertainty_reduction=_hud_level(o, "uncertainty_reduction"),
+            requires_authorization=bool(o.get("requires_authorization", True)),
+            rationale=str(o.get("rationale", ""))[:240]))
+    return rank_options(options).to_dict()
+
+
 async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) -> dict:
     """Route validated HUD commands to appropriate tool functions."""
     try:
@@ -301,6 +337,43 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             # non-blocking CPU/RAM sample, no self-test, no Ollama probe. Never blocks.
             from core.runtime_health import build_live_runtime_health
             return build_live_runtime_health()
+
+        if cmd == "collector_telemetry":
+            # V68 M39 — bounded per-collector rate/lag/reliability + derived state. Pure
+            # in-memory read of the telemetry ring; no world-effect, never blocks.
+            from core.collector_fabric import fabric
+            return {"panel": "collector_telemetry", "collectors": fabric.telemetry_snapshot()}
+
+        if cmd == "sensor_intel":
+            # V68 M41 — sensor trust / health / coverage. Read-only over the mesh; trust
+            # is reported conservatively (unsigned == DECLARED, never VERIFIED).
+            from core.sensor_intel import build_live_sensor_intel
+            return build_live_sensor_intel()
+
+        if cmd == "causal_timeline":
+            # V68 M42 — evidence-conscious causal & change timeline. Every link carries its
+            # epistemic label; correlation is never presented as proof.
+            from core.causal_timeline import build_live_causal_timeline
+            return build_live_causal_timeline()
+
+        if cmd == "operational_state_health":
+            # V68 M38 — durable-vs-volatile honesty. Never claims durable if only volatile.
+            from core.operational_store import get_store
+            return {"panel": "operational_state_health", **get_store().health()}
+
+        if cmd == "cognitive_synthesis":
+            # V68 M40 — evidence-grounded narrative for a question. Bounded timeout; if no
+            # model is reachable it returns the deterministic grounded answer instantly.
+            # The LLM never introduces a fact the structured state does not support.
+            from core.cognitive_synthesis import build_live_synthesis
+            question = str(args.get("question", ""))[:200]
+            sensors = args.get("sensors") if isinstance(args.get("sensors"), dict) else None
+            return await build_live_synthesis(question, sensors=sensors)
+
+        if cmd == "decision_support":
+            # V68 M43 — transparent advisory over operator-SUPPLIED candidate options.
+            # Advisory only: it ranks and explains, it NEVER executes or auto-selects.
+            return _dispatch_decision_support(args)
 
         if cmd == "aura_get_incidents":
             from core.correlator import correlator
