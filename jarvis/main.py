@@ -293,6 +293,15 @@ async def _process_voice_input(
     except Exception as e:
         logger.debug(f"MACRO: process error: {e}")
 
+    # 4b. V67 M33 — typed operational voice intents (grounded READ-ONLY / DRY-RUN only;
+    #     a request to actually run a runbook is refused here and routed to HITL).
+    try:
+        from core.voice_ops import process_for_voice_ops
+        if await process_for_voice_ops(user_input, _aura_broadcast, tts):
+            return True
+    except Exception as e:
+        logger.debug(f"VOICE_OPS: process error: {e}")
+
     # 5. Normal LLM routing
     await _run_turn(llm, tts, user_input, name, lang=lang)
     return False
