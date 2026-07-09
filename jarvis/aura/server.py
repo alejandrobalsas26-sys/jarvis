@@ -65,6 +65,8 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "get_coverage",
     # V67 M31 — live operator command center (READ-ONLY, bounded, redacted)
     "ops_command_center",
+    # V67 M32 — grounded natural-language operational query (READ-ONLY)
+    "ops_query",
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -282,6 +284,15 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             from core.ops_views import build_live_command_center
             sensors = args.get("sensors") if isinstance(args.get("sensors"), dict) else None
             return build_live_command_center(sensors=sensors)
+
+        if cmd == "ops_query":
+            # V67 M32 — grounded, READ-ONLY question answering. The question is DATA:
+            # it is keyword-classified and answered only from structured state; it is
+            # never executed, and every field is bounded/redacted before return.
+            from core.ops_query import answer_question
+            question = str(args.get("question", ""))[:200]
+            sensors = args.get("sensors") if isinstance(args.get("sensors"), dict) else None
+            return answer_question(question, sensors=sensors).to_dict()
 
         if cmd == "aura_get_incidents":
             from core.correlator import correlator
