@@ -1065,6 +1065,29 @@ async def _main_async() -> None:
     # Signal handlers are disabled to avoid conflicts with the parent loop.
     watchdog = TaskWatchdog()
 
+    # ── V67 M28: unified collector fabric ─────────────────────────────────────
+    # Thin lifecycle/health layer over the existing producers. It does NOT replace
+    # the watchdog or the ingestion boundary — it registers the canonical
+    # telemetry collectors, reads TaskWatchdog.get_status() for truthful health,
+    # and instruments a managed broadcast (per-collector metrics/heartbeat) that
+    # forwards to _aura_broadcast unchanged. Unconfigured integrations stay
+    # DORMANT/OPTIONAL rather than a restart loop.
+    try:
+        from core.collector_fabric import install_default_catalog
+        collector_fabric = install_default_catalog(settings, os.environ)
+        collector_fabric.attach_watchdog(watchdog)
+
+        def _cbcast(collector_id: str):
+            """Managed broadcast for *collector_id* → counts events, then forwards
+            to _aura_broadcast (signing stays inside the producer, unchanged)."""
+            return collector_fabric.managed_broadcast(collector_id, _aura_broadcast)
+    except Exception as _e:  # noqa: BLE001 — fabric is observability; never block boot
+        logger.warning(f"COLLECTOR_FABRIC: unavailable ({_e}); telemetry unaffected")
+        collector_fabric = None
+
+        def _cbcast(collector_id: str):
+            return _aura_broadcast
+
     aura_server = None
     aura_task: asyncio.Task | None = None
     if not args.no_aura:
@@ -1088,7 +1111,7 @@ async def _main_async() -> None:
             try:
                 from tools.zeek_dpi import start_zeek_dpi
                 try:
-                    watchdog.register("zeek-dpi", lambda: start_zeek_dpi(_aura_broadcast), RestartPolicy.BACKOFF)
+                    watchdog.register("zeek-dpi", lambda: start_zeek_dpi(_cbcast("zeek-dpi")), RestartPolicy.BACKOFF)
                     logger.info("ZEEK_DPI: L7 deep packet inspection streamer initializing…")
                 except Exception as e:
                     logger.warning(f"Could not register zeek-dpi: {e}")
@@ -1126,7 +1149,7 @@ async def _main_async() -> None:
             else:
                 try:
                     from tools.etw_monitor import start_etw_monitor
-                    watchdog.register("etw-monitor", lambda: start_etw_monitor(_aura_broadcast), RestartPolicy.BACKOFF)
+                    watchdog.register("etw-monitor", lambda: start_etw_monitor(_cbcast("etw-monitor")), RestartPolicy.BACKOFF)
                     logger.info("ETW: kernel telemetry monitor task queued…")
                 except ImportError:
                     logger.warning("ETW: tools.etw_monitor unavailable — kernel telemetry disabled")
@@ -1148,7 +1171,7 @@ async def _main_async() -> None:
                 from tools.threat_feed_sync import start_threat_feed_sync
                 watchdog.register(
                     "threat-feed",
-                    lambda: start_threat_feed_sync(_aura_broadcast),
+                    lambda: start_threat_feed_sync(_cbcast("threat-feed")),
                     RestartPolicy.BACKOFF,
                 )
                 logger.info("THREAT_FEED: live OSINT feed sync initializing…")
@@ -1160,7 +1183,7 @@ async def _main_async() -> None:
                 from tools.resource_sentinel import start_resource_sentinel
                 watchdog.register(
                     "resource-watchdog",
-                    lambda: start_resource_sentinel(_aura_broadcast),
+                    lambda: start_resource_sentinel(_cbcast("resource-watchdog")),
                     RestartPolicy.ALWAYS,
                 )
                 logger.info("RESOURCE_SENTINEL: hardware watchdog initializing…")
@@ -1171,7 +1194,7 @@ async def _main_async() -> None:
             try:
                 watchdog.register(
                     "sysmon-bridge",
-                    lambda: start_sysmon_bridge(_aura_broadcast),
+                    lambda: start_sysmon_bridge(_cbcast("sysmon-bridge")),
                     RestartPolicy.BACKOFF,
                 )
                 logger.info("SYSMON_BRIDGE: VM telemetry bridge registered…")
@@ -1182,7 +1205,7 @@ async def _main_async() -> None:
             try:
                 watchdog.register(
                     "ebpf-bridge",
-                    lambda: start_ebpf_bridge(_aura_broadcast),
+                    lambda: start_ebpf_bridge(_cbcast("ebpf-bridge")),
                     RestartPolicy.BACKOFF,
                 )
                 logger.info("EBPF_BRIDGE: eBPF/Falco bridge registered…")
@@ -1193,7 +1216,7 @@ async def _main_async() -> None:
             try:
                 watchdog.register(
                     "sliver-monitor",
-                    lambda: start_sliver_monitor(_aura_broadcast),
+                    lambda: start_sliver_monitor(_cbcast("sliver-monitor")),
                     RestartPolicy.BACKOFF,
                 )
                 logger.info("SLIVER_MONITOR: Sliver C2 session monitor registered…")
@@ -1279,7 +1302,7 @@ async def _main_async() -> None:
                 from core.network_baseline import start_network_baseline
                 watchdog.register(
                     "network-baseline",
-                    lambda: start_network_baseline(_aura_broadcast),
+                    lambda: start_network_baseline(_cbcast("network-baseline")),
                     RestartPolicy.ALWAYS,
                 )
                 logger.info("NETWORK_BASELINE: statistical anomaly engine registered…")
@@ -1490,7 +1513,7 @@ async def _main_async() -> None:
             try:
                 watchdog.register(
                     "sensor-mesh",
-                    lambda: start_sensor_server(_aura_broadcast),
+                    lambda: start_sensor_server(_cbcast("sensor-mesh")),
                     RestartPolicy.ALWAYS,
                 )
                 logger.info("SENSOR_MESH: WebSocket server registered on port 9999")
