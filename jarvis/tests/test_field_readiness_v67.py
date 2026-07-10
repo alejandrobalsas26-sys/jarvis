@@ -54,14 +54,15 @@ class TestCompleteness:
 
 
 class TestHonesty:
-    def test_persistence_volatile_without_postgres(self, monkeypatch):
+    def test_persistence_durable_local_without_postgres(self, monkeypatch):
+        # V68 M38: durable local SQLite state — no Postgres required, never faked.
         for var in ("JARVIS_PG_DSN", "DATABASE_URL", "POSTGRES_DSN"):
             monkeypatch.delenv(var, raising=False)
-        assert "VOLATILE" in _line(_report(), "PERSISTENCE").value
+        assert _line(_report(), "PERSISTENCE").value == "DURABLE (sqlite)"
 
-    def test_persistence_configured_with_dsn(self, monkeypatch):
+    def test_persistence_reports_fleet_tier_with_dsn(self, monkeypatch):
         monkeypatch.setenv("DATABASE_URL", "postgres://x")
-        assert _line(_report(), "PERSISTENCE").value == "CONFIGURED"
+        assert "fleet PG" in _line(_report(), "PERSISTENCE").value
 
     def test_ollama_not_probed_when_disabled(self):
         assert _line(_report(), "OLLAMA").value == "NOT CHECKED"

@@ -118,10 +118,10 @@ def assess_field_readiness(*, probe_ollama: bool = True) -> FieldReadinessReport
     # ── assets ────────────────────────────────────────────────────────────────
     lines.append(ReadinessLine("ASSETS", f"{_asset_count()} OBSERVED", _VALUE))
 
-    # ── sensors ───────────────────────────────────────────────────────────────
-    n_sensors = _sensor_count()
-    lines.append(ReadinessLine("SENSORS", f"{n_sensors} CONNECTED",
-                               _VALUE if n_sensors else _DORMANT))
+    # ── sensors (M41: connection is not health is not trust) ──────────────────
+    sm = _sensor_summary()
+    lines.append(ReadinessLine("SENSORS", sm["value"],
+                               _VALUE if sm["connected"] else _DORMANT))
 
     # ── aura ──────────────────────────────────────────────────────────────────
     lines.append(ReadinessLine("AURA", _READY if _aura_available() else _ABSENT,
@@ -130,7 +130,7 @@ def assess_field_readiness(*, probe_ollama: bool = True) -> FieldReadinessReport
     # ── persistence ───────────────────────────────────────────────────────────
     persist = _persistence_state()
     lines.append(ReadinessLine("PERSISTENCE", persist,
-                               _OK if persist == "CONFIGURED" else _DORMANT))
+                               _OK if persist.startswith("DURABLE") else _DORMANT))
 
     # ── docker / vmware ───────────────────────────────────────────────────────
     lines.append(ReadinessLine("DOCKER", _AVAILABLE if shutil.which("docker")
@@ -188,12 +188,18 @@ def _asset_count() -> int:
         return 0
 
 
-def _sensor_count() -> int:
+def _sensor_summary() -> dict:
+    # M41: report connection AND health AND trust as distinct facts — a live socket is
+    # not a producing sensor, and a producing sensor is not a trusted one.
     try:
-        from core.sensor_mesh import get_connected_agents
-        return len(get_connected_agents())
+        from core.sensor_intel import assess_mesh
+        m = assess_mesh()
+        n = m.connected
+        val = (f"{n} CONNECTED / {m.producing} PRODUCING / {m.trusted} TRUSTED"
+               if n else "0 CONNECTED")
+        return {"connected": n, "value": val}
     except Exception:  # noqa: BLE001
-        return 0
+        return {"connected": 0, "value": "0 CONNECTED"}
 
 
 def _aura_available() -> bool:
@@ -205,11 +211,19 @@ def _aura_available() -> bool:
 
 
 def _persistence_state() -> str:
-    # Real check: persistent alert state needs a configured Postgres DSN; otherwise the
-    # spine runs in-memory (volatile) — reported honestly, never as "OK".
-    for var in ("JARVIS_PG_DSN", "DATABASE_URL", "POSTGRES_DSN"):
-        if os.environ.get(var):
-            return "CONFIGURED"
+    # Real check: V68 gives durable local operational state via SQLite on the NVMe
+    # (always available when the data dir is writable). A configured fleet Postgres is
+    # an additional tier. Reported honestly — VOLATILE only when nothing durable exists.
+    try:
+        from core.operational_store import _DEFAULT_PATH
+        target = _DEFAULT_PATH.parent
+        probe = target if target.exists() else target.parent
+        if os.access(probe, os.W_OK):
+            fleet = any(os.environ.get(v) for v in
+                        ("JARVIS_PG_DSN", "DATABASE_URL", "POSTGRES_DSN"))
+            return "DURABLE (sqlite + fleet PG)" if fleet else "DURABLE (sqlite)"
+    except Exception:  # noqa: BLE001
+        pass
     return "VOLATILE (in-memory)"
 
 

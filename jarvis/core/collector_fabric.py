@@ -55,6 +55,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── M39 telemetry intelligence bridge (guarded; never breaks the ingest path) ───
+def _telemetry_record(collector_id: str, *, event: dict | None = None,
+                      error: bool = False) -> None:
+    try:
+        from core.telemetry_intel import telemetry
+        telemetry.record(collector_id, event=event, error=error)
+    except Exception:  # noqa: BLE001 — telemetry is observability, never load-bearing
+        pass
+
+
+def _telemetry_backpressure(collector_id: str, on: bool, *, backlog: int = 0,
+                            drops: int = 0) -> None:
+    try:
+        from core.telemetry_intel import telemetry
+        telemetry.set_backpressure(collector_id, on, backlog=backlog)
+        if drops:
+            telemetry.record_drop(collector_id, drops)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Status taxonomy (shared with M34 readiness)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +177,8 @@ class Collector:
         self.backlog = max(0, int(backlog))
         if drops:
             self.drops += int(drops)
+        _telemetry_backpressure(self.spec.collector_id, bool(on),
+                                backlog=self.backlog, drops=int(drops or 0))
 
     def mark_stopping(self) -> None:
         self._stopping = True
@@ -319,10 +342,14 @@ class CollectorFabric:
                 col.record_event()
             except Exception:  # noqa: BLE001
                 pass
+            failed = False
             try:
                 await base_broadcast(event)
             except Exception as e:  # noqa: BLE001 — mirror _aura_broadcast fire-and-forget
+                failed = True
                 col.record_error(f"broadcast: {e}")
+            # One telemetry sample per event, reflecting the real ingest outcome.
+            _telemetry_record(collector_id, event=event, error=failed)
 
         return _managed
 
@@ -397,6 +424,32 @@ class CollectorFabric:
             "drops": total_drops,
             "by_status": buckets,
         }
+
+    def telemetry_snapshot(self, *, now: float | None = None) -> dict:
+        """M39: per-collector rolling telemetry intelligence (rate, lag, freshness,
+        reliability + derived state), keyed by collector id.
+
+        Reconciles the supervisor's cumulative restart counts and each collector's
+        drop counter into the telemetry meters first, so flapping / backpressure are
+        reflected, then returns the bounded snapshots. Never raises — telemetry is
+        observability, so any failure degrades to an empty dict, not a broken fabric."""
+        try:
+            from core.telemetry_intel import telemetry
+        except Exception:  # noqa: BLE001
+            return {}
+        try:
+            wd = self._watchdog
+            restarts = wd.restart_counts() if wd and hasattr(wd, "restart_counts") else {}
+            for cid, count in restarts.items():
+                telemetry.sync_restart_count(cid, count, now=now)
+            for c in self._collectors.values():
+                m = telemetry.meter(c.spec.collector_id)
+                # Reconcile cumulative drops the collector tracked outside mark_backpressure.
+                if c.drops > m.drops:
+                    m.record_drop(c.drops - m.drops)
+        except Exception:  # noqa: BLE001
+            pass
+        return telemetry.all_snapshots(now=now)
 
     def aura_panel(self) -> dict:
         """Bounded, redaction-safe collectors panel for AURA (M31).
