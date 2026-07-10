@@ -284,6 +284,8 @@ def build_timeline(entries: list[TimelineEntry], *,
     hypotheses: list[CausalLink] = []
     for f in findings:
         for ch in changes:
+            if len(links) >= _MAX_LINKS:
+                break
             if not f.entity or ch.entity != f.entity:
                 continue
             if f.at is None or ch.at is None or not (0 <= ch.at - f.at <= hypothesis_window_s):
