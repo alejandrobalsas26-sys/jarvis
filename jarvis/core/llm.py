@@ -1668,6 +1668,29 @@ class LLM:
         except Exception:
             pass
 
+        # V68.1 M47 — authorization-aware cyber intent gate, computed ONCE per
+        # turn (the user message is constant across the tool loop). For an
+        # offensive/operational request against a real-world target with no
+        # established authorization/scope, this hard-blocks tool execution and
+        # injects a first-party directive requiring a refusal + safe alternatives.
+        # It never widens authority: effectful actions keep their existing gates.
+        try:
+            from core.cyber_intent import classify_cyber_intent
+            _cyber_intent = classify_cyber_intent(
+                user_message, getattr(self.tool_executor, "authority", None)
+            )
+        except Exception as _ci_e:
+            logger.warning(f"CYBER_INTENT: classification skipped: {_ci_e}")
+            _cyber_intent = None
+        _cyber_directive = _cyber_intent.directive() if _cyber_intent else ""
+        _cyber_block_tools = bool(_cyber_intent and _cyber_intent.block_tools)
+        if _cyber_intent and _cyber_intent.offensive_operational:
+            logger.info(
+                f"CYBER_INTENT: category={_cyber_intent.category} "
+                f"block_tools={_cyber_intent.block_tools} "
+                f"authorized={_cyber_intent.authorization_established}"
+            )
+
         # Track dangerous-tool usage across the agentic loop (drives verification).
         _turn_tool_used = False
         _turn_tool_names: list[str] = []
@@ -1704,6 +1727,9 @@ class LLM:
             # v34.0 — append live threat-feed enrichment to system prompt
             if _threat_ctx:
                 _sys_content = _sys_content + _threat_ctx
+            # V68.1 M47 — authorization gate directive (first-party, authoritative).
+            if _cyber_directive:
+                _sys_content = _sys_content + "\n\n" + _cyber_directive
             messages_for_api = [
                 {"role": "system", "content": _sys_content},
                 *self.history,
@@ -1917,7 +1943,26 @@ class LLM:
                 # Non-retryable failures allow 1 attempt total (no retry);
                 # retryable failures allow 2 (original + exactly one retry).
                 _max_attempts = 2 if _turn_tool_retryable.get(tool_name) else 1
-                if _prior_failures >= _max_attempts:
+                if _cyber_block_tools:
+                    # V68.1 M47 — offensive/operational request with no established
+                    # authorization: refuse ALL tool execution this turn. No scan,
+                    # no exploit search, no operational step. Fail-closed.
+                    logger.warning(
+                        f"CYBER_INTENT: blocked tool '{tool_name}' — authorization/scope "
+                        "not established for offensive request"
+                    )
+                    result = make_failure(
+                        tool=tool_name,
+                        error_class="authorization_required",
+                        safe_message=(
+                            "Authorization/scope is not established for this offensive "
+                            "request. No tool will run. State that authorization is missing "
+                            "and offer safe defensive/lab alternatives."
+                        ),
+                        retryable=False,
+                        fallback_allowed=True,
+                    )
+                elif _prior_failures >= _max_attempts:
                     result = make_failure(
                         tool=tool_name,
                         error_class="retry_budget_exhausted",
