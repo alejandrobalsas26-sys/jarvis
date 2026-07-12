@@ -1434,6 +1434,7 @@ class LLM:
         model_decision: ModelDecision | None,
         tool_used: bool = False,
         tool_names: list[str] | None = None,
+        tool_failed: bool = False,
     ) -> str:
         """Staged post-stream verification (Phase 3). Returns the answer to store/show.
 
@@ -1461,7 +1462,48 @@ class LLM:
         if not high_risk or not (draft_answer or "").strip():
             return draft_answer
 
-        result = await verify_answer(self.client, user_message, draft_answer, model_decision)
+        # V68.1 M49 — deterministic model-free checks FIRST. A failed-tool /
+        # unauthorized fallback is audited here (no expensive verifier pass), and
+        # a security-sensitive turn with a failed tool is flagged promptly instead
+        # of blocking on a multi-minute cold model swap.
+        from core.verification import (
+            deterministic_precheck, resource_aware_timeout, verifier_latency_stats,
+        )
+        pre = deterministic_precheck(
+            user_message, draft_answer,
+            tool_failed=tool_failed, security_sensitive=security_sensitive,
+        )
+        if pre is not None:
+            result = pre
+        else:
+            # Bounded, CPU-aware timeout: warm when the draft already used the
+            # VERIFIER model (no model swap under OLLAMA_MAX_LOADED_MODELS=1).
+            warm = False
+            on_battery = False
+            try:
+                from core.model_router import (
+                    resolve_inference_model, model_for_role, ModelRole as _MR,
+                )
+                draft_model = resolve_inference_model(model_decision) if model_decision else ""
+                warm = bool(draft_model) and draft_model == model_for_role(_MR.VERIFIER)
+            except Exception:
+                warm = False
+            try:
+                from core.hardware_profile import get_cached_profile
+                _hw = get_cached_profile()
+                on_battery = bool(getattr(_hw, "on_battery", False)) if _hw else False
+            except Exception:
+                on_battery = False
+            _timeout = resource_aware_timeout(warm=warm, on_battery=on_battery)
+            logger.debug(
+                f"VERIFIER: bounded pass (warm={warm}, on_battery={on_battery}, "
+                f"timeout={_timeout:.0f}s)"
+            )
+            result = await verify_answer(
+                self.client, user_message, draft_answer, model_decision,
+                timeout=_timeout,
+                cancel_event=_cancel_bus.llm_stream_cancel,
+            )
 
         from datetime import datetime, timezone
         try:
@@ -1886,6 +1928,7 @@ class LLM:
                             user_message, full_text, decision,
                             tool_used=_turn_tool_used,
                             tool_names=_turn_tool_names or None,
+                            tool_failed=bool(_turn_tool_failures),
                         )
                     except Exception as _ver_e:
                         logger.warning(f"VERIFIER: skipped due to error: {_ver_e}")

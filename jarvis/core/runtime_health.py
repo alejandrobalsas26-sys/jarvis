@@ -179,6 +179,27 @@ def _model_subsystem(model: dict | None) -> SubsystemHealth:
                            {"roles": roles})
 
 
+def _verifier_subsystem(verifier: dict | None = None) -> SubsystemHealth:
+    """V68.1 M49 — bounded CPU-aware verification latency observability."""
+    stats = verifier if verifier is not None else _live_verifier()
+    count = stats.get("count", 0)
+    if not count:
+        return SubsystemHealth("verifier", HealthStatus.DORMANT,
+                               "no verification samples yet", {})
+    timeouts = stats.get("timeouts", 0)
+    # Frequent timeouts => the CPU verifier is struggling; surface as DEGRADED.
+    status = HealthStatus.DEGRADED if timeouts and timeouts >= max(1, count // 2) \
+        else HealthStatus.OK
+    return SubsystemHealth(
+        "verifier", status,
+        f"avg {stats.get('avg_s', 0)}s / max {stats.get('max_s', 0)}s over "
+        f"{count} pass(es), {timeouts} timeout(s)",
+        {"verifier_avg_s": stats.get("avg_s"), "verifier_max_s": stats.get("max_s"),
+         "verifier_last_s": stats.get("last_s"), "verifier_timeouts": timeouts,
+         "verifier_count": count},
+    )
+
+
 def _spine_subsystem(spine: dict | None) -> SubsystemHealth:
     s = spine or {}
     vs = s.get("verification_success_rate")
@@ -223,6 +244,7 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
     subsystems = [
         _collectors_subsystem(fm, tel), _resource_subsystem(res), _tasks_subsystem(ws),
         _inference_subsystem(prof), _model_subsystem(mdl), _spine_subsystem(sp),
+        _verifier_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}
@@ -251,6 +273,14 @@ def _live_telemetry() -> dict:
     try:
         from core.collector_fabric import fabric
         return fabric.telemetry_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_verifier() -> dict:
+    try:
+        from core.verification import verifier_latency_stats
+        return verifier_latency_stats()
     except Exception:  # noqa: BLE001
         return {}
 
