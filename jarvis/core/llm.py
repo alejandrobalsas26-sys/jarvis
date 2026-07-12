@@ -1671,6 +1671,12 @@ class LLM:
         # Track dangerous-tool usage across the agentic loop (drives verification).
         _turn_tool_used = False
         _turn_tool_names: list[str] = []
+        # V68.1 M46 — per-turn tool failure ledger. Bounds retries (max one, and
+        # only for explicitly-retryable failures) and keeps a failure scoped to
+        # THIS turn so a tool fault cannot contaminate the conversation into an
+        # unrelated tool family (the Packet Tracer bug).
+        _turn_tool_failures: dict[str, int] = {}
+        _turn_tool_retryable: dict[str, bool] = {}
 
         # V61 Phase 4 — only consult long-term/episodic memory when it helps:
         # explicit recall/project intent (should_use_memory) or a deep/security
@@ -1900,11 +1906,33 @@ class LLM:
                     tool_input = {}
                 logger.info(f"Tool: {tool_name}({tool_input})")
 
+                # V68.1 M46 — bounded, deterministic tool-failure recovery. If this
+                # exact tool already failed non-retryably (or hit the one-retry
+                # budget) earlier this turn, do NOT re-run it; short-circuit with a
+                # scoped failure envelope so the loop cannot spin or drift into an
+                # unrelated tool family.
+                from core.tool_result import is_failure, make_failure, recovery_guidance
+
+                _prior_failures = _turn_tool_failures.get(tool_name, 0)
+                # Non-retryable failures allow 1 attempt total (no retry);
+                # retryable failures allow 2 (original + exactly one retry).
+                _max_attempts = 2 if _turn_tool_retryable.get(tool_name) else 1
+                if _prior_failures >= _max_attempts:
+                    result = make_failure(
+                        tool=tool_name,
+                        error_class="retry_budget_exhausted",
+                        safe_message=(
+                            f"`{tool_name}` already failed this turn and will not be "
+                            "retried again. Answer without it or state it is unavailable."
+                        ),
+                        retryable=False,
+                        fallback_allowed=True,
+                    )
                 # Enrutar al MCP si la tool proviene del bridge, sino al executor local.
                 # V61 hardening: MCP tools pass through ToolExecutor.aexecute_mcp() —
                 # the SAME allowlist/traversal-guard/HITL gate as local tools, never a
                 # direct, unaudited call_tool(). See tools/executor.py MCP_TOOL_ALLOWLIST.
-                if tool_name in self._mcp_tool_names and self._mcp_session:
+                elif tool_name in self._mcp_tool_names and self._mcp_session:
                     async def _call_mcp(name: str, args: dict) -> dict:
                         mcp_result = await self._mcp_session.call_tool(name, args)
                         content = (
@@ -1922,6 +1950,21 @@ class LLM:
                     result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
 
                 logger.debug(f"Result: {result}")
+
+                # V68.1 M46 — on failure: record it, and append recovery guidance
+                # that pins the model to THIS tool/topic and forbids switching to an
+                # unrelated tool because of the error.
+                _failure_guidance = ""
+                if is_failure(result):
+                    _turn_tool_failures[tool_name] = _prior_failures + 1
+                    _turn_tool_retryable[tool_name] = bool(result.get("retryable", False))
+                    _failure_guidance = "\n\n" + recovery_guidance(result)
+                    logger.warning(
+                        f"TOOL_RECOVERY: '{tool_name}' failed "
+                        f"(class={result.get('error_class', 'unknown')}, "
+                        f"count={_turn_tool_failures[tool_name]})"
+                    )
+
                 result_str = json.dumps(result, ensure_ascii=False)
                 # v58.0 — redact secrets from tool output before it enters the
                 # prompt history (token-safe, fail-open if ContextManager absent).
@@ -1934,10 +1977,13 @@ class LLM:
                 # web/file/RAG/screen/clipboard sources) and truncate. This is the
                 # prompt-injection boundary: tool output is DATA, never policy.
                 labeled = self._label_tool_result(tool_name, result_str)
+                # V68.1 M46 — recovery guidance is appended OUTSIDE the untrusted
+                # data envelope: it is first-party policy from JARVIS, not tool
+                # data, so it must not be quarantined with the (untrusted) output.
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": labeled,
+                    "content": labeled + _failure_guidance,
                 })
             # Continúa el loop: el LLM responde al resultado de las tools
 
