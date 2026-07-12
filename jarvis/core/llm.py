@@ -1467,7 +1467,7 @@ class LLM:
         # a security-sensitive turn with a failed tool is flagged promptly instead
         # of blocking on a multi-minute cold model swap.
         from core.verification import (
-            deterministic_precheck, resource_aware_timeout, verifier_latency_stats,
+            deterministic_precheck, resource_aware_timeout,
         )
         pre = deterministic_precheck(
             user_message, draft_answer,

@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from core.boot_state import (
     BootState,
-    BootSubsystem,
     assemble_boot_state,
-    OK, FAILED, DEGRADED, OPTIONAL, DORMANT,
+    OK, FAILED, OPTIONAL,
 )
 
 
