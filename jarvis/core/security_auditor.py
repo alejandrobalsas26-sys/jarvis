@@ -28,10 +28,101 @@ Windows system ports (expected, do not block):
 import asyncio
 import socket
 import subprocess
+import time
 from datetime import datetime, timezone
 
 import psutil
 from loguru import logger
+
+# ── V68.1 M50 — repeated-finding deduplication ────────────────────────────────
+# A real run emitted the SAME "UDP/41641 owned by tailscaled.exe" warning every
+# scan cycle. Identical (proto, port, process) findings within a suppression
+# window now update a count/last_seen instead of re-warning every few minutes.
+# The operator can classify a finding; classification is EXPLICIT and never
+# inferred from the process name alone.
+_SUPPRESSION_WINDOW_S = 3600.0   # re-surface an unchanged finding at most hourly
+
+# Operator finding classifications.
+EXPECTED = "EXPECTED"
+KNOWN_SERVICE = "KNOWN_SERVICE"
+INVESTIGATE = "INVESTIGATE"
+SUPPRESS_UNTIL = "SUPPRESS_UNTIL"
+BLOCKED = "BLOCKED"
+_SILENCING_CLASSES = frozenset({EXPECTED, KNOWN_SERVICE})
+
+# key = (proto, port, process_name) → {count, first_seen, last_seen, last_logged}
+_finding_state: dict[tuple, dict] = {}
+# key → {"classification": str, "until": float | None}
+_finding_class: dict[tuple, dict] = {}
+
+
+def _finding_key(proto: str, port: int, process: str) -> tuple:
+    return (str(proto).upper(), int(port), (process or "unknown").lower())
+
+
+def classify_finding(port: int, process: str, classification: str,
+                     proto: str = "TCP", until: float | None = None) -> dict:
+    """Operator-driven classification of a port/process finding. Explicit only —
+    never derived from a process name. Returns the stored classification record."""
+    key = _finding_key(proto, port, process)
+    rec = {"classification": classification, "until": until}
+    _finding_class[key] = rec
+    logger.info(
+        f"SECURITY_AUDITOR: finding {proto}/{port} '{process}' classified "
+        f"{classification}" + (f" until {until}" if until else "")
+    )
+    return rec
+
+
+def _classification_of(key: tuple, now: float) -> str | None:
+    rec = _finding_class.get(key)
+    if not rec:
+        return None
+    cls = rec.get("classification")
+    if cls == SUPPRESS_UNTIL:
+        until = rec.get("until")
+        # Active suppression only while unexpired; treat as silencing meanwhile.
+        return SUPPRESS_UNTIL if (until is None or now < until) else None
+    return cls
+
+
+def _register_finding(proto: str, port: int, process: str, now: float) -> dict:
+    """Update dedup state for a finding. Returns
+    {"should_log": bool, "count": int, "suppressed_by": str|None}."""
+    key = _finding_key(proto, port, process)
+    st = _finding_state.get(key)
+    if st is None:
+        st = {"count": 0, "first_seen": now, "last_seen": now, "last_logged": 0.0}
+        _finding_state[key] = st
+    st["count"] += 1
+    st["last_seen"] = now
+
+    cls = _classification_of(key, now)
+    if cls in _SILENCING_CLASSES or cls == SUPPRESS_UNTIL:
+        return {"should_log": False, "count": st["count"], "suppressed_by": cls}
+
+    # Log if never yet logged (first real sighting, or first after a classification
+    # suppression expired), then at most once per suppression window.
+    never_logged = st["last_logged"] == 0.0
+    due = (now - st["last_logged"]) >= _SUPPRESSION_WINDOW_S
+    should_log = never_logged or due
+    if should_log:
+        st["last_logged"] = now
+    return {"should_log": should_log, "count": st["count"], "suppressed_by": None}
+
+
+def finding_dedup_summary() -> dict:
+    """Read-only rollup of tracked findings (observability / AURA)."""
+    return {
+        "tracked": len(_finding_state),
+        "classified": len(_finding_class),
+        "findings": [
+            {"proto": k[0], "port": k[1], "process": k[2],
+             "count": v["count"], "last_seen": v["last_seen"],
+             "classification": (_finding_class.get(k) or {}).get("classification")}
+            for k, v in sorted(_finding_state.items())
+        ][:50],
+    }
 
 # Ports JARVIS explicitly owns or expects
 _JARVIS_PORTS: set[int] = {
@@ -259,12 +350,27 @@ async def run_port_audit(broadcast_fn) -> dict:
                 report["system"].append(entry)
                 continue
             report["unknown"].append(entry)
-            logger.warning(
-                f"SECURITY_AUDITOR: UNKNOWN port {p['proto']}/{port} "
-                f"owned by '{p['process']}' (PID {p['pid']})"
-            )
-            # Auto-block unknown non-ephemeral ports
-            if port < 49152 and port not in _blocked_ports:
+            # V68.1 M50 — deduplicate repeated identical findings. Update
+            # count/last_seen and only warn on first sight or once per hour, and
+            # honor operator classification (EXPECTED/KNOWN_SERVICE/SUPPRESS_UNTIL
+            # silence; BLOCKED still blocks). No auto-trust from process name.
+            now = time.time()
+            key = _finding_key(p["proto"], port, p["process"])
+            dedup = _register_finding(p["proto"], port, p["process"], now)
+            entry["seen_count"] = dedup["count"]
+            entry["classification"] = (_finding_class.get(key) or {}).get("classification")
+            if dedup["should_log"]:
+                seen = dedup["count"]
+                logger.warning(
+                    f"SECURITY_AUDITOR: UNKNOWN port {p['proto']}/{port} "
+                    f"owned by '{p['process']}' (PID {p['pid']})"
+                    + (f" [seen {seen}x since first sighting]" if seen > 1 else "")
+                )
+            classification = _classification_of(key, now)
+            # Auto-block unknown non-ephemeral ports — unless explicitly marked
+            # EXPECTED/KNOWN_SERVICE by the operator; BLOCKED is honored as block.
+            silence_block = classification in _SILENCING_CLASSES
+            if port < 49152 and port not in _blocked_ports and not silence_block:
                 blocked = await loop.run_in_executor(
                     None, _block_port_firewall, port, p["proto"]
                 )
