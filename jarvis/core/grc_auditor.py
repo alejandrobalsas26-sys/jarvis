@@ -68,7 +68,7 @@ class GRCAuditor:
         """Periodic audit loop. Runs once immediately then every interval."""
         interval = self._interval()
         logger.info(
-            "GRC_AUDITOR: %s — interval=%ds report=%s",
+            "GRC_AUDITOR: {} — interval={}s report={}",
             "ENABLED" if self.is_enabled() else "DISABLED (set JARVIS_GRC_ENABLED=1)",
             interval,
             self._report_path(),
@@ -78,12 +78,12 @@ class GRCAuditor:
                 try:
                     summary = await self.run_once()
                     logger.info(
-                        "GRC_AUDITOR: report written — alerts=%d critical=%d",
+                        "GRC_AUDITOR: report written — alerts={} critical={}",
                         summary.get("total_alerts", 0),
                         summary.get("critical_alerts", 0),
                     )
                 except Exception as e:
-                    logger.error("GRC_AUDITOR: run_once failed: %s", e)
+                    logger.error("GRC_AUDITOR: run_once failed: {}", e)
             await asyncio.sleep(interval)
 
     async def stop(self) -> None:
@@ -115,7 +115,7 @@ class GRCAuditor:
             for inc in correlator.get_active_incidents():
                 alerts.append(inc)
         except Exception as e:
-            logger.debug("GRC_AUDITOR: correlator unavailable: %s", e)
+            logger.debug("GRC_AUDITOR: correlator unavailable: {}", e)
 
         # 2. DB query if V55 db_manager pool is live
         try:
@@ -144,9 +144,9 @@ class GRCAuditor:
                     db_alerts = loop.run_until_complete(_fetch())
                     alerts.extend(db_alerts)
         except Exception as e:
-            logger.debug("GRC_AUDITOR: DB query skipped: %s", e)
+            logger.debug("GRC_AUDITOR: DB query skipped: {}", e)
 
-        logger.debug("GRC_AUDITOR: collected %d alerts for 24h window", len(alerts))
+        logger.debug("GRC_AUDITOR: collected {} alerts for 24h window", len(alerts))
         return alerts
 
     def map_to_controls(self, alerts: list[dict]) -> dict:
@@ -387,7 +387,7 @@ ul{{margin:0.5em 0;}} li{{margin:0.3em 0;}}
             with open(manifest, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            logger.warning("GRC_AUDITOR: manifest update failed: %s", e)
+            logger.warning("GRC_AUDITOR: manifest update failed: {}", e)
 
     async def write_immutable_report(self, html: str, markdown: str) -> dict:
         """Write the current report and an immutable timestamped archive copy."""
@@ -421,14 +421,14 @@ ul{{margin:0.5em 0;}} li{{margin:0.3em 0;}}
                 self._append_manifest, archive_dir,
                 {"html": str(archive_html), "md": str(archive_md)},
             )
-            logger.info("GRC_AUDITOR: report written → %s", report_path)
+            logger.info("GRC_AUDITOR: report written → {}", report_path)
             return {
                 "current":      str(report_path),
                 "archive_html": str(archive_html),
                 "archive_md":   str(archive_md),
             }
         except Exception as e:
-            logger.error("GRC_AUDITOR: write failed: %s", e)
+            logger.error("GRC_AUDITOR: write failed: {}", e)
             return {"error": str(e)}
 
     def _write_sync(self, html: str, markdown: str) -> dict:

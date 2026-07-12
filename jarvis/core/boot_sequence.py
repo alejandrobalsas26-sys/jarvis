@@ -19,34 +19,57 @@ import asyncio
 from datetime import datetime, timezone
 from loguru import logger
 
-_BOOT_LINES = [
-    ("hardware",      "Hardware profile loaded.",                         0.5),
-    ("memory",        "Episodic memory online.",                          0.7),
-    ("detection",     "Detection subsystems active. ETW, Sysmon, canaries armed.", 0.9),
-    ("correlation",   "Correlation engine warm. Five rules loaded.",      0.7),
-    ("vision",        "Visual cortex online. Moondream loaded.",          0.6),
-    ("predictive",    "Predictive threat engine ready.",                  0.7),
-    ("hunting",       "Autonomous threat hunting scheduled.",             0.7),
-    ("intelligence",  "Intelligence fusion database connected.",          0.6),
-    ("communication", "Telegram bridge established.",                     0.6),
-    ("ready",         "All systems nominal. JARVIS at your service.",     1.0),
+# V68.1 M48 — the previous fixed script narrated states that could contradict
+# reality (Moondream/ETW/Sysmon/Telegram/"all nominal"). When a truthful
+# core.boot_state.BootState snapshot is supplied, narration is derived from it;
+# these constants are only the honest, capability-neutral fallback used when no
+# snapshot is available (they no longer assert specific integrations are active).
+_FALLBACK_LINES = [
+    ("hardware",      "Hardware profile loaded.",                    0.5),
+    ("memory",        "Episodic memory subsystem initialized.",      0.7),
+    ("detection",     "Detection subsystems initializing.",          0.9),
+    ("correlation",   "Correlation engine warming.",                 0.7),
+    ("vision",        "Vision subsystem initializing.",              0.6),
+    ("ready",         "JARVIS online.",                              1.0),
 ]
+# Phases that are spoken aloud (the rest stream only to AURA/logs).
+_SPOKEN_PHASES = frozenset({"detection", "ready"})
+
+
+def _lines_from_state(boot_state) -> list[tuple[str, str, float]]:
+    """Attach display pauses to the truthful narration lines from a BootState."""
+    pause_by_phase = {
+        "hardware": 0.5, "memory": 0.6, "llm": 0.6, "detection": 0.9,
+        "correlation": 0.6, "vision": 0.6, "persistence": 0.6,
+        "communication": 0.6, "ready": 1.0,
+    }
+    return [
+        (phase, message, pause_by_phase.get(phase, 0.6))
+        for phase, message in boot_state.narration_lines()
+    ]
 
 
 async def execute_boot_sequence(
     broadcast_fn,
     tts,
     skip_voice: bool = False,
+    boot_state=None,
 ) -> None:
     """
     Execute the JARVIS boot sequence.
     Streams visual to AURA. Optionally speaks each phase.
+
+    When *boot_state* (core.boot_state.BootState) is provided, every narrated
+    line reflects the real subsystem state — no fabricated "Moondream loaded"
+    or "all systems nominal". Without it, a capability-neutral fallback is used.
     """
     import os
     if os.getenv("JARVIS_QUIET_BOOT", "0") == "1":
         skip_voice = True
 
     logger.info("BOOT_SEQUENCE: initiating JARVIS awakening…")
+
+    boot_lines = _lines_from_state(boot_state) if boot_state is not None else _FALLBACK_LINES
 
     await broadcast_fn({
         "type":      "boot_sequence_started",
@@ -60,7 +83,7 @@ async def execute_boot_sequence(
         asyncio.create_task(tts.speak_async(greeting))
         await asyncio.sleep(2.5)
 
-    for phase, message, pause in _BOOT_LINES:
+    for phase, message, pause in boot_lines:
         await broadcast_fn({
             "type":      "boot_phase",
             "phase":     phase,
@@ -70,7 +93,7 @@ async def execute_boot_sequence(
 
         logger.info(f"BOOT: {phase.upper()} — {message}")
 
-        if tts and not skip_voice and phase in ("detection", "ready"):
+        if tts and not skip_voice and phase in _SPOKEN_PHASES:
             asyncio.create_task(tts.speak_async(message))
 
         await asyncio.sleep(pause)

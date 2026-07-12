@@ -1189,11 +1189,18 @@ class ToolExecutor:
     # ── Tiempo / Clima ────────────────────────────────────────────────────────
 
     def _tool_get_datetime(self) -> dict:
-        now = datetime.now()
+        # V68.1 M48 — time is read directly from the host clock (never fabricated
+        # by the model). astimezone() attaches the real local tz offset so the
+        # answer is unambiguously system-sourced.
+        now = datetime.now().astimezone()
         return {
             "date": now.strftime("%A, %d de %B de %Y"),
             "time": now.strftime("%H:%M:%S"),
             "weekday": now.strftime("%A"),
+            "timezone": now.tzname() or "",
+            "utc_offset": now.strftime("%z"),
+            "iso": now.isoformat(),
+            "source": "host_system_clock",
         }
 
     def _tool_get_weather(self, city: str) -> dict:

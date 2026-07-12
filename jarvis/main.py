@@ -950,7 +950,9 @@ async def _main_async() -> None:
             team_runtime  = v63_team_runtime,
             broadcast_fn  = _aura_broadcast,
         )
-        logger.info("V63 M3: agent_planner attached")
+        # V68.1 M48: attach() already logs "V63 M3: agent_planner attached"
+        # (core/agent_planner.py). The duplicate log here made the same line
+        # appear twice at boot — removed.
     except Exception as e:
         logger.debug(f"V63 M4/M3: team_runtime/planner attach failed: {e}")
 
@@ -1825,6 +1827,7 @@ async def _main_async() -> None:
                 # Self-test + cinematic boot sequence — runs ONCE on real startup
                 # (created as a task, not watchdog-managed → never re-runs on restart)
                 async def _startup_sequence():
+                    test_report = {}
                     try:
                         test_report = await run_self_test(_aura_broadcast)
                         if test_report.get("failed", 0) > 0:
@@ -1834,8 +1837,48 @@ async def _main_async() -> None:
                             )
                     except Exception as e:
                         logger.debug(f"V46: self-test error: {e}")
+                    # V68.1 M48 — build the ONE truthful boot-state snapshot from
+                    # the self-test report plus explicit runtime flags, then narrate
+                    # from it. Guardian, self-test, narration and field readiness all
+                    # now describe the SAME reality (no fabricated Moondream/ETW/
+                    # Sysmon/Telegram/"all nominal").
+                    boot_state = None
                     try:
-                        await execute_boot_sequence(_aura_broadcast, tts)
+                        from core.boot_state import assemble_boot_state
+                        _etw_on = bool(_is_windows_admin() or os.environ.get(
+                            "JARVIS_ETW_ENABLE", "").strip().lower()
+                            in ("1", "true", "yes", "on"))
+                        _sysmon_path = os.getenv("SYSMON_LOG_PATH", "")
+                        _sysmon_on = bool(_sysmon_path and os.path.exists(_sysmon_path))
+                        _tg_on = bool(os.getenv("JARVIS_TELEGRAM_TOKEN", "")
+                                      and os.getenv("JARVIS_TELEGRAM_CHAT_ID", "0") != "0")
+                        _pg_on = False
+                        try:
+                            from core import db_manager as _dbm
+                            _pg_on = bool(_dbm._instance and _dbm._instance.is_connected())
+                        except Exception:
+                            _pg_on = False
+                        _vis_model = getattr(llm, "model_vision", None) or "gemma3:4b"
+                        boot_state = assemble_boot_state(
+                            test_report,
+                            vision_model=_vis_model,
+                            etw_enabled=_etw_on,
+                            sysmon_active=_sysmon_on,
+                            telegram_configured=_tg_on,
+                            postgres_available=_pg_on,
+                        )
+                        logger.info(
+                            f"BOOT_STATE: health={boot_state.health()} "
+                            f"nominal={boot_state.all_systems_nominal()} "
+                            f"failed={boot_state.failed} degraded={boot_state.degraded} "
+                            f"optional_dormant={boot_state.optional_missing} "
+                            f"vision={_vis_model} etw={_etw_on} sysmon={_sysmon_on} "
+                            f"telegram={_tg_on} postgres={_pg_on}"
+                        )
+                    except Exception as e:
+                        logger.debug(f"V68.1: boot-state assembly error: {e}")
+                    try:
+                        await execute_boot_sequence(_aura_broadcast, tts, boot_state=boot_state)
                     except Exception as e:
                         logger.debug(f"V46: boot sequence error: {e}")
                     # v46.0 OMEGA — IoT startup pulse
