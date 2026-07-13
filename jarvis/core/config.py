@@ -81,6 +81,36 @@ class Settings(BaseSettings):
     model_fast_override: str = ""
     model_deep_override: str = ""
 
+    # ── Embedding runtime (V69 M52 — unified semantic embedding) ──────────────
+    # The configured EMBEDDING role (core.model_router, JARVIS_MODEL_EMBEDDING →
+    # nomic-embed-text via Ollama) is ALWAYS the primary provider. These knobs
+    # tune the ONE runtime every semantic consumer resolves through. Operator-only
+    # (env/.env), never sourced from LLM/tool input.
+    #   embedding_fallback_enabled : opt IN to the sentence-transformers /
+    #       all-MiniLM-L6-v2 fallback. Off by default → no silent provider switch
+    #       and no torch import unless the operator asks for it. The fallback
+    #       carries a distinct fingerprint/dimension, so callers are always told
+    #       which provider is active.
+    #   embedding_timeout_s  : hard per-call timeout for a provider embed.
+    #   embedding_batch_size : bounded batch size (CPU-only host discipline).
+    embedding_fallback_enabled: bool = False
+    embedding_timeout_s:        float = 30.0
+    embedding_batch_size:       int = 16
+
+    @field_validator("embedding_fallback_enabled", mode="before")
+    @classmethod
+    def _coerce_embedding_fallback(cls, v) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(v)
+
+    @field_validator("embedding_batch_size")
+    @classmethod
+    def validate_embedding_batch_size(cls, v: int) -> int:
+        if not 1 <= v <= 128:
+            raise ValueError("embedding_batch_size must be between 1 and 128.")
+        return v
+
     # ── AURA HUD server (loopback WebSocket telemetry / command HUD) ──────────
     # CSWSH defense for the /ws handshake: by default only loopback origins
     # (localhost / 127.0.0.0/8 / ::1) may open the AURA WebSocket; missing or

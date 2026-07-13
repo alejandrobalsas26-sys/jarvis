@@ -527,8 +527,8 @@ TOOLS: list[dict] = [
             "name": "ingest_docs",
             "description": (
                 "Scans a local folder for PDF and TXT files, splits them into 1000-char chunks "
-                "with 200-char overlap, generates embeddings with all-MiniLM-L6-v2, and stores "
-                "them in the Knowledge Vault (ChromaDB). "
+                "with 200-char overlap, generates embeddings with the configured local "
+                "embedding model, and stores them in the Knowledge Vault (ChromaDB). "
                 "Default folder: jarvis/brain/docs/. "
                 "Use this when the user says 'index my PDFs', 'load this folder', or "
                 "'add documents to my knowledge base'."
