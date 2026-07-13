@@ -50,7 +50,9 @@ async def consolidate_memory(
         loop  = asyncio.get_running_loop()
 
         def _fetch_all():
-            col = vault._client.get_or_create_collection("jarvis_episodic")
+            from core.episodic_memory import resolve_episodic_physical
+            col = vault._client.get_or_create_collection(
+                resolve_episodic_physical(), embedding_function=None)
             return col.get(
                 limit=500,
                 include=["documents", "metadatas"],
@@ -139,7 +141,9 @@ async def consolidate_memory(
 
         if deleted_ids:
             def _delete():
-                col = vault._client.get_or_create_collection("jarvis_episodic")
+                from core.episodic_memory import resolve_episodic_physical
+                col = vault._client.get_or_create_collection(
+                    resolve_episodic_physical(), embedding_function=None)
                 col.delete(ids=deleted_ids)
 
             try:

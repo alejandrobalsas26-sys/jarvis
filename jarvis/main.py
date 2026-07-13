@@ -790,6 +790,14 @@ async def _main_async() -> None:
             pass
     register_shutdown_callback(_flush_chroma)
 
+    # V69 M53 — bounded semantic-continuity checkpoint (durable state confirm; a
+    # running operator migration is resumable from its journal, never orphaned).
+    try:
+        from core.semantic_migration import semantic_shutdown_checkpoint
+        register_shutdown_callback(semantic_shutdown_checkpoint)
+    except Exception as e:
+        logger.debug(f"V69 M53: semantic shutdown hook error: {e}")
+
     # Check model availability — clear, non-catastrophic guidance if missing.
     model_avail = await check_model_availability()
     missing = [m for m, ok in model_avail.items() if not ok]
@@ -1877,6 +1885,17 @@ async def _main_async() -> None:
                         )
                     except Exception as e:
                         logger.debug(f"V68.1: boot-state assembly error: {e}")
+                    # V69 M53 — metadata-only semantic-memory restoration summary.
+                    # Never scans records, resumes migrations, or loads the DEEP
+                    # model; degrades honestly if the embedding runtime is down.
+                    try:
+                        from core.semantic_migration import semantic_boot_summary, \
+                            SemanticMigrationController
+                        _sem = semantic_boot_summary()
+                        for _ln in SemanticMigrationController.render_boot_summary(_sem):
+                            logger.info(_ln)
+                    except Exception as e:
+                        logger.debug(f"V69 M53: semantic boot summary error: {e}")
                     try:
                         await execute_boot_sequence(_aura_broadcast, tts, boot_state=boot_state)
                     except Exception as e:

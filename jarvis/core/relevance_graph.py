@@ -33,7 +33,9 @@ async def build_relevance_graph(max_episodes: int = 200) -> dict[str, float]:
         vault = get_vault()
 
         def _fetch():
-            col = vault._client.get_or_create_collection("jarvis_episodic")
+            from core.episodic_memory import resolve_episodic_physical
+            col = vault._client.get_or_create_collection(
+                resolve_episodic_physical(), embedding_function=None)
             return col.get(
                 limit=max_episodes,
                 include=["metadatas", "documents"],
@@ -152,7 +154,9 @@ async def prune_low_relevance_episodes() -> int:
         loop  = asyncio.get_running_loop()
 
         def _do_prune():
-            col = vault._client.get_or_create_collection("jarvis_episodic")
+            from core.episodic_memory import resolve_episodic_physical
+            col = vault._client.get_or_create_collection(
+                resolve_episodic_physical(), embedding_function=None)
             data = col.get(limit=500, include=["metadatas"])
             ids  = data.get("ids", [])
             metas = data.get("metadatas", []) or []
