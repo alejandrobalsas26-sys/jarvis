@@ -584,6 +584,124 @@ class SemanticMigrationController:
         return record
 
 
+    # ── boot restoration (metadata-only; never embeds / scans all records) ───
+    def boot_summary(self, logical_names=MANAGED_LOGICAL) -> dict:
+        """Truthful, metadata-only semantic-memory restoration summary at boot.
+
+        Loads the alias registry, confirms each active physical collection exists,
+        reads its stamp + record count (cheap), compares the stored fingerprint to
+        the ACTIVE fingerprint (computed WITHOUT embedding — no probe embed, no
+        DEEP model), and detects an interrupted migration journal. Never scans all
+        records, never resumes a migration, never blocks. Degrades honestly when
+        the embedding runtime is unavailable.
+        """
+        collections: list[dict] = []
+        overall = "OK"
+        try:
+            runtime = self._get_runtime()
+            active_fp = runtime.active_fingerprint()   # no embed; cheap availability probe
+            client = self._get_client()
+            try:
+                existing = {c.name for c in client.list_collections()}
+            except Exception:  # noqa: BLE001
+                existing = set()
+            registry = self._get_registry()
+            for logical in logical_names:
+                collections.append(
+                    self._boot_one(logical, active_fp, client, existing, registry))
+            if not active_fp:
+                overall = "DEGRADED"
+            elif any(c["status"] in ("REINDEX_REQUIRED", "MIGRATING", "FAILED") for c in collections):
+                overall = "DEGRADED"
+        except Exception as e:  # noqa: BLE001 — boot summary must never crash boot
+            logger.debug(f"SEMANTIC_MIGRATION: boot summary error: {e}")
+            return {"overall": "UNKNOWN", "collections": []}
+        return {"overall": overall, "collections": collections}
+
+    def _boot_one(self, logical, active_fp, client, existing, registry) -> dict:
+        entry = registry.get(logical)
+        active_physical = (entry.active_physical_collection if entry else None) or (
+            logical if logical in existing else None)
+        rec = {
+            "logical_name": logical, "active_physical": active_physical,
+            "status": "UNKNOWN", "records": None, "detail": "",
+            "rollback_available": bool(entry and entry.rollback_available),
+        }
+        # Interrupted migration?
+        j = ReindexJournal.load(self._journal_path(logical))
+        if j is not None and not j.activated and j.offset < j.total:
+            rec["status"] = "MIGRATING"
+            rec["detail"] = f"interrupted migration ({j.offset}/{j.total}); resume required"
+            return rec
+        if not active_fp:
+            rec["status"] = "UNAVAILABLE"
+            rec["detail"] = "embedding runtime unavailable"
+            return rec
+        if active_physical is None or active_physical not in existing:
+            rec["status"] = "NONE"
+            rec["detail"] = "no active collection (never indexed)"
+            return rec
+        try:
+            col = client.get_collection(active_physical, embedding_function=None)
+            meta = dict(getattr(col, "metadata", None) or {})
+            rec["records"] = col.count()
+            stored_fp = meta.get("embedding_fingerprint")
+            if not stored_fp:
+                rec["status"] = "REINDEX_REQUIRED"
+                rec["detail"] = "legacy unstamped collection preserved; migration not started"
+            elif stored_fp == active_fp:
+                rec["status"] = "ACTIVE"
+                rec["detail"] = (f"provider={meta.get('embedding_provider')} "
+                                 f"model={meta.get('embedding_model')} "
+                                 f"dim={meta.get('embedding_dimension')}")
+            else:
+                rec["status"] = "REINDEX_REQUIRED"
+                rec["detail"] = "active collection built by a different model; legacy preserved"
+        except Exception as e:  # noqa: BLE001
+            rec["status"] = "UNKNOWN"
+            rec["detail"] = f"probe failed: {str(e)[:80]}"
+        return rec
+
+    @staticmethod
+    def render_boot_summary(summary: dict) -> list[str]:
+        """Render the boot summary to truthful, ASCII, internal-free lines."""
+        lines = [f"SEMANTIC MEMORY [{summary.get('overall', 'UNKNOWN')}]"]
+        for c in summary.get("collections", []):
+            head = f"  {c['logical_name']}: {c['status']}"
+            if c.get("active_physical") and c["status"] == "ACTIVE":
+                head += f" physical={c['active_physical']} records={c.get('records')}"
+            lines.append(head)
+            if c.get("detail"):
+                lines.append(f"    {c['detail']}")
+            if c.get("rollback_available"):
+                lines.append("    rollback available")
+        return lines
+
+
 def get_controller() -> SemanticMigrationController:
     """Production controller (lazy singleton wiring)."""
     return SemanticMigrationController()
+
+
+def semantic_boot_summary() -> dict:
+    """Metadata-only boot restoration summary for the production stores."""
+    return get_controller().boot_summary()
+
+
+async def semantic_shutdown_checkpoint() -> None:
+    """Graceful-shutdown checkpoint (bounded, fast). Migrations run synchronously
+    via operator commands and persist their state/journals eagerly on every
+    transition, so there is no background worker to cancel and nothing unbounded to
+    flush — this confirms + logs the durable state so shutdown stays truthful."""
+    try:
+        summary = get_controller().boot_summary()
+        migrating = [c["logical_name"] for c in summary.get("collections", [])
+                     if c["status"] == "MIGRATING"]
+        if migrating:
+            logger.info(
+                f"SEMANTIC_SHUTDOWN: interrupted migration(s) checkpointed "
+                f"(resumable): {migrating}")
+        else:
+            logger.info("SEMANTIC_SHUTDOWN: semantic state durable; no active migration.")
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"SEMANTIC_SHUTDOWN: checkpoint error: {e}")
