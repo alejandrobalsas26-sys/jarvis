@@ -1,18 +1,26 @@
 """
-core/knowledge.py — Knowledge Vault: RAG local con ChromaDB y sentence-transformers.
+core/knowledge.py — Knowledge Vault: RAG local con ChromaDB.
 
 Indexa PDFs y TXTs de jarvis/brain/docs/ en un vector store persistente localizado
-en jarvis/brain/vector_store/. Usa all-MiniLM-L6-v2 para embeddings (CPU-only).
+en jarvis/brain/vector_store/.
+
+V69 M52: embeddings ya NO se calculan aquí con sentence-transformers directamente.
+El vault consume el runtime de embeddings unificado (core.embedding_runtime), que
+resuelve el rol EMBEDDING configurado (nomic-embed-text via Ollama) con fallback
+opcional explícito. La colección se estampa con la huella (fingerprint) del runtime
+activo y se verifica antes de consultar/insertar; en caso de incompatibilidad se
+reporta REINDEX_REQUIRED sin borrar datos del usuario.
 """
 
 import hashlib
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from loguru import logger
 
 _VAULT_PATH = Path(__file__).parent.parent / "brain" / "vector_store"
 _DEFAULT_DOCS = Path(__file__).parent.parent / "brain" / "docs"
-_MODEL_NAME = "all-MiniLM-L6-v2"
+_COLLECTION_NAME = "knowledge_vault"
 _CHUNK_SIZE = 1000   # chars
 _CHUNK_OVERLAP = 200  # chars
 
@@ -84,40 +92,93 @@ def get_vault() -> "KnowledgeVault":
 
 
 class KnowledgeVault:
-    def __init__(self) -> None:
-        # V68.1 M45: construction is now cheap and NEVER imports heavy vector
-        # deps. Backend init (chromadb + sentence-transformers + torch) is
-        # deferred to _ensure_backend() so a dependency fault degrades honestly
-        # instead of raising a raw torch stack trace out of the tool boundary.
+    def __init__(self, embedder=None) -> None:
+        # V68.1 M45: construction is cheap and NEVER imports heavy vector deps.
+        # V69 M52: embeddings come from the injectable unified runtime (default:
+        # the production singleton, Ollama-first, no torch import unless the
+        # operator opted into the fallback). Backend init (chromadb + runtime
+        # health + fingerprint compatibility) is deferred to _ensure_backend() so
+        # a dependency/config fault degrades honestly instead of raising a raw
+        # backend stack trace out of the tool boundary.
         _VAULT_PATH.mkdir(parents=True, exist_ok=True)
         self._chroma = None
         self._collection = None
-        self._model = None
+        self._embedder = embedder
+        self._active_fingerprint: str = ""
         self._backend_ready = False
         self._backend_error: tuple[str, str] | None = None
+        self._reindex: "object | None" = None   # CompatibilityResult on mismatch
+
+    def _get_embedder(self):
+        if self._embedder is None:
+            from core.embedding_runtime import get_runtime
+            self._embedder = get_runtime()
+        return self._embedder
 
     def _ensure_backend(self) -> bool:
         """Attempt one guarded initialization of the vector backend.
 
-        Returns True when ready, False when unavailable. On failure the fault is
-        classified once and cached; dependency internals never leak. Idempotent.
+        Returns True when ready AND the collection is compatible with the active
+        embedding runtime. Returns False when unavailable OR a reindex is required
+        (distinguish via ``self._backend_error`` vs ``self._reindex``). On failure
+        the fault is classified once and cached; dependency internals never leak.
+        Idempotent.
         """
         if self._backend_ready:
             return True
-        if self._backend_error is not None:
+        if self._backend_error is not None or self._reindex is not None:
             return False
         try:
             import chromadb
-            from sentence_transformers import SentenceTransformer
+            from core.vector_collections import (
+                META_FINGERPRINT, check_compatibility, stamp_metadata, COMPAT_OK,
+            )
+
+            embedder = self._get_embedder()
+            health = embedder.health()
+            if not health.available:
+                self._backend_error = (
+                    health.error_class or "backend_init_failed",
+                    health.message or "Embedding runtime unavailable.",
+                )
+                logger.warning(
+                    f"KnowledgeVault embedding runtime unavailable "
+                    f"[{self._backend_error[0]}]: {self._backend_error[1]}"
+                )
+                return False
 
             self._chroma = chromadb.PersistentClient(path=str(_VAULT_PATH))
-            self._collection = self._chroma.get_or_create_collection(
-                name="knowledge_vault",
-                metadata={"hnsw:space": "cosine"},
+            stamp = stamp_metadata(
+                health, created_at=datetime.now(timezone.utc).isoformat()
             )
-            self._model = SentenceTransformer(_MODEL_NAME)
+            self._collection = self._chroma.get_or_create_collection(
+                name=_COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine", **stamp},
+            )
+            stored_meta = dict(self._collection.metadata or {})
+            # A collection with no vectors yet is safe to (re)stamp to the active
+            # runtime — there is no incompatible data to protect.
+            if self._collection.count() == 0 and stored_meta.get(META_FINGERPRINT) != health.fingerprint:
+                try:
+                    self._collection.modify(metadata={"hnsw:space": "cosine", **stamp})
+                    stored_meta = stamp
+                except Exception:  # noqa: BLE001 — restamp is best-effort
+                    pass
+
+            compat = check_compatibility(stored_meta, health)
+            if compat.status != COMPAT_OK:
+                self._reindex = compat
+                logger.warning(
+                    f"KnowledgeVault collection incompatible [{compat.status}]: {compat.reason}"
+                )
+                return False
+
+            self._active_fingerprint = health.fingerprint
             self._backend_ready = True
-            logger.info(f"KnowledgeVault: DB en {_VAULT_PATH} | modelo {_MODEL_NAME}")
+            logger.info(
+                f"KnowledgeVault: DB en {_VAULT_PATH} | provider {health.provider} "
+                f"| model {health.model} | fp {health.fingerprint} | dim {health.dimension}"
+            )
             return True
         except Exception as e:  # noqa: BLE001 — classify, never propagate raw
             self._backend_error = _classify_backend_error(e)
@@ -130,6 +191,12 @@ class KnowledgeVault:
         """Read-only, internal-free backend health for self-test / boot summary."""
         if self._backend_ready:
             return {"available": True, "error_class": None, "message": "ready"}
+        if self._reindex is not None:
+            return {
+                "available": False,
+                "error_class": "reindex_required",
+                "message": getattr(self._reindex, "reason", "Collection requires reindex."),
+            }
         if self._backend_error is not None:
             return {
                 "available": False,
@@ -142,24 +209,46 @@ class KnowledgeVault:
     def _client(self):
         """Alias for the Chroma client — used by episodic_memory / relevance_graph
         for cross-collection access. Raises a *clean* KnowledgeVaultUnavailable
-        (never a torch trace) when the backend cannot initialize; every internal
+        (never a backend trace) when the backend cannot initialize; every internal
         caller already wraps this in try/except and degrades to empty results.
+
+        NOTE: the "jarvis_episodic" collection reached through this client still
+        uses Chroma's DEFAULT embedder (documented split-brain, deferred to a
+        later milestone with its own reindex) — it is intentionally NOT routed
+        through the unified runtime yet. See docs/V69_M52_EMBEDDING_RUNTIME.md.
         """
         if not self._ensure_backend():
-            raise KnowledgeVaultUnavailable(*self._backend_error)
+            # Prefer the classified backend error; fall back to a reindex hint.
+            if self._backend_error is not None:
+                raise KnowledgeVaultUnavailable(*self._backend_error)
+            raise KnowledgeVaultUnavailable(
+                "reindex_required", "Knowledge Vault requires a reindex."
+            )
         return self._chroma
 
     def _embed(self, text: str) -> list[float]:
-        # v31.0: route through LRU cache. Episodic memory and incident
-        # correlator re-query identical MITRE strings constantly; caching
-        # eliminates the bulk of redundant sentence-transformers passes.
+        # v31.0 / V69 M52: route through the LRU cache keyed by the active
+        # fingerprint. Episodic memory and the incident correlator re-query
+        # identical MITRE strings constantly; caching eliminates redundant
+        # provider passes. The fingerprint key ensures a provider change (e.g.
+        # explicit fallback activation) never returns a stale-provider vector.
         if not self._ensure_backend():
-            raise KnowledgeVaultUnavailable(*self._backend_error)
-        return self._embed_cached(text)
+            if self._backend_error is not None:
+                raise KnowledgeVaultUnavailable(*self._backend_error)
+            raise KnowledgeVaultUnavailable(
+                "reindex_required", "Knowledge Vault requires a reindex."
+            )
+        return self._embed_cached(self._active_fingerprint, text)
 
     @lru_cache(maxsize=512)
-    def _embed_cached(self, text: str) -> list[float]:
-        return self._model.encode([text]).tolist()[0]
+    def _embed_cached(self, fingerprint: str, text: str) -> list[float]:
+        res = self._get_embedder().embed_text(text)
+        if not res.ok:
+            raise KnowledgeVaultUnavailable(
+                res.error_class or "embedding_error",
+                res.message or "Embedding failed.",
+            )
+        return res.vector
 
     def embedding_cache_info(self) -> str:
         info = self._embed_cached.cache_info()
@@ -167,6 +256,29 @@ class KnowledgeVault:
             f"embeddings: hits={info.hits} misses={info.misses} "
             f"size={info.currsize}/{info.maxsize}"
         )
+
+    def _degraded_envelope(self) -> dict:
+        """Structured, internal-free envelope when the backend can't serve.
+
+        Distinguishes a hard ``unavailable`` (dependency/config/provider fault)
+        from a ``reindex_required`` (collection built by a different embedding
+        model — the user's data is preserved, never queried with an incompatible
+        vector). Neither ever exposes backend internals to the LLM.
+        """
+        if self._reindex is not None:
+            return {
+                "status": "reindex_required",
+                "error_class": "reindex_required",
+                "message": (
+                    "Knowledge Vault was indexed with a different embedding model. "
+                    "Reindex is required before it can be queried; existing data is "
+                    "preserved."
+                ),
+            }
+        error_class, safe = self._backend_error or (
+            "backend_init_failed", "Vector backend offline."
+        )
+        return {"status": "unavailable", "error_class": error_class, "message": safe}
 
     def _read_pdf(self, path: Path) -> str:
         import pdfplumber
@@ -181,12 +293,7 @@ class KnowledgeVault:
     def ingest_docs(self, folder_path: str = "") -> dict:
         """Scan folder for PDFs and TXTs, chunk into 1000-char/200-overlap pieces and index."""
         if not self._ensure_backend():
-            error_class, safe = self._backend_error
-            return {
-                "status": "unavailable",
-                "error_class": error_class,
-                "message": safe,
-            }
+            return self._degraded_envelope()
         folder = (
             Path(folder_path).expanduser().resolve()
             if folder_path
@@ -284,8 +391,7 @@ class KnowledgeVault:
         n_results = max(1, min(n_results, 10))
 
         if not self._ensure_backend():
-            error_class, safe = self._backend_error
-            return {"status": "unavailable", "error_class": error_class, "message": safe}
+            return self._degraded_envelope()
 
         try:
             count = self._collection.count()
@@ -314,7 +420,15 @@ class KnowledgeVault:
                 include=["documents", "metadatas"],
             )
         except KnowledgeVaultUnavailable as e:
-            return {"status": "unavailable", "error_class": e.error_class,
+            # A hard dependency/config/provider condition degrades to
+            # "unavailable"; a transient per-call embedding fault is "error".
+            _HARD = {
+                "dependency_incompatibility", "dependency_missing",
+                "dependency_import_failed", "provider_unreachable",
+                "not_configured", "backend_init_failed", "reindex_required",
+            }
+            status = "unavailable" if e.error_class in _HARD else "error"
+            return {"status": status, "error_class": e.error_class,
                     "message": e.safe_message}
         except Exception as e:  # noqa: BLE001 — never leak a stack trace to the LLM
             logger.warning(f"KnowledgeVault.query embedding/search error: {e}")

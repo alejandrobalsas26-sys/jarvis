@@ -61,19 +61,50 @@ class _FakeCollection:
         return {"documents": [self._docs], "metadatas": [self._metas]}
 
 
-class _FakeModel:
-    def encode(self, texts):
-        class _Arr:
-            def tolist(self_inner):
-                return [[0.1, 0.2, 0.3] for _ in texts]
-        return _Arr()
+from core.embedding_runtime import EmbeddingResult, EmbeddingHealth
+
+
+class _FakeRuntime:
+    """Injected embedding runtime — no Ollama, no torch, no sentence-transformers.
+
+    V69 M52: the vault now consumes core.embedding_runtime instead of holding a
+    SentenceTransformer. This fake exercises the plain-Python boundary.
+    """
+
+    def __init__(self, *, available: bool = True, ok: bool = True,
+                 error_class: str | None = None, message: str | None = None):
+        self._available = available
+        self._ok = ok
+        self._error_class = error_class
+        self._message = message
+        self.fingerprint = "fp_fake_1234"
+
+    def health(self) -> EmbeddingHealth:
+        return EmbeddingHealth(
+            available=self._available, provider="ollama", model="nomic-embed-text:latest",
+            dimension=3, fingerprint=self.fingerprint, schema_version=1,
+            fallback_active=False, message="ready" if self._available else "down",
+            error_class=None if self._available else (self._error_class or "provider_unreachable"),
+        )
+
+    def embed_text(self, text: str) -> EmbeddingResult:
+        if not self._ok:
+            return EmbeddingResult(
+                status="error", error_class=self._error_class or "embedding_error",
+                message=self._message or "boom", provider="ollama",
+                model="nomic-embed-text:latest", fingerprint=self.fingerprint,
+            )
+        return EmbeddingResult(
+            status="ok", vector=[0.1, 0.2, 0.3], provider="ollama",
+            model="nomic-embed-text:latest", dimension=3, fingerprint=self.fingerprint,
+        )
 
 
 def _ready_vault(collection: _FakeCollection) -> KnowledgeVault:
-    v = KnowledgeVault()
+    v = KnowledgeVault(embedder=_FakeRuntime())
     v._backend_ready = True
     v._collection = collection
-    v._model = _FakeModel()
+    v._active_fingerprint = "fp_fake_1234"
     return v
 
 
@@ -175,12 +206,13 @@ def test_vector_store_read_error_is_structured():
 
 
 def test_embedding_error_is_structured_no_stack_trace():
-    class _BrokenModel:
-        def encode(self, texts):
-            raise RuntimeError("CUDA kernel torch.Tensor internal boom")
-
     v = _ready_vault(_FakeCollection(count=1, docs=["d"], metas=[{"source": "s"}]))
-    v._model = _BrokenModel()
+    # A per-call embedding failure surfaced by the runtime → structured "error",
+    # never a raw torch/CUDA stack trace at the boundary.
+    v._embedder = _FakeRuntime(
+        ok=False, error_class="embedding_error",
+        message="CUDA kernel internal boom",
+    )
     result = v.query("q")
     assert result["status"] == "error"
     assert result["error_class"] == "embedding_error"

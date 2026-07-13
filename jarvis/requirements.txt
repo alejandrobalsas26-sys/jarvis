@@ -55,7 +55,11 @@ mcp>=1.0.0                # Cliente/servidor MCP — integración Packet Tracer 
 
 # ── Memoria Vectorial (RAG local) ──────────────────────────────
 chromadb>=0.5.0           # Vector store persistente (guarda en .chroma_db/)
-sentence-transformers>=3.0.0  # Embeddings locales — modelo all-MiniLM-L6-v2
+# V69 M52: los embeddings los produce el runtime unificado (core.embedding_runtime),
+# cuyo proveedor PRIMARIO es el rol EMBEDDING configurado (nomic-embed-text via
+# Ollama). sentence-transformers pasa a ser un FALLBACK OPCIONAL, activado solo si
+# el operador pone JARVIS_EMBEDDING_FALLBACK=true (embedding_fallback_enabled).
+sentence-transformers>=3.0.0  # (opcional) fallback all-MiniLM-L6-v2, solo si se habilita
 
 # ── AURA UI (WebSocket telemetry pipeline) ─────────────────────
 fastapi>=0.111.0          # ASGI framework + WebSocket support
