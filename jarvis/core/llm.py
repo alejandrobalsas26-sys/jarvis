@@ -33,6 +33,12 @@ from core.model_router import (
     ModelRole,
 )
 from core.verification import should_verify, verify_answer
+# V69 M54.3/M54.4/M54.8 — deterministic pre-tool + verification policy, text-loop
+# language continuity, and host-clock grounding. Extends the existing per-turn
+# decision without forking routing or the security gate.
+from core.turn_policy import classify_request
+from core.language_context import LanguageContext
+from core import host_time as _host_time
 from core.memory_router import (
     should_use_memory,
     should_write_memory,
@@ -924,6 +930,12 @@ class LLM:
         self.history: list[dict] = []
         self._session_prefix: str = ""
 
+        # V69 M54.4 — ONE session-scoped conversation-language state shared by the
+        # text and voice paths. Text turns feed it deterministically (no LLM);
+        # chat_stream injects its directive so replies follow the user's language
+        # across tool failures, verifier timeouts and model switches.
+        self.language_context = LanguageContext()
+
         # V67 M27 — resolve the VISION-role model ONCE through the unified role
         # resolver so the operator's JARVIS_MODEL_VISION (gemma3:4b) is honored on
         # the vision paths. Before V67 main.py's voice handlers read
@@ -1435,6 +1447,7 @@ class LLM:
         tool_used: bool = False,
         tool_names: list[str] | None = None,
         tool_failed: bool = False,
+        turn_policy=None,
     ) -> str:
         """Staged post-stream verification (Phase 3). Returns the answer to store/show.
 
@@ -1450,6 +1463,19 @@ class LLM:
         The verifier only audits text; it NEVER executes tools.
         """
         security_sensitive = is_security_sensitive_turn(user_message, tool_names)
+        # V69 M54.6 — verification policy matrix. A turn the deterministic policy
+        # classified as not-warranting a model verifier (greeting, basic education,
+        # time) skips the LLM verifier ENTIRELY when no tool ran — this is what keeps
+        # a simple educational answer from paying a cold verifier swap (symptom #5,
+        # criteria #14). If any tool actually executed, the existing high-risk gate
+        # below still applies, so tool-grounded answers are never silently trusted.
+        if (turn_policy is not None and not tool_used
+                and not turn_policy.wants_llm_verifier()):
+            logger.debug(
+                f"VERIFIER: skipped by policy ({turn_policy.verify_policy.value}) "
+                "— no tool ran"
+            )
+            return draft_answer
         requires = bool(model_decision is not None
                         and getattr(model_decision, "requires_verification", False))
         high_risk = (
@@ -1667,6 +1693,29 @@ class LLM:
 
         self.history.append({"role": "user", "content": user_message})
 
+        # V69 M54.3 — deterministic pre-tool + verification policy, computed once.
+        # Decides whether this turn may touch the private Knowledge Vault and how
+        # much verification its answer warrants. Fixes the POO bug: general
+        # educational knowledge is answered directly and never routed to the vault.
+        _turn_policy = classify_request(
+            user_message,
+            authority=getattr(self.tool_executor, "authority", None),
+        )
+        # V69 M54.4 — update the shared conversation language from THIS user turn
+        # (deterministic; no LLM). Ambiguous tokens ("POO") inherit the active
+        # language; explicit "answer in English" overrides and is sticky.
+        try:
+            self.language_context.observe_text(user_message)
+        except Exception:
+            pass
+        logger.debug(
+            "TURN_POLICY: class={} reason={} verify={} vault={} lang={}".format(
+                _turn_policy.request_class.value, _turn_policy.reason_code.value,
+                _turn_policy.verify_policy.value, _turn_policy.knowledge_vault_allowed,
+                self.language_context.active_language(),
+            )
+        )
+
         # V61 Phase 1 / V63 M1 — unified per-turn decision, computed once (the
         # user message is constant across the agentic tool loop). The composed
         # TaskDecision layers semantic domain (M2) + response surface (M6) +
@@ -1772,6 +1821,17 @@ class LLM:
             # V68.1 M47 — authorization gate directive (first-party, authoritative).
             if _cyber_directive:
                 _sys_content = _sys_content + "\n\n" + _cyber_directive
+            # V69 M54.8 — host-clock grounding (authoritative, system-sourced) so the
+            # model never claims it lacks real-time access. Cheap; injected every turn.
+            try:
+                _sys_content = _sys_content + "\n\n" + _host_time.host_time_prompt_line()
+            except Exception:
+                pass
+            # V69 M54.4 — enforce the active conversation language in-band.
+            try:
+                _sys_content = _sys_content + "\n\n" + self.language_context.directive()
+            except Exception:
+                pass
             messages_for_api = [
                 {"role": "system", "content": _sys_content},
                 *self.history,
@@ -1793,10 +1853,15 @@ class LLM:
                 f"(role={decision.role.value}, score={decision.complexity:.2f}, "
                 f"ctx={_ctx} adaptive)"
             )
+            # V69 M54.3 — offer only the tool subset this turn's policy permits. The
+            # private Knowledge Vault family is withheld for general knowledge so a
+            # question like "POO" can never be routed to query_knowledge; every other
+            # tool (and its own downstream gate) is unchanged.
+            _turn_tools = _turn_policy.filter_tools(TOOLS)
             stream = await self.client.chat.completions.create(
                 model=_routed_model,
                 messages=messages_for_api,
-                tools=TOOLS,
+                tools=_turn_tools,
                 stream=True,
                 extra_body={"options": {"num_ctx": _ctx}},
             )
@@ -1929,6 +1994,7 @@ class LLM:
                             tool_used=_turn_tool_used,
                             tool_names=_turn_tool_names or None,
                             tool_failed=bool(_turn_tool_failures),
+                            turn_policy=_turn_policy,
                         )
                     except Exception as _ver_e:
                         logger.warning(f"VERIFIER: skipped due to error: {_ver_e}")
