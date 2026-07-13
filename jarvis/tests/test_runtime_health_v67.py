@@ -104,7 +104,7 @@ class TestShapeAndLive:
     def test_snapshot_has_all_subsystems(self):
         names = {s.name for s in _snap().subsystems}
         assert names == {"collectors", "resource", "tasks", "inference",
-                         "model_runtime", "spine"}
+                         "model_runtime", "spine", "verifier"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

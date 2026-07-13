@@ -933,15 +933,27 @@ class ToolExecutor:
 
             return result
         except Exception as e:
+            # V68.1 M46: never surface a raw exception / dependency stack trace to
+            # the model. Log the real error; return a typed, sanitized envelope so
+            # a tool fault cannot contaminate the conversation into an unrelated task.
+            from core.tool_result import classify_exception, make_failure
+
             logger.error(f"Error en tool '{tool_name}': {e}")
+            error_class, safe_message = classify_exception(e)
             self._audit.log_action(tool_name, reasoning, auth_audit, "error", str(e)[:200])
             await _aura_broadcast({
                 "type": "error",
                 "tool": tool_name,
-                "message": str(e)[:200],
+                "message": safe_message[:200],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
-            return {"error": str(e)}
+            return make_failure(
+                tool=tool_name,
+                error_class=error_class,
+                safe_message=safe_message,
+                retryable=(error_class == "timeout"),
+                fallback_allowed=True,
+            )
 
     async def run_capability(self, name: str, params: dict, reasoning: str = "") -> dict:
         """V63 — execute a typed security capability (core.capabilities) through
@@ -1177,11 +1189,18 @@ class ToolExecutor:
     # ── Tiempo / Clima ────────────────────────────────────────────────────────
 
     def _tool_get_datetime(self) -> dict:
-        now = datetime.now()
+        # V68.1 M48 — time is read directly from the host clock (never fabricated
+        # by the model). astimezone() attaches the real local tz offset so the
+        # answer is unambiguously system-sourced.
+        now = datetime.now().astimezone()
         return {
             "date": now.strftime("%A, %d de %B de %Y"),
             "time": now.strftime("%H:%M:%S"),
             "weekday": now.strftime("%A"),
+            "timezone": now.tzname() or "",
+            "utc_offset": now.strftime("%z"),
+            "iso": now.isoformat(),
+            "source": "host_system_clock",
         }
 
     def _tool_get_weather(self, city: str) -> dict:
@@ -2158,9 +2177,45 @@ class ToolExecutor:
         return self._get_vault().ingest_docs(folder_path)
 
     def _tool_query_knowledge(self, query: str) -> dict:
-        """Retrieve the top-3 most relevant chunks from the Knowledge Vault."""
-        text = self._get_vault().query_knowledge(query)
-        return {"result": text}
+        """Retrieve the top-N most relevant chunks from the Knowledge Vault.
+
+        V68.1 M45/M46: routes through the structured query() boundary and maps
+        the result to either a clean success payload or a typed ToolFailure
+        envelope. Vector internals (torch/Chroma/SentenceTransformer) never
+        reach this layer or the LLM.
+        """
+        from core.tool_result import make_failure
+
+        result = self._get_vault().query(query)
+        status = result.get("status")
+
+        if status == "ok":
+            fragments = result["fragments"]
+            rendered = "\n\n---\n\n".join(
+                f"[Source: {f['source']} | Chunk {f['chunk']}]\n{f['text']}"
+                for f in fragments
+            )
+            return {
+                "status": "ok",
+                "result": rendered,
+                "sources": [f["source"] for f in fragments],
+                "fragment_count": len(fragments),
+            }
+
+        if status == "empty":
+            # An empty vault is an honest, useful, NON-error result.
+            return {"status": "ok", "result": result["message"], "sources": [], "fragment_count": 0}
+
+        # unavailable / error → typed failure envelope (non-retryable: the fault
+        # is a dependency/config/embedding condition, not a transient blip).
+        error_class = result.get("error_class", "knowledge_error")
+        return make_failure(
+            tool="query_knowledge",
+            error_class=error_class,
+            safe_message=result.get("message", "Knowledge Vault is unavailable."),
+            retryable=False,
+            fallback_allowed=True,
+        )
 
     # ── System Health Monitor ─────────────────────────────────────────────────
 

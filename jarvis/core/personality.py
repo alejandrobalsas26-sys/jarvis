@@ -19,16 +19,19 @@ _OPERATOR_NAME   = "Alejandro"
 # ── Boot greetings ────────────────────────────────────────────────────────────
 
 _GREETINGS = {
+    # V68.1 M48 — a wake greeting must not assert an unverified status. The
+    # authoritative "nominal / degraded" claim is made later by the truthful
+    # boot narration (core.boot_state) once the self-test has actually run.
     "morning": [
-        "Good morning. All systems nominal.",
+        "Good morning. JARVIS online.",
         f"Good morning, {_OPERATOR_NAME}. JARVIS online.",
         "Good morning. The lab held through the night.",
         f"Morning, {_OPERATOR_NAME}. Ready when you are.",
     ],
     "afternoon": [
         "Good afternoon. Standing by.",
-        f"Afternoon, {_OPERATOR_NAME}. All clear.",
-        "Good afternoon. Systems nominal.",
+        f"Afternoon, {_OPERATOR_NAME}. Ready when you are.",
+        "Good afternoon. JARVIS online.",
     ],
     "evening": [
         "Good evening. JARVIS at your service.",

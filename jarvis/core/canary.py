@@ -7,6 +7,7 @@ Port selection avoids kernel-locked Windows services:
 """
 
 import asyncio
+import os
 import socket
 
 from loguru import logger
@@ -21,13 +22,38 @@ _CANARY_PORTS: dict[int, str] = {
     1433: "MSSQL-DECOY",
 }
 
+# V68.1 M50 — deception services default to LOCALHOST ONLY. Binding a honeypot
+# matrix on 0.0.0.0 silently exposes decoy services to the whole home/public
+# network. External exposure now requires an EXPLICIT operator opt-in and is
+# logged with the real, proven bind address. Secure default, not a denylist.
+_EXPOSE_ENV = "JARVIS_CANARY_EXPOSE"       # "1"/"true" → allow non-localhost bind
+_BIND_ENV = "JARVIS_CANARY_BIND"           # explicit bind address when exposing
+_DEFAULT_LOCAL_HOST = "127.0.0.1"
 
-def _port_available(port: int) -> bool:
-    """Return True if the port is not already bound or locked on this host."""
+
+def _canary_bind_host() -> str:
+    """Resolve the canary bind address. Localhost unless the operator explicitly
+    enables authorized lab exposure. Any exposure is deliberate and auditable."""
+    expose = os.environ.get(_EXPOSE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    if not expose:
+        return _DEFAULT_LOCAL_HOST
+    # Explicit exposure: honor an operator-specified bind address, else all-ifaces.
+    host = os.environ.get(_BIND_ENV, "").strip() or "0.0.0.0"
+    logger.warning(
+        f"CANARY: authorized lab exposure ENABLED via {_EXPOSE_ENV} — binding {host} "
+        "(decoy services reachable off-host). Ensure this is an authorized lab network."
+    )
+    return host
+
+
+def _port_available(port: int, host: str | None = None) -> bool:
+    """Return True if *port* is not already bound or locked on *host*.
+    Probes the SAME address the listener will use so collision detection is real."""
+    host = host or _canary_bind_host()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.bind(("0.0.0.0", port))
+            s.bind((host, port))
             return True
         except OSError:
             return False
@@ -132,10 +158,16 @@ async def start_canaries(
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "canary")
 
     servers = []
+    bind_host = _canary_bind_host()
+    logger.info(
+        f"CANARY: bind scope = {bind_host} "
+        f"({'localhost-only (secure default)' if bind_host == _DEFAULT_LOCAL_HOST else 'EXPOSED — authorized lab'})"
+    )
 
     for port, service in _CANARY_PORTS.items():
-        if not _port_available(port):
-            logger.info(f"CANARY: port {port} ({service}) unavailable — skipped")
+        if not _port_available(port, bind_host):
+            logger.info(f"CANARY: port {port} ({service}) unavailable/in use on "
+                        f"{bind_host} — skipped (collision)")
             continue
         try:
             # CRITICAL CLOSURE FIX: freeze port + refs into lambda via default keyword args
@@ -144,13 +176,20 @@ async def start_canaries(
                        ce=cognitive_engine: (
                     canary_handler(r, w, p, broadcast_fn, te, lc, ce)
                 ),
-                "0.0.0.0",
+                bind_host,
                 port,
             )
             servers.append(server)
-            logger.info(f"CANARY: listening on :{port} ({service})")
+            # Log the REAL, proven bind address from the socket — never assume.
+            try:
+                real = server.sockets[0].getsockname()
+                real_str = f"{real[0]}:{real[1]}"
+            except Exception:
+                real_str = f"{bind_host}:{port}"
+            logger.info(f"CANARY: listening on {real_str} ({service})")
         except Exception as exc:
-            logger.warning(f"CANARY: failed to bind port {port} ({service}) — {exc}")
+            logger.warning(f"CANARY: failed to bind port {port} ({service}) on "
+                           f"{bind_host} — {exc}")
 
     if not servers:
         logger.warning("CANARY: no ports could be bound — honeypot matrix offline")

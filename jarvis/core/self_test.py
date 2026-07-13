@@ -31,6 +31,55 @@ def _configured_role_model(role_name: str, default: str) -> str:
         return default
 
 
+# V68.1 M48 — a real run had the dependency Guardian find both Ollama models
+# while self-test reported "Ollama LLM Server FAILED". Root cause: divergent
+# timeout policy. Guardian probes /api/tags with a 5s httpx timeout; self-test
+# used a 3s aiohttp timeout, which on this CPU-bound host times out whenever
+# Ollama is mid model-load (OLLAMA_MAX_LOADED_MODELS=1). Both now use the SAME
+# normalized host AND a compatible, generous timeout with one retry, so they
+# agree. Probe once per self-test and share the result across ollama+vision.
+_OLLAMA_PROBE_TIMEOUT_S = 8.0
+_OLLAMA_PROBE_RETRIES = 1
+_ollama_probe_cache: "tuple[bool, list[str]] | None" = None
+
+
+async def _probe_ollama_tags() -> tuple[bool, list[str]]:
+    """Return (reachable, model_names). Tolerant of transient model-load latency.
+    Cached for the duration of one self-test run so ollama+vision agree."""
+    global _ollama_probe_cache
+    if _ollama_probe_cache is not None:
+        return _ollama_probe_cache
+    import aiohttp
+    base = _ollama_base()
+    last_exc: Exception | None = None
+    for attempt in range(_OLLAMA_PROBE_RETRIES + 1):
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(
+                    f"{base}/api/tags",
+                    timeout=aiohttp.ClientTimeout(total=_OLLAMA_PROBE_TIMEOUT_S),
+                ) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        models = [m.get("name", "") for m in data.get("models", [])]
+                        _ollama_probe_cache = (True, models)
+                        return _ollama_probe_cache
+        except Exception as e:  # noqa: BLE001 — retry transient load, then report
+            last_exc = e
+        if attempt < _OLLAMA_PROBE_RETRIES:
+            await asyncio.sleep(1.0)
+    if last_exc is not None:
+        logger.debug(f"SELF_TEST: Ollama probe failed after retries: {last_exc}")
+    _ollama_probe_cache = (False, [])
+    return _ollama_probe_cache
+
+
+def _reset_ollama_probe_cache() -> None:
+    """Clear the per-run probe cache (called at the start of each self-test)."""
+    global _ollama_probe_cache
+    _ollama_probe_cache = None
+
+
 def classify_result(passed: bool, category: str, detail: str) -> str:
     """Map a self-test outcome to the operational taxonomy:
 
@@ -96,6 +145,7 @@ async def run_self_test(broadcast_fn=None) -> dict:
     Returns: {passed, failed, optional_missing, duration_s, results}
     """
     logger.info("SELF_TEST: validating all JARVIS subsystems…")
+    _reset_ollama_probe_cache()  # V68.1 M48 — fresh Ollama probe per run
     start = time.monotonic()
 
     results = []
@@ -166,32 +216,25 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
     """Run a single subsystem test. Returns (passed, detail)."""
     try:
         if test_id == "ollama":
-            import aiohttp
-            async with aiohttp.ClientSession() as s:
-                async with s.get(
-                    f"{_ollama_base()}/api/tags",
-                    timeout=aiohttp.ClientTimeout(total=3),
-                ) as r:
-                    if r.status == 200:
-                        data   = await r.json()
-                        models = [m.get("name","") for m in data.get("models", [])]
-                        # V66.1: verify the CONFIGURED FAST/DEEP role models are
-                        # pulled — not just that some models exist.
-                        fast = _configured_role_model("fast", "qwen3:8b")
-                        deep = _configured_role_model("deep", "qwen3:14b")
-                        try:
-                            from core.model_router import _model_installed
-                            fast_ok = _model_installed(fast, models)
-                            deep_ok = _model_installed(deep, models)
-                        except Exception:
-                            fast_ok = any(fast.split(":")[0] in m for m in models)
-                            deep_ok = any(deep.split(":")[0] in m for m in models)
-                        miss = [m for m, ok in ((fast, fast_ok), (deep, deep_ok)) if not ok]
-                        if miss:
-                            return False, (f"{len(models)} models; MISSING role model(s): "
-                                           f"{', '.join(miss)}")
-                        return True, f"{len(models)} models; fast={fast} deep={deep}"
-            return False, "Ollama not responding"
+            reachable, models = await _probe_ollama_tags()
+            if not reachable:
+                return False, "Ollama not responding"
+            # V66.1: verify the CONFIGURED FAST/DEEP role models are
+            # pulled — not just that some models exist.
+            fast = _configured_role_model("fast", "qwen3:8b")
+            deep = _configured_role_model("deep", "qwen3:14b")
+            try:
+                from core.model_router import _model_installed
+                fast_ok = _model_installed(fast, models)
+                deep_ok = _model_installed(deep, models)
+            except Exception:
+                fast_ok = any(fast.split(":")[0] in m for m in models)
+                deep_ok = any(deep.split(":")[0] in m for m in models)
+            miss = [m for m, ok in ((fast, fast_ok), (deep, deep_ok)) if not ok]
+            if miss:
+                return False, (f"{len(models)} models; MISSING role model(s): "
+                               f"{', '.join(miss)}")
+            return True, f"{len(models)} models; fast={fast} deep={deep}"
 
         elif test_id == "chromadb":
             try:
@@ -280,26 +323,20 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
         elif test_id == "vision":
             # V66.1: probe the CONFIGURED VISION-role model (e.g. gemma3:4b),
             # NOT a hardcoded legacy moondream. If VISION == gemma3:4b, this
-            # tests gemma3:4b.
-            import aiohttp
+            # tests gemma3:4b. Shares the same tolerant probe as the ollama test
+            # (V68.1 M48) so the two never disagree about Ollama reachability.
             vision_model = _configured_role_model("vision", "gemma3:4b")
-            async with aiohttp.ClientSession() as s:
-                async with s.get(
-                    f"{_ollama_base()}/api/tags",
-                    timeout=aiohttp.ClientTimeout(total=3),
-                ) as r:
-                    if r.status == 200:
-                        data   = await r.json()
-                        models = [m.get("name","") for m in data.get("models", [])]
-                        try:
-                            from core.model_router import _model_installed
-                            present = _model_installed(vision_model, models)
-                        except Exception:
-                            present = any(vision_model.split(":")[0] in m for m in models)
-                        if present:
-                            return True, f"{vision_model} loaded"
-                        return False, f"{vision_model} not pulled (run: ollama pull {vision_model})"
-            return False, "Ollama unavailable"
+            reachable, models = await _probe_ollama_tags()
+            if not reachable:
+                return False, "Ollama unavailable"
+            try:
+                from core.model_router import _model_installed
+                present = _model_installed(vision_model, models)
+            except Exception:
+                present = any(vision_model.split(":")[0] in m for m in models)
+            if present:
+                return True, f"{vision_model} loaded"
+            return False, f"{vision_model} not pulled (run: ollama pull {vision_model})"
 
         elif test_id == "ocr":
             try:

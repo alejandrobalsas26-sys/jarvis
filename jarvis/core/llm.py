@@ -1434,6 +1434,7 @@ class LLM:
         model_decision: ModelDecision | None,
         tool_used: bool = False,
         tool_names: list[str] | None = None,
+        tool_failed: bool = False,
     ) -> str:
         """Staged post-stream verification (Phase 3). Returns the answer to store/show.
 
@@ -1461,7 +1462,48 @@ class LLM:
         if not high_risk or not (draft_answer or "").strip():
             return draft_answer
 
-        result = await verify_answer(self.client, user_message, draft_answer, model_decision)
+        # V68.1 M49 — deterministic model-free checks FIRST. A failed-tool /
+        # unauthorized fallback is audited here (no expensive verifier pass), and
+        # a security-sensitive turn with a failed tool is flagged promptly instead
+        # of blocking on a multi-minute cold model swap.
+        from core.verification import (
+            deterministic_precheck, resource_aware_timeout,
+        )
+        pre = deterministic_precheck(
+            user_message, draft_answer,
+            tool_failed=tool_failed, security_sensitive=security_sensitive,
+        )
+        if pre is not None:
+            result = pre
+        else:
+            # Bounded, CPU-aware timeout: warm when the draft already used the
+            # VERIFIER model (no model swap under OLLAMA_MAX_LOADED_MODELS=1).
+            warm = False
+            on_battery = False
+            try:
+                from core.model_router import (
+                    resolve_inference_model, model_for_role, ModelRole as _MR,
+                )
+                draft_model = resolve_inference_model(model_decision) if model_decision else ""
+                warm = bool(draft_model) and draft_model == model_for_role(_MR.VERIFIER)
+            except Exception:
+                warm = False
+            try:
+                from core.hardware_profile import get_cached_profile
+                _hw = get_cached_profile()
+                on_battery = bool(getattr(_hw, "on_battery", False)) if _hw else False
+            except Exception:
+                on_battery = False
+            _timeout = resource_aware_timeout(warm=warm, on_battery=on_battery)
+            logger.debug(
+                f"VERIFIER: bounded pass (warm={warm}, on_battery={on_battery}, "
+                f"timeout={_timeout:.0f}s)"
+            )
+            result = await verify_answer(
+                self.client, user_message, draft_answer, model_decision,
+                timeout=_timeout,
+                cancel_event=_cancel_bus.llm_stream_cancel,
+            )
 
         from datetime import datetime, timezone
         try:
@@ -1668,9 +1710,38 @@ class LLM:
         except Exception:
             pass
 
+        # V68.1 M47 — authorization-aware cyber intent gate, computed ONCE per
+        # turn (the user message is constant across the tool loop). For an
+        # offensive/operational request against a real-world target with no
+        # established authorization/scope, this hard-blocks tool execution and
+        # injects a first-party directive requiring a refusal + safe alternatives.
+        # It never widens authority: effectful actions keep their existing gates.
+        try:
+            from core.cyber_intent import classify_cyber_intent
+            _cyber_intent = classify_cyber_intent(
+                user_message, getattr(self.tool_executor, "authority", None)
+            )
+        except Exception as _ci_e:
+            logger.warning(f"CYBER_INTENT: classification skipped: {_ci_e}")
+            _cyber_intent = None
+        _cyber_directive = _cyber_intent.directive() if _cyber_intent else ""
+        _cyber_block_tools = bool(_cyber_intent and _cyber_intent.block_tools)
+        if _cyber_intent and _cyber_intent.offensive_operational:
+            logger.info(
+                f"CYBER_INTENT: category={_cyber_intent.category} "
+                f"block_tools={_cyber_intent.block_tools} "
+                f"authorized={_cyber_intent.authorization_established}"
+            )
+
         # Track dangerous-tool usage across the agentic loop (drives verification).
         _turn_tool_used = False
         _turn_tool_names: list[str] = []
+        # V68.1 M46 — per-turn tool failure ledger. Bounds retries (max one, and
+        # only for explicitly-retryable failures) and keeps a failure scoped to
+        # THIS turn so a tool fault cannot contaminate the conversation into an
+        # unrelated tool family (the Packet Tracer bug).
+        _turn_tool_failures: dict[str, int] = {}
+        _turn_tool_retryable: dict[str, bool] = {}
 
         # V61 Phase 4 — only consult long-term/episodic memory when it helps:
         # explicit recall/project intent (should_use_memory) or a deep/security
@@ -1698,6 +1769,9 @@ class LLM:
             # v34.0 — append live threat-feed enrichment to system prompt
             if _threat_ctx:
                 _sys_content = _sys_content + _threat_ctx
+            # V68.1 M47 — authorization gate directive (first-party, authoritative).
+            if _cyber_directive:
+                _sys_content = _sys_content + "\n\n" + _cyber_directive
             messages_for_api = [
                 {"role": "system", "content": _sys_content},
                 *self.history,
@@ -1854,6 +1928,7 @@ class LLM:
                             user_message, full_text, decision,
                             tool_used=_turn_tool_used,
                             tool_names=_turn_tool_names or None,
+                            tool_failed=bool(_turn_tool_failures),
                         )
                     except Exception as _ver_e:
                         logger.warning(f"VERIFIER: skipped due to error: {_ver_e}")
@@ -1900,11 +1975,52 @@ class LLM:
                     tool_input = {}
                 logger.info(f"Tool: {tool_name}({tool_input})")
 
+                # V68.1 M46 — bounded, deterministic tool-failure recovery. If this
+                # exact tool already failed non-retryably (or hit the one-retry
+                # budget) earlier this turn, do NOT re-run it; short-circuit with a
+                # scoped failure envelope so the loop cannot spin or drift into an
+                # unrelated tool family.
+                from core.tool_result import is_failure, make_failure, recovery_guidance
+
+                _prior_failures = _turn_tool_failures.get(tool_name, 0)
+                # Non-retryable failures allow 1 attempt total (no retry);
+                # retryable failures allow 2 (original + exactly one retry).
+                _max_attempts = 2 if _turn_tool_retryable.get(tool_name) else 1
+                if _cyber_block_tools:
+                    # V68.1 M47 — offensive/operational request with no established
+                    # authorization: refuse ALL tool execution this turn. No scan,
+                    # no exploit search, no operational step. Fail-closed.
+                    logger.warning(
+                        f"CYBER_INTENT: blocked tool '{tool_name}' — authorization/scope "
+                        "not established for offensive request"
+                    )
+                    result = make_failure(
+                        tool=tool_name,
+                        error_class="authorization_required",
+                        safe_message=(
+                            "Authorization/scope is not established for this offensive "
+                            "request. No tool will run. State that authorization is missing "
+                            "and offer safe defensive/lab alternatives."
+                        ),
+                        retryable=False,
+                        fallback_allowed=True,
+                    )
+                elif _prior_failures >= _max_attempts:
+                    result = make_failure(
+                        tool=tool_name,
+                        error_class="retry_budget_exhausted",
+                        safe_message=(
+                            f"`{tool_name}` already failed this turn and will not be "
+                            "retried again. Answer without it or state it is unavailable."
+                        ),
+                        retryable=False,
+                        fallback_allowed=True,
+                    )
                 # Enrutar al MCP si la tool proviene del bridge, sino al executor local.
                 # V61 hardening: MCP tools pass through ToolExecutor.aexecute_mcp() —
                 # the SAME allowlist/traversal-guard/HITL gate as local tools, never a
                 # direct, unaudited call_tool(). See tools/executor.py MCP_TOOL_ALLOWLIST.
-                if tool_name in self._mcp_tool_names and self._mcp_session:
+                elif tool_name in self._mcp_tool_names and self._mcp_session:
                     async def _call_mcp(name: str, args: dict) -> dict:
                         mcp_result = await self._mcp_session.call_tool(name, args)
                         content = (
@@ -1922,6 +2038,21 @@ class LLM:
                     result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
 
                 logger.debug(f"Result: {result}")
+
+                # V68.1 M46 — on failure: record it, and append recovery guidance
+                # that pins the model to THIS tool/topic and forbids switching to an
+                # unrelated tool because of the error.
+                _failure_guidance = ""
+                if is_failure(result):
+                    _turn_tool_failures[tool_name] = _prior_failures + 1
+                    _turn_tool_retryable[tool_name] = bool(result.get("retryable", False))
+                    _failure_guidance = "\n\n" + recovery_guidance(result)
+                    logger.warning(
+                        f"TOOL_RECOVERY: '{tool_name}' failed "
+                        f"(class={result.get('error_class', 'unknown')}, "
+                        f"count={_turn_tool_failures[tool_name]})"
+                    )
+
                 result_str = json.dumps(result, ensure_ascii=False)
                 # v58.0 — redact secrets from tool output before it enters the
                 # prompt history (token-safe, fail-open if ContextManager absent).
@@ -1934,10 +2065,13 @@ class LLM:
                 # web/file/RAG/screen/clipboard sources) and truncate. This is the
                 # prompt-injection boundary: tool output is DATA, never policy.
                 labeled = self._label_tool_result(tool_name, result_str)
+                # V68.1 M46 — recovery guidance is appended OUTSIDE the untrusted
+                # data envelope: it is first-party policy from JARVIS, not tool
+                # data, so it must not be quarantined with the (untrusted) output.
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": labeled,
+                    "content": labeled + _failure_guidance,
                 })
             # Continúa el loop: el LLM responde al resultado de las tools
 
