@@ -11,6 +11,8 @@ import asyncio, time
 from enum import Enum
 from loguru import logger
 
+from core.lifecycle import is_stopping as _lifecycle_stopping
+
 
 class RestartPolicy(Enum):
     ALWAYS  = "always"
@@ -27,13 +29,39 @@ class TaskWatchdog:
 
     def __init__(self):
         self._registry: dict[str, dict] = {}
+        # V69 M54.12 — standard lifecycle contract. Once requested to stop (or the
+        # global lifecycle is STOPPING) the monitor loop stops restarting tasks and
+        # register() refuses new supervision, so no worker is resurrected during
+        # shutdown.
+        self._stopping = False
+
+    def _should_stop(self) -> bool:
+        return self._stopping or _lifecycle_stopping()
+
+    def request_stop(self) -> None:
+        """Idempotent: stop supervising/restarting. Does not itself cancel running
+        tasks — run_graceful_shutdown cancels the asyncio tasks; this just prevents
+        the monitor from creating replacements."""
+        self._stopping = True
+
+    def stop(self) -> None:
+        """Alias kept for the shutdown driver's getattr(watchdog, 'stop')."""
+        self.request_stop()
+
+    def status(self) -> dict:
+        """Lifecycle-contract status accessor (start/request_stop/stop/status)."""
+        return {"stopping": self._should_stop(), "supervised": len(self._registry)}
 
     def register(
         self,
         name: str,
         coro_factory,
         policy: RestartPolicy = RestartPolicy.BACKOFF,
-    ) -> asyncio.Task:
+    ) -> asyncio.Task | None:
+        # Never begin supervising new work once shutdown has started.
+        if self._should_stop():
+            logger.debug(f"WATCHDOG: register('{name}') refused — shutting down")
+            return None
         task = asyncio.create_task(coro_factory(), name=name)
         self._registry[name] = {
             "task":            task,
@@ -49,10 +77,19 @@ class TaskWatchdog:
     async def _monitor_loop(self, broadcast_fn) -> None:
         while True:
             await asyncio.sleep(30)
+            # V69 M54.12 — stop supervising once shutdown begins. No task is
+            # restarted after STOPPING (fixes a scheduler resurrecting mid-shutdown).
+            if self._should_stop():
+                logger.debug("WATCHDOG: monitor loop exiting — shutdown in progress")
+                return
             for name, entry in list(self._registry.items()):
                 task = entry["task"]
                 if not task.done():
                     continue
+                # Re-check inside the loop: a shutdown may have started while we were
+                # inspecting tasks — never spawn a replacement during shutdown.
+                if self._should_stop():
+                    return
 
                 exc     = task.exception() if not task.cancelled() else None
                 policy  = entry["policy"]

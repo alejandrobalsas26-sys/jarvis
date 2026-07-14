@@ -227,6 +227,10 @@ def reset_lifecycle(clock: "callable" = time.monotonic) -> LifecycleManager:
 
 
 # ── Convenience module-level guards (read the current global) ────────────────
+# These resolve `lifecycle` at CALL time, so a module that imports the FUNCTIONS
+# (not the object) always observes the current global — important because
+# reset_lifecycle() rebinds it in tests. Modules that consult lifecycle should
+# import these, never `from core.lifecycle import lifecycle`.
 def is_stopping() -> bool:
     return lifecycle.is_stopping()
 
@@ -241,3 +245,11 @@ def accepts_input() -> bool:
 
 def begin_stopping() -> bool:
     return lifecycle.begin_stopping()
+
+
+def mark_stopped() -> bool:
+    return lifecycle.mark_stopped()
+
+
+def current_state() -> LifecycleState:
+    return lifecycle.state
