@@ -200,6 +200,49 @@ def _verifier_subsystem(verifier: dict | None = None) -> SubsystemHealth:
     )
 
 
+def _interactive_subsystem(turn: dict | None = None, life: dict | None = None,
+                           console: dict | None = None,
+                           tts: dict | None = None) -> SubsystemHealth:
+    """V69 M54 — interactive-runtime observability: end-to-end turn latency (M54.5),
+    lifecycle phase timings (M54.2), console queue health (M54.1) and TTS governor
+    backpressure (M54.9). DORMANT until the first turn; DEGRADED only if the runtime
+    itself has FAILED."""
+    turn = turn if turn is not None else _live_turn()
+    life = life if life is not None else _live_lifecycle()
+    console = console if console is not None else _live_console()
+    tts = tts if tts is not None else {}
+    state = str(life.get("state", "UNKNOWN"))
+    turns = turn.get("count", 0) or 0
+    expired = turn.get("expired", 0) or 0
+    # Status reflects TURN-BUDGET health only — lifecycle state (STOPPING/…) is
+    # informational (a normal transient), never a health failure, so a shutting
+    # -down process is not reported as "unhealthy runtime".
+    if not turns:
+        status = HealthStatus.DORMANT
+    elif expired >= max(1, turns // 2):
+        status = HealthStatus.DEGRADED   # many turns blew their end-to-end budget
+    else:
+        status = HealthStatus.OK
+    metrics = {
+        "turn_avg_total_ms": turn.get("avg_total_ms"),
+        "turn_max_total_ms": turn.get("max_total_ms"),
+        "turn_count": turn.get("count"),
+        "turn_expired": turn.get("expired"),
+        "text_ready_ms": life.get("text_ready_ms"),
+        "core_ready_ms": life.get("core_ready_ms"),
+        "operational_ready_ms": life.get("operational_ready_ms"),
+        "console_dropped": console.get("dropped"),
+        "console_coalesced": console.get("coalesced"),
+        "tts_dropped": tts.get("dropped"),
+        "tts_coalesced": tts.get("coalesced"),
+    }
+    return SubsystemHealth(
+        "interactive", status,
+        f"lifecycle={state}; turns={turn.get('count', 0)}; "
+        f"turn_max={turn.get('max_total_ms', 0)}ms",
+        metrics)
+
+
 def _spine_subsystem(spine: dict | None) -> SubsystemHealth:
     s = spine or {}
     vs = s.get("verification_success_rate")
@@ -244,7 +287,7 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
     subsystems = [
         _collectors_subsystem(fm, tel), _resource_subsystem(res), _tasks_subsystem(ws),
         _inference_subsystem(prof), _model_subsystem(mdl), _spine_subsystem(sp),
-        _verifier_subsystem(),
+        _verifier_subsystem(), _interactive_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}
@@ -281,6 +324,31 @@ def _live_verifier() -> dict:
     try:
         from core.verification import verifier_latency_stats
         return verifier_latency_stats()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_turn() -> dict:
+    try:
+        from core.turn_budget import turn_latency_stats
+        return turn_latency_stats()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_lifecycle() -> dict:
+    try:
+        from core.lifecycle import lifecycle
+        return lifecycle.snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_console() -> dict:
+    try:
+        from core.console import get_console
+        c = get_console()
+        return c.metrics() if c is not None else {}
     except Exception:  # noqa: BLE001
         return {}
 

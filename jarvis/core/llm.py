@@ -14,7 +14,7 @@ import re
 import time as _time
 import uuid
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext as _nullcontext
 from datetime import date
 from pathlib import Path
 from typing import AsyncGenerator
@@ -37,6 +37,7 @@ from core.verification import should_verify, verify_answer
 # language continuity, and host-clock grounding. Extends the existing per-turn
 # decision without forking routing or the security gate.
 from core.turn_policy import classify_request
+from core.turn_budget import TurnBudget, budget_for, record_turn
 from core.language_context import LanguageContext
 from core import host_time as _host_time
 from core.memory_router import (
@@ -1448,6 +1449,7 @@ class LLM:
         tool_names: list[str] | None = None,
         tool_failed: bool = False,
         turn_policy=None,
+        budget=None,
     ) -> str:
         """Staged post-stream verification (Phase 3). Returns the answer to store/show.
 
@@ -1521,15 +1523,32 @@ class LLM:
             except Exception:
                 on_battery = False
             _timeout = resource_aware_timeout(warm=warm, on_battery=on_battery)
+            # V69 M54.5 — the verifier gets only the REMAINING turn budget, never a
+            # fresh full timeout. If too little remains to be worth a (possibly cold)
+            # verifier pass, do NOT start it: surface a concise human-review status
+            # and return control to the user promptly.
+            if budget is not None:
+                if not budget.can_afford_verifier():
+                    logger.warning(
+                        "VERIFIER: skipped — turn budget exhausted "
+                        f"(remaining={budget.remaining_s():.1f}s); returning for human review"
+                    )
+                    return draft_answer + (
+                        "\n\n[VERIFICATION] Not verified within the turn budget — "
+                        "flagged for human review."
+                    )
+                _timeout = budget.verifier_budget_s(_timeout)
             logger.debug(
                 f"VERIFIER: bounded pass (warm={warm}, on_battery={on_battery}, "
                 f"timeout={_timeout:.0f}s)"
             )
-            result = await verify_answer(
-                self.client, user_message, draft_answer, model_decision,
-                timeout=_timeout,
-                cancel_event=_cancel_bus.llm_stream_cancel,
-            )
+            with (budget.phase("verification") if budget is not None
+                  else _nullcontext()):
+                result = await verify_answer(
+                    self.client, user_message, draft_answer, model_decision,
+                    timeout=_timeout,
+                    cancel_event=_cancel_bus.llm_stream_cancel,
+                )
 
         from datetime import datetime, timezone
         try:
@@ -1701,6 +1720,11 @@ class LLM:
             user_message,
             authority=getattr(self.tool_executor, "authority", None),
         )
+        # V69 M54.5 — one real end-to-end deadline for the whole turn (routing +
+        # queue wait + model load + generation + tool + verification), sized by the
+        # turn's risk. The verifier later receives only the REMAINING budget, so a
+        # turn can never block for minutes on a fresh full verifier timeout.
+        _budget = TurnBudget(total_s=budget_for(_turn_policy))
         # V69 M54.4 — update the shared conversation language from THIS user turn
         # (deterministic; no LLM). Ambiguous tokens ("POO") inherit the active
         # language; explicit "answer in English" overrides and is sticky.
@@ -1995,6 +2019,7 @@ class LLM:
                             tool_names=_turn_tool_names or None,
                             tool_failed=bool(_turn_tool_failures),
                             turn_policy=_turn_policy,
+                            budget=_budget,
                         )
                     except Exception as _ver_e:
                         logger.warning(f"VERIFIER: skipped due to error: {_ver_e}")
@@ -2024,6 +2049,17 @@ class LLM:
 
                 # V62.0 Phase 5 — response-surface foundation (best-effort).
                 await self._maybe_broadcast_response(final_answer, full_text, decision)
+
+                # V69 M54.5 — record the end-to-end turn latency for runtime health.
+                try:
+                    _snap = _budget.snapshot()
+                    record_turn(_snap)
+                    logger.debug(
+                        f"TURN_BUDGET: total={_snap['total_turn_ms']}ms "
+                        f"budget={_snap['budget_ms']}ms expired={_snap['expired']}"
+                    )
+                except Exception:
+                    pass
 
                 unregister_operation("llm_stream")  # v35.0
                 break
