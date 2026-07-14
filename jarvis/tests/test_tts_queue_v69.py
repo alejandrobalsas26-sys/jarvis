@@ -9,10 +9,42 @@ TTS integration keeps the daemon-worker shutdown contract intact.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from core.tts_queue import TTSGovernor, TTSPriority
 from core.tts import TTS
-from tests.test_tts_shutdown import FakeEngine
+
+
+class _FakeVoice:
+    id = "v0"
+    name = "Fake Voice en-US"
+    languages = [b"en-US"]
+
+
+class FakeEngine:
+    """Minimal pyttsx3-like engine (self-contained so this test collects from any
+    rootdir). runAndWait() is instant."""
+
+    def __init__(self):
+        self._props = {"voices": [_FakeVoice()]}
+        self.said: list[str] = []
+        self.stopped = 0
+        self._lock = threading.Lock()
+
+    def getProperty(self, key):
+        return self._props.get(key)
+
+    def setProperty(self, key, value):
+        self._props[key] = value
+
+    def say(self, text):
+        self.said.append(text)
+
+    def runAndWait(self):
+        pass
+
+    def stop(self):
+        self.stopped += 1
 
 
 class FakeClock:
