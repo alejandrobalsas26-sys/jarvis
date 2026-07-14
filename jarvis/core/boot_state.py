@@ -57,6 +57,14 @@ class BootState:
     failed: int = 0
     degraded: int = 0
     optional_missing: int = 0
+    # V69 M54.7 — semantic-continuity truth folded into readiness. The live run
+    # reported "SEMANTIC MEMORY [DEGRADED] / jarvis_episodic: REINDEX_REQUIRED" yet
+    # still narrated "Episodic memory online" and "All systems nominal". These flags,
+    # derived from core.semantic_migration.semantic_boot_summary(), make the ONE
+    # snapshot tell the truth: a required-reindex degrades memory and blocks nominal.
+    semantic_degraded: bool = False
+    episodic_reindex_required: bool = False
+    knowledge_vault_active: bool = False
 
     # ── Derived truth ────────────────────────────────────────────────────────
 
@@ -70,15 +78,19 @@ class BootState:
         return self.status_of(key) in (OK, ACTIVE)
 
     def all_systems_nominal(self) -> bool:
-        """True ONLY when no subsystem FAILED and none is DEGRADED. An optional
-        integration being dormant does not, by itself, block 'nominal', but a
-        failed or degraded required subsystem always does."""
-        return self.failed == 0 and self.degraded == 0
+        """True ONLY when no subsystem FAILED, none is DEGRADED, and semantic memory
+        is not degraded. An optional integration being dormant does not, by itself,
+        block 'nominal', but a failed/degraded required subsystem — including a
+        required episodic-memory reindex — always does (M54.7)."""
+        return (self.failed == 0 and self.degraded == 0
+                and not self.semantic_degraded)
 
     def health(self) -> str:
         if self.failed:
             return "DEGRADED"
         if self.degraded:
+            return "DEGRADED"
+        if self.semantic_degraded:
             return "DEGRADED"
         return "OK"
 
@@ -104,6 +116,28 @@ class BootState:
             return "Telegram bridge established."
         return "Telegram disabled — credentials not configured."
 
+    def _memory_line(self) -> str:
+        """Episodic-memory narration. A required reindex is reported honestly —
+        never "Episodic memory online" while jarvis_episodic is REINDEX_REQUIRED."""
+        if self.episodic_reindex_required:
+            return ("Semantic memory degraded — episodic memory requires migration "
+                    "(reindex required); legacy collection preserved.")
+        if self.semantic_degraded:
+            return "Semantic memory degraded — embedding runtime unavailable."
+        if self.is_ok("chromadb"):
+            return "Episodic memory online."
+        return "Episodic memory degraded — vector store unavailable."
+
+    def _semantic_line(self) -> str:
+        """Knowledge Vault + semantic-continuity status line."""
+        vault = "Knowledge Vault active." if self.knowledge_vault_active \
+            else "Knowledge Vault idle — no documents indexed."
+        if self.episodic_reindex_required:
+            return vault + " Episodic memory requires migration."
+        if self.semantic_degraded:
+            return vault + " Semantic memory degraded."
+        return vault + " Semantic memory nominal."
+
     def _ready_line(self) -> str:
         if self.all_systems_nominal():
             base = "All systems nominal. JARVIS at your service."
@@ -115,8 +149,19 @@ class BootState:
             bits.append(f"{self.failed} failed")
         if self.degraded:
             bits.append(f"{self.degraded} degraded")
+        if self.semantic_degraded:
+            bits.append("degraded semantic memory")
         if self.optional_missing:
             bits.append(f"{self.optional_missing} optional dormant")
+        # Preferred phrasing when the ONLY problem is semantic memory (the live case).
+        if self.semantic_degraded and not self.failed and not self.degraded:
+            base = ("JARVIS is ready with degraded semantic memory. "
+                    + ("Knowledge Vault is active. " if self.knowledge_vault_active
+                       else "")
+                    + "Episodic memory requires migration.")
+            if self.optional_missing:
+                base += f" {self.optional_missing} optional integration(s) dormant."
+            return base
         return (
             f"JARVIS online with reduced capability — {', '.join(bits)}."
         )
@@ -125,9 +170,8 @@ class BootState:
         """Truthful (phase, message) pairs replacing the old hardcoded script."""
         lines: list[tuple[str, str]] = [
             ("hardware", "Hardware profile loaded."),
-            ("memory",
-             "Episodic memory online." if self.is_ok("chromadb")
-             else "Episodic memory degraded — vector store unavailable."),
+            ("memory", self._memory_line()),
+            ("semantic", self._semantic_line()),
             ("llm",
              "Language models online." if self.is_ok("ollama")
              else "Language model server unavailable — degraded."),
@@ -158,8 +202,41 @@ class BootState:
             "failed": self.failed,
             "degraded": self.degraded,
             "optional_missing": self.optional_missing,
+            "semantic_degraded": self.semantic_degraded,
+            "episodic_reindex_required": self.episodic_reindex_required,
+            "knowledge_vault_active": self.knowledge_vault_active,
             "subsystems": [s.to_dict() for s in self.subsystems],
         }
+
+
+def _derive_semantic(summary: dict | None) -> tuple[bool, bool, bool]:
+    """Fold core.semantic_migration.semantic_boot_summary() into three truthful
+    flags: (semantic_degraded, episodic_reindex_required, knowledge_vault_active).
+
+    Robust to a missing/malformed summary (degrades to all-False, never raises).
+    'episodic' is matched by logical-name substring so jarvis_episodic's
+    REINDEX_REQUIRED/MIGRATING status flips the reindex flag; any non-episodic
+    ACTIVE collection is treated as an active Knowledge Vault.
+    """
+    if not isinstance(summary, dict):
+        return (False, False, False)
+    overall = str(summary.get("overall", "")).upper()
+    semantic_degraded = overall == "DEGRADED"
+    episodic_reindex = False
+    vault_active = False
+    for c in summary.get("collections", []) or []:
+        if not isinstance(c, dict):
+            continue
+        logical = str(c.get("logical_name", "")).lower()
+        status = str(c.get("status", "")).upper()
+        if "episodic" in logical:
+            if status in ("REINDEX_REQUIRED", "MIGRATING", "FAILED"):
+                episodic_reindex = True
+        elif status == "ACTIVE":
+            vault_active = True
+    if episodic_reindex:
+        semantic_degraded = True
+    return (semantic_degraded, episodic_reindex, vault_active)
 
 
 def assemble_boot_state(
@@ -170,10 +247,12 @@ def assemble_boot_state(
     sysmon_active: bool = False,
     telegram_configured: bool = False,
     postgres_available: bool = False,
+    semantic_summary: dict | None = None,
 ) -> BootState:
     """Build the single truthful boot snapshot from the self-test report plus
-    explicit runtime flags. Never probes; purely derives. Robust to a missing or
-    malformed report (degrades to an empty, honest snapshot)."""
+    explicit runtime flags AND the semantic-continuity summary (M54.7). Never
+    probes; purely derives. Robust to a missing or malformed report/summary
+    (degrades to an empty, honest snapshot)."""
     report = self_test_report or {}
     results = report.get("results", []) if isinstance(report, dict) else []
 
@@ -191,6 +270,7 @@ def assemble_boot_state(
     failed = int(report.get("failed", 0) or 0)
     degraded = sum(1 for s in subsystems if s.status == DEGRADED)
     optional_missing = int(report.get("optional_missing", 0) or 0)
+    semantic_degraded, episodic_reindex, vault_active = _derive_semantic(semantic_summary)
 
     return BootState(
         subsystems=tuple(subsystems),
@@ -202,4 +282,7 @@ def assemble_boot_state(
         failed=failed,
         degraded=degraded,
         optional_missing=optional_missing,
+        semantic_degraded=semantic_degraded,
+        episodic_reindex_required=episodic_reindex,
+        knowledge_vault_active=vault_active,
     )

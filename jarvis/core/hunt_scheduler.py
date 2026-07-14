@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
+from core.lifecycle import is_stopping as _lifecycle_stopping
+
 _HUNT_INTERVAL_H = 4
 _HUNT_INTERVAL_S = _HUNT_INTERVAL_H * 3600
 _WARMUP_S        = 1800  # 30-minute warmup before the first sweep
@@ -142,6 +144,14 @@ async def run_single_hunt(
     """Run a single hunt hypothesis and return findings."""
     if hypothesis_index >= len(_HYPOTHESES):
         hypothesis_index = 0
+
+    # V69 M54.12 — never begin a hypothesis once shutdown has started. This is the
+    # exact guard the live run was missing: "HUNT: running H04" appeared after
+    # shutdown had begun.
+    if _lifecycle_stopping():
+        logger.debug("HUNT: skipped — shutdown in progress")
+        return {"hypothesis": "", "id": "", "verdict": "SKIPPED", "findings": [],
+                "confidence": 0, "recommendation": "shutdown in progress"}
 
     hyp = _HYPOTHESES[hypothesis_index]
     logger.info(f"HUNT: running {hyp['id']} — {hyp['name']}")
@@ -297,6 +307,11 @@ async def run_all_hunts(
     })
 
     for i, hyp in enumerate(_HYPOTHESES):
+        # Stop the sweep immediately if shutdown began mid-sweep — no further
+        # hypothesis is started after STOPPING.
+        if _lifecycle_stopping():
+            logger.info("HUNT_SCHEDULER: sweep aborted — shutdown in progress")
+            break
         result = await run_single_hunt(
             i, broadcast_fn, ollama_client, model
         )
@@ -370,6 +385,11 @@ async def start_hunt_scheduler(
     await asyncio.sleep(_WARMUP_S)
 
     while True:
+        # V69 M54.12 — consult the authoritative lifecycle before EACH iteration.
+        # No new sweep is scheduled once STOPPING.
+        if _lifecycle_stopping():
+            logger.info("HUNT_SCHEDULER: stopping — no further sweeps")
+            return
         try:
             if state is not None:
                 from core.ironman_mode import should_run_background_tasks

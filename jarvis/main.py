@@ -56,6 +56,37 @@ logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
 
 _V4X_TASKS = []   # strong refs; asyncio only holds weak refs to tasks
 
+_LOG_FORMAT = "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
+
+
+def _install_console_logging() -> None:
+    """V69 M54.1 — route interactive logs through the single console coordinator so
+    background output can never merge into the active input line. The stderr sink is
+    replaced by the coordinator's sink; the file sink is preserved. Falls back
+    silently (keeps stderr) if the console module is unavailable."""
+    try:
+        from core.console import install_console, console_log_sink
+        install_console()
+        logger.remove()
+        logger.add(console_log_sink, level="INFO", format=_LOG_FORMAT)
+        logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
+    except Exception:
+        pass
+
+
+def _console_emit(text: str, channel=None) -> None:
+    """Post one framed line through the coordinator, or print() if none is
+    installed (tests / headless). channel defaults to ASSISTANT-safe BOOT."""
+    try:
+        from core.console import get_console, ConsoleChannel
+        c = get_console()
+        if c is not None:
+            c.post(text, channel or ConsoleChannel.BOOT)
+            return
+    except Exception:
+        pass
+    print(text)
+
 
 def _is_windows_admin() -> bool:
     """True only when running elevated on Windows. Non-Windows returns False so
@@ -104,10 +135,28 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
+    # V69 M54.1 — stream assistant tokens through the console coordinator's inline
+    # channel so a background log that arrives mid-answer breaks cleanly instead of
+    # smearing into the reply. Falls back to raw print() when no console is installed.
+    try:
+        from core.console import get_console, ConsoleChannel
+        _console = get_console()
+    except Exception:
+        _console = None
+        ConsoleChannel = None
+
+    def _emit_chunk(chunk: str) -> None:
+        if _console is not None:
+            _console.post(chunk, ConsoleChannel.ASSISTANT)
+        else:
+            print(chunk, end="", flush=True)
+
     async def producer() -> None:
         buffer = ""
+        if _console is not None:
+            _console.begin_stream()
         async for chunk in llm.chat_stream(user_input):
-            print(chunk, end="", flush=True)
+            _emit_chunk(chunk)
             buffer += chunk
             sentences, buffer = _split_sentences(buffer)
             for sentence in sentences:
@@ -115,6 +164,8 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         # Volcar el remanente final (puede no tener puntuación al final)
         if buffer.strip():
             await queue.put(buffer.strip())
+        if _console is not None:
+            _console.end_stream()
         await queue.put(None)  # sentinel: indica al consumer que terminó
 
     async def consumer() -> None:
@@ -131,9 +182,15 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
             if spoken:
                 await tts.speak_async(spoken, lang=lang)
 
-    print(f"\n[{name}] ", end="", flush=True)
+    if _console is not None:
+        _console.post(f"\n[{name}] ", ConsoleChannel.ASSISTANT)
+    else:
+        print(f"\n[{name}] ", end="", flush=True)
     await asyncio.gather(producer(), consumer())
-    print()  # newline tras el output del streaming
+    if _console is not None:
+        _console.post("\n", ConsoleChannel.ASSISTANT)
+    else:
+        print()  # newline tras el output del streaming
 
 
 async def _greeting(llm, tts, name: str, user: str) -> None:
@@ -149,18 +206,46 @@ async def _greeting(llm, tts, name: str, user: str) -> None:
 async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
     from core.mode_commands import parse_mode_command, describe_mode
+    from core.lifecycle import lifecycle
+    try:
+        from core.console import get_console
+        _console = get_console()
+    except Exception:
+        _console = None
 
     loop = asyncio.get_running_loop()
-    print("Modo texto activo. Escribe tu mensaje o 'salir' para terminar.\n")
+    _console_emit("Modo texto activo. Escribe tu mensaje o 'salir' para terminar.")
 
+    # V69 M54.2 — the interactive read is gated on the lifecycle: input is only
+    # accepted in the TEXT_READY..OPERATIONAL band, never before boot has reached
+    # TEXT_READY nor after STOPPING begins.
+    _first_interaction = True
     while True:
+        if lifecycle.is_stopping():
+            break
+        # Show the protected prompt through the coordinator (it redraws around logs).
+        if _console is not None:
+            _console.set_prompt("Tú: ")
+        _prompt = "" if _console is not None else "Tú: "
         try:
             # run_in_executor para no bloquear el event loop con input()
-            user_input = await loop.run_in_executor(None, input, "Tú: ")
+            user_input = await loop.run_in_executor(None, input, _prompt)
             user_input = user_input.strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nCerrando...")
+            _console_emit("Cerrando...")
             break
+        finally:
+            if _console is not None:
+                _console.set_prompt(None)
+
+        # V69 M54.9 — the operator is now interacting; drop any pending cinematic
+        # boot/background narration so it doesn't keep speaking over them.
+        if _first_interaction:
+            _first_interaction = False
+            try:
+                tts.cancel_boot_narration()
+            except Exception:
+                pass
 
         if not user_input:
             continue
@@ -656,6 +741,14 @@ async def _main_async() -> None:
     parser.add_argument("--no-aura", action="store_true", help="Disable AURA WebSocket server")
     args = parser.parse_args()
 
+    # V69 M54.1/M54.2 — PHASE 1 (PROCESS STARTED): install the single console
+    # coordinator and route interactive logs through it BEFORE any boot output, so
+    # background logs are serialized and the input line is protected from the very
+    # first log line. The lifecycle starts in STARTING; text input stays gated until
+    # TEXT_READY is marked below.
+    _install_console_logging()
+    from core.lifecycle import lifecycle as _lifecycle
+
     from core.hardware_profile import detect_hardware, set_cached_profile
     from core.dependency_guardian import ensure_all, resolve_models
     from core.shutdown_manager import (
@@ -862,6 +955,12 @@ async def _main_async() -> None:
     )
     llm = LLM(tool_executor=executor)
     tts = TTS()
+
+    # V69 M54.2 — PHASE 2 (TEXT READY): the console coordinator, FAST routing, the
+    # executor and the LLM/TTS are up, so the operator may now type. Noncritical
+    # subsystems keep warming in the background after this point.
+    if _lifecycle.mark_text_ready():
+        logger.info("LIFECYCLE: TEXT_READY — interactive input enabled")
 
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
@@ -1077,6 +1176,11 @@ async def _main_async() -> None:
     for name, info in diag["subsystems"].items():
         if info["status"] != "OK":
             logger.warning(f"  [{info['status']}] {name}: {info['detail'][:100]}")
+
+    # V69 M54.2 — PHASE 3 (CORE READY): model roles validated, memory metadata
+    # restored, ToolExecutor available, boot-state diagnostic complete.
+    if _lifecycle.mark_core_ready():
+        logger.info("LIFECYCLE: CORE_READY — core subsystems validated")
 
     # ── AURA WebSocket server ─────────────────────────────────────────────────
     # Runs as an asyncio task alongside the LLM/STT pipeline in the same event
@@ -1850,6 +1954,19 @@ async def _main_async() -> None:
                     # from it. Guardian, self-test, narration and field readiness all
                     # now describe the SAME reality (no fabricated Moondream/ETW/
                     # Sysmon/Telegram/"all nominal").
+                    # V69 M53/M54.7 — metadata-only semantic-memory restoration
+                    # summary, computed FIRST so it can feed the ONE boot snapshot.
+                    # Never scans records, resumes migrations, or loads the DEEP
+                    # model; degrades honestly if the embedding runtime is down.
+                    _sem = None
+                    try:
+                        from core.semantic_migration import semantic_boot_summary, \
+                            SemanticMigrationController
+                        _sem = semantic_boot_summary()
+                        for _ln in SemanticMigrationController.render_boot_summary(_sem):
+                            logger.info(_ln)
+                    except Exception as e:
+                        logger.debug(f"V69 M53: semantic boot summary error: {e}")
                     boot_state = None
                     try:
                         from core.boot_state import assemble_boot_state
@@ -1874,28 +1991,20 @@ async def _main_async() -> None:
                             sysmon_active=_sysmon_on,
                             telegram_configured=_tg_on,
                             postgres_available=_pg_on,
+                            semantic_summary=_sem,   # M54.7 — fold semantic truth in
                         )
                         logger.info(
                             f"BOOT_STATE: health={boot_state.health()} "
                             f"nominal={boot_state.all_systems_nominal()} "
                             f"failed={boot_state.failed} degraded={boot_state.degraded} "
+                            f"semantic_degraded={boot_state.semantic_degraded} "
+                            f"episodic_reindex={boot_state.episodic_reindex_required} "
                             f"optional_dormant={boot_state.optional_missing} "
                             f"vision={_vis_model} etw={_etw_on} sysmon={_sysmon_on} "
                             f"telegram={_tg_on} postgres={_pg_on}"
                         )
                     except Exception as e:
                         logger.debug(f"V68.1: boot-state assembly error: {e}")
-                    # V69 M53 — metadata-only semantic-memory restoration summary.
-                    # Never scans records, resumes migrations, or loads the DEEP
-                    # model; degrades honestly if the embedding runtime is down.
-                    try:
-                        from core.semantic_migration import semantic_boot_summary, \
-                            SemanticMigrationController
-                        _sem = semantic_boot_summary()
-                        for _ln in SemanticMigrationController.render_boot_summary(_sem):
-                            logger.info(_ln)
-                    except Exception as e:
-                        logger.debug(f"V69 M53: semantic boot summary error: {e}")
                     try:
                         await execute_boot_sequence(_aura_broadcast, tts, boot_state=boot_state)
                     except Exception as e:
@@ -2053,6 +2162,17 @@ async def _main_async() -> None:
         except ImportError:
             logger.warning("AURA: fastapi/uvicorn not installed — UI disabled. pip install fastapi uvicorn[standard]")
 
+    # V69 M54.2 — PHASE 4 (OPERATIONAL): collectors, hunts, feeds, Whisper, optional
+    # integrations, AURA and background monitors are registered/warming. Boot-phase
+    # latencies (process/text/core/operational ready ms) are now available through
+    # runtime health.
+    if _lifecycle.mark_operational():
+        _pt = _lifecycle.phase_timings_ms()
+        logger.info(
+            "LIFECYCLE: OPERATIONAL — text_ready={}ms core_ready={}ms operational={}ms".format(
+                _pt.get("TEXT_READY"), _pt.get("CORE_READY"), _pt.get("OPERATIONAL"),
+            )
+        )
     logger.info("JARVIS listo.")
 
     try:
@@ -2104,6 +2224,14 @@ async def _main_async() -> None:
                     aura_task.cancel()
         except (RuntimeError, asyncio.CancelledError, Exception):
             pass  # MCP/anyio cancel scope error on shutdown is cosmetic
+
+        # V69 M54.1 — stop the single console renderer LAST (bounded flush, no orphan
+        # daemon thread). After this nothing writes to the interactive terminal.
+        try:
+            from core.console import reset_console
+            reset_console()
+        except Exception:
+            pass
 
         _hard_kill_timer.cancel()
 
