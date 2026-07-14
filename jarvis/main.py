@@ -1850,6 +1850,19 @@ async def _main_async() -> None:
                     # from it. Guardian, self-test, narration and field readiness all
                     # now describe the SAME reality (no fabricated Moondream/ETW/
                     # Sysmon/Telegram/"all nominal").
+                    # V69 M53/M54.7 — metadata-only semantic-memory restoration
+                    # summary, computed FIRST so it can feed the ONE boot snapshot.
+                    # Never scans records, resumes migrations, or loads the DEEP
+                    # model; degrades honestly if the embedding runtime is down.
+                    _sem = None
+                    try:
+                        from core.semantic_migration import semantic_boot_summary, \
+                            SemanticMigrationController
+                        _sem = semantic_boot_summary()
+                        for _ln in SemanticMigrationController.render_boot_summary(_sem):
+                            logger.info(_ln)
+                    except Exception as e:
+                        logger.debug(f"V69 M53: semantic boot summary error: {e}")
                     boot_state = None
                     try:
                         from core.boot_state import assemble_boot_state
@@ -1874,28 +1887,20 @@ async def _main_async() -> None:
                             sysmon_active=_sysmon_on,
                             telegram_configured=_tg_on,
                             postgres_available=_pg_on,
+                            semantic_summary=_sem,   # M54.7 — fold semantic truth in
                         )
                         logger.info(
                             f"BOOT_STATE: health={boot_state.health()} "
                             f"nominal={boot_state.all_systems_nominal()} "
                             f"failed={boot_state.failed} degraded={boot_state.degraded} "
+                            f"semantic_degraded={boot_state.semantic_degraded} "
+                            f"episodic_reindex={boot_state.episodic_reindex_required} "
                             f"optional_dormant={boot_state.optional_missing} "
                             f"vision={_vis_model} etw={_etw_on} sysmon={_sysmon_on} "
                             f"telegram={_tg_on} postgres={_pg_on}"
                         )
                     except Exception as e:
                         logger.debug(f"V68.1: boot-state assembly error: {e}")
-                    # V69 M53 — metadata-only semantic-memory restoration summary.
-                    # Never scans records, resumes migrations, or loads the DEEP
-                    # model; degrades honestly if the embedding runtime is down.
-                    try:
-                        from core.semantic_migration import semantic_boot_summary, \
-                            SemanticMigrationController
-                        _sem = semantic_boot_summary()
-                        for _ln in SemanticMigrationController.render_boot_summary(_sem):
-                            logger.info(_ln)
-                    except Exception as e:
-                        logger.debug(f"V69 M53: semantic boot summary error: {e}")
                     try:
                         await execute_boot_sequence(_aura_broadcast, tts, boot_state=boot_state)
                     except Exception as e:
