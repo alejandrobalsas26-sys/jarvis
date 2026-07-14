@@ -118,7 +118,7 @@ def test_stop_sync_idempotent_and_closes():
     assert tts._closed is True
     # speak_async after close is a no-op (nothing enqueued).
     asyncio.run(tts.speak_async("ignored"))
-    assert tts._jobs.qsize() == 0
+    assert len(tts._gov) == 0
 
 
 def test_interrupt_keeps_engine_alive():

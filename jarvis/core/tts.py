@@ -10,12 +10,13 @@ señal del cancel_bus. Sub-frase splitting para preempt granular.
 """
 
 import asyncio
-import queue
 import re
 import threading
 from loguru import logger
 
 import core.cancel_bus as _cancel_bus
+# V69 M54.9 — bounded, prioritized, dedup/coalescing utterance governor.
+from core.tts_queue import TTSGovernor, TTSPriority
 
 _SENT_SPLIT_RE = re.compile(r'(?<=[.!?;:])\s+')
 
@@ -83,13 +84,20 @@ class TTS:
         self._configure_engine()
 
         # V66.1 shutdown reliability: a single DEDICATED DAEMON worker thread
-        # drains a thread-safe job queue. Daemon (unlike the old non-daemon
+        # drains a bounded, prioritized governor. Daemon (unlike the old non-daemon
         # ThreadPoolExecutor) means a stuck engine.runAndWait() can NEVER block
         # interpreter exit or leave an orphaned "tts-worker_0" behind — no 80s
         # atexit join, no force-exit required. The engine is only ever touched
         # from this one thread (guarded by _engine_lock), so it stays the single
         # owner of the non-thread-safe SAPI engine.
-        self._jobs: "queue.Queue[tuple[str, str | None] | None]" = queue.Queue()
+        #
+        # V69 M54.9 — the governor bounds the queue and applies priority / dedup /
+        # coalescing / backpressure so boot narration and background alerts can no
+        # longer flood dozens of stale utterances (the "dropped 28 pending" bug).
+        # A Condition wakes the worker on enqueue / close (no busy-wait, no
+        # unbounded FIFO).
+        self._gov = TTSGovernor()
+        self._cv = threading.Condition()
         self._engine_lock = threading.Lock()
         self._stop_lock = threading.Lock()
         self._interrupted: bool = False
@@ -99,7 +107,7 @@ class TTS:
             target=self._run_worker, name="tts-worker", daemon=True,
         )
         self._worker.start()
-        logger.info("TTS: pyttsx3 offline activo (daemon worker).")
+        logger.info("TTS: pyttsx3 offline activo (daemon worker, bounded governor).")
 
     def _configure_engine(self) -> None:
         self.engine.setProperty("rate", 165)
@@ -177,74 +185,88 @@ class TTS:
             self._busy = False
 
     def _run_worker(self) -> None:
-        """Dedicated daemon-thread loop: drain the job queue and synthesize.
-
-        v35.0: check tts_cancel before each item — drop and clear the queue.
-        The ONLY exits are the None sentinel (graceful stop) or the process
-        ending (daemon → force-killed, never joined). No asyncio here: the queue
-        is thread-safe, so speak_async never blocks the event loop.
+        """Dedicated daemon-thread loop: pop the highest-priority utterance and
+        synthesize. Waits on a Condition (no busy-wait). The ONLY exits are
+        `_closed` with an empty governor (graceful stop) or the process ending
+        (daemon → force-killed, never joined).
         """
         while True:
-            item = self._jobs.get()
-            try:
-                if item is None:                     # sentinel de parada
+            with self._cv:
+                while not self._closed and len(self._gov) == 0:
+                    self._cv.wait(timeout=0.5)
+                if self._closed and len(self._gov) == 0:
                     return
-                if self._closed:
-                    continue
-                text, lang = item
+                item = self._gov.pop()
+            if item is None:
+                continue
+            if self._closed:
+                continue
 
-                # v35.0 — pre-speech cancel check
+            # v35.0 — pre-speech cancel check
+            if (_cancel_bus.tts_cancel is not None
+                    and _cancel_bus.tts_cancel.is_set()):
+                logger.debug("TTS: cancelled before speech — draining queue")
+                self._drain_jobs()
+                _cancel_bus.tts_cancel.clear()
+                continue
+
+            self._interrupted = False
+            try:
+                self._speak_sync(item.text, item.lang)
+            except Exception as e:  # worker must never die on a bad utterance
+                logger.debug(f"TTS: worker error: {e}")
+
+            # If interrupted mid-speech, drain remaining queue
+            if self._interrupted:
+                self._drain_jobs()
                 if (_cancel_bus.tts_cancel is not None
                         and _cancel_bus.tts_cancel.is_set()):
-                    logger.debug("TTS: cancelled before speech — draining queue")
-                    self._drain_jobs()
                     _cancel_bus.tts_cancel.clear()
-                    continue
-
-                self._interrupted = False
-                try:
-                    self._speak_sync(text, lang)
-                except Exception as e:  # worker must never die on a bad utterance
-                    logger.debug(f"TTS: worker error: {e}")
-
-                # If interrupted mid-speech, drain remaining queue
-                if self._interrupted:
-                    self._drain_jobs()
-                    if (_cancel_bus.tts_cancel is not None
-                            and _cancel_bus.tts_cancel.is_set()):
-                        _cancel_bus.tts_cancel.clear()
-            finally:
-                self._jobs.task_done()
 
     def _drain_jobs(self) -> int:
-        """Drop all pending items in the queue without blocking. Returns count.
-        Re-injects nothing — a None sentinel already consumed is not re-queued."""
-        dropped = 0
-        while True:
-            try:
-                item = self._jobs.get_nowait()
-            except queue.Empty:
-                break
-            self._jobs.task_done()
-            if item is None:            # preserve stop semantics if sentinel drained
-                self._jobs.put_nowait(None)
-                break
-            dropped += 1
+        """Drop all pending governor items without blocking. Returns count."""
+        with self._cv:
+            dropped = self._gov.clear()
         if dropped:
             logger.info(f"TTS: dropped {dropped} pending utterance(s)")
         return dropped
 
-    async def speak_async(self, text: str, lang: str | None = None) -> None:
+    async def speak_async(
+        self,
+        text: str,
+        lang: str | None = None,
+        *,
+        priority: TTSPriority = TTSPriority.NORMAL,
+        coalesce_key: str | None = None,
+    ) -> None:
         """
-        Encola el texto (y opcionalmente un hint de idioma — V62.0 Phase 1
-        TTSVoiceRouter — para elegir voz antes de sintetizar). El daemon worker
-        thread reproduce en paralelo, permitiendo que el LLM continúe generando
-        mientras el audio suena. Enqueue es no bloqueante (queue.Queue), así que
-        nunca frena el event loop. lang=None preserva el comportamiento previo.
+        Admit text into the bounded governor (with an optional language hint for
+        voice routing, a priority, and a coalescing key). The daemon worker speaks
+        in priority order in parallel with LLM generation. Enqueue is non-blocking
+        and bounded — it never floods, never grows without limit, and never frees
+        the event loop for more than a lock acquisition. lang=None and the default
+        NORMAL priority preserve the previous behavior for existing callers.
         """
         if not text.strip() or self._closed:
             return
-        self._jobs.put_nowait((text, lang))
+        with self._cv:
+            self._gov.put(text, lang=lang, priority=priority, key=coalesce_key)
+            self._cv.notify()
+
+    def cancel_boot_narration(self) -> int:
+        """Drop all queued NORMAL/LOW narration (boot status, background info),
+        keeping only HIGH/CRITICAL. Called once text interaction begins so pending
+        cinematic boot lines don't keep speaking over the operator (M54.9)."""
+        with self._cv:
+            removed = self._gov.cancel_below(TTSPriority.HIGH)
+        if removed:
+            logger.debug(f"TTS: cancelled {removed} obsolete boot/background utterance(s)")
+        return removed
+
+    def queue_metrics(self) -> dict:
+        """Bounded governor metrics for runtime health (dropped/coalesced/…)."""
+        with self._cv:
+            return self._gov.metrics()
 
     def speak(self, text: str) -> None:
         """Síntesis sincrónica directa — para uso fuera del event loop."""
@@ -268,7 +290,7 @@ class TTS:
         """Espera (acotado) a que la cola se vacíe y termine el audio en curso —
         útil al finalizar un turno. Bounded so a hung engine can't wedge a turn."""
         for _ in range(600):  # ~30s ceiling at 50ms granularity
-            if self._jobs.empty() and not self._busy:
+            if len(self._gov) == 0 and not self._busy:
                 return
             await asyncio.sleep(0.05)
 
@@ -297,21 +319,29 @@ class TTS:
             self.engine.stop()
         except Exception:
             pass
-        # Wake the worker so it observes _closed / consumes the sentinel.
-        try:
-            self._jobs.put_nowait(None)
-        except Exception:
-            pass
+        # Wake the worker so it observes _closed and exits (no sentinel needed —
+        # the Condition + _closed flag drive the loop's only graceful exit).
+        with self._cv:
+            self._cv.notify_all()
 
     async def stop(self) -> None:
         """Graceful, bounded, idempotent shutdown (registered shutdown callback).
 
-        The worker is a daemon thread, so even if a stuck engine.runAndWait()
-        ignores the stop signal the interpreter still exits cleanly — no orphaned
-        non-daemon 'tts-worker', no 80s atexit join, no force-exit needed. The
-        join below is a courtesy with a short ceiling, not a correctness
-        dependency.
+        M54.9 — drop NORMAL/LOW narration immediately, give any queued HIGH/CRITICAL
+        speech a short bounded window to play, then tear down. The worker is a daemon
+        thread, so even if a stuck engine.runAndWait() ignores the stop signal the
+        interpreter still exits cleanly — no orphaned non-daemon 'tts-worker', no 80s
+        atexit join, no force-exit needed.
         """
+        with self._cv:
+            self._gov.cancel_below(TTSPriority.HIGH)
+            self._cv.notify_all()
+        for _ in range(20):  # ~1s bounded drain of remaining high-priority speech
+            with self._cv:
+                pending = len(self._gov)
+            if pending == 0 and not self._busy:
+                break
+            await asyncio.sleep(0.05)
         self._teardown()
         for _ in range(40):  # ~2s courtesy join
             if not self._worker.is_alive():

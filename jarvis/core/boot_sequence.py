@@ -76,11 +76,29 @@ async def execute_boot_sequence(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 
+    # V69 M54.9 — boot narration is LOW priority so it is dropped first under
+    # backpressure and can be cancelled the moment the operator starts interacting
+    # (tts.cancel_boot_narration()). The final "ready" line is NORMAL so it survives
+    # a little longer. Each phase uses a coalesce key so a re-narrated phase never
+    # stacks duplicates.
+    try:
+        from core.tts_queue import TTSPriority
+    except Exception:  # pragma: no cover - tts_queue is always present
+        TTSPriority = None
+
+    def _prio(phase_name: str):
+        if TTSPriority is None:
+            return {}
+        return {
+            "priority": TTSPriority.NORMAL if phase_name == "ready" else TTSPriority.LOW,
+            "coalesce_key": f"boot:{phase_name}",
+        }
+
     # Initial wake message
     if tts and not skip_voice:
         from core.personality import get_boot_greeting
         greeting = get_boot_greeting()
-        asyncio.create_task(tts.speak_async(greeting))
+        asyncio.create_task(tts.speak_async(greeting, **_prio("greeting")))
         await asyncio.sleep(2.5)
 
     for phase, message, pause in boot_lines:
@@ -94,7 +112,7 @@ async def execute_boot_sequence(
         logger.info(f"BOOT: {phase.upper()} — {message}")
 
         if tts and not skip_voice and phase in _SPOKEN_PHASES:
-            asyncio.create_task(tts.speak_async(message))
+            asyncio.create_task(tts.speak_async(message, **_prio(phase)))
 
         await asyncio.sleep(pause)
 
