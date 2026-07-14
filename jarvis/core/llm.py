@@ -2075,7 +2075,12 @@ class LLM:
                     tool_input = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     tool_input = {}
-                logger.info(f"Tool: {tool_name}({tool_input})")
+                # V69 M54.13 — never print a raw/large tool payload into the
+                # interactive console. Summarize the argument keys and bound the
+                # rendered length; the full arguments are still in the DEBUG file log.
+                _arg_summary = ", ".join(sorted(tool_input.keys())) if isinstance(tool_input, dict) else ""
+                logger.info(f"Tool: {tool_name}({_arg_summary})")
+                logger.debug(f"Tool args: {tool_name} {str(tool_input)[:500]}")
 
                 # V68.1 M46 — bounded, deterministic tool-failure recovery. If this
                 # exact tool already failed non-retryably (or hit the one-retry
