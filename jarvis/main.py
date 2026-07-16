@@ -1128,7 +1128,28 @@ async def _main_async() -> None:
             fast = get_fast_readiness()
             await fast.probe()
             logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
-            if fast.state.value == "REACHABLE":
+            # V69 M55 — probe the NATIVE transport capability (bounded, cached) so
+            # the first DIRECT_FAST turn can use native no-think with proven support.
+            # The tiny probe generation also WARMS qwen3:8b with think=false, which
+            # is faster than the reasoning-default OpenAI prewarm, so it doubles as
+            # the warmup when it succeeds (no redundant model load under
+            # OLLAMA_MAX_LOADED_MODELS=1).
+            _warmed = False
+            try:
+                from core.ollama_native import refresh_native_capability
+                cap = await refresh_native_capability(model=fast.model)
+                fast.note_capability(cap)
+                logger.info(
+                    "NATIVE_CAP: state={} think_false_supported={} version={}".format(
+                        cap.state.value, cap.think_false_supported, cap.server_version,
+                    )
+                )
+                if getattr(cap, "streaming_ok", False):
+                    fast.mark_served()   # the probe proved the model serves tokens
+                    _warmed = True
+            except Exception as _ne:
+                logger.debug(f"NATIVE_CAP: probe skipped: {_ne}")
+            if not _warmed and fast.state.value == "REACHABLE":
                 await fast.prewarm(client=llm.client)
                 logger.info(f"FAST_READINESS: prewarm -> {fast.state.value}")
         except Exception as exc:

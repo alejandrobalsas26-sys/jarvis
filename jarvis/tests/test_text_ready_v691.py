@@ -183,8 +183,12 @@ def test_failed_prewarm_degrades_but_still_allows_input():
 def test_snapshot_shape_carries_no_user_content():
     f = FastReadiness(model="qwen3:8b", clock=FakeClock())
     snap = f.snapshot()
+    # V69 M55.10 — transport/no-think capability metadata joins the snapshot. All
+    # keys remain safe metadata (a model name, a state, a version) — never a prompt
+    # or generated content.
     assert set(snap) == {"state", "model", "last_probe_ms", "last_success_at",
-                         "last_error", "accepts_input"}
+                         "last_error", "accepts_input", "transport",
+                         "think_supported", "native_state", "server_version"}
     assert snap["model"] == "qwen3:8b"
 
 

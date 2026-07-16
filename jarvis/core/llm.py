@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import httpx
-from openai import AsyncOpenAI
+from openai import APIConnectionError, AsyncOpenAI
 from loguru import logger
 
 from core.config import settings
@@ -948,6 +948,24 @@ def _turn_timeout_message(language: str | None) -> str:
     return _TURN_TIMEOUT_EN if lang.startswith("en") else _TURN_TIMEOUT_ES
 
 
+# V69 M55.12 — both transports unreachable (e.g. Ollama down). A concise localized
+# error that returns prompt control, never a raw connection trace.
+_FAST_UNREACHABLE_ES = (
+    "No pude acceder al modelo FAST en este momento. El runtime sigue activo; "
+    "revisa el estado de Ollama e inténtalo nuevamente."
+)
+_FAST_UNREACHABLE_EN = (
+    "I couldn't reach the FAST model right now. The runtime is still active; "
+    "check the Ollama service and try again."
+)
+
+
+def _fast_unreachable_message(language: str | None) -> str:
+    """The bounded 'model unreachable' reply in the turn's ACTIVE language."""
+    lang = (language or "es").lower()
+    return _FAST_UNREACHABLE_EN if lang.startswith("en") else _FAST_UNREACHABLE_ES
+
+
 async def _aclose_stream(stream) -> bool:
     """Close a live Ollama SSE response, bounded and never raising. Returns whether
     teardown succeeded, so runtime health can report cancel_success truthfully."""
@@ -990,6 +1008,12 @@ async def _iter_stream_bounded(stream, budget, stage_t):
         yield chunk
 
 
+class _NativeFastUnavailable(Exception):
+    """Raised inside the native fast path when the native transport failed BEFORE
+    any content was streamed, signalling chat_stream to fall back to the existing
+    OpenAI-compatible loop. Never surfaced to the user."""
+
+
 class LLM:
     def __init__(self, tool_executor):
         # V69 M54.1.5 — THE unbounded wait. This was constructed with no `timeout=`
@@ -1021,6 +1045,9 @@ class LLM:
         self.tool_executor = tool_executor
         self.history: list[dict] = []
         self._session_prefix: str = ""
+        # V69 M55.3 — shared httpx client for the native /api/chat fast path,
+        # created lazily on the first fast turn and closed in aclose().
+        self._native_http = None
 
         # V69 M54.4 — ONE session-scoped conversation-language state shared by the
         # text and voice paths. Text turns feed it deterministically (no LLM);
@@ -1758,6 +1785,175 @@ class LLM:
         except Exception as e:
             logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
 
+    # ── V69 M55.3/.4/.5 — native no-think FAST path helpers ───────────────────
+    def _close_turn_with_status(self, msg: str) -> str:
+        """Keep history coherent when a turn ends with ONLY a status message
+        (timeout / unreachable). The user message is already in history; without a
+        paired assistant turn it dangles, and the NEXT turn's model sees the unanswered
+        question and answers THAT instead (the live 'hola replied about TCP' bug). So
+        pair it with the status note, then return the same message to yield."""
+        try:
+            if msg and (not self.history or self.history[-1].get("role") != "assistant"):
+                self.history.append({"role": "assistant", "content": msg})
+        except Exception:
+            pass
+        return msg
+
+    def _drop_dangling_user(self) -> None:
+        """Remove a trailing unanswered user message (operator cancellation) so it
+        cannot pollute the NEXT turn's context — same coherence guarantee as
+        _close_turn_with_status, for the paths that yield nothing."""
+        try:
+            if self.history and self.history[-1].get("role") == "user":
+                self.history.pop()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _note_fast_readiness(method: str, *args) -> None:
+        """Best-effort FAST-readiness counter update (timeout/cancel/fallback)."""
+        try:
+            from core.fast_readiness import get_fast_readiness
+            fn = getattr(get_fast_readiness(), method, None)
+            if callable(fn):
+                fn(*args)
+        except Exception:
+            pass
+
+    def _get_native_http(self):
+        """Lazily create a shared httpx client for the native /api/chat fast path.
+        Reused across fast turns to avoid connection churn; closed in aclose()."""
+        if getattr(self, "_native_http", None) is None:
+            self._native_http = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=float(getattr(settings, "turn_connect_timeout_s", 5.0)),
+                    read=_MAX_TOTAL_S, write=30.0, pool=30.0,
+                ),
+            )
+        return self._native_http
+
+    def _fast_system_prompt(self) -> str:
+        """A LEAN system prompt for the native fast path. Deliberately NOT the full
+        200-line tool/security manual: a smaller prompt prefills far faster on a CPU
+        host AND keeps answers concise. Carries identity, host-clock grounding and
+        the active-language directive so continuity (M54.4/M54.8) is preserved."""
+        name = settings.assistant_name
+        user = settings.user_name
+        parts = [
+            f"You are {name}, {user}'s local AI assistant.",
+            "Answer directly, concisely and correctly in the user's language. "
+            "Do NOT show reasoning or think out loud, do NOT emit tool/JSON calls, "
+            "and do NOT write a long essay for a short question — a few clear "
+            "sentences unless the user explicitly asks for more depth. Keep "
+            "technical terms (payload, buffer overflow, thread) in English.",
+        ]
+        try:
+            parts.append(_host_time.host_time_prompt_line())
+        except Exception:
+            pass
+        try:
+            parts.append(self.language_context.directive())
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+
+    async def _native_fast_stream(self, *, route, budget, timeouts, result):
+        """Stream a DIRECT_FAST turn from native /api/chat with reasoning disabled.
+
+        Yields ONLY content text — reasoning (a native ``thinking`` field) is dropped
+        at the transport boundary and never surfaced. Raises
+        :class:`_NativeFastUnavailable` ONLY when the native transport fails BEFORE
+        any content, so the caller can fall back cleanly; a mid-stream failure ends
+        gracefully with the partial answer rather than double-answering.
+        """
+        from core.ollama_native import (
+            CancellationToken,
+            NativeTransportError,
+            chat_stream as _native_chat_stream,
+        )
+        messages = [
+            {"role": "system", "content": self._fast_system_prompt()},
+            *self.history,
+        ]
+        _ctx = _adaptive_ctx(self.history, route.context)
+        token = CancellationToken.from_event(
+            getattr(_cancel_bus, "llm_stream_cancel", None)
+        )
+        chunks: list[str] = []
+        _infer_start = _time.monotonic()
+        try:
+            async for ch in _native_chat_stream(
+                model=route.model,
+                messages=messages,
+                think=route.think,
+                max_tokens=route.max_tokens,
+                temperature=0.3,
+                budget=budget,
+                timeouts=timeouts,
+                cancellation=token,
+                ctx=_ctx,
+                keep_alive=route.keep_alive,
+                client=self._get_native_http(),
+            ):
+                if token.cancelled or (
+                    _cancel_bus.llm_stream_cancel is not None
+                    and _cancel_bus.llm_stream_cancel.is_set()
+                ):
+                    result["cancelled"] = True
+                    return
+                if ch.content:
+                    chunks.append(ch.content)
+                    yield ch.content
+                if ch.done:
+                    result["done_reason"] = ch.done_reason
+                    result["tokens_per_second"] = ch.tokens_per_second()
+                    result["eval_count"] = ch.eval_count
+        except NativeTransportError as e:
+            result["error"] = e.reason
+            if not chunks:
+                raise _NativeFastUnavailable(e.reason) from e
+            # partial answer already streamed — bounded, honest end (no restart).
+        finally:
+            result["text"] = "".join(chunks)
+            result["infer_ms"] = round((_time.monotonic() - _infer_start) * 1000)
+
+    def _finalize_fast_turn(self, result: dict, budget, route) -> None:
+        """Finalize a completed native fast turn: history, readiness and health."""
+        if result.get("cancelled"):
+            budget.cancel_success = True
+            record_turn(budget.snapshot())
+            return
+        text = result.get("text", "")
+        if text.strip():
+            self.history.append({"role": "assistant", "content": text})
+        try:
+            from core.fast_readiness import get_fast_readiness
+            fr = get_fast_readiness()
+            fr.mark_served()
+            _record = getattr(fr, "record_fast_turn", None)
+            if callable(_record):
+                _record(
+                    first_token_ms=budget.snapshot().get("first_token_ms"),
+                    total_ms=result.get("infer_ms"),
+                    tokens_per_second=result.get("tokens_per_second"),
+                    transport="native", think=route.think,
+                )
+        except Exception:
+            pass
+        record_turn(budget.snapshot())
+        try:
+            from tools.executor import _aura_broadcast as _bcast_fast
+            asyncio.create_task(_bcast_fast({
+                "type": "fast_turn_complete",
+                "transport": "native",
+                "model": route.model,
+                "reason": route.reason.value,
+                "first_token_ms": budget.snapshot().get("first_token_ms"),
+                "tokens_per_second": result.get("tokens_per_second"),
+            }))
+        except Exception:
+            pass
+
     async def chat_stream(self, user_message: str) -> AsyncGenerator[str, None]:
         """
         Genera tokens del LLM en tiempo real via Ollama.
@@ -1770,6 +1966,28 @@ class LLM:
              ejecuta las tools (local o MCP) y continúa el stream con la respuesta.
           5. Si finish_reason == "stop": fin del turno.
         """
+        # V69 M55.11 — deterministic bypass FIRST. Time/date/lifecycle/FAST-model/
+        # vault questions have a single trusted local answer already in the runtime;
+        # restating it via a CPU-bound model is pure latency. Answer it directly in
+        # the active language and return — no MCP init, no routing, no model call.
+        try:
+            self.language_context.observe_text(user_message)
+        except Exception:
+            pass
+        try:
+            from core.deterministic_bypass import maybe_bypass
+            _bypass = maybe_bypass(
+                user_message, language=self.language_context.active_language(),
+            )
+        except Exception:
+            _bypass = None
+        if _bypass:
+            logger.info("BYPASS: answered deterministically from runtime data (no model)")
+            self.history.append({"role": "user", "content": user_message})
+            self.history.append({"role": "assistant", "content": _bypass})
+            yield _bypass
+            return
+
         await self._init_mcp()
         await self._maybe_compress_history()
 
@@ -1873,6 +2091,89 @@ class LLM:
             }))
         except Exception:
             pass
+
+        # ── V69 M55.3/.4/.5 — native no-think FAST path ───────────────────────
+        # An ordinary DIRECT_FAST turn (greeting / simple education / low-risk chat)
+        # is served by the native /api/chat transport with reasoning DISABLED and a
+        # bounded num_predict, bypassing the tool/verifier/RAG pipeline entirely.
+        # This is the only wire-level way to make qwen3:8b answer promptly on this
+        # CPU host (native think=false: ~1.3s to first token warm vs ~29s via /v1).
+        # A transport failure BEFORE the first token falls through to the existing
+        # OpenAI-compatible loop below; the whole-turn deadline, language and
+        # cancellation are preserved on both paths.
+        try:
+            from core import ollama_native as _native
+            from core.fast_path import decide_fast_route
+            _native_state = _native.get_native_capability().state.value
+            _fast_route = decide_fast_route(
+                turn_policy=_turn_policy, model_decision=decision,
+                routed_model=_routed_model, native_state=_native_state,
+                settings=settings,
+            )
+        except Exception as _fr_e:
+            logger.warning(f"FAST_ROUTE: skipped ({_fr_e})")
+            _fast_route = None
+
+        if _fast_route is not None and _fast_route.use_native:
+            logger.info(
+                "FAST_ROUTE: native no-think — model={} think={} max_tokens={} "
+                "reason={} detail={!r}".format(
+                    _fast_route.model, _fast_route.think, _fast_route.max_tokens,
+                    _fast_route.reason.value, _fast_route.detail,
+                )
+            )
+            _fast_stage_t = timeouts_for(_turn_policy)
+            _budget.model_role = "fast"
+            _fast_result: dict = {}
+            try:
+                async for _piece in self._native_fast_stream(
+                    route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
+                    result=_fast_result,
+                ):
+                    yield _piece
+            except _NativeFastUnavailable as _nfu:
+                logger.info(
+                    "FAST_ROUTE: native unavailable ({}) — falling back to /v1".format(
+                        _nfu
+                    )
+                )
+                self._note_fast_readiness("note_native_fallback")
+                # fall through to the existing OpenAI-compatible loop below.
+            except TurnTimeout as _tt:
+                _budget.timeout_stage = _tt.stage
+                _budget.cancel_success = True
+                logger.warning(
+                    f"FAST_ROUTE: native stream timed out (stage={_tt.stage}) — cancelled"
+                )
+                self._note_fast_readiness("note_timeout", _tt.stage)
+                record_turn(_budget.snapshot())
+                _fast_to_msg = _turn_timeout_message(self.language_context.active_language())
+                # Pair the (possibly partial) answer with the user turn — no dangling
+                # user message to pollute the next turn.
+                self._close_turn_with_status(
+                    (_fast_result.get("text") or "").strip() or _fast_to_msg)
+                yield _fast_to_msg
+                unregister_operation("llm_stream")
+                return
+            except asyncio.CancelledError:
+                _budget.cancel_success = True
+                logger.info("FAST_ROUTE: cancelled — clean exit")
+                self._note_fast_readiness("note_cancellation")
+                _fast_partial = (_fast_result.get("text") or "").strip()
+                if _fast_partial:
+                    self._close_turn_with_status(_fast_partial)
+                else:
+                    self._drop_dangling_user()
+                try:
+                    await self._broadcast_cancel_event()
+                except Exception:
+                    pass
+                unregister_operation("llm_stream")
+                return
+            else:
+                self._finalize_fast_turn(_fast_result, _budget, _fast_route)
+                unregister_operation("llm_stream")
+                return
 
         # V68.1 M47 — authorization-aware cyber intent gate, computed ONCE per
         # turn (the user message is constant across the tool loop). For an
@@ -1987,7 +2288,8 @@ class LLM:
             _first_token_budget = min(_stage_t.first_token_s, _budget.remaining_s())
             if _first_token_budget <= 0.0:
                 _budget.timeout_stage = "total"
-                yield _turn_timeout_message(self.language_context.active_language())
+                yield self._close_turn_with_status(
+                    _turn_timeout_message(self.language_context.active_language()))
                 unregister_operation("llm_stream")
                 return
             try:
@@ -2019,7 +2321,25 @@ class LLM:
                     )
                 )
                 record_turn(_budget.snapshot())
-                yield _turn_timeout_message(self.language_context.active_language())
+                yield self._close_turn_with_status(
+                    _turn_timeout_message(self.language_context.active_language()))
+                unregister_operation("llm_stream")
+                return
+            except (APIConnectionError, httpx.ConnectError, httpx.HTTPError) as _conn_err:
+                # V69 M55.12 — the FAST model is unreachable (e.g. Ollama down). When
+                # the native fast path already fell back here and /v1 ALSO cannot
+                # connect, both transports have failed: degrade to a concise,
+                # localized error that returns prompt control — never a raw trace.
+                _budget.timeout_stage = "connect"
+                _budget.cancel_success = True
+                logger.warning(
+                    "LLM: FAST model {} unreachable ({}) — bounded failure".format(
+                        _routed_model, type(_conn_err).__name__,
+                    )
+                )
+                record_turn(_budget.snapshot())
+                yield self._close_turn_with_status(
+                    _fast_unreachable_message(self.language_context.active_language()))
                 unregister_operation("llm_stream")
                 return
 
@@ -2077,7 +2397,12 @@ class LLM:
                     f"limit={_tt.limit_s:.1f}s) — cancelled"
                 )
                 record_turn(_budget.snapshot())
-                yield _turn_timeout_message(self.language_context.active_language())
+                # V69 M55.15 — pair the (possibly partial) answer with the user turn
+                # so a timed-out turn cannot leave a dangling user message that the
+                # NEXT turn's model answers instead (the 'hola replied about TCP' bug).
+                _to_msg = _turn_timeout_message(self.language_context.active_language())
+                self._close_turn_with_status("".join(text_chunks).strip() or _to_msg)
+                yield _to_msg
                 unregister_operation("llm_stream")
                 return
             except asyncio.CancelledError:
@@ -2086,6 +2411,12 @@ class LLM:
                 # turn hang on pool acquisition).
                 _budget.cancel_success = await _aclose_stream(stream)
                 logger.info("LLM: asyncio.CancelledError — clean exit")
+                # Coherence: keep partial content or drop the unanswered user turn.
+                _partial = "".join(text_chunks).strip()
+                if _partial:
+                    self._close_turn_with_status(_partial)
+                else:
+                    self._drop_dangling_user()
                 try:
                     await self._broadcast_cancel_event()
                 except Exception:
@@ -2094,6 +2425,7 @@ class LLM:
                 return
             except (RuntimeError, BaseExceptionGroup) as e:
                 logger.error(f"LLM: stream interrupted by task group error: {e}")
+                self._drop_dangling_user()
                 unregister_operation("llm_stream")
                 return
 
@@ -2425,6 +2757,14 @@ class LLM:
         if self._closed:
             return
         self._closed = True
+        # V69 M55.3 — close the shared native fast-path HTTP client so no httpx
+        # connection outlives the runtime (ordered before task cancellation).
+        if getattr(self, "_native_http", None) is not None:
+            try:
+                await self._native_http.aclose()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"LLM: native http close suppressed: {e}")
+            self._native_http = None
         try:
             await self._exit_stack.aclose()
         except (asyncio.CancelledError, RuntimeError) as e:

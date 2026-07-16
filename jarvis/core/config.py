@@ -7,7 +7,7 @@ other modules.  Pydantic BaseSettings validates types at startup.
 
 import re
 from pathlib import Path
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV_FILE = str(Path(__file__).parent.parent / ".env")
@@ -185,6 +185,76 @@ class Settings(BaseSettings):
     @classmethod
     def validate_turn_connect(cls, v: float) -> float:
         return max(0.5, min(float(v), 30.0))
+
+    # ── FAST interactive transport (V69 M55.7) ───────────────────────────────
+    # Ordinary DIRECT_FAST turns (greetings, simple education, low-risk chat) run
+    # through the NATIVE Ollama /api/chat endpoint with reasoning disabled — the
+    # only wire-level way to make qwen3:8b (a reasoning model) answer promptly on
+    # this CPU host. Operator-tunable within hard caps; role→model mapping stays
+    # authoritative in core.model_router (JARVIS_MODEL_FAST), so fast_model is an
+    # OPTIONAL distinct non-reasoning override consulted ONLY by the native fast
+    # path — empty means "use the resolved FAST-role model" (no fork, no silent
+    # model change). Env aliases keep the JARVIS_FAST_* convention.
+    #   fast_transport : auto | native | openai (auto = native when the capability
+    #                    probe proved think=false works, else OpenAI-compatible)
+    #   fast_think     : off | on | omit   (off = think:false; omit = send no field)
+    #   fast_max_tokens: num_predict cap so a simple turn finishes inside its budget
+    #   fast_context   : num_ctx for a fast turn (small KV cache = less CPU/token)
+    #   fast_keep_alive: how long Ollama keeps FAST resident after a turn
+    #   fast_model     : optional distinct non-reasoning FAST model (native path only)
+    fast_transport: str = Field(
+        default="auto",
+        validation_alias=AliasChoices("JARVIS_FAST_TRANSPORT", "fast_transport"),
+    )
+    fast_think: str = Field(
+        default="off",
+        validation_alias=AliasChoices("JARVIS_FAST_THINK", "fast_think"),
+    )
+    fast_max_tokens: int = Field(
+        default=256,
+        validation_alias=AliasChoices("JARVIS_FAST_MAX_TOKENS", "fast_max_tokens"),
+    )
+    fast_context: int = Field(
+        default=2048,
+        validation_alias=AliasChoices("JARVIS_FAST_CONTEXT", "fast_context"),
+    )
+    fast_keep_alive: str = Field(
+        default="10m",
+        validation_alias=AliasChoices("JARVIS_FAST_KEEP_ALIVE", "fast_keep_alive"),
+    )
+    fast_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("JARVIS_FAST_MODEL", "fast_model"),
+    )
+
+    @field_validator("fast_transport")
+    @classmethod
+    def validate_fast_transport(cls, v: str) -> str:
+        val = (v or "auto").strip().lower()
+        return val if val in {"auto", "native", "openai"} else "auto"
+
+    @field_validator("fast_think")
+    @classmethod
+    def validate_fast_think(cls, v: str) -> str:
+        val = (v or "off").strip().lower()
+        return val if val in {"off", "on", "omit"} else "off"
+
+    @field_validator("fast_max_tokens")
+    @classmethod
+    def validate_fast_max_tokens(cls, v: int) -> int:
+        # Clamp, never raise: a typo must not unbound generation. Upper bound keeps
+        # a simple turn finishing inside its risk budget on a ~5 tok/s CPU.
+        return max(32, min(int(v), 2048))
+
+    @field_validator("fast_context")
+    @classmethod
+    def validate_fast_context(cls, v: int) -> int:
+        return max(512, min(int(v), 8192))
+
+    def fast_think_value(self) -> bool | None:
+        """Resolve fast_think into the native ``think`` field: off→False (disabled),
+        on→True, omit→None (send no field, use the model/server default)."""
+        return {"off": False, "on": True, "omit": None}.get(self.fast_think, False)
 
     # ── AURA HUD server (loopback WebSocket telemetry / command HUD) ──────────
     # CSWSH defense for the /ws handshake: by default only loopback origins

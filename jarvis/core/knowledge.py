@@ -91,6 +91,20 @@ def get_vault() -> "KnowledgeVault":
     return _vault_singleton
 
 
+def vault_count_if_loaded() -> int | None:
+    """V69 M55.11 — the vault document count ONLY when the backend is already
+    initialized. Returns ``None`` without forcing a (heavy) Chroma load, so a
+    deterministic 'is the vault empty?' bypass stays bounded and non-blocking on
+    the interactive path. Guarded end-to-end."""
+    v = _vault_singleton
+    if v is None or not getattr(v, "_backend_ready", False):
+        return None
+    try:
+        return int(v._collection.count())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class KnowledgeVault:
     def __init__(self, embedder=None) -> None:
         # V68.1 M45: construction is cheap and NEVER imports heavy vector deps.
