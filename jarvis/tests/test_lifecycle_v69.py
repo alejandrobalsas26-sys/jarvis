@@ -41,6 +41,10 @@ def test_starts_in_starting_no_input():
 
 def test_boot_phases_advance_monotonically_and_enable_input():
     lm, _ = _lm()
+    # V69 M54.1.9 — TEXT_READY now requires a real reader. This test used to mark
+    # it with nothing reading, which is exactly the guarantee that turned out to be
+    # false in the live run.
+    lm.bind_input_reader(lambda: True)
     assert lm.mark_text_ready() is True
     assert lm.accepts_input()              # user may type at TEXT_READY
     assert lm.mark_core_ready() is True
@@ -51,6 +55,7 @@ def test_boot_phases_advance_monotonically_and_enable_input():
 
 def test_advance_never_moves_backward():
     lm, _ = _lm()
+    lm.bind_input_reader(lambda: True)
     lm.mark_core_ready()                    # jump straight to CORE_READY
     assert lm.state is LifecycleState.CORE_READY
     # A lower target is ignored (monotonic).
@@ -113,6 +118,7 @@ def test_mark_stopped_and_failed():
 
 def test_phase_timings_stamped_once_and_monotonic():
     lm, clk = _lm()
+    lm.bind_input_reader(lambda: True)
     clk.advance(0.10)
     lm.mark_text_ready()
     clk.advance(0.50)

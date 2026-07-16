@@ -223,14 +223,30 @@ def _interactive_subsystem(turn: dict | None = None, life: dict | None = None,
         status = HealthStatus.DEGRADED   # many turns blew their end-to-end budget
     else:
         status = HealthStatus.OK
+    # V69 M54.1.13 — the metrics that would have made the live failures visible:
+    # WHICH stage timed out, whether cancellation actually worked, whether the
+    # lifecycle's TEXT_READY claim matches a real reader, and FAST's true state.
+    fast = _live_fast_readiness()
     metrics = {
         "turn_avg_total_ms": turn.get("avg_total_ms"),
         "turn_max_total_ms": turn.get("max_total_ms"),
         "turn_count": turn.get("count"),
         "turn_expired": turn.get("expired"),
+        "turn_timed_out": turn.get("timed_out"),
+        "turn_last_timeout_stage": turn.get("last_timeout_stage"),
+        "turn_cancellations": turn.get("cancellations"),
+        "turn_last_first_token_ms": turn.get("last_first_token_ms"),
         "text_ready_ms": life.get("text_ready_ms"),
         "core_ready_ms": life.get("core_ready_ms"),
         "operational_ready_ms": life.get("operational_ready_ms"),
+        # M54.1.9 — these two disagreeing IS the false-TEXT_READY bug.
+        "input_available": life.get("input_available"),
+        "fast_state": fast.get("state"),
+        "fast_model": fast.get("model"),
+        "fast_last_probe_ms": fast.get("last_probe_ms"),
+        "fast_last_error": fast.get("last_error"),
+        "greeting_renderer": "deterministic",
+        "greeting_unresolved_placeholders": 0,
         "console_dropped": console.get("dropped"),
         "console_coalesced": console.get("coalesced"),
         "tts_dropped": tts.get("dropped"),
@@ -239,7 +255,69 @@ def _interactive_subsystem(turn: dict | None = None, life: dict | None = None,
     return SubsystemHealth(
         "interactive", status,
         f"lifecycle={state}; turns={turn.get('count', 0)}; "
-        f"turn_max={turn.get('max_total_ms', 0)}ms",
+        f"turn_max={turn.get('max_total_ms', 0)}ms; fast={fast.get('state')}",
+        metrics)
+
+
+def _live_fast_readiness() -> dict:
+    try:
+        from core.fast_readiness import get_fast_readiness
+        return get_fast_readiness().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_watcher() -> dict:
+    try:
+        from tools.yara_file_monitor import watcher_metrics
+        return watcher_metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _filesystem_subsystem(watcher: dict | None = None) -> SubsystemHealth:
+    """V69 M54.1.13 — filesystem-watcher backpressure. The live boot printed dozens
+    of QueueFull tracebacks and NOTHING recorded them: the YARA monitor was
+    TaskWatchdog-registered only, never a health surface, so its drops were
+    invisible. DORMANT when the monitor is not running; DEGRADED when a root is
+    STALE (events were lost and recovery has not finished) — never silently OK."""
+    watcher = watcher if watcher is not None else _live_watcher()
+    if not watcher.get("running"):
+        return SubsystemHealth("filesystem_watch", HealthStatus.DORMANT,
+                               "file monitor not running", {})
+    classes = watcher.get("classes", {}) or {}
+    rec = watcher.get("reconcile", {}) or {}
+    total = {k: 0 for k in ("received", "accepted", "coalesced", "ignored",
+                            "dropped", "overflows", "queue_depth",
+                            "queue_high_watermark")}
+    last_reason = None
+    last_overflow = None
+    for c in classes.values():
+        for k in total:
+            total[k] += c.get(k, 0) or 0
+        last_reason = c.get("last_drop_reason") or last_reason
+        last_overflow = c.get("last_overflow_at") or last_overflow
+    stale = rec.get("stale_roots", 0) or 0
+    status = HealthStatus.DEGRADED if stale else HealthStatus.OK
+    metrics = {
+        "watch_queue_depth": total["queue_depth"],
+        "watch_queue_high_watermark": total["queue_high_watermark"],
+        "watch_received": total["received"],
+        "watch_accepted": total["accepted"],
+        "watch_coalesced": total["coalesced"],
+        "watch_ignored": total["ignored"],
+        "watch_dropped": total["dropped"],
+        "watch_overflows": total["overflows"],
+        "watch_last_drop_reason": last_reason,
+        "watch_last_overflow_at": last_overflow,
+        "watch_reconciliations": rec.get("reconciliations", 0),
+        "watch_stale_roots": stale,
+    }
+    return SubsystemHealth(
+        "filesystem_watch", status,
+        f"queue={total['queue_depth']}/{total['queue_high_watermark']} peak; "
+        f"coalesced={total['coalesced']}; dropped={total['dropped']}; "
+        f"stale_roots={stale}",
         metrics)
 
 
@@ -288,6 +366,9 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         _collectors_subsystem(fm, tel), _resource_subsystem(res), _tasks_subsystem(ws),
         _inference_subsystem(prof), _model_subsystem(mdl), _spine_subsystem(sp),
         _verifier_subsystem(), _interactive_subsystem(),
+        # V69 M54.1.13 — watcher backpressure joins the existing health surface
+        # rather than becoming a second one.
+        _filesystem_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}

@@ -103,8 +103,12 @@ class TestHonesty:
 class TestShapeAndLive:
     def test_snapshot_has_all_subsystems(self):
         names = {s.name for s in _snap().subsystems}
+        # V69 M54.1.13 — filesystem_watch joins the ONE health surface (the YARA
+        # monitor was TaskWatchdog-registered only, so its dropped events were
+        # invisible while the live boot flooded the console with QueueFull).
         assert names == {"collectors", "resource", "tasks", "inference",
-                         "model_runtime", "spine", "verifier", "interactive"}
+                         "model_runtime", "spine", "verifier", "interactive",
+                         "filesystem_watch"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

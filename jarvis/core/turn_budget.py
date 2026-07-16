@@ -301,15 +301,27 @@ def record_turn(snapshot: dict) -> None:
 
 
 def turn_latency_stats() -> dict:
-    """Read-only turn-latency rollup for runtime health."""
+    """Read-only turn-latency rollup for runtime health. Bounded (50-sample ring),
+    counters and timings only — never prompt content or model payloads."""
     samples = list(_TURN_SAMPLES)
     if not samples:
-        return {"count": 0, "avg_total_ms": 0.0, "max_total_ms": 0.0, "expired": 0}
+        return {"count": 0, "avg_total_ms": 0.0, "max_total_ms": 0.0, "expired": 0,
+                "timed_out": 0, "cancellations": 0, "last_timeout_stage": None,
+                "last_first_token_ms": None, "successful_turns": 0}
     totals = [s.get("total_turn_ms", 0.0) for s in samples]
+    timed_out = [s for s in samples if s.get("timeout_stage")]
+    ft = [s.get("first_token_ms") for s in samples if s.get("first_token_ms")]
     return {
         "count": len(samples),
         "avg_total_ms": round(sum(totals) / len(totals), 1),
         "max_total_ms": round(max(totals), 1),
         "last_total_ms": totals[-1],
         "expired": sum(1 for s in samples if s.get("expired")),
+        # M54.1.13 — WHICH bound fired, and whether teardown actually worked.
+        "timed_out": len(timed_out),
+        "successful_turns": len(samples) - len(timed_out),
+        "last_timeout_stage": timed_out[-1].get("timeout_stage") if timed_out else None,
+        "cancellations": sum(1 for s in samples if s.get("cancel_success") is True),
+        "last_first_token_ms": ft[-1] if ft else None,
+        "avg_first_token_ms": round(sum(ft) / len(ft), 1) if ft else None,
     }

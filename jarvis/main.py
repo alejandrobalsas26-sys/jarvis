@@ -265,6 +265,31 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         print()  # newline tras el output del streaming
 
 
+# V69 M54.1.9 — the single fact behind TEXT_READY: is a reader actually live?
+# Flipped by the interactive loops themselves the moment they are about to read, and
+# consulted by the lifecycle's bound probe. A module-level dict (not a bool) so the
+# closure in _main_async observes mutations.
+_INPUT_READER: dict = {"live": False}
+
+
+def _mark_input_reader_live(live: bool = True) -> None:
+    """Declare the interactive reader live/dead and settle the lifecycle state."""
+    _INPUT_READER["live"] = live
+    if not live:
+        return
+    try:
+        from core.lifecycle import lifecycle as _lc
+        if _lc.mark_text_ready():
+            _pt = _lc.phase_timings_ms()
+            logger.info(
+                "LIFECYCLE: TEXT_READY — prompt accepting input at {}ms".format(
+                    _pt.get("TEXT_READY"),
+                )
+            )
+    except Exception:
+        pass
+
+
 def _active_language(llm) -> str:
     """The turn's active language, for a bounded failure message that matches it."""
     try:
@@ -324,6 +349,19 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     loop = asyncio.get_running_loop()
     _console_emit("Modo texto activo. Escribe tu mensaje o 'salir' para terminar.")
 
+    # V69 M54.1.9 — the reader is live HERE, not 1200 lines ago. This is the moment
+    # TEXT_READY becomes true, and marking it here is what makes the lifecycle state
+    # and the operator's experience agree. Optional warmup (collectors, briefing,
+    # MCP, Whisper, feeds, hunts) keeps running behind us.
+    _mark_input_reader_live(True)
+    try:
+        from core.fast_readiness import get_fast_readiness
+        _fast = get_fast_readiness()
+        if _fast.state.value == "WARMING":
+            _console_emit("FAST model warming — tu primer mensaje puede tardar más.")
+    except Exception:
+        pass
+
     # V69 M54.2 — the interactive read is gated on the lifecycle: input is only
     # accepted in the TEXT_READY..OPERATIONAL band, never before boot has reached
     # TEXT_READY nor after STOPPING begins.
@@ -341,6 +379,7 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             user_input = user_input.strip()
         except (KeyboardInterrupt, EOFError):
             _console_emit("Cerrando...")
+            _mark_input_reader_live(False)
             break
         finally:
             if _console is not None:
@@ -569,6 +608,10 @@ async def _loop_voice_continuous(llm, tts, stt, name: str, consent=None, state=N
     # store; there is no separate local history here.
     from core.language_context import LanguageContext
     language_context = LanguageContext()
+
+    # V69 M54.1.9 — voice is an interactive reader too: the operator can address
+    # JARVIS from here on, so this is where the lifecycle may claim TEXT_READY.
+    _mark_input_reader_live(True)
 
     # ── TTS with interruption support ────────────────────────────────────
     _tts_speaking = asyncio.Event()
@@ -1064,11 +1107,35 @@ async def _main_async() -> None:
     llm = LLM(tool_executor=executor)
     tts = TTS()
 
-    # V69 M54.2 — PHASE 2 (TEXT READY): the console coordinator, FAST routing, the
-    # executor and the LLM/TTS are up, so the operator may now type. Noncritical
-    # subsystems keep warming in the background after this point.
-    if _lifecycle.mark_text_ready():
-        logger.info("LIFECYCLE: TEXT_READY — interactive input enabled")
+    # V69 M54.1.9 — the console coordinator, FAST routing, the executor and the
+    # LLM/TTS are up. That makes the reader CONSTRUCTIBLE, not AVAILABLE: the actual
+    # input loop does not start for another ~1200 lines of boot. M54 marked
+    # TEXT_READY here and logged "interactive input enabled" while nothing was
+    # reading — the state was a claim about intent, not reachability.
+    #
+    # So we only BIND the readiness probe here. The lifecycle refuses TEXT_READY
+    # until the probe reports the reader is genuinely live, and the reader itself
+    # flips that flag when it starts (see _loop_text / _loop_voice_continuous).
+    _lifecycle.bind_input_reader(lambda: _INPUT_READER["live"])
+
+    # V69 M54.1.8 — start FAST readiness in the BACKGROUND. The operator must not
+    # wait on a model probe to reach the prompt, but TEXT_READY must not claim
+    # readiness we have not established either: the probe is bounded metadata (no
+    # inference) and the prewarm asks for a single token, once.
+    async def _fast_warmup() -> None:
+        try:
+            from core.fast_readiness import get_fast_readiness
+            fast = get_fast_readiness()
+            await fast.probe()
+            logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
+            if fast.state.value == "REACHABLE":
+                await fast.prewarm(client=llm.client)
+                logger.info(f"FAST_READINESS: prewarm -> {fast.state.value}")
+        except Exception as exc:
+            logger.debug(f"FAST_READINESS: probe failed: {exc}")
+
+    if _lifecycle.can_start_task():
+        asyncio.create_task(_fast_warmup(), name="fast-readiness-warmup")
 
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
