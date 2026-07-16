@@ -1914,6 +1914,28 @@ class LLM:
              ejecuta las tools (local o MCP) y continúa el stream con la respuesta.
           5. Si finish_reason == "stop": fin del turno.
         """
+        # V69 M55.11 — deterministic bypass FIRST. Time/date/lifecycle/FAST-model/
+        # vault questions have a single trusted local answer already in the runtime;
+        # restating it via a CPU-bound model is pure latency. Answer it directly in
+        # the active language and return — no MCP init, no routing, no model call.
+        try:
+            self.language_context.observe_text(user_message)
+        except Exception:
+            pass
+        try:
+            from core.deterministic_bypass import maybe_bypass
+            _bypass = maybe_bypass(
+                user_message, language=self.language_context.active_language(),
+            )
+        except Exception:
+            _bypass = None
+        if _bypass:
+            logger.info("BYPASS: answered deterministically from runtime data (no model)")
+            self.history.append({"role": "user", "content": user_message})
+            self.history.append({"role": "assistant", "content": _bypass})
+            yield _bypass
+            return
+
         await self._init_mcp()
         await self._maybe_compress_history()
 
