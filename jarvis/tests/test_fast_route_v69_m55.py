@@ -23,6 +23,16 @@ from core.model_router import ModelDecision, ModelRole
 from core.turn_policy import classify_request
 
 
+def teardown_function(_):
+    # These tests drive the REAL fast path, which mutates the process-global
+    # FastReadiness / native-capability singletons. Reset them so counters do not
+    # leak into other test files (e.g. runtime-health baselines read them live).
+    from core.fast_readiness import reset_fast_readiness
+    from core.ollama_native import reset_native_capability
+    reset_fast_readiness(None)
+    reset_native_capability()
+
+
 def _md(role: ModelRole) -> ModelDecision:
     return ModelDecision(role=role, provider="ollama", model="m", complexity=0.1,
                          reason="t", requires_verification=False)
@@ -280,6 +290,69 @@ def test_both_transports_unavailable_returns_localized_error(monkeypatch):
         monkeypatch.setattr(llm.client, "with_options", lambda **kw: _cd)
         out = await llm.chat("hola")
         assert out.strip() == _FAST_UNREACHABLE_ES.strip()
+        await llm.aclose()
+
+    asyncio.run(_run())
+
+
+def test_fast_timeout_pairs_user_with_assistant_no_dangling(monkeypatch):
+    """M55.15 — a timed-out fast turn must pair the user message with an assistant
+    turn, so the NEXT turn's model can't answer the previous (unanswered) question
+    (the live 'hola replied about TCP' bug)."""
+    from core.ollama_native import (
+        ChatChunk,
+        NativeCapability,
+        NativeProbeState,
+        set_native_capability,
+    )
+    from core.turn_budget import TurnTimeout
+
+    async def timing_out_native(**kw):
+        yield ChatChunk(content="Empez")     # partial content, then a stall
+        raise TurnTimeout("total", 1.0)
+
+    monkeypatch.setattr("core.ollama_native.chat_stream", timing_out_native)
+    set_native_capability(NativeCapability(state=NativeProbeState.NATIVE_READY,
+                                           model="qwen3:8b"))
+
+    async def _run():
+        from core.llm import LLM
+        llm = LLM(_StubExecutor())
+        llm.history = []
+        await llm.chat("hola")
+        assert llm.history[-1]["role"] == "assistant"   # paired, not dangling
+        assert llm.history[-2]["role"] == "user"
+        users = [m for m in llm.history if m["role"] == "user"]
+        assert len(users) == 1 and users[0]["content"] == "hola"
+        await llm.aclose()
+
+    asyncio.run(_run())
+
+
+def test_fast_cancel_without_content_drops_dangling_user(monkeypatch):
+    """A cancelled fast turn that produced no content must not leave a dangling
+    user message behind."""
+    from core.ollama_native import (
+        NativeCapability,
+        NativeProbeState,
+        set_native_capability,
+    )
+
+    async def cancelling_native(**kw):
+        raise asyncio.CancelledError()
+        yield  # pragma: no cover — make it an async generator
+
+    monkeypatch.setattr("core.ollama_native.chat_stream", cancelling_native)
+    set_native_capability(NativeCapability(state=NativeProbeState.NATIVE_READY,
+                                           model="qwen3:8b"))
+
+    async def _run():
+        from core.llm import LLM
+        llm = LLM(_StubExecutor())
+        llm.history = []
+        await llm.chat("hola")
+        assert not any(m["role"] == "user" for m in llm.history), \
+            "the unanswered user turn must be dropped, not left dangling"
         await llm.aclose()
 
     asyncio.run(_run())

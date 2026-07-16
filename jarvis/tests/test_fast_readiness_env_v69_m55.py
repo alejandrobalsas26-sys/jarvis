@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from core.fast_readiness import FastReadiness, reset_fast_readiness
 from core.ollama_env import collect_ollama_env
-from core.ollama_native import NativeCapability, NativeProbeState
+from core.ollama_native import NativeCapability, NativeProbeState, reset_native_capability
+
+
+def teardown_function(_):
+    # Reset process-global singletons so counters/state don't leak across files.
+    reset_fast_readiness(None)
+    reset_native_capability()
 
 
 # ── M55.10 FastReadiness extension ────────────────────────────────────────────

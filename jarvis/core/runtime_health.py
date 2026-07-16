@@ -267,7 +267,9 @@ def _fast_inference_subsystem(fast_stats: dict | None = None) -> SubsystemHealth
     timeouts = stats.get("timeouts", 0) or 0
     if not requests:
         status = HealthStatus.DORMANT
-    elif timeouts and timeouts >= max(1, requests // 2):
+    elif requests >= 4 and timeouts >= max(1, requests // 2):
+        # Only a SUSTAINED timeout rate degrades — one timeout in a handful of
+        # turns is not a degraded transport (and avoids flapping on tiny samples).
         status = HealthStatus.DEGRADED
     else:
         status = HealthStatus.OK
@@ -297,7 +299,9 @@ def _ollama_env_subsystem(env: dict | None = None) -> SubsystemHealth:
         "max_loaded_applied": e.get("max_loaded_applied"),
         "active_transport": e.get("active_transport"),
     }
-    return SubsystemHealth("ollama_env", HealthStatus.OK,
+    # Advisory only (rank 0) — the truthful env view informs the operator but must
+    # never degrade or even shift the overall runtime verdict.
+    return SubsystemHealth("ollama_env", HealthStatus.OPTIONAL,
                            str(e.get("max_loaded_applied", "")), metrics)
 
 

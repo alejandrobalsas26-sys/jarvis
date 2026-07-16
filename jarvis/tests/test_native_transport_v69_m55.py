@@ -40,6 +40,11 @@ from core.ollama_native import (
 from core.turn_budget import StageTimeouts, TurnBudget, TurnTimeout
 
 
+def teardown_function(_):
+    # Reset the process-global native-capability singleton these tests set.
+    reset_native_capability()
+
+
 class FakeClock:
     def __init__(self, t: float = 0.0) -> None:
         self.t = t

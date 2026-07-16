@@ -1786,6 +1786,29 @@ class LLM:
             logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
 
     # ── V69 M55.3/.4/.5 — native no-think FAST path helpers ───────────────────
+    def _close_turn_with_status(self, msg: str) -> str:
+        """Keep history coherent when a turn ends with ONLY a status message
+        (timeout / unreachable). The user message is already in history; without a
+        paired assistant turn it dangles, and the NEXT turn's model sees the unanswered
+        question and answers THAT instead (the live 'hola replied about TCP' bug). So
+        pair it with the status note, then return the same message to yield."""
+        try:
+            if msg and (not self.history or self.history[-1].get("role") != "assistant"):
+                self.history.append({"role": "assistant", "content": msg})
+        except Exception:
+            pass
+        return msg
+
+    def _drop_dangling_user(self) -> None:
+        """Remove a trailing unanswered user message (operator cancellation) so it
+        cannot pollute the NEXT turn's context — same coherence guarantee as
+        _close_turn_with_status, for the paths that yield nothing."""
+        try:
+            if self.history and self.history[-1].get("role") == "user":
+                self.history.pop()
+        except Exception:
+            pass
+
     @staticmethod
     def _note_fast_readiness(method: str, *args) -> None:
         """Best-effort FAST-readiness counter update (timeout/cancel/fallback)."""
@@ -2124,13 +2147,23 @@ class LLM:
                 )
                 self._note_fast_readiness("note_timeout", _tt.stage)
                 record_turn(_budget.snapshot())
-                yield _turn_timeout_message(self.language_context.active_language())
+                _fast_to_msg = _turn_timeout_message(self.language_context.active_language())
+                # Pair the (possibly partial) answer with the user turn — no dangling
+                # user message to pollute the next turn.
+                self._close_turn_with_status(
+                    (_fast_result.get("text") or "").strip() or _fast_to_msg)
+                yield _fast_to_msg
                 unregister_operation("llm_stream")
                 return
             except asyncio.CancelledError:
                 _budget.cancel_success = True
                 logger.info("FAST_ROUTE: cancelled — clean exit")
                 self._note_fast_readiness("note_cancellation")
+                _fast_partial = (_fast_result.get("text") or "").strip()
+                if _fast_partial:
+                    self._close_turn_with_status(_fast_partial)
+                else:
+                    self._drop_dangling_user()
                 try:
                     await self._broadcast_cancel_event()
                 except Exception:
@@ -2255,7 +2288,8 @@ class LLM:
             _first_token_budget = min(_stage_t.first_token_s, _budget.remaining_s())
             if _first_token_budget <= 0.0:
                 _budget.timeout_stage = "total"
-                yield _turn_timeout_message(self.language_context.active_language())
+                yield self._close_turn_with_status(
+                    _turn_timeout_message(self.language_context.active_language()))
                 unregister_operation("llm_stream")
                 return
             try:
@@ -2287,7 +2321,8 @@ class LLM:
                     )
                 )
                 record_turn(_budget.snapshot())
-                yield _turn_timeout_message(self.language_context.active_language())
+                yield self._close_turn_with_status(
+                    _turn_timeout_message(self.language_context.active_language()))
                 unregister_operation("llm_stream")
                 return
             except (APIConnectionError, httpx.ConnectError, httpx.HTTPError) as _conn_err:
@@ -2303,7 +2338,8 @@ class LLM:
                     )
                 )
                 record_turn(_budget.snapshot())
-                yield _fast_unreachable_message(self.language_context.active_language())
+                yield self._close_turn_with_status(
+                    _fast_unreachable_message(self.language_context.active_language()))
                 unregister_operation("llm_stream")
                 return
 
@@ -2361,7 +2397,12 @@ class LLM:
                     f"limit={_tt.limit_s:.1f}s) — cancelled"
                 )
                 record_turn(_budget.snapshot())
-                yield _turn_timeout_message(self.language_context.active_language())
+                # V69 M55.15 — pair the (possibly partial) answer with the user turn
+                # so a timed-out turn cannot leave a dangling user message that the
+                # NEXT turn's model answers instead (the 'hola replied about TCP' bug).
+                _to_msg = _turn_timeout_message(self.language_context.active_language())
+                self._close_turn_with_status("".join(text_chunks).strip() or _to_msg)
+                yield _to_msg
                 unregister_operation("llm_stream")
                 return
             except asyncio.CancelledError:
@@ -2370,6 +2411,12 @@ class LLM:
                 # turn hang on pool acquisition).
                 _budget.cancel_success = await _aclose_stream(stream)
                 logger.info("LLM: asyncio.CancelledError — clean exit")
+                # Coherence: keep partial content or drop the unanswered user turn.
+                _partial = "".join(text_chunks).strip()
+                if _partial:
+                    self._close_turn_with_status(_partial)
+                else:
+                    self._drop_dangling_user()
                 try:
                     await self._broadcast_cancel_event()
                 except Exception:
@@ -2378,6 +2425,7 @@ class LLM:
                 return
             except (RuntimeError, BaseExceptionGroup) as e:
                 logger.error(f"LLM: stream interrupted by task group error: {e}")
+                self._drop_dangling_user()
                 unregister_operation("llm_stream")
                 return
 
