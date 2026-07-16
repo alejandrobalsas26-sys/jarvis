@@ -259,6 +259,64 @@ def _interactive_subsystem(turn: dict | None = None, life: dict | None = None,
         metrics)
 
 
+def _fast_inference_subsystem(fast_stats: dict | None = None) -> SubsystemHealth:
+    """V69 M55.13 — native FAST no-think transport latency + no-think capability.
+    DORMANT until the first FAST turn; DEGRADED only if timeouts dominate."""
+    stats = fast_stats if fast_stats is not None else _live_fast_inference()
+    requests = stats.get("requests", 0) or 0
+    timeouts = stats.get("timeouts", 0) or 0
+    if not requests:
+        status = HealthStatus.DORMANT
+    elif timeouts and timeouts >= max(1, requests // 2):
+        status = HealthStatus.DEGRADED
+    else:
+        status = HealthStatus.OK
+    return SubsystemHealth(
+        "fast_inference", status,
+        "transport={} model={} think_supported={} p50_ft={}ms reqs={}".format(
+            stats.get("active_transport"), stats.get("active_model"),
+            stats.get("think_supported"), stats.get("p50_first_token_ms"), requests),
+        {k: v for k, v in stats.items() if v is not None})
+
+
+def _ollama_env_subsystem(env: dict | None = None) -> SubsystemHealth:
+    """V69 M55.13 — truthful Ollama environment. Advisory ONLY: an unverified /
+    not-applied OLLAMA_MAX_LOADED_MODELS never marks the runtime unhealthy."""
+    e = env if env is not None else _live_ollama_env()
+    if not e:
+        return SubsystemHealth("ollama_env", HealthStatus.OPTIONAL,
+                               "ollama env not available", {})
+    cfg = e.get("configured_by_jarvis", {}) or {}
+    metrics = {
+        "configured_parallel": cfg.get("num_parallel"),
+        "configured_max_loaded": cfg.get("max_loaded_models"),
+        "observed_loaded_models": e.get("observed_loaded_models"),
+        "settings_verified": e.get("settings_verified"),
+        "server_version": e.get("server_version"),
+        "capability_probe_state": e.get("capability_probe_state"),
+        "max_loaded_applied": e.get("max_loaded_applied"),
+        "active_transport": e.get("active_transport"),
+    }
+    return SubsystemHealth("ollama_env", HealthStatus.OK,
+                           str(e.get("max_loaded_applied", "")), metrics)
+
+
+def _live_fast_inference() -> dict:
+    try:
+        from core.fast_readiness import get_fast_readiness
+        return get_fast_readiness().fast_inference_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_ollama_env() -> dict:
+    try:
+        from core.ollama_env import collect_ollama_env
+        return collect_ollama_env().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _live_fast_readiness() -> dict:
     try:
         from core.fast_readiness import get_fast_readiness
@@ -369,6 +427,8 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         # V69 M54.1.13 — watcher backpressure joins the existing health surface
         # rather than becoming a second one.
         _filesystem_subsystem(),
+        # V69 M55.13 — native FAST transport latency + truthful Ollama env state.
+        _fast_inference_subsystem(), _ollama_env_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}

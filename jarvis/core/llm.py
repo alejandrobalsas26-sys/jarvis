@@ -1768,6 +1768,17 @@ class LLM:
             logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
 
     # ── V69 M55.3/.4/.5 — native no-think FAST path helpers ───────────────────
+    @staticmethod
+    def _note_fast_readiness(method: str, *args) -> None:
+        """Best-effort FAST-readiness counter update (timeout/cancel/fallback)."""
+        try:
+            from core.fast_readiness import get_fast_readiness
+            fn = getattr(get_fast_readiness(), method, None)
+            if callable(fn):
+                fn(*args)
+        except Exception:
+            pass
+
     def _get_native_http(self):
         """Lazily create a shared httpx client for the native /api/chat fast path.
         Reused across fast turns to avoid connection churn; closed in aclose()."""
@@ -2085,6 +2096,7 @@ class LLM:
                         _nfu
                     )
                 )
+                self._note_fast_readiness("note_native_fallback")
                 # fall through to the existing OpenAI-compatible loop below.
             except TurnTimeout as _tt:
                 _budget.timeout_stage = _tt.stage
@@ -2092,6 +2104,7 @@ class LLM:
                 logger.warning(
                     f"FAST_ROUTE: native stream timed out (stage={_tt.stage}) — cancelled"
                 )
+                self._note_fast_readiness("note_timeout", _tt.stage)
                 record_turn(_budget.snapshot())
                 yield _turn_timeout_message(self.language_context.active_language())
                 unregister_operation("llm_stream")
@@ -2099,6 +2112,7 @@ class LLM:
             except asyncio.CancelledError:
                 _budget.cancel_success = True
                 logger.info("FAST_ROUTE: cancelled — clean exit")
+                self._note_fast_readiness("note_cancellation")
                 try:
                     await self._broadcast_cancel_event()
                 except Exception:

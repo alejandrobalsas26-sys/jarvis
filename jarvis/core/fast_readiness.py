@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
 _PROBE_TIMEOUT_S = 3.0
 _PREWARM_TIMEOUT_S = 45.0
+# Bounded moving-window size for FAST first-token / total / throughput samples.
+_FT_WINDOW = 20
 
 
 class FastState(str, Enum):
@@ -59,6 +62,20 @@ class FastReadiness:
     _last_success_at: float | None = field(default=None)
     _last_error: str | None = field(default=None)
     _prewarm_started: bool = field(default=False)
+    # ── V69 M55.10 — FAST transport + no-think capability + latency stats ──────
+    transport: str = field(default="auto")
+    think_supported: bool | None = field(default=None)
+    native_state: str = field(default="UNKNOWN")
+    server_version: str | None = field(default=None)
+    _ft_samples: "deque[float]" = field(default_factory=lambda: deque(maxlen=_FT_WINDOW))
+    _total_samples: "deque[float]" = field(default_factory=lambda: deque(maxlen=_FT_WINDOW))
+    _tps_samples: "deque[float]" = field(default_factory=lambda: deque(maxlen=_FT_WINDOW))
+    _successes: int = field(default=0)
+    _timeouts: int = field(default=0)
+    _cancellations: int = field(default=0)
+    _native_fallbacks: int = field(default=0)
+    _last_timeout_stage: str | None = field(default=None)
+    _post_cancel_busy_ms: float | None = field(default=None)
 
     @property
     def state(self) -> FastState:
@@ -79,6 +96,98 @@ class FastReadiness:
             "last_success_at": self._last_success_at,
             "last_error": self._last_error,
             "accepts_input": self.accepts_input(),
+            # M55.10 — transport + no-think capability (additive keys).
+            "transport": self.transport,
+            "think_supported": self.think_supported,
+            "native_state": self.native_state,
+            "server_version": self.server_version,
+        }
+
+    # ── V69 M55.10 — FAST transport capability + latency observability ─────────
+    def note_capability(self, cap) -> None:
+        """Fold a :class:`~core.ollama_native.NativeCapability` into readiness.
+        Bounded and never raising."""
+        try:
+            state = getattr(cap, "state", None)
+            self.native_state = getattr(state, "value", str(state)) if state else "UNKNOWN"
+            self.think_supported = bool(getattr(cap, "think_false_supported", False))
+            ver = getattr(cap, "server_version", None)
+            if ver:
+                self.server_version = ver
+        except Exception:  # noqa: BLE001
+            pass
+
+    def record_fast_turn(self, *, first_token_ms=None, total_ms=None,
+                         tokens_per_second=None, transport=None, think=None) -> None:
+        """Record one completed FAST turn's latency sample (bounded ring)."""
+        self._successes += 1
+        if transport:
+            self.transport = transport
+        if first_token_ms:
+            self._ft_samples.append(float(first_token_ms))
+        if total_ms:
+            self._total_samples.append(float(total_ms))
+        if tokens_per_second:
+            self._tps_samples.append(float(tokens_per_second))
+
+    def note_timeout(self, stage: str | None) -> None:
+        self._timeouts += 1
+        self._last_timeout_stage = stage
+
+    def note_cancellation(self) -> None:
+        self._cancellations += 1
+
+    def note_native_fallback(self) -> None:
+        self._native_fallbacks += 1
+
+    def note_post_cancel_busy(self, ms: float | None) -> None:
+        """Server-side continuation observed AFTER a client cancel (M55.9). Only set
+        when actually measured — left None otherwise (never invented)."""
+        self._post_cancel_busy_ms = ms
+
+    @staticmethod
+    def _p50(xs: list[float]) -> float | None:
+        if not xs:
+            return None
+        s = sorted(xs)
+        return round(s[len(s) // 2], 1)
+
+    def fast_inference_snapshot(self) -> dict:
+        """Bounded FAST-inference metrics for runtime health (M55.13). Counters and
+        timings only — never prompt content or generated text."""
+        ft = list(self._ft_samples)
+        tot = list(self._total_samples)
+        tps = list(self._tps_samples)
+        gen_cap = ctx_cap = think_req = None
+        transport = self.transport
+        try:
+            from core.config import settings as _s
+            gen_cap = getattr(_s, "fast_max_tokens", None)
+            ctx_cap = getattr(_s, "fast_context", None)
+            think_req = _s.fast_think_value() if hasattr(_s, "fast_think_value") else None
+            transport = self.transport or getattr(_s, "fast_transport", "auto")
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "active_transport": transport,
+            "active_model": self.model,
+            "think_requested": think_req,
+            "think_supported": self.think_supported,
+            "native_state": self.native_state,
+            "generation_cap": gen_cap,
+            "context_cap": ctx_cap,
+            "requests": self._successes + self._timeouts + self._cancellations,
+            "successes": self._successes,
+            "timeouts": self._timeouts,
+            "cancellations": self._cancellations,
+            "native_fallbacks": self._native_fallbacks,
+            "average_first_token_ms": round(sum(ft) / len(ft), 1) if ft else None,
+            "p50_first_token_ms": self._p50(ft),
+            "recent_first_token_ms": ft[-1] if ft else None,
+            "average_total_ms": round(sum(tot) / len(tot), 1) if tot else None,
+            "recent_tokens_per_second": tps[-1] if tps else None,
+            "last_timeout_stage": self._last_timeout_stage,
+            "post_cancel_busy_ms": self._post_cancel_busy_ms,
         }
 
     async def probe(self) -> FastState:

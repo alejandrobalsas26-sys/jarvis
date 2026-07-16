@@ -106,9 +106,11 @@ class TestShapeAndLive:
         # V69 M54.1.13 — filesystem_watch joins the ONE health surface (the YARA
         # monitor was TaskWatchdog-registered only, so its dropped events were
         # invisible while the live boot flooded the console with QueueFull).
+        # V69 M55.13 — fast_inference (native no-think transport latency) and
+        # ollama_env (truthful, advisory environment state) join the ONE surface.
         assert names == {"collectors", "resource", "tasks", "inference",
                          "model_runtime", "spine", "verifier", "interactive",
-                         "filesystem_watch"}
+                         "filesystem_watch", "fast_inference", "ollama_env"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()
