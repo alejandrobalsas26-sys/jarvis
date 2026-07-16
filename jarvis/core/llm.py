@@ -19,6 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import AsyncGenerator
 
+import httpx
 from openai import AsyncOpenAI
 from loguru import logger
 
@@ -37,7 +38,14 @@ from core.verification import should_verify, verify_answer
 # language continuity, and host-clock grounding. Extends the existing per-turn
 # decision without forking routing or the security gate.
 from core.turn_policy import classify_request
-from core.turn_budget import TurnBudget, budget_for, record_turn
+from core.turn_budget import (
+    _MAX_TOTAL_S,
+    TurnBudget,
+    TurnTimeout,
+    budget_for,
+    record_turn,
+    timeouts_for,
+)
 from core.language_context import LanguageContext
 from core import host_time as _host_time
 from core.memory_router import (
@@ -921,11 +929,94 @@ def _adaptive_ctx(history: list[dict], base_ctx: int) -> int:
     return base_ctx
 
 
+# ── V69 M54.1.5/.6 — bounded streaming helpers ───────────────────────────────
+# One concise, bilingual sentence for a turn that could not finish in time. The
+# operator must always get control back WITH an explanation, never silence.
+_TURN_TIMEOUT_ES = (
+    "No pude completar la respuesta dentro del límite de tiempo. "
+    "Cancelé la generación para devolverte el control."
+)
+_TURN_TIMEOUT_EN = (
+    "I couldn't finish the answer within the time limit. "
+    "I cancelled the generation to give you back control."
+)
+
+
+def _turn_timeout_message(language: str | None) -> str:
+    """The bounded timeout reply, in the turn's ACTIVE language (M54.4 continuity)."""
+    lang = (language or "es").lower()
+    return _TURN_TIMEOUT_EN if lang.startswith("en") else _TURN_TIMEOUT_ES
+
+
+async def _aclose_stream(stream) -> bool:
+    """Close a live Ollama SSE response, bounded and never raising. Returns whether
+    teardown succeeded, so runtime health can report cancel_success truthfully."""
+    for attr in ("close", "aclose"):
+        fn = getattr(stream, attr, None)
+        if fn is None:
+            continue
+        try:
+            res = fn()
+            if asyncio.iscoroutine(res):
+                await asyncio.wait_for(res, timeout=2.0)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _iter_stream_bounded(stream, budget, stage_t):
+    """Iterate an Ollama SSE stream under an idle-gap bound and the turn total.
+
+    `async for chunk in stream` is unbounded: once streaming begins, a token-starved
+    CPU model can extend the turn indefinitely. Each step here awaits __anext__
+    inside wait_for, so a stall is interrupted rather than merely measured. wait_for
+    cancels AND awaits the inner task, so the stream is never left mid-flight.
+    """
+    it = stream.__aiter__()
+    while True:
+        remaining = budget.remaining_s()
+        if remaining <= 0.0:
+            raise TurnTimeout("total", budget.total_s)
+        wait = min(stage_t.idle_s, remaining)
+        try:
+            chunk = await asyncio.wait_for(it.__anext__(), timeout=wait)
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError:
+            if budget.remaining_s() <= 0.0:
+                raise TurnTimeout("total", budget.total_s) from None
+            raise TurnTimeout("stream_idle", wait) from None
+        yield chunk
+
+
 class LLM:
     def __init__(self, tool_executor):
+        # V69 M54.1.5 — THE unbounded wait. This was constructed with no `timeout=`
+        # and therefore silently inherited the openai SDK default, verified against
+        # the installed openai 2.36.0 as:
+        #     Timeout(connect=5.0, read=600, write=600, pool=600)
+        # A 600-second read timeout nobody chose was the turn's only real bound. The
+        # 5 s connect always succeeded instantly (Ollama's listener is up); the wait
+        # happened AFTER connect, while Ollama synchronously swapped models under
+        # OLLAMA_MAX_LOADED_MODELS=1 before emitting the first SSE byte — governed by
+        # read=600. That is the multi-minute hang the operator hit.
+        #
+        # The bound is explicit now. It is deliberately a CEILING, not the real
+        # deadline: the per-turn deadline is derived from the risk-sized TurnBudget
+        # and applied per request via `with_options(timeout=...)`, because this
+        # client is shared with the verifier.
+        from core.config import settings as _cfg
         self.client = AsyncOpenAI(
             base_url="http://localhost:11434/v1",
             api_key="ollama",
+            timeout=httpx.Timeout(
+                connect=float(getattr(_cfg, "turn_connect_timeout_s", 5.0)),
+                read=_MAX_TOTAL_S,
+                write=30.0,
+                pool=30.0,
+            ),
+            max_retries=0,   # a retry would silently multiply the turn's deadline
         )
         self.tool_executor = tool_executor
         self.history: list[dict] = []
@@ -1882,20 +1973,67 @@ class LLM:
             # question like "POO" can never be routed to query_knowledge; every other
             # tool (and its own downstream gate) is unchanged.
             _turn_tools = _turn_policy.filter_tools(TOOLS)
-            stream = await self.client.chat.completions.create(
-                model=_routed_model,
-                messages=messages_for_api,
-                tools=_turn_tools,
-                stream=True,
-                extra_body={"options": {"num_ctx": _ctx}},
-            )
+            # V69 M54.1.5/.6 — the single `await` that hung the live run for
+            # minutes. It covers Ollama's model swap (unload nomic, load qwen3:8b
+            # off disk, prefill) and does not return until the FIRST SSE chunk. It
+            # had no bound of its own and inherited the SDK's read=600.
+            #
+            # It now gets an explicit per-request deadline derived from what the
+            # turn has ACTUALLY got left, so queue wait and model-load time count
+            # against the same total rather than each getting a fresh timeout.
+            # with_options() is used because self.client is shared with the verifier.
+            _stage_t = timeouts_for(_turn_policy)
+            _budget.model_role = getattr(decision.role, "value", None)
+            _first_token_budget = min(_stage_t.first_token_s, _budget.remaining_s())
+            if _first_token_budget <= 0.0:
+                _budget.timeout_stage = "total"
+                yield _turn_timeout_message(self.language_context.active_language())
+                unregister_operation("llm_stream")
+                return
+            try:
+                stream = await asyncio.wait_for(
+                    self.client.with_options(
+                        timeout=httpx.Timeout(
+                            connect=_stage_t.connect_s,
+                            read=_first_token_budget,
+                            write=_stage_t.connect_s,
+                            pool=_stage_t.connect_s,
+                        ),
+                    ).chat.completions.create(
+                        model=_routed_model,
+                        messages=messages_for_api,
+                        tools=_turn_tools,
+                        stream=True,
+                        extra_body={"options": {"num_ctx": _ctx}},
+                    ),
+                    timeout=_first_token_budget,
+                )
+            except (asyncio.TimeoutError, httpx.TimeoutException) as _to_err:
+                # Bounded, honest failure instead of an open-ended park. The
+                # request is already torn down by wait_for/httpx here.
+                _budget.timeout_stage = "first_token"
+                _budget.cancel_success = True
+                logger.warning(
+                    "LLM: no first token from {} within {:.1f}s ({}) — cancelled".format(
+                        _routed_model, _first_token_budget, type(_to_err).__name__,
+                    )
+                )
+                record_turn(_budget.snapshot())
+                yield _turn_timeout_message(self.language_context.active_language())
+                unregister_operation("llm_stream")
+                return
 
             text_chunks: list[str] = []
             accumulated_calls: dict[int, dict] = {}
             finish_reason: str | None = None
 
             try:
-                async for chunk in stream:
+                # V69 M54.1.6 — a stream that starts and then stalls must be
+                # cancelled. `async for chunk in stream` had no gap bound, and the
+                # operator-interrupt check below is CHUNK-GATED: it only runs when a
+                # chunk arrives, so it could never break a pre-first-token or
+                # mid-stream stall. _iter_stream_bounded supplies the missing bound.
+                async for chunk in _iter_stream_bounded(stream, _budget, _stage_t):
                     # v35.0 — operator interrupt check on every chunk
                     if (_cancel_bus.llm_stream_cancel is not None
                             and _cancel_bus.llm_stream_cancel.is_set()):
@@ -1929,7 +2067,24 @@ class LLM:
 
                     if choice.finish_reason is not None:
                         finish_reason = choice.finish_reason
+            except TurnTimeout as _tt:
+                # The stream stalled mid-answer. Close it, release the connection,
+                # and tell the operator in their language — never hang.
+                _budget.timeout_stage = _tt.stage
+                _budget.cancel_success = await _aclose_stream(stream)
+                logger.warning(
+                    f"LLM: stream stalled (stage={_tt.stage}, "
+                    f"limit={_tt.limit_s:.1f}s) — cancelled"
+                )
+                record_turn(_budget.snapshot())
+                yield _turn_timeout_message(self.language_context.active_language())
+                unregister_operation("llm_stream")
+                return
             except asyncio.CancelledError:
+                # M54.1.12 — on cancellation the live HTTP response must be closed,
+                # not abandoned to the pool (a leaked pool slot would make the NEXT
+                # turn hang on pool acquisition).
+                _budget.cancel_success = await _aclose_stream(stream)
                 logger.info("LLM: asyncio.CancelledError — clean exit")
                 try:
                     await self._broadcast_cancel_event()

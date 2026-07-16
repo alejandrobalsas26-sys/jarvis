@@ -111,6 +111,81 @@ class Settings(BaseSettings):
             raise ValueError("embedding_batch_size must be between 1 and 128.")
         return v
 
+    # ── Filesystem watch policy (V69 M54.1.3) ────────────────────────────────
+    # The live boot flooded the console with QueueFull tracebacks because the YARA
+    # watcher hardcoded `~/Downloads` recursive — which CONTAINS this repo — with a
+    # 100-slot queue and no dedup, so JARVIS scanning its own writes saturated it.
+    # These make the roots and the noise policy operator-configurable instead:
+    #   watch_include      : extra roots to observe (os.pathsep/','-separated)
+    #   watch_exclude      : extra directory NAMES or absolute paths to ignore
+    #   watch_queue_size   : bounded event queue capacity
+    #   watch_debounce_ms  : window in which repeats of one path coalesce
+    #   watch_security_root: observe ~/Downloads for executables (SECURITY_SCAN)
+    # Bounds are clamped, never raised: an operator typo must not create an
+    # unbounded queue or disable debouncing entirely.
+    watch_include:       str = ""
+    watch_exclude:       str = ""
+    watch_queue_size:    int = 512
+    watch_debounce_ms:   int = 1000
+    watch_security_root: bool = True
+
+    @field_validator("watch_queue_size")
+    @classmethod
+    def validate_watch_queue_size(cls, v: int) -> int:
+        # Clamp rather than raise: a bad value must not stop the runtime booting.
+        return max(16, min(int(v), 8192))
+
+    @field_validator("watch_debounce_ms")
+    @classmethod
+    def validate_watch_debounce_ms(cls, v: int) -> int:
+        return max(50, min(int(v), 60_000))
+
+    @field_validator("watch_security_root", mode="before")
+    @classmethod
+    def _coerce_watch_security_root(cls, v) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(v)
+
+    # ── Interactive turn deadlines (V69 M54.1.5-.7) ──────────────────────────
+    # The live first turn never returned: AsyncOpenAI was built with no timeout=,
+    # inheriting the SDK default read=600 (ten minutes nobody chose), and the M54
+    # TurnBudget only ever bounded the verifier. These make the real bounds
+    # explicit and operator-tunable — within hard caps, so a typo cannot recreate
+    # an effectively unlimited wait.
+    #   turn_budget_scale         : multiplies every risk-sized total (0.25..3.0)
+    #   turn_first_token_timeout_s: connect -> first token (covers the cold model
+    #                               swap that OLLAMA_MAX_LOADED_MODELS=1 forces)
+    #   turn_stream_idle_timeout_s: max gap between chunks once streaming started
+    #   turn_connect_timeout_s    : HTTP connection establishment
+    # Calibrated live on the target host: warm first token 10.3s, cold 110.2s
+    # (qwen3:8b reasoning chain), generation ~13 chars/s. first_token is the
+    # anti-silence bound; it is clamped down to each policy's total.
+    turn_budget_scale:          float = 1.0
+    turn_first_token_timeout_s: float = 90.0
+    turn_stream_idle_timeout_s: float = 20.0
+    turn_connect_timeout_s:     float = 5.0
+
+    @field_validator("turn_budget_scale")
+    @classmethod
+    def validate_turn_budget_scale(cls, v: float) -> float:
+        return max(0.25, min(float(v), 3.0))
+
+    @field_validator("turn_first_token_timeout_s")
+    @classmethod
+    def validate_turn_first_token(cls, v: float) -> float:
+        return max(2.0, min(float(v), 180.0))
+
+    @field_validator("turn_stream_idle_timeout_s")
+    @classmethod
+    def validate_turn_stream_idle(cls, v: float) -> float:
+        return max(1.0, min(float(v), 120.0))
+
+    @field_validator("turn_connect_timeout_s")
+    @classmethod
+    def validate_turn_connect(cls, v: float) -> float:
+        return max(0.5, min(float(v), 30.0))
+
     # ── AURA HUD server (loopback WebSocket telemetry / command HUD) ──────────
     # CSWSH defense for the /ws handshake: by default only loopback origins
     # (localhost / 127.0.0.0/8 / ::1) may open the AURA WebSocket; missing or

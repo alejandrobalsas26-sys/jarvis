@@ -209,6 +209,62 @@ class BootState:
         }
 
 
+# ── V69 M54.1.10 — the ONE truthful readiness claim, reusable ────────────────
+# The deterministic greeting must state readiness without re-deriving it (two
+# derivations would eventually disagree, which is exactly the "All systems nominal"
+# lie M54 fixed). main() remembers the assembled state here; the greeting reads it.
+_last_boot_state = None
+
+
+def remember_boot_state(state) -> None:
+    """Publish the assembled boot state as the session's truthful snapshot."""
+    global _last_boot_state
+    _last_boot_state = state
+
+
+def get_last_boot_state():
+    return _last_boot_state
+
+
+def readiness_sentence(language: str = "es") -> str:
+    """The single readiness sentence, from the real boot state. Falls back to a
+    non-committal claim rather than inventing "nominal" when nothing is known."""
+    state = _last_boot_state
+    if state is None:
+        return "JARVIS is ready." if language.startswith("en") else "JARVIS está listo."
+    line = state._ready_line()
+    if not language.startswith("en"):
+        return _READY_ES.get(line) or _translate_ready_es(state)
+    return line
+
+
+_READY_ES: dict[str, str] = {
+    "All systems nominal. JARVIS at your service.":
+        "Todos los sistemas nominales. JARVIS a tu servicio.",
+}
+
+
+def _translate_ready_es(state) -> str:
+    """Spanish rendering of the degraded readiness claim (the live case). Kept in
+    lockstep with _ready_line() — same facts, same order, no extra promises."""
+    if state.semantic_degraded and not state.failed and not state.degraded:
+        base = "JARVIS está listo con memoria semántica degradada."
+        if state.knowledge_vault_active:
+            base += " El Knowledge Vault está activo."
+        base += " La memoria episódica requiere migración."
+        return base
+    bits = []
+    if state.failed:
+        bits.append(f"{state.failed} con fallos")
+    if state.degraded:
+        bits.append(f"{state.degraded} degradados")
+    if state.semantic_degraded:
+        bits.append("memoria semántica degradada")
+    if not bits:
+        return "Todos los sistemas nominales. JARVIS a tu servicio."
+    return f"JARVIS en línea con capacidad reducida — {', '.join(bits)}."
+
+
 def _derive_semantic(summary: dict | None) -> tuple[bool, bool, bool]:
     """Fold core.semantic_migration.semantic_boot_summary() into three truthful
     flags: (semantic_degraded, episodic_reindex_required, knowledge_vault_active).

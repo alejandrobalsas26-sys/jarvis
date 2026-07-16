@@ -57,9 +57,18 @@ def test_full_broken_scenario_is_now_coherent():
     # 4. A premature input attempt is rejected by the gate.
     assert not life.accepts_input()
 
-    # 5. Reach TEXT_READY.
+    # 5. Reach TEXT_READY. V69 M54.1.9 — the state is now gated on a REAL reader:
+    # marking it without one is refused, because that is precisely the false
+    # guarantee the live run exposed (TEXT_READY logged ~1200 lines before the
+    # prompt existed).
+    assert not life.mark_text_ready(), "TEXT_READY must not be claimable with no reader"
+    _reader_live = {"v": False}
+    life.bind_input_reader(lambda: _reader_live["v"])
+    assert not life.mark_text_ready(), "a bound-but-dead reader is still not ready"
+    _reader_live["v"] = True                       # the input loop starts here
     assert life.mark_text_ready()
     assert life.accepts_input()
+    assert life.input_available()
 
     # 6-7. Background logs during active typing keep the input line intact.
     console.set_prompt("Tú: ")

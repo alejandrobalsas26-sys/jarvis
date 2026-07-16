@@ -78,6 +78,8 @@ class LifecycleManager:
     _phase_ms: dict[str, float] = field(default_factory=dict)
     _t0: float = field(default=0.0)
     _stopping_at: float | None = field(default=None)
+    # M54.1.9 — the bound input-reader availability probe (None = no reader).
+    _input_ready_fn: "callable | None" = field(default=None)
 
     def __post_init__(self) -> None:
         self._t0 = self.clock()
@@ -132,7 +134,46 @@ class LifecycleManager:
             self._stamp_phase(target.name)
             return True
 
+    # ── V69 M54.1.9 — TEXT_READY must be an externally OBSERVABLE guarantee ──
+    # M54 logged "TEXT_READY — interactive input enabled" ~1200 lines before the
+    # reader existed: `mark_text_ready()` fired at main.py:962 while the actual
+    # `input()` loop (_loop_text) did not start until main.py:2188, behind optional
+    # subsystem registration, self-test, boot narration, briefing, MCP attachment,
+    # integrity regeneration and Whisper warmup — plus a blocking LLM greeting. The
+    # state was a claim about intent, not about reachability.
+    #
+    # The transition is now GATED on a bound reader. `accepts_input()` stays the
+    # permission question; `input_available()` is the new capability question, and
+    # TEXT_READY requires both. A subsystem may attach its readiness probe so the
+    # gate reflects reality rather than an ordering assumption.
+    def bind_input_reader(self, ready_fn: "callable") -> None:
+        """Register the predicate that answers 'is the text reader actually able to
+        accept a line right now?'. Until this is bound, TEXT_READY cannot be
+        reached — a lifecycle that cannot prove a reader must not claim one."""
+        with self._lock:
+            self._input_ready_fn = ready_fn
+
+    def input_available(self) -> bool:
+        """True only if a reader is bound AND reports itself available."""
+        fn = self._input_ready_fn
+        if fn is None:
+            return False
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+
     def mark_text_ready(self) -> bool:
+        """Advance to TEXT_READY. Refuses (returns False) unless the input reader is
+        genuinely available, so the state can never outrun the prompt again."""
+        if not self.input_available():
+            return False
+        return self.advance_to(LifecycleState.TEXT_READY)
+
+    def force_text_ready(self) -> bool:
+        """Advance without the reader gate. For headless/voice-only runs and tests
+        that intentionally have no text reader. Named to be conspicuous in review —
+        production text mode must use mark_text_ready()."""
         return self.advance_to(LifecycleState.TEXT_READY)
 
     def mark_core_ready(self) -> bool:
@@ -199,6 +240,8 @@ class LifecycleManager:
             "state": self._state.name,
             "is_stopping": self.is_stopping(),
             "accepts_input": self.accepts_input(),
+            # M54.1.9 — the two must agree; a divergence here IS the old bug.
+            "input_available": self.input_available(),
             "process_started_ms": ph.get("STARTING", 0.0),
             "text_ready_ms": ph.get("TEXT_READY"),
             "core_ready_ms": ph.get("CORE_READY"),

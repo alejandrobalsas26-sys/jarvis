@@ -290,13 +290,17 @@ async def dump_process_memory(
         "timestamp":    datetime.now(timezone.utc).isoformat(),
     })
 
-    # Queue YARA scan on dump
+    # Queue YARA scan on dump. V69 M54.1.1 — this used to be
+    #     loop.call_soon_threadsafe(_scan_queue_ref.put_nowait, Path(...))
+    # whose `except Exception` was dead: the put runs later on the loop thread, so
+    # a QueueFull escaped into the loop's default handler as a full traceback.
+    # offer_security_path() catches it inside the callback and counts the drop. A
+    # memory dump is a HIGH-priority event, so it evicts older noise rather than
+    # being dropped itself.
     try:
-        from tools.yara_file_monitor import _scan_queue_ref
-        if _scan_queue_ref is not None:
-            loop.call_soon_threadsafe(
-                _scan_queue_ref.put_nowait, Path(dump_path_str)
-            )
+        from tools.yara_file_monitor import offer_security_path
+        if not offer_security_path(dump_path_str):
+            logger.debug("MEM_HUNTER: YARA scan not queued (monitor down or backpressure)")
     except Exception as e:
         logger.debug(f"MEM_HUNTER: YARA queue error: {e}")
 

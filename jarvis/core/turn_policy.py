@@ -19,6 +19,7 @@ a reason code) and fully unit-testable without a live model.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -128,6 +129,29 @@ _EDUCATIONAL_MARKERS = (
     "qué significa", "que significa", "what is", "what are", "explain",
     "how does", "difference between", "what does", "define ", "meaning of",
     "teach me", "enséñame", "ensename", "concepto de",
+)
+
+# V69 M54.1.11 — the "how do I <verb>?" interrogative form.
+#
+# The live turn "como saco la raiz cubica de algo" matched NO marker set: the
+# educational list had "qué es"/"cómo funciona"/"explica" but nothing for
+# "cómo + verb". It fell through to branch 9 (ORDINARY_CONVERSATION), which is a
+# real misclassification — an ordinary how-to question IS general educational.
+#
+# This is an ALLOWLIST of educational verbs, not a broad "cómo \w+" pattern:
+# "cómo estás" is a greeting, not a lesson. It is also safe by PRECEDENCE — the
+# cyber-sensitive (5) and effectful (6) branches are evaluated BEFORE educational
+# (7), so "cómo ejecuto un exploit" can never be promoted to educational by this.
+# Accent-optional throughout: the operator types without accents.
+_HOWTO_RE = re.compile(
+    r"\bc[oó]mo\s+(?:se\s+|puedo\s+|podr[ií]a\s+|deber[ií]a\s+)?"
+    r"(?:saco|sacar|saca|hago|hacer|hace|calculo|calcular|calcula|"
+    r"obtengo|obtener|obtiene|resuelvo|resolver|resuelve|"
+    r"escribo|escribir|escribe|uso|usar|usa|aprendo|aprender|"
+    r"defino|definir|declaro|declarar|convierto|convertir|"
+    r"funciona|funcionan|sirve)\b"
+    r"|\bhow\s+(?:do|can|could|would|should)\s+(?:i|you|we)\b"
+    r"|\bhow\s+to\s+\w+"
 )
 
 
@@ -266,11 +290,13 @@ def classify_request(
     #    because it is still a definitional question. Direct FAST, no vault,
     #    deterministic checks only. THIS is the POO path.
     ed = _hits(text, _EDUCATIONAL_MARKERS)
-    if ed:
+    _howto = _HOWTO_RE.search(text)
+    if ed or _howto:
+        _matched = tuple(ed) if ed else (f"howto:{_howto.group(0)}",)
         return TurnPolicy(
             RequestClass.GENERAL_EDUCATIONAL, ReasonCode.DIRECT_FAST,
             VerifyPolicy.DETERMINISTIC_CHECKS_ONLY, security,
-            knowledge_vault_allowed=False, matched=tuple(ed),
+            knowledge_vault_allowed=False, matched=_matched,
             detail="general educational knowledge — answered directly with FAST",
         )
 
