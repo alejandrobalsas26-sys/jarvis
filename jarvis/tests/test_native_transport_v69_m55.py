@@ -252,6 +252,27 @@ def test_stream_server_disconnect_is_clean():
     asyncio.run(_run())
 
 
+def test_next_turn_after_timeout_succeeds():
+    """A stream that times out releases its source; a SECOND stream then works
+    immediately (the property the operator actually needs after a cancelled turn)."""
+    async def _run():
+        t_fast = StageTimeouts(first_token_s=0.05, idle_s=0.05, total_s=60.0)
+        b1 = TurnBudget(total_s=60.0, clock=FakeClock())
+        src1 = FakeLineSource(["never"], stall_forever=True)
+        with pytest.raises(TurnTimeout):
+            async for _c in _stream(src1, budget=b1, timeouts=t_fast):
+                pass
+        await asyncio.sleep(0)
+        assert src1.closed is True
+        # Second turn: fresh source, completes normally.
+        b2 = TurnBudget(total_s=60.0, clock=FakeClock())
+        src2 = FakeLineSource([_line(content="ok", done=True, done_reason="stop")])
+        t_ok = StageTimeouts(first_token_s=1.0, idle_s=1.0, total_s=60.0)
+        out = [c.content async for c in _stream(src2, budget=b2, timeouts=t_ok)]
+        assert out == ["ok"]
+    asyncio.run(_run())
+
+
 def test_stream_skips_malformed_lines_midstream():
     async def _run():
         budget = TurnBudget(total_s=60.0, clock=FakeClock())

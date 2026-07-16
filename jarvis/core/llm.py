@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import httpx
-from openai import AsyncOpenAI
+from openai import APIConnectionError, AsyncOpenAI
 from loguru import logger
 
 from core.config import settings
@@ -946,6 +946,24 @@ def _turn_timeout_message(language: str | None) -> str:
     """The bounded timeout reply, in the turn's ACTIVE language (M54.4 continuity)."""
     lang = (language or "es").lower()
     return _TURN_TIMEOUT_EN if lang.startswith("en") else _TURN_TIMEOUT_ES
+
+
+# V69 M55.12 — both transports unreachable (e.g. Ollama down). A concise localized
+# error that returns prompt control, never a raw connection trace.
+_FAST_UNREACHABLE_ES = (
+    "No pude acceder al modelo FAST en este momento. El runtime sigue activo; "
+    "revisa el estado de Ollama e inténtalo nuevamente."
+)
+_FAST_UNREACHABLE_EN = (
+    "I couldn't reach the FAST model right now. The runtime is still active; "
+    "check the Ollama service and try again."
+)
+
+
+def _fast_unreachable_message(language: str | None) -> str:
+    """The bounded 'model unreachable' reply in the turn's ACTIVE language."""
+    lang = (language or "es").lower()
+    return _FAST_UNREACHABLE_EN if lang.startswith("en") else _FAST_UNREACHABLE_ES
 
 
 async def _aclose_stream(stream) -> bool:
@@ -2270,6 +2288,22 @@ class LLM:
                 )
                 record_turn(_budget.snapshot())
                 yield _turn_timeout_message(self.language_context.active_language())
+                unregister_operation("llm_stream")
+                return
+            except (APIConnectionError, httpx.ConnectError, httpx.HTTPError) as _conn_err:
+                # V69 M55.12 — the FAST model is unreachable (e.g. Ollama down). When
+                # the native fast path already fell back here and /v1 ALSO cannot
+                # connect, both transports have failed: degrade to a concise,
+                # localized error that returns prompt control — never a raw trace.
+                _budget.timeout_stage = "connect"
+                _budget.cancel_success = True
+                logger.warning(
+                    "LLM: FAST model {} unreachable ({}) — bounded failure".format(
+                        _routed_model, type(_conn_err).__name__,
+                    )
+                )
+                record_turn(_budget.snapshot())
+                yield _fast_unreachable_message(self.language_context.active_language())
                 unregister_operation("llm_stream")
                 return
 

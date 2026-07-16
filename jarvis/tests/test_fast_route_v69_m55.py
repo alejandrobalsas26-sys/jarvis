@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from core.config import Settings
 from core.fast_path import FastReason, decide_fast_route
 from core.model_router import ModelDecision, ModelRole
@@ -236,8 +234,52 @@ def test_native_failure_falls_back(monkeypatch):
             "with_options",
             lambda **kw: _FakeOpenAI(fell_back),
         )
-        out = await llm.chat("hola")
+        await llm.chat("hola")
         assert fell_back["v"] is True, "native failure must fall back to /v1"
+        await llm.aclose()
+
+    asyncio.run(_run())
+
+
+def test_both_transports_unavailable_returns_localized_error(monkeypatch):
+    """M55.12 — native declined (UNAVAILABLE) AND /v1 cannot connect: both
+    transports have failed, so the turn yields a concise localized error and
+    returns prompt control — never a raw connection trace."""
+    import httpx
+    from openai import APIConnectionError
+
+    from core.llm import _FAST_UNREACHABLE_ES
+    from core.ollama_native import (
+        NativeCapability,
+        NativeProbeState,
+        set_native_capability,
+    )
+
+    # Native is unavailable -> decide_fast_route never even tries it.
+    set_native_capability(NativeCapability(state=NativeProbeState.UNAVAILABLE,
+                                           model="qwen3:8b"))
+
+    class _ConnDown:
+        def chat(self):  # pragma: no cover
+            return self
+
+        @property
+        def completions(self):
+            return self
+
+        async def create(self, **kw):
+            raise APIConnectionError(
+                request=httpx.Request("POST", "http://localhost:11434/v1/chat/completions"))
+
+    _cd = _ConnDown()
+    _cd.chat = _cd  # type: ignore[assignment]
+
+    async def _run():
+        from core.llm import LLM
+        llm = LLM(_StubExecutor())
+        monkeypatch.setattr(llm.client, "with_options", lambda **kw: _cd)
+        out = await llm.chat("hola")
+        assert out.strip() == _FAST_UNREACHABLE_ES.strip()
         await llm.aclose()
 
     asyncio.run(_run())
