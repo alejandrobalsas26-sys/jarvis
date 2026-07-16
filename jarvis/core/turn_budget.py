@@ -177,9 +177,18 @@ class StageTimeouts:
     total_s        the whole user-visible turn (the outer boundary)
     """
 
+    # M54.1.7 — calibrated against live measurements on the target host (AMD Ryzen
+    # 5 7430U, 15W, CPU-only Ollama, qwen3:8b). See
+    # docs/V69_M54_1_RUNTIME_BACKPRESSURE_FIRST_TURN.md for the full run:
+    #   warm first token ....... 10.3 s   (this is the number that matters)
+    #   cold first token ...... 110.2 s   (reasoning chain, not just model load)
+    #   generation rate ........ ~13 chars/s  -> a 2.4k-char answer is ~3 min
+    # first_token is the anti-SILENCE bound (the live pathology was minutes with
+    # nothing on screen); idle is the anti-STALL bound. Both are clamped to the
+    # policy total, so a simple turn can never wait longer than its own ceiling.
     queue_wait_s: float = 30.0
     connect_s: float = 5.0
-    first_token_s: float = 45.0
+    first_token_s: float = 90.0
     idle_s: float = 20.0
     total_s: float = _DEFAULT_BUDGET_S
 

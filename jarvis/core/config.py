@@ -158,8 +158,11 @@ class Settings(BaseSettings):
     #                               swap that OLLAMA_MAX_LOADED_MODELS=1 forces)
     #   turn_stream_idle_timeout_s: max gap between chunks once streaming started
     #   turn_connect_timeout_s    : HTTP connection establishment
+    # Calibrated live on the target host: warm first token 10.3s, cold 110.2s
+    # (qwen3:8b reasoning chain), generation ~13 chars/s. first_token is the
+    # anti-silence bound; it is clamped down to each policy's total.
     turn_budget_scale:          float = 1.0
-    turn_first_token_timeout_s: float = 45.0
+    turn_first_token_timeout_s: float = 90.0
     turn_stream_idle_timeout_s: float = 20.0
     turn_connect_timeout_s:     float = 5.0
 
