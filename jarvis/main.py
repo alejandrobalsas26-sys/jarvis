@@ -135,6 +135,31 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
+    # V69 M54.1.5 — the budget starts HERE: the instant the user's message enters
+    # the turn, before policy classification, routing, lock waiting or any model
+    # call. M54 created it deep inside chat_stream (after MCP init, history
+    # compression and threat enrichment had already run unbounded) and handed it to
+    # nobody but the verifier. Sizing it needs the policy, which is cheap,
+    # deterministic and non-blocking, so classify first and count that too.
+    from core.turn_policy import classify_request
+    from core.turn_budget import (
+        StageTimeouts, TurnBudget, bounded_stream, budget_for, record_turn,
+        timeouts_for,
+    )
+    from core.llm import _turn_timeout_message
+
+    _t_policy = None
+    try:
+        _t_policy = classify_request(
+            user_input, authority=getattr(llm.tool_executor, "authority", None),
+        )
+    except Exception:
+        _t_policy = None
+    budget = TurnBudget(total_s=budget_for(_t_policy))
+    stage_t: StageTimeouts = timeouts_for(_t_policy)
+    # Set once the outer deadline fires, so in-flight producers stop emitting.
+    _timed_out = {"v": False}
+
     # V69 M54.1 — stream assistant tokens through the console coordinator's inline
     # channel so a background log that arrives mid-answer breaks cleanly instead of
     # smearing into the reply. Falls back to raw print() when no console is installed.
@@ -155,14 +180,26 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         buffer = ""
         if _console is not None:
             _console.begin_stream()
-        async for chunk in llm.chat_stream(user_input):
+        # V69 M54.1.5 — THE outer boundary. This used to be a bare
+        # `async for chunk in llm.chat_stream(user_input)` with no deadline of any
+        # kind, awaited bare by the input loop, so control could not return to the
+        # prompt until the stream drained — which on a cold model swap meant
+        # minutes. `bounded_stream` wraps the WHOLE user-visible operation
+        # (routing, lock wait, model load, connect, first token, streaming), caps
+        # each step at min(stage bound, remaining total), and always closes the
+        # async generator via aclose() so no late chunk and no orphan inference
+        # survive the deadline.
+        agen = llm.chat_stream(user_input)
+        async for chunk in bounded_stream(agen, budget=budget, timeouts=stage_t):
+            if _timed_out["v"]:
+                break            # never emit a chunk that arrived after the bound
             _emit_chunk(chunk)
             buffer += chunk
             sentences, buffer = _split_sentences(buffer)
             for sentence in sentences:
                 await queue.put(sentence)
         # Volcar el remanente final (puede no tener puntuación al final)
-        if buffer.strip():
+        if buffer.strip() and not _timed_out["v"]:
             await queue.put(buffer.strip())
         if _console is not None:
             _console.end_stream()
@@ -186,21 +223,92 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         _console.post(f"\n[{name}] ", ConsoleChannel.ASSISTANT)
     else:
         print(f"\n[{name}] ", end="", flush=True)
-    await asyncio.gather(producer(), consumer())
+
+    # V69 M54.1.5 — the turn is a cancellable TASK raced against its own deadline,
+    # not a bare await. On expiry the task is cancelled (which propagates into
+    # chat_stream -> the live Ollama request -> aclose), the TTS consumer is told to
+    # stop so it can never narrate a stale answer, and the prompt returns.
+    _turn_task = asyncio.ensure_future(asyncio.gather(producer(), consumer()))
+    try:
+        await asyncio.wait_for(_turn_task, timeout=budget.remaining_s())
+    except (asyncio.TimeoutError, TimeoutError):
+        _timed_out["v"] = True
+        budget.timeout_stage = budget.timeout_stage or "total"
+        _turn_task.cancel()
+        try:
+            await asyncio.wait_for(_turn_task, timeout=3.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, TimeoutError, Exception):
+            pass
+        budget.cancel_success = _turn_task.done()
+        # Drop anything the TTS consumer had not spoken yet: a stale answer must
+        # never be narrated after the operator has control back.
+        try:
+            tts.cancel_boot_narration()
+        except Exception:
+            pass
+        _msg = _turn_timeout_message(_active_language(llm))
+        logger.warning(
+            "TURN: exceeded {:.0f}s budget (stage={}) — cancelled, prompt restored".format(
+                budget.total_s, budget.timeout_stage,
+            )
+        )
+        _emit_chunk("\n" + _msg)
+    except asyncio.CancelledError:
+        _turn_task.cancel()
+        raise
+    finally:
+        record_turn(budget.snapshot())
+
     if _console is not None:
         _console.post("\n", ConsoleChannel.ASSISTANT)
     else:
         print()  # newline tras el output del streaming
 
 
+def _active_language(llm) -> str:
+    """The turn's active language, for a bounded failure message that matches it."""
+    try:
+        return llm.language_context.active_language()
+    except Exception:
+        return "es"
+
+
 async def _greeting(llm, tts, name: str, user: str) -> None:
-    await _run_turn(
-        llm,
-        tts,
-        f"Saluda a {user}. Dile la hora actual y pregúntale en qué lo puedes ayudar. "
-        "Sé concisa y con tu personalidad habitual.",
-        name,
+    """V69 M54.1.10 — the greeting is RENDERED, not generated.
+
+    It used to run a full LLM turn on the prompt "Saluda a {user}. Dile la hora
+    actual ..." — which told the model to state the current time and never gave it
+    one, so the operator was greeted with the literal "[hora actual]". It also made
+    the first cold Ollama load happen before the prompt existed.
+
+    Time now comes from HostTime deterministically, readiness from the one truthful
+    boot snapshot (M54), and the final string is validated for placeholders before
+    it is spoken or shown.
+    """
+    from core.greeting import render_greeting
+
+    lang = _active_language(llm)
+    text = render_greeting(
+        name=user,
+        language=lang,
+        readiness=_readiness_sentence(lang),
     )
+    if _console_emit is not None:
+        _console_emit(f"\n[{name}] {text}")
+    try:
+        await tts.speak_async(text, lang=lang)
+    except Exception:
+        pass
+
+
+def _readiness_sentence(language: str = "es") -> str:
+    """The truthful one-line readiness claim from the M54 boot snapshot. Preserves
+    the M54 win: never 'All systems nominal' when semantic memory is degraded."""
+    try:
+        from core.boot_state import readiness_sentence
+        return readiness_sentence(language)
+    except Exception:
+        return "JARVIS is ready." if language.startswith("en") else "JARVIS está listo."
 
 
 async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
@@ -1993,6 +2101,15 @@ async def _main_async() -> None:
                             postgres_available=_pg_on,
                             semantic_summary=_sem,   # M54.7 — fold semantic truth in
                         )
+                        # V69 M54.1.10 — publish the ONE truthful snapshot so the
+                        # deterministic greeting states the same readiness the boot
+                        # narration does, rather than re-deriving (and eventually
+                        # contradicting) it.
+                        try:
+                            from core.boot_state import remember_boot_state
+                            remember_boot_state(boot_state)
+                        except Exception:
+                            pass
                         logger.info(
                             f"BOOT_STATE: health={boot_state.health()} "
                             f"nominal={boot_state.all_systems_nominal()} "

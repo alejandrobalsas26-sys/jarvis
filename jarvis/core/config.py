@@ -147,6 +147,42 @@ class Settings(BaseSettings):
             return v.strip().lower() in {"1", "true", "yes", "on"}
         return bool(v)
 
+    # ── Interactive turn deadlines (V69 M54.1.5-.7) ──────────────────────────
+    # The live first turn never returned: AsyncOpenAI was built with no timeout=,
+    # inheriting the SDK default read=600 (ten minutes nobody chose), and the M54
+    # TurnBudget only ever bounded the verifier. These make the real bounds
+    # explicit and operator-tunable — within hard caps, so a typo cannot recreate
+    # an effectively unlimited wait.
+    #   turn_budget_scale         : multiplies every risk-sized total (0.25..3.0)
+    #   turn_first_token_timeout_s: connect -> first token (covers the cold model
+    #                               swap that OLLAMA_MAX_LOADED_MODELS=1 forces)
+    #   turn_stream_idle_timeout_s: max gap between chunks once streaming started
+    #   turn_connect_timeout_s    : HTTP connection establishment
+    turn_budget_scale:          float = 1.0
+    turn_first_token_timeout_s: float = 45.0
+    turn_stream_idle_timeout_s: float = 20.0
+    turn_connect_timeout_s:     float = 5.0
+
+    @field_validator("turn_budget_scale")
+    @classmethod
+    def validate_turn_budget_scale(cls, v: float) -> float:
+        return max(0.25, min(float(v), 3.0))
+
+    @field_validator("turn_first_token_timeout_s")
+    @classmethod
+    def validate_turn_first_token(cls, v: float) -> float:
+        return max(2.0, min(float(v), 180.0))
+
+    @field_validator("turn_stream_idle_timeout_s")
+    @classmethod
+    def validate_turn_stream_idle(cls, v: float) -> float:
+        return max(1.0, min(float(v), 120.0))
+
+    @field_validator("turn_connect_timeout_s")
+    @classmethod
+    def validate_turn_connect(cls, v: float) -> float:
+        return max(0.5, min(float(v), 30.0))
+
     # ── AURA HUD server (loopback WebSocket telemetry / command HUD) ──────────
     # CSWSH defense for the /ws handshake: by default only loopback origins
     # (localhost / 127.0.0.0/8 / ::1) may open the AURA WebSocket; missing or
