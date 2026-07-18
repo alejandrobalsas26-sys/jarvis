@@ -1168,6 +1168,17 @@ async def _main_async() -> None:
                 )
                 fast.reconcile(cap)   # truthful verdict from BOTH probes
                 _reconciled = True
+                # V69 M55.5 — log the TRUTHFUL Ollama posture (recommended vs this
+                # process's env vs what the server actually reveals) AFTER the probe, so
+                # observed models are real and nothing is presented as verified config.
+                try:
+                    from core.ollama_env import collect_ollama_env
+                    _env = collect_ollama_env(capability=cap)
+                    logger.info(f"OLLAMA POSTURE: {_env.summary()}")
+                    if _env.max_loaded_applied() == "not-applied":
+                        logger.info(f"OLLAMA RESIDENCY: {_env.residency_guidance()}")
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception as _ne:
                 logger.debug(f"NATIVE_CAP: probe skipped: {_ne}")
             logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
