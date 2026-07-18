@@ -223,7 +223,15 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
                 break
             spoken = render(sentence, ResponseSurface.VOICE)
             if spoken:
-                await tts.speak_async(spoken, lang=lang)
+                # V69 M55.2.2 — a TTS fault must NEVER break the turn or block the
+                # prompt from being restored. Drop the utterance and keep draining so
+                # the producer's sentinel is always consumed and the turn finalizes.
+                try:
+                    await tts.speak_async(spoken, lang=lang)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug("TTS: speak_async failed; continuing turn")
 
     if _console is not None:
         _console.post(f"\n[{name}] ", ConsoleChannel.ASSISTANT)
