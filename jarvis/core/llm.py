@@ -1083,12 +1083,20 @@ class LLM:
         except Exception:
             pass
 
-        # Estado MCP — se inicializa de forma lazy en el primer chat_stream
+        # Estado MCP — V69 M55.1.1: connects in its OWN supervised background task
+        # (started at boot via start_mcp_background), NOT lazily on the first turn.
+        # A DIRECT_FAST turn never awaits it; only tool-required turns wait, and only
+        # inside their REMAINING turn budget. This removes the ~43s first-turn stall
+        # where the FAST dispatch sat behind the stdio-bridge cold spawn.
         self._mcp_session = None
         self._mcp_tool_names: set[str] = set()
         self._mcp_initialized = False
         self._mcp_init_lock = asyncio.Lock()
         self._exit_stack = AsyncExitStack()
+        self._mcp_task: "asyncio.Task | None" = None
+        # V69 M55.1 — last measured pre-inference dispatch (message-in → transport
+        # selected), surfaced for runtime health and regression assertions.
+        self._last_dispatch_ms: float | None = None
         self._closed = False
 
         name = settings.assistant_name
@@ -1289,6 +1297,56 @@ class LLM:
 
             except Exception as e:
                 logger.warning(f"MCP: No disponible — {e}")
+
+    def start_mcp_background(self) -> None:
+        """V69 M55.1.1 — kick MCP connection OFF the interactive critical path.
+
+        Called once at boot (supervised, guarded by lifecycle.can_start_task). The
+        stdio bridge spawn + handshake (~43s cold on this 15W CPU) then warms in the
+        background while the operator can already ask DIRECT_FAST questions. Idempotent
+        and non-fatal: if there is no running loop yet, the lazy path in `_ensure_mcp`
+        still covers the first tool-required turn. NEVER awaited by the fast path."""
+        if self._mcp_initialized or self._mcp_task is not None:
+            return
+        try:
+            # _init_mcp swallows its own exceptions, so the task never surfaces one.
+            self._mcp_task = asyncio.ensure_future(self._init_mcp())
+        except RuntimeError:
+            # No running event loop — a lazy _ensure_mcp() will start it on demand.
+            self._mcp_task = None
+
+    @property
+    def mcp_connected(self) -> bool:
+        """True once the bridge session is live (tools injectable). Non-blocking."""
+        return self._mcp_session is not None
+
+    async def _ensure_mcp(self, *, timeout: float | None = None) -> bool:
+        """Ensure MCP is (or becomes) connected, BOUNDED. Returns whether the bridge
+        is connected. Only the tool-chat path calls this — a DIRECT_FAST turn never
+        does — and it passes its REMAINING turn budget as ``timeout`` so a still-cold
+        bridge yields a bounded "tools still warming" outcome instead of blocking the
+        turn. Never raises: MCP failure degrades to local-tools-only, never a crash."""
+        if self._mcp_initialized and self._mcp_task is None:
+            return self.mcp_connected
+        task = self._mcp_task
+        if task is None:
+            # No background task ran (e.g. start skipped) — start it now, on-loop.
+            try:
+                task = self._mcp_task = asyncio.ensure_future(self._init_mcp())
+            except RuntimeError:
+                await self._init_mcp()
+                return self.mcp_connected
+        if timeout is not None and timeout <= 0:
+            return self.mcp_connected
+        try:
+            # shield so a turn-level timeout cancels the WAIT, not the shared MCP
+            # connection task (which keeps warming for the next tool turn).
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.info("MCP: bridge still warming — proceeding with local tools only")
+        except Exception as exc:  # noqa: BLE001 — MCP must never break a turn
+            logger.debug(f"MCP: ensure suppressed: {exc}")
+        return self.mcp_connected
 
     def _registered_tool_names(self) -> set[str]:
         """Set actual de nombres de tools registradas (locales + MCP)."""
@@ -1959,13 +2017,18 @@ class LLM:
         Genera tokens del LLM en tiempo real via Ollama.
 
         Ciclo completo:
-          1. Inicializa MCP (lazy, una sola vez).
+          1. Bypass determinista / selección de transporte (sin esperar a MCP).
           2. Comprime el historial si excede el umbral (v6.3).
           3. Stream de texto → yield chunks al pipeline TTS.
           4. Si finish_reason == "tool_calls": acumula los deltas de tool calls,
              ejecuta las tools (local o MCP) y continúa el stream con la respuesta.
           5. Si finish_reason == "stop": fin del turno.
         """
+        # V69 M55.1 — the dispatch clock starts the instant the message enters
+        # chat_stream, so pre_inference_dispatch_ms (classification + language +
+        # transport selection) is measured truthfully and can be asserted < 500ms.
+        # No raw user content is stored — only elapsed monotonic time.
+        _dispatch_t0 = _time.monotonic()
         # V69 M55.11 — deterministic bypass FIRST. Time/date/lifecycle/FAST-model/
         # vault questions have a single trusted local answer already in the runtime;
         # restating it via a CPU-bound model is pure latency. Answer it directly in
@@ -1988,7 +2051,11 @@ class LLM:
             yield _bypass
             return
 
-        await self._init_mcp()
+        # V69 M55.1.1 — MCP is NO LONGER awaited here. It warms in its own supervised
+        # background task (start_mcp_background), so a DIRECT_FAST turn reaches route
+        # selection and native streaming immediately instead of sitting ~43s behind the
+        # stdio-bridge cold spawn. The tool-chat path below awaits it via _ensure_mcp,
+        # bounded by the remaining turn budget.
         await self._maybe_compress_history()
 
         # v35.0 — register stream with cancel bus and clear prior abort flag
@@ -2013,11 +2080,11 @@ class LLM:
             except Exception:
                 pass
 
-        # v34.0 — enrich system prompt with recent threat context
-        try:
-            _threat_ctx = await refresh_threat_enrichment()
-        except Exception:
-            _threat_ctx = ""
+        # V69 M55.1 — threat-context enrichment is deferred to the non-fast path. It
+        # feeds the FULL tool/security system prompt only (see _threat_ctx below); the
+        # native fast path uses the LEAN prompt and never consumes it. Awaiting it here
+        # added seconds of pre-inference dispatch to every DIRECT_FAST turn for nothing.
+        _threat_ctx = ""
 
         self.history.append({"role": "user", "content": user_message})
 
@@ -2115,13 +2182,23 @@ class LLM:
             _fast_route = None
 
         if _fast_route is not None and _fast_route.use_native:
+            # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
+            # transport-selected (classification + language + route). Measured at the
+            # TRUTHFUL moment the native transport is chosen, never logged early.
+            _dispatch_ms = round((_time.monotonic() - _dispatch_t0) * 1000.0, 1)
+            self._last_dispatch_ms = _dispatch_ms
             logger.info(
                 "FAST_ROUTE: native no-think — model={} think={} max_tokens={} "
-                "reason={} detail={!r}".format(
+                "reason={} detail={!r} dispatch_ms={}".format(
                     _fast_route.model, _fast_route.think, _fast_route.max_tokens,
-                    _fast_route.reason.value, _fast_route.detail,
+                    _fast_route.reason.value, _fast_route.detail, _dispatch_ms,
                 )
             )
+            if _dispatch_ms > 1000.0:
+                logger.warning(
+                    "DISPATCH: pre-inference dispatch {}ms exceeded the 1s ceiling "
+                    "(optional-service contention?)".format(_dispatch_ms)
+                )
             _fast_stage_t = timeouts_for(_turn_policy)
             _budget.model_role = "fast"
             _fast_result: dict = {}
@@ -2174,6 +2251,22 @@ class LLM:
                 self._finalize_fast_turn(_fast_result, _budget, _fast_route)
                 unregister_operation("llm_stream")
                 return
+
+        # V69 M55.1.1 — this turn was NOT served by the tool-free native fast path, so
+        # it may call tools. Ensure the MCP bridge is connected, but ONLY within the
+        # turn's REMAINING budget (capped) — a still-cold bridge proceeds with local
+        # tools rather than stalling. When warmed at boot this returns immediately.
+        try:
+            await self._ensure_mcp(timeout=min(_budget.remaining_s(), 20.0))
+        except Exception as _me:  # noqa: BLE001 — MCP must never break a turn
+            logger.debug(f"MCP: ensure skipped: {_me}")
+
+        # V69 M55.1 — threat enrichment for the FULL system prompt runs here, off the
+        # fast critical path (deferred from before the fast-route decision).
+        try:
+            _threat_ctx = await refresh_threat_enrichment()
+        except Exception:
+            _threat_ctx = ""
 
         # V68.1 M47 — authorization-aware cyber intent gate, computed ONCE per
         # turn (the user message is constant across the tool loop). For an
@@ -2765,6 +2858,16 @@ class LLM:
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"LLM: native http close suppressed: {e}")
             self._native_http = None
+        # V69 M55.1.1 — a still-warming MCP background task must be stopped before the
+        # exit stack it feeds is closed, or the stdio_client cancel scope races the
+        # teardown. Cancel + await it bounded; the cancellation is expected, not an error.
+        _mt = self._mcp_task
+        if _mt is not None and not _mt.done():
+            _mt.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(_mt, return_exceptions=True), timeout=3.0)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"LLM: MCP task cancel suppressed: {e}")
         try:
             await self._exit_stack.aclose()
         except (asyncio.CancelledError, RuntimeError) as e:

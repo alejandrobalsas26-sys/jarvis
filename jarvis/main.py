@@ -65,11 +65,17 @@ def _install_console_logging() -> None:
     replaced by the coordinator's sink; the file sink is preserved. Falls back
     silently (keeps stderr) if the console module is unavailable."""
     try:
-        from core.console import install_console, console_log_sink
+        from core.console import (
+            console_log_sink, install_console, install_stdlib_logging_bridge,
+        )
         install_console()
         logger.remove()
         logger.add(console_log_sink, level="INFO", format=_LOG_FORMAT)
         logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
+        # V69 M55.1.2 — stdlib `logging` (db_manager & ~30 core modules) must also
+        # go through the coordinator, or it writes straight to stderr and smears the
+        # `Tú:` input line (the live PostgreSQL/asyncpg error).
+        install_stdlib_logging_bridge()
     except Exception:
         pass
 
@@ -1157,6 +1163,17 @@ async def _main_async() -> None:
 
     if _lifecycle.can_start_task():
         asyncio.create_task(_fast_warmup(), name="fast-readiness-warmup")
+
+    # V69 M55.1.1 — connect MCP in its OWN supervised background task, OFF the
+    # interactive critical path. The stdio bridge cold spawn (~43s on this 15W CPU)
+    # then warms while the operator can already ask DIRECT_FAST questions; only
+    # tool-required turns await it (bounded by their budget). Never blocks TEXT_READY.
+    if _lifecycle.can_start_task():
+        try:
+            llm.start_mcp_background()
+            logger.info("MCP: bridge connecting in background (off dispatch path)")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"MCP: background start skipped: {exc}")
 
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
