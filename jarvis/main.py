@@ -76,6 +76,13 @@ def _install_console_logging() -> None:
         # go through the coordinator, or it writes straight to stderr and smears the
         # `Tú:` input line (the live PostgreSQL/asyncpg error).
         install_stdlib_logging_bridge()
+        # V69 M55.3.1 — the console coordinator is up; stamp CONSOLE_READY so the boot
+        # phase ledger can report console/reader/text/core/operational latencies.
+        try:
+            from core.lifecycle import lifecycle as _lc_console
+            _lc_console.stamp("CONSOLE_READY")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -293,13 +300,14 @@ def _mark_input_reader_live(live: bool = True) -> None:
         return
     try:
         from core.lifecycle import lifecycle as _lc
-        if _lc.mark_text_ready():
-            _pt = _lc.phase_timings_ms()
-            logger.info(
-                "LIFECYCLE: TEXT_READY — prompt accepting input at {}ms".format(
-                    _pt.get("TEXT_READY"),
-                )
-            )
+        # Advance the FSM to TEXT_READY when the reader is reached early (no-op if boot
+        # already passed it), and ALWAYS stamp the truthful reader-live moment so
+        # text_ready_ms is never None once the prompt accepts input (M55.3.1).
+        _lc.mark_text_ready()
+        _ms = _lc.note_reader_ready()
+        logger.info(
+            "LIFECYCLE: TEXT_READY — prompt accepting input at {}ms".format(_ms)
+        )
     except Exception:
         pass
 
@@ -1140,30 +1148,30 @@ async def _main_async() -> None:
         try:
             from core.fast_readiness import get_fast_readiness
             fast = get_fast_readiness()
+            # V69 M55.3 — the metadata probe alone is INCONCLUSIVE (PROBING -> REACHABLE
+            # or WARMING); it must NOT emit a premature UNAVAILABLE (the live 16:52:20
+            # verdict, 19s before the native path proved NATIVE_READY). The truthful
+            # FAST verdict is decided by reconcile() AFTER the native probe below.
             await fast.probe()
-            logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
-            # V69 M55 — probe the NATIVE transport capability (bounded, cached) so
-            # the first DIRECT_FAST turn can use native no-think with proven support.
-            # The tiny probe generation also WARMS qwen3:8b with think=false, which
-            # is faster than the reasoning-default OpenAI prewarm, so it doubles as
-            # the warmup when it succeeds (no redundant model load under
-            # OLLAMA_MAX_LOADED_MODELS=1).
-            _warmed = False
+            # V69 M55 — probe the NATIVE transport capability (bounded, cached) so the
+            # first DIRECT_FAST turn can use native no-think with proven support. The
+            # tiny probe generation also WARMS qwen3:8b with think=false (no redundant
+            # model load under OLLAMA_MAX_LOADED_MODELS=1).
+            _reconciled = False
             try:
                 from core.ollama_native import refresh_native_capability
                 cap = await refresh_native_capability(model=fast.model)
-                fast.note_capability(cap)
                 logger.info(
                     "NATIVE_CAP: state={} think_false_supported={} version={}".format(
                         cap.state.value, cap.think_false_supported, cap.server_version,
                     )
                 )
-                if getattr(cap, "streaming_ok", False):
-                    fast.mark_served()   # the probe proved the model serves tokens
-                    _warmed = True
+                fast.reconcile(cap)   # truthful verdict from BOTH probes
+                _reconciled = True
             except Exception as _ne:
                 logger.debug(f"NATIVE_CAP: probe skipped: {_ne}")
-            if not _warmed and fast.state.value == "REACHABLE":
+            logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
+            if not _reconciled and fast.state.value == "REACHABLE":
                 await fast.prewarm(client=llm.client)
                 logger.info(f"FAST_READINESS: prewarm -> {fast.state.value}")
         except Exception as exc:

@@ -176,6 +176,26 @@ class LifecycleManager:
         production text mode must use mark_text_ready()."""
         return self.advance_to(LifecycleState.TEXT_READY)
 
+    def note_reader_ready(self) -> float:
+        """V69 M55.3.1 — stamp the REAL moment the interactive reader became able to
+        accept a line, and backfill the TEXT_READY phase time if boot advanced past
+        TEXT_READY before the reader existed (CORE_READY was reached first, so the
+        monotonic mark_text_ready() no-oped and text_ready_ms stayed None in the live
+        run). Records READER_READY and, first-write-wins, TEXT_READY — so text_ready_ms
+        is never None once the prompt can accept input. NEVER moves the FSM backward;
+        `accepts_input()` already reports True across TEXT_READY..OPERATIONAL. Returns
+        the stamped TEXT_READY ms."""
+        with self._lock:
+            self._stamp_phase("READER_READY")
+            self._stamp_phase("TEXT_READY")   # setdefault — no-op if already stamped
+            return self._phase_ms.get("TEXT_READY", 0.0)
+
+    def stamp(self, name: str) -> None:
+        """Record a named boot-phase timestamp (first-write-wins) for phases that are
+        NOT FSM states — e.g. CONSOLE_READY. Never moves the FSM; safe on the hot path."""
+        with self._lock:
+            self._stamp_phase(name)
+
     def mark_core_ready(self) -> bool:
         return self.advance_to(LifecycleState.CORE_READY)
 
@@ -243,6 +263,8 @@ class LifecycleManager:
             # M54.1.9 — the two must agree; a divergence here IS the old bug.
             "input_available": self.input_available(),
             "process_started_ms": ph.get("STARTING", 0.0),
+            "console_ready_ms": ph.get("CONSOLE_READY"),
+            "reader_ready_ms": ph.get("READER_READY"),
             "text_ready_ms": ph.get("TEXT_READY"),
             "core_ready_ms": ph.get("CORE_READY"),
             "operational_ready_ms": ph.get("OPERATIONAL"),
