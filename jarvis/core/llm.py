@@ -2968,7 +2968,9 @@ class LLM:
         # V69 M55.1.1 — a still-warming MCP background task must be stopped before the
         # exit stack it feeds is closed, or the stdio_client cancel scope races the
         # teardown. Cancel + await it bounded; the cancellation is expected, not an error.
-        _mt = self._mcp_task
+        # getattr-guarded like _native_http above: aclose may run on an LLM built via
+        # __new__ (tests) that never went through __init__.
+        _mt = getattr(self, "_mcp_task", None)
         if _mt is not None and not _mt.done():
             _mt.cancel()
             try:

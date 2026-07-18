@@ -1185,6 +1185,28 @@ async def _main_async() -> None:
             if not _reconciled and fast.state.value == "REACHABLE":
                 await fast.prewarm(client=llm.client)
                 logger.info(f"FAST_READINESS: prewarm -> {fast.state.value}")
+            # V69 M55.1 — warm the DISPATCH path (semantic task-decision assembly) OFF
+            # the critical path so the FIRST interactive turn's pre-inference dispatch is
+            # already < 1s. The first cold assemble_task_decision() lazily loads the
+            # semantic domain model (~1.5s on this host); doing it here in the background
+            # keeps that cost out of the operator's first DIRECT_FAST turn.
+            try:
+                from core.agent_runtime import assemble_task_decision
+                from core.cognitive_optimizer import classify_query
+                from core.response_surface import ResponseSurface
+                from core.turn_policy import classify_request
+
+                def _warm_dispatch() -> None:
+                    classify_query("hola")
+                    classify_request("hola", authority=None)
+                    assemble_task_decision(
+                        "hola", force_deep=False, query_category=None,
+                        surface=ResponseSurface.TEXT)
+
+                await asyncio.to_thread(_warm_dispatch)
+                logger.debug("DISPATCH: classification + task-decision path warmed")
+            except Exception as _dw:  # noqa: BLE001
+                logger.debug(f"DISPATCH: warmup skipped: {_dw}")
         except Exception as exc:
             logger.debug(f"FAST_READINESS: probe failed: {exc}")
 
