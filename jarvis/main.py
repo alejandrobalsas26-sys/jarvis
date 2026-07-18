@@ -1442,6 +1442,7 @@ async def _main_async() -> None:
 
     aura_server = None
     aura_task: asyncio.Task | None = None
+    aura_service = None
     if not args.no_aura:
         try:
             import uvicorn
@@ -1457,6 +1458,21 @@ async def _main_async() -> None:
             # Prevent uvicorn from fighting over SIGTERM/SIGINT with our loop
             aura_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
             aura_task = asyncio.create_task(aura_server.serve(), name="aura-server")
+            # V69 M55.4 — represent AURA through the OptionalService contract so shutdown
+            # stops it in order via its supported API (should_exit), never a mid-lifespan
+            # task cancel. serve() is already running, so the service is READY.
+            try:
+                from core.optional_service import (
+                    Criticality, OptionalService, ServiceState, stop_uvicorn_gracefully,
+                )
+                aura_service = OptionalService(
+                    "aura", criticality=Criticality.OPTIONAL,
+                    request_stop=lambda: setattr(aura_server, "should_exit", True),
+                    stop=lambda: stop_uvicorn_gracefully(aura_server, aura_task),
+                )
+                aura_service.state = ServiceState.READY
+            except Exception:  # noqa: BLE001
+                aura_service = None
             logger.info("AURA: ws://127.0.0.1:8765/ws  |  open aura/index.html to monitor")
 
             # Zeek L7 DPI log streamer
@@ -2442,26 +2458,31 @@ async def _main_async() -> None:
         _hard_kill_timer.daemon = True
         _hard_kill_timer.start()
 
-        # v30.0: graceful shutdown sequence — flush ChromaDB, save session,
-        # cancel tasks, write audit log.
-        # v46.0: broad except — MCP/anyio cancel scope errors on shutdown
-        # are cosmetic and should not pollute the operator's terminal.
+        # V69 M55.4.1/.2 — ORDERED shutdown: stop AURA/Uvicorn through its supported
+        # API (should_exit) and await serve() BEFORE run_graceful_shutdown's blanket
+        # task-cancel. The live CancelledError traceback came from serve() being
+        # .cancel()'d mid-lifespan; requesting should_exit lets Starlette's lifespan
+        # tear down cleanly. Expected cancellation is suppressed at the owner boundary;
+        # a real serve() error is still reported. Network service stops before storage
+        # is checkpointed/closed, so no service writes to a closed database.
+        try:
+            if aura_service is not None:
+                await aura_service.stop(timeout=5.0)   # ordered stop via the contract
+            elif aura_server is not None or aura_task is not None:
+                from core.optional_service import stop_uvicorn_gracefully
+                logger.info(
+                    "SHUTDOWN: {}".format(
+                        await stop_uvicorn_gracefully(aura_server, aura_task, timeout=5.0)))
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: AURA stop suppressed: {e}")
+
+        # v30.0: graceful shutdown sequence — checkpoint semantic state, flush ChromaDB,
+        # close DBs, save session, cancel remaining tasks, write audit log. AURA is
+        # already down, so its serve() task is not blanket-cancelled mid-lifespan.
         try:
             await run_graceful_shutdown(watchdog=watchdog)
         except (RuntimeError, asyncio.CancelledError, Exception) as e:
             logger.debug(f"SHUTDOWN: error during graceful shutdown: {e}")
-
-        # Graceful AURA shutdown
-        try:
-            if aura_server is not None:
-                aura_server.should_exit = True
-            if aura_task is not None:
-                try:
-                    await asyncio.wait_for(aura_task, timeout=3.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    aura_task.cancel()
-        except (RuntimeError, asyncio.CancelledError, Exception):
-            pass  # MCP/anyio cancel scope error on shutdown is cosmetic
 
         # V69 M54.1 — stop the single console renderer LAST (bounded flush, no orphan
         # daemon thread). After this nothing writes to the interactive terminal.
