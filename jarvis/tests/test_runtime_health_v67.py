@@ -108,9 +108,13 @@ class TestShapeAndLive:
         # invisible while the live boot flooded the console with QueueFull).
         # V69 M55.13 — fast_inference (native no-think transport latency) and
         # ollama_env (truthful, advisory environment state) join the ONE surface.
+        # V69 M56.8 — residency (observed model residency, inference arbitration,
+        # prewarm and power profile) EXTENDS the same surface; it is advisory (rank 0)
+        # so an evicted model never degrades the overall verdict.
         assert names == {"collectors", "resource", "tasks", "inference",
                          "model_runtime", "spine", "verifier", "interactive",
-                         "filesystem_watch", "fast_inference", "ollama_env"}
+                         "filesystem_watch", "fast_inference", "ollama_env",
+                         "residency"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

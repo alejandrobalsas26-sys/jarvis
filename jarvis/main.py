@@ -358,6 +358,54 @@ def _readiness_sentence(language: str = "es") -> str:
         return "JARVIS is ready." if language.startswith("en") else "JARVIS está listo."
 
 
+async def _handle_residency_command(user_input: str) -> bool:
+    """Handle the V69 M56 residency/posture operator commands. Returns True when the
+    input was one (and was handled), False otherwise.
+
+    SAFETY: only the read-only verbs run here. ``apply`` and ``rollback`` require an
+    :class:`~core.ollama_posture.OperatorAuthorization` covering the exact target, and
+    this surface never constructs one — so typing the verb reports what a real approval
+    would need instead of performing anything. Nothing on this path mutates the host.
+    """
+    raw = (user_input or "").strip().lower()
+    if raw in ("/residency", "/residencia", "ollama-residency"):
+        try:
+            from core.residency_status import render_status
+            print(render_status())
+        except Exception as exc:  # noqa: BLE001
+            print(f"residency status unavailable: {type(exc).__name__}")
+        return True
+
+    try:
+        from core.ollama_posture import (
+            EFFECTFUL_ACTIONS,
+            PostureController,
+            parse_posture_command,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    action = parse_posture_command(user_input)
+    if action is None:
+        return False
+    if action in EFFECTFUL_ACTIONS:
+        print(
+            f"'{action.value}' is an effectful posture change and requires explicit "
+            "operator authorization covering the exact target.\n"
+            "Run 'ollama-posture-dry-run' first to preview it; nothing has been "
+            "changed, and the Ollama server has NOT been restarted."
+        )
+        return True
+    try:
+        result = await asyncio.to_thread(lambda: PostureController().dispatch(action))
+        print(result.message)
+        if action.value == "status":
+            from core.residency_status import render_status
+            print(render_status())
+    except Exception as exc:  # noqa: BLE001
+        print(f"posture command failed: {type(exc).__name__}")
+    return True
+
+
 async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
     from core.mode_commands import parse_mode_command, describe_mode
@@ -431,6 +479,15 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             print(result.stdout)
             if result.stderr:
                 print(result.stderr)
+            continue
+
+        # V69 M56.2/M56.8 — Ollama posture + residency operator commands. TEXT ONLY and
+        # deterministically parsed: the six verbs take NO arguments, so no variable,
+        # value, PID, path or scope can arrive from free text. Only the READ-ONLY verbs
+        # are reachable here; apply/rollback demand an OperatorAuthorization that this
+        # surface deliberately does not mint, so an effectful posture change can never
+        # be triggered by typing (nor, therefore, by anything a model produced).
+        if await _handle_residency_command(user_input):
             continue
 
         # V62.0 Phase 6 — explicit consent grant/revoke, same command surface
@@ -1207,11 +1264,78 @@ async def _main_async() -> None:
                 logger.debug("DISPATCH: classification + task-decision path warmed")
             except Exception as _dw:  # noqa: BLE001
                 logger.debug(f"DISPATCH: warmup skipped: {_dw}")
+
+            # V69 M56.4 — the INFERENCE path is the half M55.1 left cold. The
+            # capability probe above proves think=false works, but under a single
+            # model slot the boot embedding load evicts qwen3:8b right after, so the
+            # operator's first question still paid an 11-19s activation. Run ONE
+            # bounded full-path native prewarm — subject to the power profile, which
+            # on battery refuses it outright (M56.6), and never blocking input.
+            try:
+                from core.fast_prewarm import PrewarmMode, get_fast_prewarm
+                from core.runtime_profile import get_runtime_profile
+
+                _pw = get_fast_prewarm()
+                _pw.note_model_switch(fast.model)
+                _profile = get_runtime_profile().detect()
+                _policy = _profile.policy()
+                if _pw.mode is PrewarmMode.OFF:
+                    logger.info("PREWARM: mode=OFF - no boot generation (readiness "
+                                "stays honest; the first turn pays the model load)")
+                elif not _policy.background_prewarm_allowed:
+                    logger.info(
+                        "PREWARM: skipped by power policy profile={} source={} - {}"
+                        .format(_profile.effective.value, _profile.source.value,
+                                _policy.rationale))
+                else:
+                    if (_pw.mode is PrewarmMode.BACKGROUND
+                            and _policy.prewarm_delay_s > 0):
+                        await asyncio.sleep(_policy.prewarm_delay_s)
+                    if not _lifecycle.is_stopping():
+                        fast.note_prewarm_started()
+                        # BEFORE_TEXT_READY takes the hard-capped path so the prompt
+                        # can never be held closed indefinitely; BACKGROUND runs the
+                        # ordinary bounded attempt.
+                        _rec = await (_pw.run_before_text_ready()
+                                      if _pw.mode is PrewarmMode.BEFORE_TEXT_READY
+                                      else _pw.run_once())
+                        fast.note_prewarm_result(_rec)
+                        logger.info(
+                            "PREWARM: state={} first_token_ms={} load_ms={} "
+                            "total_ms={} fast={}".format(
+                                _rec.state.value, _rec.first_token_ms,
+                                _rec.load_duration_ms, _rec.total_ms,
+                                fast.state.value))
+            except Exception as _pwe:  # noqa: BLE001 — never block boot
+                logger.debug(f"PREWARM: skipped: {_pwe}")
+
+            # V69 M56.8 — ONE compact residency line (not a wall of diagnostics).
+            try:
+                from core.residency_status import render_summary
+                logger.info(render_summary())
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as exc:
             logger.debug(f"FAST_READINESS: probe failed: {exc}")
 
+    # V69 M56.4.1 — the mode decides WHERE this runs. BACKGROUND/OFF keep the boot
+    # path free (the prompt opens while FAST warms); BEFORE_TEXT_READY is the
+    # operator's explicit trade of boot latency for first-turn latency and is awaited
+    # here, hard-capped inside run_before_text_ready() so boot can never hang.
     if _lifecycle.can_start_task():
-        asyncio.create_task(_fast_warmup(), name="fast-readiness-warmup")
+        _prewarm_blocks_boot = False
+        try:
+            from core.fast_prewarm import PrewarmMode as _PM
+            from core.fast_prewarm import get_fast_prewarm as _get_pw
+            _prewarm_blocks_boot = _get_pw().mode is _PM.BEFORE_TEXT_READY
+        except Exception:  # noqa: BLE001
+            pass
+        if _prewarm_blocks_boot:
+            logger.info("PREWARM: mode=BEFORE_TEXT_READY - bounded wait before the "
+                        "prompt opens")
+            await _fast_warmup()
+        else:
+            asyncio.create_task(_fast_warmup(), name="fast-readiness-warmup")
 
     # V69 M55.1.1 — connect MCP in its OWN supervised background task, OFF the
     # interactive critical path. The stdio bridge cold spawn (~43s on this 15W CPU)
@@ -2498,6 +2622,19 @@ async def _main_async() -> None:
         # tear down cleanly. Expected cancellation is suppressed at the owner boundary;
         # a real serve() error is still reported. Network service stops before storage
         # is checkpointed/closed, so no service writes to a closed database.
+        # V69 M56.8 — stop residency work FIRST, before anything else is torn down: an
+        # in-flight prewarm or a queued governor waiter is exactly the orphan-task class
+        # M55.4 removed. close() FAILS waiters rather than leaving them pending, and
+        # cancel() awaits the prewarm's teardown, both bounded.
+        try:
+            from core.fast_prewarm import get_fast_prewarm
+            from core.residency_governor import get_governor
+            await get_fast_prewarm().cancel()
+            await get_governor().close()
+            logger.debug("SHUTDOWN: prewarm cancelled and governor closed")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: residency stop suppressed: {e}")
+
         try:
             if aura_service is not None:
                 await aura_service.stop(timeout=5.0)   # ordered stop via the contract
