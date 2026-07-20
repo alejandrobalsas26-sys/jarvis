@@ -948,6 +948,25 @@ def _turn_timeout_message(language: str | None) -> str:
     return _TURN_TIMEOUT_EN if lang.startswith("en") else _TURN_TIMEOUT_ES
 
 
+# V69 M55.2.1 — a native stream that produced SOME content then stalled / disconnected
+# ends with the partial preserved plus this SHORT status. It never claims success, and
+# it invites a continuation instead of silently truncating.
+_PARTIAL_STREAM_ES = (
+    "La respuesta quedó incompleta porque el flujo del modelo se interrumpió. "
+    "Puedes pedirme que continúe."
+)
+_PARTIAL_STREAM_EN = (
+    "The answer was left incomplete because the model stream was interrupted. "
+    "You can ask me to continue."
+)
+
+
+def _partial_stream_message(language: str | None) -> str:
+    """The bounded 'answer left incomplete' status in the turn's ACTIVE language."""
+    lang = (language or "es").lower()
+    return _PARTIAL_STREAM_EN if lang.startswith("en") else _PARTIAL_STREAM_ES
+
+
 # V69 M55.12 — both transports unreachable (e.g. Ollama down). A concise localized
 # error that returns prompt control, never a raw connection trace.
 _FAST_UNREACHABLE_ES = (
@@ -1083,12 +1102,20 @@ class LLM:
         except Exception:
             pass
 
-        # Estado MCP — se inicializa de forma lazy en el primer chat_stream
+        # Estado MCP — V69 M55.1.1: connects in its OWN supervised background task
+        # (started at boot via start_mcp_background), NOT lazily on the first turn.
+        # A DIRECT_FAST turn never awaits it; only tool-required turns wait, and only
+        # inside their REMAINING turn budget. This removes the ~43s first-turn stall
+        # where the FAST dispatch sat behind the stdio-bridge cold spawn.
         self._mcp_session = None
         self._mcp_tool_names: set[str] = set()
         self._mcp_initialized = False
         self._mcp_init_lock = asyncio.Lock()
         self._exit_stack = AsyncExitStack()
+        self._mcp_task: "asyncio.Task | None" = None
+        # V69 M55.1 — last measured pre-inference dispatch (message-in → transport
+        # selected), surfaced for runtime health and regression assertions.
+        self._last_dispatch_ms: float | None = None
         self._closed = False
 
         name = settings.assistant_name
@@ -1289,6 +1316,56 @@ class LLM:
 
             except Exception as e:
                 logger.warning(f"MCP: No disponible — {e}")
+
+    def start_mcp_background(self) -> None:
+        """V69 M55.1.1 — kick MCP connection OFF the interactive critical path.
+
+        Called once at boot (supervised, guarded by lifecycle.can_start_task). The
+        stdio bridge spawn + handshake (~43s cold on this 15W CPU) then warms in the
+        background while the operator can already ask DIRECT_FAST questions. Idempotent
+        and non-fatal: if there is no running loop yet, the lazy path in `_ensure_mcp`
+        still covers the first tool-required turn. NEVER awaited by the fast path."""
+        if self._mcp_initialized or self._mcp_task is not None:
+            return
+        try:
+            # _init_mcp swallows its own exceptions, so the task never surfaces one.
+            self._mcp_task = asyncio.ensure_future(self._init_mcp())
+        except RuntimeError:
+            # No running event loop — a lazy _ensure_mcp() will start it on demand.
+            self._mcp_task = None
+
+    @property
+    def mcp_connected(self) -> bool:
+        """True once the bridge session is live (tools injectable). Non-blocking."""
+        return self._mcp_session is not None
+
+    async def _ensure_mcp(self, *, timeout: float | None = None) -> bool:
+        """Ensure MCP is (or becomes) connected, BOUNDED. Returns whether the bridge
+        is connected. Only the tool-chat path calls this — a DIRECT_FAST turn never
+        does — and it passes its REMAINING turn budget as ``timeout`` so a still-cold
+        bridge yields a bounded "tools still warming" outcome instead of blocking the
+        turn. Never raises: MCP failure degrades to local-tools-only, never a crash."""
+        if self._mcp_initialized and self._mcp_task is None:
+            return self.mcp_connected
+        task = self._mcp_task
+        if task is None:
+            # No background task ran (e.g. start skipped) — start it now, on-loop.
+            try:
+                task = self._mcp_task = asyncio.ensure_future(self._init_mcp())
+            except RuntimeError:
+                await self._init_mcp()
+                return self.mcp_connected
+        if timeout is not None and timeout <= 0:
+            return self.mcp_connected
+        try:
+            # shield so a turn-level timeout cancels the WAIT, not the shared MCP
+            # connection task (which keeps warming for the next tool turn).
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.info("MCP: bridge still warming — proceeding with local tools only")
+        except Exception as exc:  # noqa: BLE001 — MCP must never break a turn
+            logger.debug(f"MCP: ensure suppressed: {exc}")
+        return self.mcp_connected
 
     def _registered_tool_names(self) -> set[str]:
         """Set actual de nombres de tools registradas (locales + MCP)."""
@@ -1880,7 +1957,13 @@ class LLM:
             getattr(_cancel_bus, "llm_stream_cancel", None)
         )
         chunks: list[str] = []
+        _chunks_received = 0
+        _done = False
         _infer_start = _time.monotonic()
+        # V69 M55.2 — a native turn resolves to EXACTLY ONE terminal state. Pessimistic
+        # default until the stream proves otherwise, so a silent abort is never read as
+        # success. The caller maps TurnTimeout/CancelledError/GeneratorExit on top.
+        result["final_state"] = "FAILED"
         try:
             async for ch in _native_chat_stream(
                 model=route.model,
@@ -1895,52 +1978,110 @@ class LLM:
                 keep_alive=route.keep_alive,
                 client=self._get_native_http(),
             ):
+                _chunks_received += 1
                 if token.cancelled or (
                     _cancel_bus.llm_stream_cancel is not None
                     and _cancel_bus.llm_stream_cancel.is_set()
                 ):
                     result["cancelled"] = True
+                    result["final_state"] = "CANCELLED"
                     return
                 if ch.content:
                     chunks.append(ch.content)
+                    # Capture the partial BEFORE yielding: if the outer turn-level
+                    # deadline aclose()s us at the yield, the finalizer must still see
+                    # everything shown so far (an `async for` does not close the inner
+                    # generator before GeneratorExit reaches the caller's handler).
+                    result["text"] = "".join(chunks)
                     yield ch.content
                 if ch.done:
+                    _done = True
                     result["done_reason"] = ch.done_reason
                     result["tokens_per_second"] = ch.tokens_per_second()
                     result["eval_count"] = ch.eval_count
+            # Clean end-of-stream. A `done` event OR content that streamed to a clean
+            # StopAsyncIteration is COMPLETED (valid EOS); a stream that produced nothing
+            # at all is FAILED (never surfaced as a successful empty answer).
+            result["final_state"] = "COMPLETED" if (_done or chunks) else "FAILED"
         except NativeTransportError as e:
             result["error"] = e.reason
             if not chunks:
+                # Pre-content transport failure — the caller falls back to /v1; there is
+                # no partial to preserve and the user turn stays for /v1 to answer.
                 raise _NativeFastUnavailable(e.reason) from e
-            # partial answer already streamed — bounded, honest end (no restart).
+            # Mid-stream disconnect AFTER partial content — truthful terminal state, not
+            # a successful answer. The finalizer keeps the partial + a status note.
+            result["final_state"] = "DISCONNECTED"
         finally:
             result["text"] = "".join(chunks)
+            result["chunks_received"] = _chunks_received
+            result["content_chars"] = len(result["text"])
+            result["done_received"] = _done
+            result["stream_closed"] = True   # the async-for's finally closed the source
             result["infer_ms"] = round((_time.monotonic() - _infer_start) * 1000)
 
-    def _finalize_fast_turn(self, result: dict, budget, route) -> None:
-        """Finalize a completed native fast turn: history, readiness and health."""
-        if result.get("cancelled"):
-            budget.cancel_success = True
-            record_turn(budget.snapshot())
-            return
-        text = result.get("text", "")
-        if text.strip():
-            self.history.append({"role": "assistant", "content": text})
+    def _finalize_native_turn(self, result: dict, budget, route, *, state: str,
+                              language: str | None) -> str | None:
+        """V69 M55.2 — the SINGLE idempotent finalizer for a native fast turn.
+
+        Runs on every terminal state (COMPLETED / TIMED_OUT / CANCELLED / FAILED /
+        DISCONNECTED, incl. the GeneratorExit path) and guarantees, exactly once:
+          * history is finalized coherently — full text on success, partial+localized
+            status on an incomplete stream, drop-dangling on a content-free cancel —
+            so a timed-out/partial turn can NEVER contaminate the next turn;
+          * readiness + runtime health are recorded once;
+          * the SHORT user-facing status message to yield is returned (or None when the
+            already-streamed content needs no addendum).
+        It never raises and never depends on TTS/MCP/console to finalize."""
+        if result.get("finalized"):
+            return result.get("status_msg")
+        result["finalized"] = True
+        result["final_state"] = state
+        text = (result.get("text") or "").strip()
+        status_msg: str | None = None
         try:
-            from core.fast_readiness import get_fast_readiness
-            fr = get_fast_readiness()
-            fr.mark_served()
-            _record = getattr(fr, "record_fast_turn", None)
-            if callable(_record):
-                _record(
-                    first_token_ms=budget.snapshot().get("first_token_ms"),
-                    total_ms=result.get("infer_ms"),
-                    tokens_per_second=result.get("tokens_per_second"),
-                    transport="native", think=route.think,
-                )
+            if state == "COMPLETED":
+                if text:
+                    self._close_turn_with_status(text)      # append full answer
+                else:
+                    # done/EOS but no content — keep history coherent, invite retry.
+                    status_msg = _partial_stream_message(language)
+                    self._close_turn_with_status(status_msg)
+            elif state in ("TIMED_OUT", "DISCONNECTED", "FAILED"):
+                status_msg = _partial_stream_message(language)
+                # The partial (if any) already streamed to the user; pair it WITH the
+                # status so context is coherent and truthful — never "successful".
+                combined = (text + "\n\n" + status_msg) if text else status_msg
+                self._close_turn_with_status(combined)
+            elif state == "CANCELLED":
+                if text:
+                    self._close_turn_with_status(text)      # keep the partial shown
+                else:
+                    self._drop_dangling_user()               # nothing shown => no dangle
         except Exception:
             pass
-        record_turn(budget.snapshot())
+        # ── Readiness + health, recorded ONCE ──────────────────────────────────
+        try:
+            if state == "COMPLETED" and text:
+                from core.fast_readiness import get_fast_readiness
+                fr = get_fast_readiness()
+                fr.mark_served()
+                _record = getattr(fr, "record_fast_turn", None)
+                if callable(_record):
+                    _record(
+                        first_token_ms=budget.snapshot().get("first_token_ms"),
+                        total_ms=result.get("infer_ms"),
+                        tokens_per_second=result.get("tokens_per_second"),
+                        transport="native", think=route.think,
+                    )
+        except Exception:
+            pass
+        try:
+            if state in ("CANCELLED", "TIMED_OUT"):
+                budget.cancel_success = True
+            record_turn(budget.snapshot())
+        except Exception:
+            pass
         try:
             from tools.executor import _aura_broadcast as _bcast_fast
             asyncio.create_task(_bcast_fast({
@@ -1948,24 +2089,35 @@ class LLM:
                 "transport": "native",
                 "model": route.model,
                 "reason": route.reason.value,
+                "final_state": state,
+                "chunks_received": result.get("chunks_received"),
+                "content_chars": result.get("content_chars"),
+                "done_received": result.get("done_received"),
                 "first_token_ms": budget.snapshot().get("first_token_ms"),
                 "tokens_per_second": result.get("tokens_per_second"),
             }))
         except Exception:
             pass
+        result["status_msg"] = status_msg
+        return status_msg
 
     async def chat_stream(self, user_message: str) -> AsyncGenerator[str, None]:
         """
         Genera tokens del LLM en tiempo real via Ollama.
 
         Ciclo completo:
-          1. Inicializa MCP (lazy, una sola vez).
+          1. Bypass determinista / selección de transporte (sin esperar a MCP).
           2. Comprime el historial si excede el umbral (v6.3).
           3. Stream de texto → yield chunks al pipeline TTS.
           4. Si finish_reason == "tool_calls": acumula los deltas de tool calls,
              ejecuta las tools (local o MCP) y continúa el stream con la respuesta.
           5. Si finish_reason == "stop": fin del turno.
         """
+        # V69 M55.1 — the dispatch clock starts the instant the message enters
+        # chat_stream, so pre_inference_dispatch_ms (classification + language +
+        # transport selection) is measured truthfully and can be asserted < 500ms.
+        # No raw user content is stored — only elapsed monotonic time.
+        _dispatch_t0 = _time.monotonic()
         # V69 M55.11 — deterministic bypass FIRST. Time/date/lifecycle/FAST-model/
         # vault questions have a single trusted local answer already in the runtime;
         # restating it via a CPU-bound model is pure latency. Answer it directly in
@@ -1988,7 +2140,11 @@ class LLM:
             yield _bypass
             return
 
-        await self._init_mcp()
+        # V69 M55.1.1 — MCP is NO LONGER awaited here. It warms in its own supervised
+        # background task (start_mcp_background), so a DIRECT_FAST turn reaches route
+        # selection and native streaming immediately instead of sitting ~43s behind the
+        # stdio-bridge cold spawn. The tool-chat path below awaits it via _ensure_mcp,
+        # bounded by the remaining turn budget.
         await self._maybe_compress_history()
 
         # v35.0 — register stream with cancel bus and clear prior abort flag
@@ -2013,11 +2169,11 @@ class LLM:
             except Exception:
                 pass
 
-        # v34.0 — enrich system prompt with recent threat context
-        try:
-            _threat_ctx = await refresh_threat_enrichment()
-        except Exception:
-            _threat_ctx = ""
+        # V69 M55.1 — threat-context enrichment is deferred to the non-fast path. It
+        # feeds the FULL tool/security system prompt only (see _threat_ctx below); the
+        # native fast path uses the LEAN prompt and never consumes it. Awaiting it here
+        # added seconds of pre-inference dispatch to every DIRECT_FAST turn for nothing.
+        _threat_ctx = ""
 
         self.history.append({"role": "user", "content": user_message})
 
@@ -2115,65 +2271,109 @@ class LLM:
             _fast_route = None
 
         if _fast_route is not None and _fast_route.use_native:
+            # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
+            # transport-selected (classification + language + route). Measured at the
+            # TRUTHFUL moment the native transport is chosen, never logged early.
+            _dispatch_ms = round((_time.monotonic() - _dispatch_t0) * 1000.0, 1)
+            self._last_dispatch_ms = _dispatch_ms
             logger.info(
                 "FAST_ROUTE: native no-think — model={} think={} max_tokens={} "
-                "reason={} detail={!r}".format(
+                "reason={} detail={!r} dispatch_ms={}".format(
                     _fast_route.model, _fast_route.think, _fast_route.max_tokens,
-                    _fast_route.reason.value, _fast_route.detail,
+                    _fast_route.reason.value, _fast_route.detail, _dispatch_ms,
                 )
             )
+            if _dispatch_ms > 1000.0:
+                logger.warning(
+                    "DISPATCH: pre-inference dispatch {}ms exceeded the 1s ceiling "
+                    "(optional-service contention?)".format(_dispatch_ms)
+                )
             _fast_stage_t = timeouts_for(_turn_policy)
             _budget.model_role = "fast"
             _fast_result: dict = {}
+            _fast_lang = self.language_context.active_language()
+            # V69 M55.2.2 — ONE turn-finalization guard. Whatever terminal state the
+            # native stream reaches, history is finalized exactly once and the generator
+            # returns coherently, so the interactive loop always restores the prompt
+            # once. GeneratorExit (the turn-level bounded_stream deadline aclose()ing us
+            # mid-stream) is caught here — the case that previously left a partial answer
+            # dangling with no prompt and let the NEXT turn answer the PREVIOUS question.
             try:
-                async for _piece in self._native_fast_stream(
-                    route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
-                    result=_fast_result,
-                ):
-                    yield _piece
-            except _NativeFastUnavailable as _nfu:
-                logger.info(
-                    "FAST_ROUTE: native unavailable ({}) — falling back to /v1".format(
-                        _nfu
-                    )
-                )
-                self._note_fast_readiness("note_native_fallback")
-                # fall through to the existing OpenAI-compatible loop below.
-            except TurnTimeout as _tt:
-                _budget.timeout_stage = _tt.stage
-                _budget.cancel_success = True
-                logger.warning(
-                    f"FAST_ROUTE: native stream timed out (stage={_tt.stage}) — cancelled"
-                )
-                self._note_fast_readiness("note_timeout", _tt.stage)
-                record_turn(_budget.snapshot())
-                _fast_to_msg = _turn_timeout_message(self.language_context.active_language())
-                # Pair the (possibly partial) answer with the user turn — no dangling
-                # user message to pollute the next turn.
-                self._close_turn_with_status(
-                    (_fast_result.get("text") or "").strip() or _fast_to_msg)
-                yield _fast_to_msg
-                unregister_operation("llm_stream")
-                return
-            except asyncio.CancelledError:
-                _budget.cancel_success = True
-                logger.info("FAST_ROUTE: cancelled — clean exit")
-                self._note_fast_readiness("note_cancellation")
-                _fast_partial = (_fast_result.get("text") or "").strip()
-                if _fast_partial:
-                    self._close_turn_with_status(_fast_partial)
-                else:
-                    self._drop_dangling_user()
                 try:
-                    await self._broadcast_cancel_event()
-                except Exception:
-                    pass
-                unregister_operation("llm_stream")
-                return
-            else:
-                self._finalize_fast_turn(_fast_result, _budget, _fast_route)
-                unregister_operation("llm_stream")
-                return
+                    async for _piece in self._native_fast_stream(
+                        route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
+                        result=_fast_result,
+                    ):
+                        yield _piece
+                except _NativeFastUnavailable as _nfu:
+                    logger.info(
+                        "FAST_ROUTE: native unavailable ({}) — falling back to /v1".format(
+                            _nfu
+                        )
+                    )
+                    self._note_fast_readiness("note_native_fallback")
+                    # No partial exists (guaranteed pre-content) — fall through to the
+                    # OpenAI-compatible loop below WITHOUT finalizing the turn.
+                except TurnTimeout as _tt:
+                    _budget.timeout_stage = _tt.stage
+                    logger.warning(
+                        f"FAST_ROUTE: native stream timed out (stage={_tt.stage}) — cancelled"
+                    )
+                    self._note_fast_readiness("note_timeout", _tt.stage)
+                    _status = self._finalize_native_turn(
+                        _fast_result, _budget, _fast_route,
+                        state="TIMED_OUT", language=_fast_lang)
+                    if _status:
+                        yield _status
+                    unregister_operation("llm_stream")
+                    return
+                except asyncio.CancelledError:
+                    logger.info("FAST_ROUTE: cancelled — clean exit")
+                    self._note_fast_readiness("note_cancellation")
+                    self._finalize_native_turn(
+                        _fast_result, _budget, _fast_route,
+                        state="CANCELLED", language=_fast_lang)
+                    try:
+                        await self._broadcast_cancel_event()
+                    except Exception:
+                        pass
+                    unregister_operation("llm_stream")
+                    return
+                else:
+                    _state = _fast_result.get("final_state") or (
+                        "COMPLETED" if (_fast_result.get("text") or "").strip()
+                        else "FAILED")
+                    _status = self._finalize_native_turn(
+                        _fast_result, _budget, _fast_route,
+                        state=_state, language=_fast_lang)
+                    if _status:
+                        yield _status
+                    unregister_operation("llm_stream")
+                    return
+            except GeneratorExit:
+                # Outer aclose() mid-stream (turn-level deadline). No yield is possible;
+                # finalize history coherently and re-raise so the generator closes.
+                self._note_fast_readiness("note_cancellation")
+                self._finalize_native_turn(
+                    _fast_result, _budget, _fast_route,
+                    state="CANCELLED", language=_fast_lang)
+                raise
+
+        # V69 M55.1.1 — this turn was NOT served by the tool-free native fast path, so
+        # it may call tools. Ensure the MCP bridge is connected, but ONLY within the
+        # turn's REMAINING budget (capped) — a still-cold bridge proceeds with local
+        # tools rather than stalling. When warmed at boot this returns immediately.
+        try:
+            await self._ensure_mcp(timeout=min(_budget.remaining_s(), 20.0))
+        except Exception as _me:  # noqa: BLE001 — MCP must never break a turn
+            logger.debug(f"MCP: ensure skipped: {_me}")
+
+        # V69 M55.1 — threat enrichment for the FULL system prompt runs here, off the
+        # fast critical path (deferred from before the fast-route decision).
+        try:
+            _threat_ctx = await refresh_threat_enrichment()
+        except Exception:
+            _threat_ctx = ""
 
         # V68.1 M47 — authorization-aware cyber intent gate, computed ONCE per
         # turn (the user message is constant across the tool loop). For an
@@ -2765,6 +2965,18 @@ class LLM:
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"LLM: native http close suppressed: {e}")
             self._native_http = None
+        # V69 M55.1.1 — a still-warming MCP background task must be stopped before the
+        # exit stack it feeds is closed, or the stdio_client cancel scope races the
+        # teardown. Cancel + await it bounded; the cancellation is expected, not an error.
+        # getattr-guarded like _native_http above: aclose may run on an LLM built via
+        # __new__ (tests) that never went through __init__.
+        _mt = getattr(self, "_mcp_task", None)
+        if _mt is not None and not _mt.done():
+            _mt.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(_mt, return_exceptions=True), timeout=3.0)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"LLM: MCP task cancel suppressed: {e}")
         try:
             await self._exit_stack.aclose()
         except (asyncio.CancelledError, RuntimeError) as e:

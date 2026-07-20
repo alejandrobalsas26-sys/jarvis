@@ -35,7 +35,11 @@ def _process_env() -> dict:
 
 def _jarvis_recommendation() -> dict:
     """What JARVIS's hardware profile RECOMMENDS (advisory; not applied to the
-    server). Mirrors model_router.configure_ollama_for_hardware's computation."""
+    server). Mirrors model_router.configure_ollama_for_hardware's computation.
+
+    M55.5.1 — max_loaded_models is recommended as max(2, parallel): this host needs
+    qwen3:8b (FAST) and nomic-embed-text resident together, so a single slot would
+    evict FAST on every embedding call."""
     out = {"num_parallel": None, "max_loaded_models": None, "keep_alive": None}
     try:
         from core.hardware_profile import get_cached_profile
@@ -43,7 +47,7 @@ def _jarvis_recommendation() -> dict:
         if hw is not None:
             parallel = getattr(hw, "recommended_pools", getattr(hw, "pools", 1))
             out["num_parallel"] = parallel
-            out["max_loaded_models"] = parallel
+            out["max_loaded_models"] = max(2, int(parallel))
             out["keep_alive"] = "30m" if getattr(hw, "is_dual_channel", False) else "10m"
     except Exception:  # noqa: BLE001
         pass
@@ -88,6 +92,61 @@ class OllamaEnvTruth:
             "process). Verify via the Ollama service configuration."
         )
 
+    def residency_guidance(self) -> str:
+        """V69 M55.5.1 — deterministic operator guidance for keeping FAST + embedding
+        resident. Guidance ONLY — JARVIS never restarts or reconfigures the server —
+        and it makes NO claim about memory saved or latency gained without a
+        measurement (only observable model sizes/counts are reported)."""
+        rec_max = (self.configured_by_jarvis or {}).get("max_loaded_models") or 2
+        parts = [
+            "Residency: this host regularly needs qwen3:8b (FAST) and nomic-embed-text "
+            "resident together.",
+            "Recommended: OLLAMA_NUM_PARALLEL=1 and OLLAMA_MAX_LOADED_MODELS={} in the "
+            "Ollama SERVER environment, then restart the Ollama service.".format(rec_max),
+        ]
+        if self.observed_loaded_models is not None:
+            parts.append("Observed resident models: {} ({}).".format(
+                self.observed_loaded_models,
+                ", ".join(self.active_models) if self.active_models else "none"))
+        if self.max_loaded_applied() == "not-applied":
+            parts.append(
+                "With a single model slot, loading the embedding model can EVICT FAST, "
+                "forcing a cold reload on the next fast turn.")
+        parts.append(
+            "A server restart is required to apply environment changes. Guidance only — "
+            "no memory/latency claim is made without a measurement.")
+        return " ".join(parts)
+
+    def posture_report(self) -> dict:
+        """V69 M55.5 — the five HONEST categories, never conflated: what JARVIS
+        recommends, what THIS process's env holds, what the server actually reveals,
+        whether the server's settings are verified (always False — the API cannot), and
+        what remains unknown (the server's real parallel/max-loaded config)."""
+        rec = self.configured_by_jarvis or {}
+        proc = self.process_environment or {}
+        return {
+            "host": "127.0.0.1",
+            "recommended": {
+                "num_parallel": rec.get("num_parallel"),
+                "max_loaded_models": rec.get("max_loaded_models"),
+                "keep_alive": rec.get("keep_alive"),
+            },
+            "jarvis_process_env": {
+                "OLLAMA_NUM_PARALLEL": proc.get("OLLAMA_NUM_PARALLEL") or "unset",
+                "OLLAMA_MAX_LOADED_MODELS": proc.get("OLLAMA_MAX_LOADED_MODELS") or "unset",
+            },
+            "server_observed": {
+                "server_version": self.server_version,
+                "active_models": list(self.active_models),
+                "observed_loaded_models": self.observed_loaded_models,
+            },
+            "server_settings_verified": self.settings_verified,   # always False
+            "unknown": [
+                "OLLAMA_NUM_PARALLEL(server)",
+                "OLLAMA_MAX_LOADED_MODELS(server)",
+            ],
+        }
+
     def snapshot(self) -> dict:
         return {
             "process_environment": self.process_environment,
@@ -102,6 +161,8 @@ class OllamaEnvTruth:
             "settings_verified": self.settings_verified,
             "max_loaded_applied": self.max_loaded_applied(),
             "guidance": self.guidance(),
+            "residency_guidance": self.residency_guidance(),
+            "posture_report": self.posture_report(),
         }
 
     def summary(self) -> str:

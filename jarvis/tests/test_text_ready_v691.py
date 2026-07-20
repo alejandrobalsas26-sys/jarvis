@@ -109,12 +109,16 @@ def test_fast_starts_configured_not_ready():
     assert f.accepts_input() is False, "CONFIGURED alone must not gate input open"
 
 
-def test_probe_marks_unavailable_when_server_is_down():
+def test_probe_is_inconclusive_not_unavailable_on_a_single_failure():
+    """V69 M55.3 — a single failed metadata probe is WARMING (the server may be busy
+    loading under OLLAMA_MAX_LOADED_MODELS=1), NEVER a premature UNAVAILABLE. The
+    16:52:20 live 'FAST_READINESS: UNAVAILABLE' — 19s before NATIVE_READY — was this bug."""
     f = FastReadiness(model="qwen3:8b", base_url="http://127.0.0.1:1", clock=FakeClock())
     state = asyncio.run(f.probe())
-    assert state is FastState.UNAVAILABLE
+    assert state is FastState.WARMING
     assert f.snapshot()["last_error"] is not None
     assert f.snapshot()["last_probe_ms"] is not None
+    assert f.accepts_input() is True   # WARMING still accepts input
 
 
 def test_model_matching_tolerates_the_latest_tag():

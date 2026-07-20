@@ -607,17 +607,35 @@ def resolve_embedding_model(installed=None, hw_recommendation: str | None = None
 
 
 async def configure_ollama_for_hardware(hw_profile) -> None:
-    """Log optimal ollama serve flags for the operator."""
-    # v46.0: parallelism must match actual recommended pools — on battery
-    # pools=1 even when RAM is dual-channel, so reading pools dynamically
-    # prevents the hardcoded =2 mismatch with the resolved profile.
+    """Log the RECOMMENDED Ollama server flags for this hardware — ADVISORY ONLY.
+
+    V69 M55.5: JARVIS does NOT set these, and the Ollama server is a SEPARATE process
+    that read its own environment when it launched, so a printed value proves nothing
+    about the running server. The old `OLLAMA CONFIG: ... MAX_LOADED_MODELS=1` line read
+    like verified configuration; it is replaced by a clearly-labelled RECOMMENDED line
+    plus THIS process's env (which is still not the server's). The truthful,
+    category-separated posture — recommended vs process-env vs server-observed — is in
+    core.ollama_env and is logged after the native capability probe.
+    """
+    import os
+    # v46.0: parallelism tracks the resolved pools (1 on battery even when RAM is
+    # dual-channel), so the recommendation matches the real profile.
     parallel = getattr(hw_profile, "recommended_pools",
                        getattr(hw_profile, "pools", 1))
-    keep_alive = "30m" if hw_profile.is_dual_channel else "10m"
+    keep_alive = "30m" if getattr(hw_profile, "is_dual_channel", False) else "10m"
+    # M55.5.1 — this CPU host regularly needs qwen3:8b (FAST) AND nomic-embed-text
+    # resident; recommend room for TWO so an embedding call does not EVICT FAST (the
+    # live cold-swap). Guidance only — applying it needs the SERVER env + a restart.
+    max_loaded = max(2, int(parallel))
+    proc_parallel = os.environ.get("OLLAMA_NUM_PARALLEL", "unset")
+    proc_max = os.environ.get("OLLAMA_MAX_LOADED_MODELS", "unset")
     logger.info(
-        f"OLLAMA CONFIG: "
-        f"OLLAMA_NUM_PARALLEL={parallel} "
-        f"OLLAMA_KEEP_ALIVE={keep_alive} "
-        f"OLLAMA_MAX_LOADED_MODELS={parallel} "
-        f"ollama serve"
+        "OLLAMA RECOMMENDED (advisory; set in the SERVER env + restart to apply): "
+        "OLLAMA_NUM_PARALLEL={} OLLAMA_MAX_LOADED_MODELS={} OLLAMA_KEEP_ALIVE={}".format(
+            parallel, max_loaded, keep_alive)
+    )
+    logger.info(
+        "OLLAMA JARVIS-PROCESS ENV (NOT the server's; server settings are not "
+        "API-verifiable): OLLAMA_NUM_PARALLEL={} OLLAMA_MAX_LOADED_MODELS={}".format(
+            proc_parallel, proc_max)
     )

@@ -65,11 +65,24 @@ def _install_console_logging() -> None:
     replaced by the coordinator's sink; the file sink is preserved. Falls back
     silently (keeps stderr) if the console module is unavailable."""
     try:
-        from core.console import install_console, console_log_sink
+        from core.console import (
+            console_log_sink, install_console, install_stdlib_logging_bridge,
+        )
         install_console()
         logger.remove()
         logger.add(console_log_sink, level="INFO", format=_LOG_FORMAT)
         logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
+        # V69 M55.1.2 — stdlib `logging` (db_manager & ~30 core modules) must also
+        # go through the coordinator, or it writes straight to stderr and smears the
+        # `Tú:` input line (the live PostgreSQL/asyncpg error).
+        install_stdlib_logging_bridge()
+        # V69 M55.3.1 — the console coordinator is up; stamp CONSOLE_READY so the boot
+        # phase ledger can report console/reader/text/core/operational latencies.
+        try:
+            from core.lifecycle import lifecycle as _lc_console
+            _lc_console.stamp("CONSOLE_READY")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -217,7 +230,15 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
                 break
             spoken = render(sentence, ResponseSurface.VOICE)
             if spoken:
-                await tts.speak_async(spoken, lang=lang)
+                # V69 M55.2.2 — a TTS fault must NEVER break the turn or block the
+                # prompt from being restored. Drop the utterance and keep draining so
+                # the producer's sentinel is always consumed and the turn finalizes.
+                try:
+                    await tts.speak_async(spoken, lang=lang)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug("TTS: speak_async failed; continuing turn")
 
     if _console is not None:
         _console.post(f"\n[{name}] ", ConsoleChannel.ASSISTANT)
@@ -279,13 +300,14 @@ def _mark_input_reader_live(live: bool = True) -> None:
         return
     try:
         from core.lifecycle import lifecycle as _lc
-        if _lc.mark_text_ready():
-            _pt = _lc.phase_timings_ms()
-            logger.info(
-                "LIFECYCLE: TEXT_READY — prompt accepting input at {}ms".format(
-                    _pt.get("TEXT_READY"),
-                )
-            )
+        # Advance the FSM to TEXT_READY when the reader is reached early (no-op if boot
+        # already passed it), and ALWAYS stamp the truthful reader-live moment so
+        # text_ready_ms is never None once the prompt accepts input (M55.3.1).
+        _lc.mark_text_ready()
+        _ms = _lc.note_reader_ready()
+        logger.info(
+            "LIFECYCLE: TEXT_READY — prompt accepting input at {}ms".format(_ms)
+        )
     except Exception:
         pass
 
@@ -1126,37 +1148,81 @@ async def _main_async() -> None:
         try:
             from core.fast_readiness import get_fast_readiness
             fast = get_fast_readiness()
+            # V69 M55.3 — the metadata probe alone is INCONCLUSIVE (PROBING -> REACHABLE
+            # or WARMING); it must NOT emit a premature UNAVAILABLE (the live 16:52:20
+            # verdict, 19s before the native path proved NATIVE_READY). The truthful
+            # FAST verdict is decided by reconcile() AFTER the native probe below.
             await fast.probe()
-            logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
-            # V69 M55 — probe the NATIVE transport capability (bounded, cached) so
-            # the first DIRECT_FAST turn can use native no-think with proven support.
-            # The tiny probe generation also WARMS qwen3:8b with think=false, which
-            # is faster than the reasoning-default OpenAI prewarm, so it doubles as
-            # the warmup when it succeeds (no redundant model load under
-            # OLLAMA_MAX_LOADED_MODELS=1).
-            _warmed = False
+            # V69 M55 — probe the NATIVE transport capability (bounded, cached) so the
+            # first DIRECT_FAST turn can use native no-think with proven support. The
+            # tiny probe generation also WARMS qwen3:8b with think=false (no redundant
+            # model load under OLLAMA_MAX_LOADED_MODELS=1).
+            _reconciled = False
             try:
                 from core.ollama_native import refresh_native_capability
                 cap = await refresh_native_capability(model=fast.model)
-                fast.note_capability(cap)
                 logger.info(
                     "NATIVE_CAP: state={} think_false_supported={} version={}".format(
                         cap.state.value, cap.think_false_supported, cap.server_version,
                     )
                 )
-                if getattr(cap, "streaming_ok", False):
-                    fast.mark_served()   # the probe proved the model serves tokens
-                    _warmed = True
+                fast.reconcile(cap)   # truthful verdict from BOTH probes
+                _reconciled = True
+                # V69 M55.5 — log the TRUTHFUL Ollama posture (recommended vs this
+                # process's env vs what the server actually reveals) AFTER the probe, so
+                # observed models are real and nothing is presented as verified config.
+                try:
+                    from core.ollama_env import collect_ollama_env
+                    _env = collect_ollama_env(capability=cap)
+                    logger.info(f"OLLAMA POSTURE: {_env.summary()}")
+                    if _env.max_loaded_applied() == "not-applied":
+                        logger.info(f"OLLAMA RESIDENCY: {_env.residency_guidance()}")
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception as _ne:
                 logger.debug(f"NATIVE_CAP: probe skipped: {_ne}")
-            if not _warmed and fast.state.value == "REACHABLE":
+            logger.info(f"FAST_READINESS: {fast.state.value} model={fast.model}")
+            if not _reconciled and fast.state.value == "REACHABLE":
                 await fast.prewarm(client=llm.client)
                 logger.info(f"FAST_READINESS: prewarm -> {fast.state.value}")
+            # V69 M55.1 — warm the DISPATCH path (semantic task-decision assembly) OFF
+            # the critical path so the FIRST interactive turn's pre-inference dispatch is
+            # already < 1s. The first cold assemble_task_decision() lazily loads the
+            # semantic domain model (~1.5s on this host); doing it here in the background
+            # keeps that cost out of the operator's first DIRECT_FAST turn.
+            try:
+                from core.agent_runtime import assemble_task_decision
+                from core.cognitive_optimizer import classify_query
+                from core.response_surface import ResponseSurface
+                from core.turn_policy import classify_request
+
+                def _warm_dispatch() -> None:
+                    classify_query("hola")
+                    classify_request("hola", authority=None)
+                    assemble_task_decision(
+                        "hola", force_deep=False, query_category=None,
+                        surface=ResponseSurface.TEXT)
+
+                await asyncio.to_thread(_warm_dispatch)
+                logger.debug("DISPATCH: classification + task-decision path warmed")
+            except Exception as _dw:  # noqa: BLE001
+                logger.debug(f"DISPATCH: warmup skipped: {_dw}")
         except Exception as exc:
             logger.debug(f"FAST_READINESS: probe failed: {exc}")
 
     if _lifecycle.can_start_task():
         asyncio.create_task(_fast_warmup(), name="fast-readiness-warmup")
+
+    # V69 M55.1.1 — connect MCP in its OWN supervised background task, OFF the
+    # interactive critical path. The stdio bridge cold spawn (~43s on this 15W CPU)
+    # then warms while the operator can already ask DIRECT_FAST questions; only
+    # tool-required turns await it (bounded by their budget). Never blocks TEXT_READY.
+    if _lifecycle.can_start_task():
+        try:
+            llm.start_mcp_background()
+            logger.info("MCP: bridge connecting in background (off dispatch path)")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"MCP: background start skipped: {exc}")
 
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
@@ -1409,6 +1475,7 @@ async def _main_async() -> None:
 
     aura_server = None
     aura_task: asyncio.Task | None = None
+    aura_service = None
     if not args.no_aura:
         try:
             import uvicorn
@@ -1424,6 +1491,21 @@ async def _main_async() -> None:
             # Prevent uvicorn from fighting over SIGTERM/SIGINT with our loop
             aura_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
             aura_task = asyncio.create_task(aura_server.serve(), name="aura-server")
+            # V69 M55.4 — represent AURA through the OptionalService contract so shutdown
+            # stops it in order via its supported API (should_exit), never a mid-lifespan
+            # task cancel. serve() is already running, so the service is READY.
+            try:
+                from core.optional_service import (
+                    Criticality, OptionalService, ServiceState, stop_uvicorn_gracefully,
+                )
+                aura_service = OptionalService(
+                    "aura", criticality=Criticality.OPTIONAL,
+                    request_stop=lambda: setattr(aura_server, "should_exit", True),
+                    stop=lambda: stop_uvicorn_gracefully(aura_server, aura_task),
+                )
+                aura_service.state = ServiceState.READY
+            except Exception:  # noqa: BLE001
+                aura_service = None
             logger.info("AURA: ws://127.0.0.1:8765/ws  |  open aura/index.html to monitor")
 
             # Zeek L7 DPI log streamer
@@ -2409,26 +2491,31 @@ async def _main_async() -> None:
         _hard_kill_timer.daemon = True
         _hard_kill_timer.start()
 
-        # v30.0: graceful shutdown sequence — flush ChromaDB, save session,
-        # cancel tasks, write audit log.
-        # v46.0: broad except — MCP/anyio cancel scope errors on shutdown
-        # are cosmetic and should not pollute the operator's terminal.
+        # V69 M55.4.1/.2 — ORDERED shutdown: stop AURA/Uvicorn through its supported
+        # API (should_exit) and await serve() BEFORE run_graceful_shutdown's blanket
+        # task-cancel. The live CancelledError traceback came from serve() being
+        # .cancel()'d mid-lifespan; requesting should_exit lets Starlette's lifespan
+        # tear down cleanly. Expected cancellation is suppressed at the owner boundary;
+        # a real serve() error is still reported. Network service stops before storage
+        # is checkpointed/closed, so no service writes to a closed database.
+        try:
+            if aura_service is not None:
+                await aura_service.stop(timeout=5.0)   # ordered stop via the contract
+            elif aura_server is not None or aura_task is not None:
+                from core.optional_service import stop_uvicorn_gracefully
+                logger.info(
+                    "SHUTDOWN: {}".format(
+                        await stop_uvicorn_gracefully(aura_server, aura_task, timeout=5.0)))
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: AURA stop suppressed: {e}")
+
+        # v30.0: graceful shutdown sequence — checkpoint semantic state, flush ChromaDB,
+        # close DBs, save session, cancel remaining tasks, write audit log. AURA is
+        # already down, so its serve() task is not blanket-cancelled mid-lifespan.
         try:
             await run_graceful_shutdown(watchdog=watchdog)
         except (RuntimeError, asyncio.CancelledError, Exception) as e:
             logger.debug(f"SHUTDOWN: error during graceful shutdown: {e}")
-
-        # Graceful AURA shutdown
-        try:
-            if aura_server is not None:
-                aura_server.should_exit = True
-            if aura_task is not None:
-                try:
-                    await asyncio.wait_for(aura_task, timeout=3.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    aura_task.cancel()
-        except (RuntimeError, asyncio.CancelledError, Exception):
-            pass  # MCP/anyio cancel scope error on shutdown is cosmetic
 
         # V69 M54.1 — stop the single console renderer LAST (bounded flush, no orphan
         # daemon thread). After this nothing writes to the interactive terminal.

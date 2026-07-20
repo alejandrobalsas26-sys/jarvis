@@ -37,17 +37,20 @@ _FT_WINDOW = 20
 
 
 class FastState(str, Enum):
-    CONFIGURED = "CONFIGURED"
-    REACHABLE = "REACHABLE"
-    WARMING = "WARMING"
-    READY = "READY"
-    DEGRADED = "DEGRADED"
-    UNAVAILABLE = "UNAVAILABLE"
+    CONFIGURED = "CONFIGURED"    # a model name is configured (says nothing about the server)
+    PROBING = "PROBING"          # a capability probe is in flight (M55.3)
+    REACHABLE = "REACHABLE"      # server answered, model present
+    WARMING = "WARMING"          # server reachable/loading OR one probe inconclusive
+    READY = "READY"              # the model produced a token — it can serve now
+    DEGRADED = "DEGRADED"        # native unusable but a functional fallback exists
+    UNAVAILABLE = "UNAVAILABLE"  # native AND fallback proven unavailable
 
 
-# States in which the operator may type and expect a bounded outcome.
-_INPUT_OK = frozenset({FastState.REACHABLE, FastState.WARMING, FastState.READY,
-                       FastState.DEGRADED})
+# States in which the operator may type and expect a bounded outcome. PROBING/WARMING
+# are included: a turn under an in-flight/loading model still answers or fails within
+# its own budget, and refusing input would be worse than a slow first answer.
+_INPUT_OK = frozenset({FastState.PROBING, FastState.REACHABLE, FastState.WARMING,
+                       FastState.READY, FastState.DEGRADED})
 
 
 @dataclass
@@ -62,6 +65,9 @@ class FastReadiness:
     _last_success_at: float | None = field(default=None)
     _last_error: str | None = field(default=None)
     _prewarm_started: bool = field(default=False)
+    # M55.3 — did the metadata probe ever actually reach the server? Distinguishes a
+    # busy/loading server (WARMING) from a truly-down one (eligible for UNAVAILABLE).
+    _reached_server: bool = field(default=False)
     # ── V69 M55.10 — FAST transport + no-think capability + latency stats ──────
     transport: str = field(default="auto")
     think_supported: bool | None = field(default=None)
@@ -191,9 +197,19 @@ class FastReadiness:
         }
 
     async def probe(self) -> FastState:
-        """Bounded metadata probe — no inference. Asks Ollama which models it has
-        and whether ours is among them."""
+        """Bounded metadata probe — no inference. Asks Ollama which models it has and
+        whether ours is among them.
+
+        M55.3 truthfulness: the probe transitions UNKNOWN/CONFIGURED -> PROBING while
+        in flight, and a SINGLE failure resolves to WARMING, never UNAVAILABLE — on
+        this host the boot-time nomic embedding load can make Ollama momentarily
+        unresponsive under OLLAMA_MAX_LOADED_MODELS=1, and declaring the model dead
+        because one 3s metadata GET timed out is exactly the premature verdict the live
+        run showed. UNAVAILABLE is decided only by reconcile(), after the native
+        transport probe ALSO fails and the server was never reached."""
         t0 = self.clock()
+        if self._state is not FastState.READY:
+            self._state = FastState.PROBING
         try:
             import httpx
             async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S) as client:
@@ -203,10 +219,14 @@ class FastReadiness:
         except Exception as exc:
             self._last_probe_ms = round((self.clock() - t0) * 1000.0, 1)
             self._last_error = type(exc).__name__
-            self._state = FastState.UNAVAILABLE
+            # Inconclusive, not fatal: stay WARMING (input still allowed) and let
+            # reconcile() reach the truthful verdict once the native probe concludes.
+            if self._state is not FastState.READY:
+                self._state = FastState.WARMING
             return self._state
         self._last_probe_ms = round((self.clock() - t0) * 1000.0, 1)
         self._last_success_at = self.clock()
+        self._reached_server = True
         if self._model_present(names):
             self._last_error = None
             # Never downgrade READY back to REACHABLE on a later probe.
@@ -215,6 +235,41 @@ class FastReadiness:
         else:
             self._last_error = "model_not_installed"
             self._state = FastState.DEGRADED
+        return self._state
+
+    def reconcile(self, cap) -> FastState:
+        """V69 M55.3 — the truthful FAST verdict AFTER both the metadata probe and the
+        native-transport capability probe have run. This is where UNAVAILABLE may be
+        declared, and only when the server is proven unreachable by BOTH paths:
+
+          native NATIVE_READY / streamed a token   -> READY
+          native OPENAI_FALLBACK / NATIVE_DEGRADED  -> DEGRADED (fallback exists)
+          native UNKNOWN / PROBING (inconclusive)   -> WARMING (never UNAVAILABLE)
+          native UNAVAILABLE + server never reached -> UNAVAILABLE
+          native UNAVAILABLE + server WAS reached   -> DEGRADED (reachable, transport bad)
+
+        Bounded and never raising."""
+        try:
+            self.note_capability(cap)
+            native = getattr(getattr(cap, "state", None), "value", "") or ""
+            if getattr(cap, "streaming_ok", False) or native == "NATIVE_READY":
+                self.mark_served()                     # a real token — strongest evidence
+                return self._state
+            if native in ("OPENAI_FALLBACK", "NATIVE_DEGRADED"):
+                if self._state is not FastState.READY:
+                    self._state = FastState.DEGRADED
+                return self._state
+            if native in ("", "UNKNOWN", "PROBING"):
+                # Native probe inconclusive — do not regress a good metadata result.
+                if self._state in (FastState.PROBING, FastState.CONFIGURED):
+                    self._state = FastState.WARMING
+                return self._state
+            # native == UNAVAILABLE (proven). Only now can UNAVAILABLE be truthful, and
+            # only if the metadata probe also never reached the server.
+            self._state = (FastState.DEGRADED if self._reached_server
+                           else FastState.UNAVAILABLE)
+        except Exception:  # noqa: BLE001 — readiness must never crash boot
+            pass
         return self._state
 
     def _model_present(self, names: set[str]) -> bool:

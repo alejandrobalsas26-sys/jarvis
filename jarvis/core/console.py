@@ -29,6 +29,7 @@ input still comes from `input()` run in an executor by the caller.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -331,6 +332,7 @@ def install_console(stream: TextIO | None = None, *, start: bool = True) -> Cons
 def reset_console() -> None:
     """Tear down the global console (tests / shutdown)."""
     global _console
+    remove_stdlib_logging_bridge()
     if _console is not None:
         _console.stop()
     _console = None
@@ -376,3 +378,76 @@ def console_log_sink(message) -> None:
         except Exception:
             coalesce_key = None
     console.post(text, channel, coalesce_key=coalesce_key)
+
+
+# ── V69 M55.1.2 — stdlib `logging` bridge (db_manager & ~30 core modules) ──────
+# The ConsoleCoordinator only intercepted loguru. Modules using the standard
+# library's `logging.getLogger(...)` (e.g. `jarvis.db_manager`) had NO handler, so
+# their records hit logging's *lastResort* handler and were written straight to
+# stderr in `LEVELNAME:name:message` form — exactly the live corruption
+# `Tú: ERROR:jarvis.db_manager: PostgreSQL unavailable ...`. Attaching a single
+# handler to the ROOT logger routes those records through the coordinator (which
+# erases/redraws around the prompt) AND disables lastResort, so no stdlib log can
+# ever share the input line again. It never hides errors — WARNING/ERROR are
+# rendered on their own clean line via the protected lane.
+class _ConsoleLoggingHandler(logging.Handler):
+    """Forward stdlib `logging` records into the single ConsoleCoordinator. A
+    logging handler must never raise into the caller, so every failure is swallowed
+    and falls back to a clean stderr line."""
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D102
+        try:
+            channel = _LEVEL_CHANNEL.get(record.levelname, ConsoleChannel.LOG)
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = str(record.msg)
+            text = f"{record.name}: {msg}" if record.name else msg
+            console = _console
+            if console is None:
+                # No coordinator installed (headless/tests): keep it on its own line.
+                try:
+                    sys.stderr.write(text + "\n")
+                except Exception:
+                    pass
+                return
+            coalesce_key = (record.name or "")[:32] or None if channel == ConsoleChannel.LOG else None
+            console.post(text, channel, coalesce_key=coalesce_key)
+        except Exception:
+            pass
+
+
+_stdlib_bridge_handler: "_ConsoleLoggingHandler | None" = None
+
+
+def install_stdlib_logging_bridge(level: int = logging.WARNING) -> None:
+    """Route stdlib `logging` through the ConsoleCoordinator (idempotent).
+
+    Attaches ONE handler to the root logger and removes logging's default stderr
+    path (any root handler disables lastResort). ``level`` defaults to WARNING so
+    INFO stays exactly as quiet as before — only the lines that previously reached
+    stderr via lastResort are now rendered prompt-safely. Never raises."""
+    global _stdlib_bridge_handler
+    if _stdlib_bridge_handler is not None:
+        return
+    try:
+        root = logging.getLogger()
+        handler = _ConsoleLoggingHandler()
+        handler.setLevel(level)
+        root.addHandler(handler)
+        if root.level == logging.NOTSET or root.level > level:
+            root.setLevel(level)
+        _stdlib_bridge_handler = handler
+    except Exception:
+        _stdlib_bridge_handler = None
+
+
+def remove_stdlib_logging_bridge() -> None:
+    """Detach the stdlib bridge (tests / shutdown). Idempotent, never raises."""
+    global _stdlib_bridge_handler
+    if _stdlib_bridge_handler is not None:
+        try:
+            logging.getLogger().removeHandler(_stdlib_bridge_handler)
+        except Exception:
+            pass
+        _stdlib_bridge_handler = None
