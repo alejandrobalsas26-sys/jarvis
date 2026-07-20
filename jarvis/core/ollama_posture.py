@@ -251,7 +251,8 @@ class PosturePlan:
         return "\n".join(lines)
 
 
-def recommend_posture(*, hw_profile=None, profile: str | None = None) -> dict:
+def recommend_posture(*, hw_profile=None, profile: str | None = None,
+                      observed_dual_residency: bool | None = None) -> dict:
     """Recommend posture values from MEASURED hardware, not from assumption.
 
     The recommendation is deliberately conservative for this class of machine:
@@ -261,7 +262,15 @@ def recommend_posture(*, hw_profile=None, profile: str | None = None) -> dict:
                            evicts qwen3:8b and the next turn pays a cold load.
       KEEP_ALIVE           long enough that an idle pause does not cost a reload;
                            shortened on battery where holding weights costs power.
-    These remain RECOMMENDED until :func:`verify_posture` proves the server has them.
+    These remain RECOMMENDED until the server process's own environment proves them.
+
+    ``observed_dual_residency`` — M56.3 MEASUREMENT, not assumption. M55 inferred a
+    single model slot from a slow turn and recommended MAX_LOADED_MODELS=2 on that
+    basis. The M56.3 live run DISPROVED it: qwen3:8b and nomic-embed-text were
+    observed resident together on this server's DEFAULTS. When dual residency has
+    actually been observed, recommending 2 would cap a server that already allows
+    more, so the variable is dropped from the recommendation entirely. Advising a
+    change that measurement shows is unnecessary is exactly the M55 mistake.
     """
     parallel = 1
     keep_alive = "30m"
@@ -282,12 +291,17 @@ def recommend_posture(*, hw_profile=None, profile: str | None = None) -> dict:
         parallel, keep_alive = 1, "5m"
     elif prof == "AC_PERFORMANCE":
         keep_alive = "30m"
-    return {
+    out = {
         "OLLAMA_NUM_PARALLEL": str(parallel),
         # Room for the interactive FAST model AND the embedding model, never less.
         "OLLAMA_MAX_LOADED_MODELS": str(max(2, parallel)),
         "OLLAMA_KEEP_ALIVE": keep_alive,
     }
+    if observed_dual_residency:
+        # Measurement beats the recommendation: the server already keeps both models
+        # resident, so pinning a cap could only make it worse.
+        out.pop("OLLAMA_MAX_LOADED_MODELS", None)
+    return out
 
 
 def build_plan(*, truth: OllamaProcessTruth, target: dict | None = None,

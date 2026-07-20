@@ -47,7 +47,13 @@ from typing import Callable
 # RAM and exercise the transport, never to produce an answer anyone reads.
 _PREWARM_PROMPT = "ok"
 _PREWARM_NUM_PREDICT = 4
-_PREWARM_CTX = 512
+# M56.4 LIVE FINDING — the prewarm MUST use the same num_ctx a real DIRECT_FAST turn
+# uses. Ollama reloads the model runner when generation parameters change, so warming
+# at ctx=512 and then serving at ctx=2048 makes the operator's first real turn pay a
+# FULL reload anyway: measured load_duration 8723 ms on an already-resident qwen3:8b,
+# against 428 ms once the contexts matched. Warming a configuration no real turn uses
+# is not a warmup. This default only applies when config is unreadable.
+_FALLBACK_CTX = 2048
 _DEFAULT_TIMEOUT_S = 45.0
 # The hard ceiling for BEFORE_TEXT_READY: past this, input opens regardless. Boot must
 # never be blocked indefinitely by an optional optimisation.
@@ -162,8 +168,22 @@ class PrewarmMetrics:
         }
 
 
+def resolve_fast_context() -> int:
+    """The num_ctx a real DIRECT_FAST turn will use (core.config ``fast_context``).
+
+    Resolved from the SAME setting :mod:`core.fast_path` hands the live turn, so the
+    prewarm can never warm a different runner configuration than the one that serves
+    the operator.
+    """
+    try:
+        from core.config import settings
+        return int(getattr(settings, "fast_context", _FALLBACK_CTX))
+    except Exception:  # noqa: BLE001
+        return _FALLBACK_CTX
+
+
 async def native_prewarm_runner(*, model: str, timeout_s: float, keep_alive: str,
-                                cancellation=None) -> PrewarmRecord:
+                                cancellation=None, ctx: int | None = None) -> PrewarmRecord:
     """Run ONE complete native /api/chat prewarm over the real transport.
 
     Deliberately identical in shape to a DIRECT_FAST turn — same module, same
@@ -185,7 +205,8 @@ async def native_prewarm_runner(*, model: str, timeout_s: float, keep_alive: str
             model=model,
             messages=[{"role": "user", "content": _PREWARM_PROMPT}],
             think=False, max_tokens=_PREWARM_NUM_PREDICT, temperature=0.0,
-            budget=budget, timeouts=timeouts, ctx=_PREWARM_CTX,
+            budget=budget, timeouts=timeouts,
+            ctx=ctx if ctx is not None else resolve_fast_context(),
             keep_alive=keep_alive, cancellation=cancellation,
         ):
             if chunk.content and record.first_token_ms is None:
@@ -231,11 +252,14 @@ class FastPrewarm:
                  runner: Callable | None = None,
                  residency_check: Callable | None = None,
                  is_stopping: Callable[[], bool] | None = None,
+                 ctx: int | None = None,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.model = model
         self.mode = mode
         self.timeout_s = max(1.0, float(timeout_s))
         self.keep_alive = keep_alive
+        # Must match the live turn's num_ctx or the prewarm warms the wrong runner.
+        self.ctx = int(ctx) if ctx is not None else resolve_fast_context()
         self._runner = runner or native_prewarm_runner
         self._residency_check = residency_check
         self._is_stopping = is_stopping or (lambda: False)
@@ -291,7 +315,8 @@ class FastPrewarm:
         try:
             record = await asyncio.wait_for(
                 self._runner(model=self.model, timeout_s=self.timeout_s,
-                             keep_alive=self.keep_alive, cancellation=cancellation),
+                             keep_alive=self.keep_alive, cancellation=cancellation,
+                             ctx=self.ctx),
                 timeout=self.timeout_s + 5.0,
             )
         except asyncio.TimeoutError:

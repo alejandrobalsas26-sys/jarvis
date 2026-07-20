@@ -41,7 +41,7 @@ It writes nothing to semantic memory: the embedding probe's vector is discarded.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Callable
 
@@ -341,6 +341,11 @@ class ResidencyVerifier:
                 timing = await fn()
             except Exception as exc:  # noqa: BLE001
                 timing = StepTiming(step=step, ok=False, error=type(exc).__name__)
+        # The SEQUENCE owns the step label, not the probe. The same probe factory
+        # serves both FAST steps, so without this re-stamp both land as "fast" and
+        # reload_cost_ms() silently finds nothing to compare (observed live M56.3).
+        if timing.step != step:
+            timing = replace(timing, step=step)
         report.timings.append(timing)
         return timing
 

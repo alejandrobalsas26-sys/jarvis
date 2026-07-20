@@ -79,6 +79,33 @@ def test_config_validator_clamps_mode_and_timeout():
     assert Settings(fast_prewarm_mode="before-text-ready").fast_prewarm_mode == "BEFORE_TEXT_READY"
 
 
+def test_prewarm_uses_the_same_num_ctx_as_a_real_fast_turn():
+    """MEASURED live: warming at ctx=512 and then serving a real turn at ctx=2048 made
+    the first operator turn pay a FULL reload of an already-resident qwen3:8b -
+    load_duration 8723 ms, versus 428 ms once the contexts matched. Ollama reloads the
+    runner when generation parameters change, so warming a configuration no real turn
+    uses is not a warmup at all."""
+    from core.config import settings
+    from core.fast_prewarm import resolve_fast_context
+
+    live_ctx = int(getattr(settings, "fast_context", 2048))
+    assert resolve_fast_context() == live_ctx
+
+    runner = _ok_runner()
+    pw = FastPrewarm(model=MODEL, runner=runner)
+    assert pw.ctx == live_ctx
+    _run(pw.run_once())
+    assert runner.calls["kwargs"][0]["ctx"] == live_ctx, (
+        "the prewarm must warm the SAME runner configuration the operator will hit")
+
+
+def test_prewarm_context_can_be_pinned_explicitly():
+    runner = _ok_runner()
+    pw = FastPrewarm(model=MODEL, runner=runner, ctx=4096)
+    _run(pw.run_once())
+    assert runner.calls["kwargs"][0]["ctx"] == 4096
+
+
 def test_off_mode_runs_no_generation():
     runner = _ok_runner()
     pw = FastPrewarm(model=MODEL, mode=PrewarmMode.OFF, runner=runner)

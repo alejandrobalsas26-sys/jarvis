@@ -144,6 +144,29 @@ def test_recommendation_keeps_room_for_fast_and_embedding():
     assert recommend_posture(profile="BATTERY_SAVER")["OLLAMA_KEEP_ALIVE"] == "5m"
 
 
+def test_observed_dual_residency_drops_the_max_loaded_recommendation():
+    """M55 inferred a single slot from a slow turn and recommended
+    MAX_LOADED_MODELS=2. The M56.3 live run observed BOTH models resident on this
+    server's defaults, so recommending 2 would cap a server that already allows more.
+    Measurement beats the recommendation."""
+    rec = recommend_posture(observed_dual_residency=True)
+    assert "OLLAMA_MAX_LOADED_MODELS" not in rec
+    assert rec["OLLAMA_NUM_PARALLEL"] == "1"     # serialization advice still stands
+    assert "OLLAMA_KEEP_ALIVE" in rec
+    # Unknown / not-yet-observed keeps the conservative recommendation.
+    for unobserved in (None, False):
+        assert "OLLAMA_MAX_LOADED_MODELS" in recommend_posture(
+            observed_dual_residency=unobserved)
+
+
+def test_plan_over_an_observed_dual_resident_host_is_smaller():
+    truth = _truth(env_readable=True, server_env={})
+    plan = build_plan(truth=truth,
+                      target=recommend_posture(observed_dual_residency=True))
+    assert {c.variable for c in plan.changes} == {"OLLAMA_NUM_PARALLEL",
+                                                 "OLLAMA_KEEP_ALIVE"}
+
+
 # ── read-only actions never mutate ───────────────────────────────────────────
 def test_status_is_read_only(tmp_path):
     writer = _Writer()

@@ -79,6 +79,25 @@ def _run(verifier):
 
 
 # ── name matching ────────────────────────────────────────────────────────────
+def test_sequence_owns_the_step_label_not_the_probe():
+    """One probe factory serves BOTH FAST steps. If the probe's own label survived,
+    both timings would land as "fast" and reload_cost_ms() would silently find nothing
+    to compare - exactly what the first live M56.3 run hit."""
+    async def inspector():
+        return [_lm(FAST)], None
+
+    async def same_label_probe():
+        return StepTiming(step="fast", duration_ms=1500.0, ok=True)
+
+    v = ResidencyVerifier(fast_model=FAST, embedding_model=EMBED, inspector=inspector,
+                          fast_probe=same_label_probe, embed_probe=same_label_probe)
+    report = _run(v)
+    assert [t.step for t in report.timings] == ["fast_1", "embedding", "fast_2"]
+    assert report.timing("fast_1") is not None
+    assert report.timing("fast_2") is not None
+    assert report.reload_cost_ms() == 0.0
+
+
 def test_model_matching_is_tag_tolerant():
     assert model_matches("nomic-embed-text:latest", "nomic-embed-text")
     assert model_matches("qwen3:8b", "qwen3:8b")
