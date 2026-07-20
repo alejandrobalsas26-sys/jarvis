@@ -305,6 +305,101 @@ def _ollama_env_subsystem(env: dict | None = None) -> SubsystemHealth:
                            str(e.get("max_loaded_applied", "")), metrics)
 
 
+def _residency_subsystem(residency: dict | None = None, governor: dict | None = None,
+                         prewarm: dict | None = None, power: dict | None = None
+                         ) -> SubsystemHealth:
+    """V69 M56.8 — model residency, inference arbitration, prewarm and power profile.
+
+    Advisory ONLY (rank 0), for the same reason the Ollama env subsystem is: an
+    evicted FAST model or a battery-disabled prewarm is a PERFORMANCE fact, not a
+    runtime fault, and it must never degrade the overall verdict. Everything here is
+    a bounded counter, a state name or a millisecond — never a prompt, a generated
+    token or a vector.
+    """
+    r = residency if residency is not None else _live_residency()
+    g = governor if governor is not None else _live_governor()
+    p = prewarm if prewarm is not None else _live_prewarm()
+    pw = power if power is not None else _live_power()
+    if not any((r, g, p, pw)):
+        return SubsystemHealth("residency", HealthStatus.OPTIONAL,
+                               "residency subsystem not available", {})
+    metrics = {
+        # ── model residency (observed, never inferred) ──
+        "residency_state": r.get("residency_state"),
+        "observed_models": ",".join(r.get("observed_models") or []) or None,
+        "preferred_models": ",".join(r.get("preferred_models") or []) or None,
+        "fast_evictions": r.get("fast_evictions"),
+        "embedding_evictions": r.get("embedding_evictions"),
+        "restoration_attempts": r.get("restoration_attempts"),
+        "restoration_successes": r.get("restoration_successes"),
+        "last_switch_reason": r.get("last_switch_reason"),
+        "last_observation_at": r.get("last_observation_at"),
+        # ── resource governor ──
+        "active_role": g.get("active_role"),
+        "active_priority": g.get("active_priority"),
+        "queue_depth": g.get("queue_depth"),
+        "queue_capacity": g.get("queue_capacity"),
+        "high_watermark": g.get("high_watermark"),
+        "average_wait_ms": g.get("average_wait_ms"),
+        "background_deferrals": g.get("background_deferrals"),
+        "governor_cancellations": g.get("cancellations"),
+        "starvation_preventions": g.get("starvation_preventions"),
+        # ── prewarm ──
+        "prewarm_mode": p.get("mode"),
+        "prewarm_state": p.get("state"),
+        "prewarm_model": p.get("model"),
+        "prewarm_attempts": p.get("attempts"),
+        "prewarm_successes": p.get("successes"),
+        "prewarm_failures": p.get("failures"),
+        "prewarm_cancellations": p.get("cancellations"),
+        "prewarm_last_load_ms": p.get("last_load_ms"),
+        "prewarm_last_first_token_ms": p.get("last_first_token_ms"),
+        "prewarm_last_total_ms": p.get("last_total_ms"),
+        "prewarm_last_failure_reason": p.get("last_failure_reason"),
+        # ── power profile ──
+        "power_profile": pw.get("profile"),
+        "power_source": pw.get("source"),
+        "power_detected_at": pw.get("detected_at"),
+        "power_override": pw.get("override"),
+    }
+    detail = "{} prewarm={} power={}".format(
+        r.get("residency_state", "UNKNOWN"), p.get("state", "IDLE"),
+        pw.get("profile", "UNKNOWN"))
+    return SubsystemHealth("residency", HealthStatus.OPTIONAL, detail, metrics)
+
+
+def _live_residency() -> dict:
+    try:
+        from core.residency import get_residency_metrics
+        return get_residency_metrics().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_governor() -> dict:
+    try:
+        from core.residency_governor import get_governor
+        return get_governor().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_prewarm() -> dict:
+    try:
+        from core.fast_prewarm import get_fast_prewarm
+        return get_fast_prewarm().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_power() -> dict:
+    try:
+        from core.runtime_profile import get_runtime_profile
+        return get_runtime_profile().detect().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _live_fast_inference() -> dict:
     try:
         from core.fast_readiness import get_fast_readiness
@@ -433,6 +528,9 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         _filesystem_subsystem(),
         # V69 M55.13 — native FAST transport latency + truthful Ollama env state.
         _fast_inference_subsystem(), _ollama_env_subsystem(),
+        # V69 M56.8 — model residency, inference arbitration, prewarm, power profile.
+        # Advisory: it extends this one health surface rather than adding a second.
+        _residency_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}

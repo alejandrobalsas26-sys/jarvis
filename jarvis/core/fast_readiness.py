@@ -40,6 +40,11 @@ class FastState(str, Enum):
     CONFIGURED = "CONFIGURED"    # a model name is configured (says nothing about the server)
     PROBING = "PROBING"          # a capability probe is in flight (M55.3)
     REACHABLE = "REACHABLE"      # server answered, model present
+    # V69 M56.8 — WARMING was one word for three different situations. Splitting them
+    # lets the prompt say something TRUE and specific ("loading the model" vs "running
+    # a warmup generation") instead of a generic "warming".
+    MODEL_LOADING = "MODEL_LOADING"  # the server is swapping the weights in
+    PREWARMING = "PREWARMING"        # a full-path native prewarm generation is in flight
     WARMING = "WARMING"          # server reachable/loading OR one probe inconclusive
     READY = "READY"              # the model produced a token — it can serve now
     DEGRADED = "DEGRADED"        # native unusable but a functional fallback exists
@@ -50,7 +55,12 @@ class FastState(str, Enum):
 # are included: a turn under an in-flight/loading model still answers or fails within
 # its own budget, and refusing input would be worse than a slow first answer.
 _INPUT_OK = frozenset({FastState.PROBING, FastState.REACHABLE, FastState.WARMING,
+                       FastState.MODEL_LOADING, FastState.PREWARMING,
                        FastState.READY, FastState.DEGRADED})
+# The warming family: states in which the operator's turn will work but may be slow.
+# TEXT_READY is INDEPENDENT of every one of them (M56.8) — input works throughout.
+WARMING_STATES = frozenset({FastState.PROBING, FastState.WARMING,
+                            FastState.MODEL_LOADING, FastState.PREWARMING})
 
 
 @dataclass
@@ -208,7 +218,10 @@ class FastReadiness:
         run showed. UNAVAILABLE is decided only by reconcile(), after the native
         transport probe ALSO fails and the server was never reached."""
         t0 = self.clock()
-        if self._state is not FastState.READY:
+        # M56.4 — never downgrade a more specific in-flight state (a running prewarm /
+        # an observed model load) back to the generic PROBING.
+        if self._state not in (FastState.READY, FastState.PREWARMING,
+                               FastState.MODEL_LOADING):
             self._state = FastState.PROBING
         try:
             import httpx
@@ -221,7 +234,11 @@ class FastReadiness:
             self._last_error = type(exc).__name__
             # Inconclusive, not fatal: stay WARMING (input still allowed) and let
             # reconcile() reach the truthful verdict once the native probe concludes.
-            if self._state is not FastState.READY:
+            # M56.4 — a more specific in-flight state (PREWARMING / MODEL_LOADING) is
+            # never replaced by this generic one: the prewarm is still running and the
+            # operator prompt would otherwise lose the accurate explanation.
+            if self._state not in (FastState.READY, FastState.PREWARMING,
+                                   FastState.MODEL_LOADING):
                 self._state = FastState.WARMING
             return self._state
         self._last_probe_ms = round((self.clock() - t0) * 1000.0, 1)
@@ -229,8 +246,11 @@ class FastReadiness:
         self._reached_server = True
         if self._model_present(names):
             self._last_error = None
-            # Never downgrade READY back to REACHABLE on a later probe.
-            if self._state is not FastState.READY:
+            # Never downgrade READY back to REACHABLE on a later probe — nor a
+            # PREWARMING/MODEL_LOADING state, which is strictly more informative than
+            # "the server lists this model" (M56.4).
+            if self._state not in (FastState.READY, FastState.PREWARMING,
+                                   FastState.MODEL_LOADING):
                 self._state = FastState.REACHABLE
         else:
             self._last_error = "model_not_installed"
@@ -321,6 +341,61 @@ class FastReadiness:
         self._state = FastState.READY
         self._last_success_at = self.clock()
         self._last_error = None
+
+    # ── V69 M56.4 — full-path prewarm integration ────────────────────────────
+    def note_model_loading(self) -> None:
+        """The server is swapping the weights in. Input stays enabled; the prompt can
+        now say something specific instead of a generic 'warming'."""
+        if self._state is not FastState.READY:
+            self._state = FastState.MODEL_LOADING
+
+    def note_prewarm_started(self) -> None:
+        """A full-path native prewarm generation is in flight. NEVER READY yet — the
+        state only becomes READY when a real content token arrives (M56.8: readiness
+        is never claimed because a prewarm was merely started)."""
+        if self._state is not FastState.READY:
+            self._state = FastState.PREWARMING
+
+    def note_prewarm_result(self, record) -> FastState:
+        """Fold a :class:`~core.fast_prewarm.PrewarmRecord` into readiness.
+
+        Only a prewarm that actually produced a content token yields READY. A
+        timeout/failure does NOT mark the model unavailable — the turn's own deadline
+        remains the honest bound — so it degrades to WARMING and input stays open.
+        """
+        try:
+            success = bool(getattr(record, "success", False))
+            state = getattr(getattr(record, "state", None), "value", "") or ""
+            if success and state == "READY":
+                self.mark_served()
+                return self._state
+            if state in ("SKIPPED", "DISABLED"):
+                # The prewarm did not run; readiness is whatever the probes concluded.
+                if self._state in (FastState.PREWARMING, FastState.MODEL_LOADING):
+                    self._state = FastState.WARMING
+                return self._state
+            self._last_error = getattr(record, "failure_reason", None) or state or None
+            if self._state is not FastState.READY:
+                self._state = FastState.WARMING
+        except Exception:  # noqa: BLE001 — readiness must never crash boot
+            pass
+        return self._state
+
+    def warming_hint(self) -> str | None:
+        """A short, TRUE sentence for the prompt when FAST is not yet READY, or None.
+
+        Spanish to match the operator-facing surface, ASCII-safe, and specific about
+        WHICH wait is happening — an indefinite silence is exactly what M54.1 fixed.
+        """
+        hints = {
+            FastState.MODEL_LOADING: "cargando el modelo FAST; tu primer mensaje puede tardar mas",
+            FastState.PREWARMING: "calentando el modelo FAST; tu primer mensaje puede tardar mas",
+            FastState.PROBING: "comprobando el modelo FAST; puedes escribir ya",
+            FastState.WARMING: "modelo FAST calentando; tu primer mensaje puede tardar mas",
+            FastState.DEGRADED: "modelo FAST degradado; respondere con la ruta alternativa",
+            FastState.UNAVAILABLE: "modelo FAST no disponible; solo respuestas deterministas",
+        }
+        return hints.get(self._state)
 
 
 # ── Process-global singleton ─────────────────────────────────────────────────

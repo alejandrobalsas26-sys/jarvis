@@ -227,6 +227,39 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("JARVIS_FAST_MODEL", "fast_model"),
     )
 
+    # ── V69 M56.4.1 — native FAST full-path prewarm ───────────────────────────
+    # M55.1 warmed the DISPATCH path; the INFERENCE path stayed cold, so the first
+    # real question still paid an 11-19s model activation. These control the bounded
+    # native /api/chat prewarm that closes that gap.
+    #   fast_prewarm_mode     : OFF | BACKGROUND | BEFORE_TEXT_READY
+    #       OFF               no model generation at boot (classification warmup stays)
+    #       BACKGROUND        default: the prompt opens at once, FAST reports WARMING
+    #       BEFORE_TEXT_READY trades boot latency for first-turn latency, hard-bounded
+    #   fast_prewarm_timeout_s: hard ceiling for one prewarm attempt
+    fast_prewarm_mode: str = Field(
+        default="BACKGROUND",
+        validation_alias=AliasChoices("JARVIS_FAST_PREWARM_MODE", "fast_prewarm_mode"),
+    )
+    fast_prewarm_timeout_s: float = Field(
+        default=45.0,
+        validation_alias=AliasChoices("JARVIS_FAST_PREWARM_TIMEOUT_S",
+                                      "fast_prewarm_timeout_s"),
+    )
+
+    @field_validator("fast_prewarm_mode")
+    @classmethod
+    def validate_fast_prewarm_mode(cls, v: str) -> str:
+        """Clamp, never raise — and never silently UPGRADE a typo into the
+        boot-blocking mode: an unrecognized value falls back to BACKGROUND."""
+        val = (v or "BACKGROUND").strip().upper().replace("-", "_")
+        return val if val in {"OFF", "BACKGROUND", "BEFORE_TEXT_READY"} else "BACKGROUND"
+
+    @field_validator("fast_prewarm_timeout_s")
+    @classmethod
+    def validate_fast_prewarm_timeout(cls, v: float) -> float:
+        # Bounded so a misconfiguration cannot hold boot open on this 15W CPU.
+        return max(5.0, min(float(v), 120.0))
+
     @field_validator("fast_transport")
     @classmethod
     def validate_fast_transport(cls, v: str) -> str:
