@@ -241,8 +241,14 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
                         (time.monotonic() - _t0) * 1000, 1)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.debug("TTS: progressive speech failed; continuing turn")
+        except Exception as exc:
+            # A TTS fault must never break the turn or block prompt restoration —
+            # but it must be DIAGNOSABLE: name the exception type so a silent
+            # signature or engine failure is visible in the log instead of the
+            # answer simply going quiet.
+            logger.debug(
+                f"TTS: progressive speech failed ({type(exc).__name__}); "
+                "continuing turn")
 
     async def _idle_flusher() -> None:
         """Emit buffered text when the model goes quiet mid-sentence.

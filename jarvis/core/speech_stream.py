@@ -254,9 +254,23 @@ def cancel_answer_speech(tts) -> int:
 
     Used when a turn is interrupted or replaced. Bounded and never raising: a TTS
     fault must never block prompt restoration (M57.4.1).
+
+    THE LINGERING-FLAG BUG THIS AVOIDS. ``TTS.interrupt()`` sets the process-wide
+    ``cancel_bus.tts_cancel`` event, and the speech worker only CLEARS it while
+    handling an utterance — mid-speech (it aborts and clears) or pre-speech (it
+    drains that utterance and clears). So when nothing is speaking and the queue is
+    already empty, the flag survives the interruption and the FIRST sentence of the
+    NEXT turn gets silently swallowed by the pre-speech drain. An operator who
+    types /stop, or /mute followed by /unmute, would lose their next answer's
+    opening line for no visible reason.
+
+    So the flag is left set ONLY when there is genuinely an utterance in flight for
+    it to preempt; otherwise it is cleared immediately. Failing this check the
+    wrong way costs at most one non-preempted utterance — never a silent mute.
     """
     removed = 0
     try:
+        busy = bool(getattr(tts, "_busy", False))
         gov = getattr(tts, "_gov", None)
         cv = getattr(tts, "_cv", None)
         if gov is not None and cv is not None:
@@ -266,6 +280,13 @@ def cancel_answer_speech(tts) -> int:
             tts.interrupt()
         except Exception:  # noqa: BLE001
             pass
+        if not busy:
+            try:
+                from core import cancel_bus as _bus
+                if _bus.tts_cancel is not None and _bus.tts_cancel.is_set():
+                    _bus.tts_cancel.clear()
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         return removed
     return removed

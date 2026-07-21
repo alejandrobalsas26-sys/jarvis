@@ -305,6 +305,121 @@ def _ollama_env_subsystem(env: dict | None = None) -> SubsystemHealth:
                            str(e.get("max_loaded_applied", "")), metrics)
 
 
+def _response_pipeline_subsystem(response: dict | None = None,
+                                 stream: dict | None = None,
+                                 speech: dict | None = None,
+                                 context: dict | None = None,
+                                 quality: dict | None = None) -> SubsystemHealth:
+    """V69 M57 — the adaptive response pipeline.
+
+    ONE advisory subsystem (rank 0) covering contract selection, streaming,
+    progressive speech, conversation context, interruption and output quality.
+    Advisory for the same reason the residency view is: a slow answer or a dropped
+    utterance is a comfort problem, not a runtime fault, and must never degrade the
+    overall verdict.
+
+    Every metric is a counter, a timing or an enum. No prompt, answer, memory
+    record, secret or token can appear here — the collectors below read only
+    already-bounded snapshots that were built content-free at the source.
+    """
+    r = response if response is not None else _live_response_runtime()
+    s = stream if stream is not None else {}
+    sp = speech if speech is not None else _live_speech_metrics()
+    c = context if context is not None else _live_context_metrics()
+    q = quality if quality is not None else _live_quality_counters()
+    if not (r or s or sp or c or q):
+        return SubsystemHealth("response_pipeline", HealthStatus.OPTIONAL,
+                               "no interactive turn yet", {})
+    if not s:
+        s = (sp or {}).get("stream", {}) or {}
+    turn = (r or {}).get("current_turn") or {}
+    tp = (r or {}).get("throughput", {}) or {}
+    metrics = {
+        # contract
+        "selected_contract": turn.get("contract"),
+        "selection_reason": turn.get("selection_reason"),
+        "token_budget": turn.get("token_budget"),
+        "context_budget": turn.get("context_budget"),
+        "profile": (r or {}).get("profile"),
+        # stream
+        "chunks_received": s.get("chunks_received"),
+        "fragments_emitted": s.get("fragments_emitted"),
+        "first_fragment_ms": turn.get("first_fragment_ms") or s.get("first_fragment_ms"),
+        "first_sentence_ms": turn.get("first_sentence_ms") or s.get("first_sentence_ms"),
+        "duplicate_fragments_suppressed": s.get("duplicate_fragments_suppressed"),
+        "max_buffer_chars": s.get("max_buffer_chars"),
+        "terminal_state": turn.get("state"),
+        # speech
+        "progressive_enabled": (sp or {}).get("progressive_enabled"),
+        "first_utterance_ms": turn.get("first_utterance_ms")
+        or (sp or {}).get("first_utterance_ms"),
+        "utterances_queued": (sp or {}).get("queued"),
+        "utterances_coalesced": (sp or {}).get("split_utterances"),
+        "utterances_stale_dropped": (sp or {}).get("stale_dropped"),
+        "speech_depth": (sp or {}).get("current_depth"),
+        "speech_high_watermark": (sp or {}).get("high_watermark"),
+        "muted": (r or {}).get("muted"),
+        # context
+        "estimated_total_tokens": (c or {}).get("estimated_total_tokens"),
+        "recent_turn_tokens": (c or {}).get("recent_turn_tokens"),
+        "digest_tokens": (c or {}).get("digest_tokens"),
+        "tool_evidence_tokens": (c or {}).get("tool_evidence_tokens"),
+        "memory_evidence_tokens": (c or {}).get("memory_evidence_tokens"),
+        "trimmed_items": (c or {}).get("trimmed_items"),
+        "digest_age_turns": (c or {}).get("digest_age_turns"),
+        # interruption
+        "interrupted_turns": (r or {}).get("interrupted_turns"),
+        "replaced_turns": (r or {}).get("replaced_turns"),
+        "cancellation_latency_ms": (r or {}).get("cancellation_latency_ms"),
+        "late_chunks_suppressed": (r or {}).get("late_chunks_suppressed"),
+        # quality
+        "repetition_suppressions": (q or {}).get("repetition_suppressions"),
+        "placeholder_blocks": (q or {}).get("placeholder_blocks"),
+        "incomplete_format_repairs": (q or {}).get("incomplete_format_repairs"),
+        "continuation_offers": (r or {}).get("continuation_offers"),
+        "truncated_turns": (r or {}).get("truncated_turns"),
+        # throughput
+        "throughput_tok_s": tp.get("median_tok_s"),
+        "throughput_samples": tp.get("samples"),
+    }
+    detail = "contract={} throughput={} tok/s".format(
+        turn.get("contract") or "n/a", tp.get("median_tok_s") or "n/a")
+    return SubsystemHealth("response_pipeline", HealthStatus.OPTIONAL, detail,
+                           metrics)
+
+
+def _live_response_runtime() -> dict:
+    try:
+        from core.response_runtime import get_response_runtime
+        return get_response_runtime().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_speech_metrics() -> dict:
+    try:
+        from core.speech_stream import last_speech_metrics
+        return last_speech_metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_context_metrics() -> dict:
+    try:
+        from core.context_composer import last_context_metrics
+        return last_context_metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_quality_counters() -> dict:
+    try:
+        from core.response_quality import quality_counters
+        return quality_counters()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _residency_subsystem(residency: dict | None = None, governor: dict | None = None,
                          prewarm: dict | None = None, power: dict | None = None
                          ) -> SubsystemHealth:
@@ -531,6 +646,10 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         # V69 M56.8 — model residency, inference arbitration, prewarm, power profile.
         # Advisory: it extends this one health surface rather than adding a second.
         _residency_subsystem(),
+        # V69 M57 — ONE advisory response-pipeline subsystem (contract, stream,
+        # speech, context, interruption, quality). No new registry: the existing
+        # single health collector gains one more entry.
+        _response_pipeline_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}

@@ -18,6 +18,7 @@ No live model, no live speech engine.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 
 import main as jarvis_main
 from core.response_commands import (
@@ -41,6 +42,33 @@ def setup_function(_):
 
 def teardown_function(_):
     reset_response_runtime(None)
+
+
+_BUS_GLOBALS = ("llm_stream_cancel", "agentic_loop_cancel", "playbook_cancel",
+                "tts_cancel", "_loop")
+
+
+@contextmanager
+def _isolated_cancel_bus():
+    """Initialize the process cancel bus and RESTORE it afterwards.
+
+    ``core.cancel_bus`` is module-global and starts uninitialized (every event is
+    ``None``), which is what most of the suite runs against: ``TTS._teardown()``
+    sets ``tts_cancel`` only ``if not None``, so in an uninitialized process it is
+    a no-op. A test that initializes the bus and walks away silently changes that
+    for every later test — the next TTS instance would see a set flag left by a
+    previous instance's shutdown and drain its first utterance instead of speaking
+    it. So these tests borrow the bus and put it back exactly as they found it.
+    """
+    import core.cancel_bus as bus
+    saved = {name: getattr(bus, name, None) for name in _BUS_GLOBALS}
+    bus.initialize(asyncio.get_running_loop())
+    bus.reset_all()
+    try:
+        yield bus
+    finally:
+        for name, value in saved.items():
+            setattr(bus, name, value)
 
 
 # ── command parsing (allowlist) ───────────────────────────────────────────────
@@ -184,18 +212,56 @@ def test_stop_with_no_active_turn_is_harmless():
     assert rr.interrupted_turns == 0
 
 
-def test_stop_sets_the_llm_cancel_flag():
-    import core.cancel_bus as bus
+def test_stop_does_not_leave_the_next_turn_silently_muted():
+    """The lingering-flag bug: TTS.interrupt() sets the process-wide tts_cancel
+    event, and the speech worker only clears it while handling an utterance. With
+    an empty queue and nothing speaking, the flag would survive and the pre-speech
+    drain would swallow the FIRST sentence of the next turn."""
+    from core.speech_stream import cancel_answer_speech
 
     async def _drive():
-        bus.initialize(asyncio.get_running_loop())
-        bus.reset_all()
-        bus.register_operation("llm_stream")
-        rr = get_response_runtime()
-        rr.begin_turn()
-        await jarvis_main._apply_response_command(
-            parse_response_command("/stop"), _FakeLLM(), _FakeTTS())
-        return bus.llm_stream_cancel.is_set()
+        with _isolated_cancel_bus() as bus:
+            tts = _FakeTTS()
+            tts._busy = False
+
+            def _interrupt():
+                tts.interrupted += 1
+                bus.tts_cancel.set()
+
+            tts.interrupt = _interrupt
+            cancel_answer_speech(tts)
+            return bus.tts_cancel.is_set()
+
+    assert asyncio.run(_drive()) is False
+
+
+def test_stop_still_preempts_an_utterance_that_is_actually_in_flight():
+    from core.speech_stream import cancel_answer_speech
+
+    async def _drive():
+        with _isolated_cancel_bus() as bus:
+            tts = _FakeTTS()
+            tts._busy = True      # the worker is inside runAndWait()
+
+            def _interrupt():
+                bus.tts_cancel.set()
+
+            tts.interrupt = _interrupt
+            cancel_answer_speech(tts)
+            return bus.tts_cancel.is_set()
+
+    assert asyncio.run(_drive()) is True
+
+
+def test_stop_sets_the_llm_cancel_flag():
+    async def _drive():
+        with _isolated_cancel_bus() as bus:
+            bus.register_operation("llm_stream")
+            rr = get_response_runtime()
+            rr.begin_turn()
+            await jarvis_main._apply_response_command(
+                parse_response_command("/stop"), _FakeLLM(), _FakeTTS())
+            return bus.llm_stream_cancel.is_set()
 
     assert asyncio.run(_drive()) is True
 
