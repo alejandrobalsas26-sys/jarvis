@@ -1909,7 +1909,7 @@ class LLM:
             )
         return self._native_http
 
-    def _fast_system_prompt(self, shape=None) -> str:
+    def _fast_system_prompt(self, shape=None, extra: str = "") -> str:
         """A LEAN system prompt for the native fast path. Deliberately NOT the full
         200-line tool/security manual: a smaller prompt prefills far faster on a CPU
         host AND keeps answers concise. Carries identity, host-clock grounding and
@@ -1943,10 +1943,15 @@ class LLM:
                 parts.append(shape.style_directive())
             except Exception:
                 pass
+        if extra:
+            # V69 M57.7 — the continuation block. It carries only DISPLAYED text
+            # plus a stylistic resume instruction; no hidden model state and no
+            # runtime error text ever reaches the model through it.
+            parts.append(extra)
         return "\n\n".join(parts)
 
     async def _native_fast_stream(self, *, route, budget, timeouts, result,
-                                  gen=None, shape=None):
+                                  gen=None, shape=None, continuation: str = ""):
         """Stream a DIRECT_FAST turn from native /api/chat with reasoning disabled.
 
         Yields ONLY content text — reasoning (a native ``thinking`` field) is dropped
@@ -1973,7 +1978,7 @@ class LLM:
         # the oldest messages — and a server drops by POSITION, which means the
         # security instructions at the front go first. The composer bounds the
         # prompt with an explicit retention order instead.
-        _sys = self._fast_system_prompt(shape)
+        _sys = self._fast_system_prompt(shape, extra=continuation)
         _composed = None
         try:
             from core.context_composer import (
@@ -2086,7 +2091,8 @@ class LLM:
             result["infer_ms"] = round((_time.monotonic() - _infer_start) * 1000)
 
     def _finalize_native_turn(self, result: dict, budget, route, *, state: str,
-                              language: str | None) -> str | None:
+                              language: str | None, shape=None,
+                              question: str = "") -> str | None:
         """V69 M55.2 — the SINGLE idempotent finalizer for a native fast turn.
 
         Runs on every terminal state (COMPLETED / TIMED_OUT / CANCELLED / FAILED /
@@ -2156,6 +2162,41 @@ class LLM:
                         tokens_per_second=result.get("tokens_per_second"),
                         transport="native", think=route.think,
                     )
+        except Exception:
+            pass
+        # ── V69 M57.8 — deterministic quality checks over the finished artefact ──
+        # No model is called: this measures properties of the OUTPUT (repetition,
+        # an unclosed fence, a leaked reasoning marker), never whether the answer
+        # is correct. Everything the operator already saw stays exactly as it was;
+        # only a truthful status line may be added.
+        try:
+            if text:
+                from core.response_quality import (
+                    evaluate_answer, record_report, status_note,
+                )
+                _report = evaluate_answer(
+                    text, question=question, shape=shape, language=(language or "es"),
+                    truncated_by_cap=bool(result.get("truncated_by_cap")),
+                    pre_content=False)
+                record_report(_report)
+                result["quality"] = _report.snapshot()
+                if status_msg is None:
+                    _note = status_note(_report, language=(language or "es"))
+                    if _note and _note not in text:
+                        status_msg = _note
+        except Exception:
+            pass
+        # ── V69 M57.7 — capture what can be continued, from DISPLAYED text only ──
+        try:
+            from core.continuation import build_state, set_continuation
+            set_continuation(build_state(
+                turn_id=int(getattr(getattr(self, "_last_turn_handle", None),
+                                    "turn_id", 0) or 0),
+                contract=getattr(getattr(shape, "contract", None), "value", ""),
+                terminal_state=state, language=(language or "es"),
+                displayed_text=text, question=question,
+                truncated_by_cap=bool(result.get("truncated_by_cap")),
+            ))
         except Exception:
             pass
         # V69 M57.8.1 — fold this turn's OBSERVED throughput into the rolling
@@ -2369,6 +2410,51 @@ class LLM:
         # Computed ONCE per turn from signals already resolved above (turn policy,
         # routed role, active language, session profile, power profile). It decides
         # only HOW to answer — never which model, which tools, or what is allowed.
+        # ── V69 M57.7 — continuation / expansion of the PREVIOUS answer ───────
+        # Deterministic: no model decides whether this is a continuation. A turn
+        # that asks to continue an answer that does not exist (or that changed
+        # topic) is REFUSED here, in the operator's language, with zero generation.
+        _cont_directive = ""
+        _cont_recovering = False
+        _cont_active = False
+        try:
+            from core.continuation import (
+                ContinuationIntent, ContinuationRefusal, build_directive,
+                classify_continuation, describe_refusal, evaluate, get_continuation,
+            )
+            _cont_intent, _cont_ordinal = classify_continuation(user_message)
+            if _cont_intent is not ContinuationIntent.NONE:
+                _cont_state = get_continuation()
+                _refusal = evaluate(_cont_intent, _cont_state,
+                                    user_message=user_message)
+                _lang_now = self.language_context.active_language()
+                if _refusal is not ContinuationRefusal.OK:
+                    if _refusal is ContinuationRefusal.NO_PREVIOUS_ANSWER:
+                        _msg = describe_refusal(_refusal, language=_lang_now)
+                        logger.info(f"CONTINUATION: refused ({_refusal.value})")
+                        self.history.append({"role": "assistant", "content": _msg})
+                        yield _msg
+                        unregister_operation("llm_stream")
+                        return
+                    # A topic change is not an error — it just clears the cursor and
+                    # the turn proceeds as an ordinary new question.
+                    from core.continuation import clear_continuation
+                    clear_continuation()
+                elif _cont_state is not None:
+                    _cont_directive = build_directive(
+                        _cont_intent, _cont_state, language=_lang_now,
+                        ordinal=_cont_ordinal)
+                    _cont_active = True
+                    _cont_recovering = (_cont_intent is ContinuationIntent.CONTINUE
+                                        and _cont_state.terminal_state
+                                        not in ("COMPLETED", ""))
+                    logger.debug(
+                        "CONTINUATION: intent={} recovering={} boundary_chars={}".format(
+                            _cont_intent.value, _cont_recovering,
+                            len(_cont_state.last_boundary)))
+        except Exception as _ct_e:  # noqa: BLE001 — never break a turn on this
+            logger.warning(f"CONTINUATION: skipped ({_ct_e})")
+
         _shape = None
         _gen = None
         try:
@@ -2386,6 +2472,7 @@ class LLM:
                     user_message, turn_policy=_turn_policy, model_decision=decision,
                     language=self.language_context.active_language(),
                     session_profile=_rr.profile, power_policy=_power,
+                    continuation=_cont_active, recovering=_cont_recovering,
                 )
                 _gen = budget_for_shape(
                     _shape, settings=settings,
@@ -2440,6 +2527,7 @@ class LLM:
                     async for _piece in self._native_fast_stream(
                         route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
                         result=_fast_result, gen=_gen, shape=_shape,
+                        continuation=_cont_directive,
                     ):
                         yield _piece
                 except _NativeFastUnavailable as _nfu:
@@ -2459,7 +2547,7 @@ class LLM:
                     self._note_fast_readiness("note_timeout", _tt.stage)
                     _status = self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state="TIMED_OUT", language=_fast_lang)
+                        shape=_shape, question=user_message, state="TIMED_OUT", language=_fast_lang)
                     if _status:
                         yield _status
                     unregister_operation("llm_stream")
@@ -2469,7 +2557,7 @@ class LLM:
                     self._note_fast_readiness("note_cancellation")
                     self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state="CANCELLED", language=_fast_lang)
+                        shape=_shape, question=user_message, state="CANCELLED", language=_fast_lang)
                     try:
                         await self._broadcast_cancel_event()
                     except Exception:
@@ -2482,7 +2570,7 @@ class LLM:
                         else "FAILED")
                     _status = self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state=_state, language=_fast_lang)
+                        shape=_shape, question=user_message, state=_state, language=_fast_lang)
                     if _status:
                         yield _status
                     unregister_operation("llm_stream")
@@ -2493,6 +2581,7 @@ class LLM:
                 self._note_fast_readiness("note_cancellation")
                 self._finalize_native_turn(
                     _fast_result, _budget, _fast_route,
+                    shape=_shape, question=user_message,
                     state="CANCELLED", language=_fast_lang)
                 raise
 
