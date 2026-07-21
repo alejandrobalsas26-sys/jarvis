@@ -1968,10 +1968,41 @@ class LLM:
             NativeTransportError,
             chat_stream as _native_chat_stream,
         )
-        messages = [
-            {"role": "system", "content": self._fast_system_prompt(shape)},
-            *self.history,
-        ]
+        # V69 M57.6 — the message list is COMPOSED, not concatenated. Sending the
+        # whole transcript every turn made prefill grow until the server dropped
+        # the oldest messages — and a server drops by POSITION, which means the
+        # security instructions at the front go first. The composer bounds the
+        # prompt with an explicit retention order instead.
+        _sys = self._fast_system_prompt(shape)
+        _composed = None
+        try:
+            from core.context_composer import (
+                compose_context, context_cache_key, publish_context_metrics,
+                resolve_context_budget,
+            )
+            from core.conversation_digest import build_digest
+            _ctx_budget = resolve_context_budget(
+                settings=settings,
+                num_ctx=int(gen.num_ctx) if gen is not None else route.context)
+            _composed = compose_context(
+                system_prompt=_sys, history=self.history,
+                digest=build_digest(self.history),
+                token_budget=_ctx_budget,
+                language=self.language_context.active_language(),
+                cache_key=context_cache_key(
+                    model=route.model, role="fast", transport="native",
+                    num_ctx=int(gen.num_ctx) if gen is not None else route.context,
+                    system_prompt=_sys,
+                    language=self.language_context.active_language(),
+                    contract=getattr(getattr(shape, "contract", None), "value", ""),
+                ),
+            )
+            messages = _composed.messages
+            publish_context_metrics(_composed.snapshot())
+        except Exception as _cc_e:  # noqa: BLE001 — never break a turn on composition
+            logger.warning(f"CONTEXT_COMPOSER: skipped ({_cc_e})")
+            messages = [{"role": "system", "content": _sys}, *self.history]
+        result["context_tokens"] = getattr(_composed, "estimated_total_tokens", None)
         if gen is not None:
             _ctx = int(gen.num_ctx)
             _max_tokens = int(gen.num_predict)
