@@ -361,10 +361,18 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         )
         _emit_chunk("\n" + _msg)
     except asyncio.CancelledError:
-        # V69 M57.5 — an outer cancellation is the operator taking control back (or
-        # shutdown). Either way this turn's speech is obsolete immediately; the
-        # distinction between the two is recorded by the caller that cancelled.
-        _turn_state = TurnState.INTERRUPTED_BY_OPERATOR
+        # V69 M57.5 — an outer cancellation is either shutdown or the operator
+        # taking control back. Those are DIFFERENT terminal states and must not be
+        # conflated: a shutdown cancel is not an interrupted answer the operator
+        # can continue. The lifecycle is the authority on which one happened.
+        _stopping = False
+        try:
+            from core.lifecycle import lifecycle as _lc
+            _stopping = bool(_lc.is_stopping())
+        except Exception:
+            _stopping = False
+        _turn_state = (TurnState.CANCELLED_ON_SHUTDOWN if _stopping
+                       else TurnState.INTERRUPTED_BY_OPERATOR)
         try:
             cancel_answer_speech(tts)
         except Exception:
@@ -512,9 +520,68 @@ async def _handle_residency_command(user_input: str) -> bool:
     return True
 
 
+_CONTINUE_PHRASE = {"es": "continúa", "en": "continue"}
+
+
+async def _apply_response_command(cmd, llm, tts) -> None:
+    """Apply ONE parsed response-pipeline command. Bounded and never raising.
+
+    Read-only commands render a panel; the rest flip a single in-process session
+    value or cancel the ACTIVE turn. Nothing here touches the host, the model, the
+    Ollama posture, the filesystem or any authorization state.
+    """
+    from core.response_commands import ResponseCommand, describe
+    from core.response_runtime import TurnState, get_response_runtime
+    from core.response_status import render_panel
+    from core.speech_stream import cancel_answer_speech
+
+    language = _active_language(llm)
+    if cmd.read_only:
+        _console_emit(render_panel(cmd.command))
+        return
+    rr = get_response_runtime()
+    profile = cmd.profile_value()
+    if profile is not None:
+        rr.set_profile(profile)
+        _console_emit(describe(cmd.command, language=language))
+        return
+    if cmd.command in (ResponseCommand.MUTE, ResponseCommand.UNMUTE):
+        muted = cmd.command is ResponseCommand.MUTE
+        rr.set_muted(muted)
+        if muted:
+            try:
+                cancel_answer_speech(tts)
+            except Exception:
+                pass
+        _console_emit(describe(cmd.command, language=language))
+        return
+    if cmd.command is ResponseCommand.STOP:
+        # V69 M57.5 — operator barge-in. Text input is line-submitted, so this is
+        # the supported form: cancel whatever is still generating or speaking, mark
+        # the turn INTERRUPTED_BY_OPERATOR (distinct from a shutdown cancel), and
+        # give the prompt straight back. No raw-keystroke backend is assumed.
+        active = rr.current is not None and rr.current.is_active()
+        t0 = time.monotonic()
+        try:
+            from core.cancel_bus import cancel_llm_only
+            cancel_llm_only()
+        except Exception:
+            pass
+        try:
+            cancel_answer_speech(tts)
+        except Exception:
+            pass
+        if active:
+            rr.end_turn(TurnState.INTERRUPTED_BY_OPERATOR)
+        rr.note_cancellation_latency((time.monotonic() - t0) * 1000.0)
+        _console_emit(describe(cmd.command, language=language, active=active))
+        return
+
+
 async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
     from core.mode_commands import parse_mode_command, describe_mode
+    from core.response_commands import parse_response_command
     from core.lifecycle import lifecycle
     try:
         from core.console import get_console
@@ -586,6 +653,19 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             if result.stderr:
                 print(result.stderr)
             continue
+
+        # V69 M57.5/M57.9 — response-pipeline commands. EXACT-match allowlist: the
+        # whole line must be a known alias, so "/stop the scan" stays an ordinary
+        # turn. Read-only panels and bounded session flips only — never the host.
+        # /continue is deliberately NOT handled here: it is a conversational intent
+        # that must reach the model with continuation context (M57.7).
+        _resp_cmd = parse_response_command(user_input)
+        if _resp_cmd is not None:
+            if _resp_cmd.conversational:
+                user_input = _CONTINUE_PHRASE.get(_active_language(llm), "continúa")
+            else:
+                await _apply_response_command(_resp_cmd, llm, tts)
+                continue
 
         # V69 M56.2/M56.8 — Ollama posture + residency operator commands. TEXT ONLY and
         # deterministically parsed: the six verbs take NO arguments, so no variable,
