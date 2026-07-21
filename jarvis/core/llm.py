@@ -1909,11 +1909,17 @@ class LLM:
             )
         return self._native_http
 
-    def _fast_system_prompt(self) -> str:
+    def _fast_system_prompt(self, shape=None) -> str:
         """A LEAN system prompt for the native fast path. Deliberately NOT the full
         200-line tool/security manual: a smaller prompt prefills far faster on a CPU
         host AND keeps answers concise. Carries identity, host-clock grounding and
-        the active-language directive so continuity (M54.4/M54.8) is preserved."""
+        the active-language directive so continuity (M54.4/M54.8) is preserved.
+
+        V69 M57.1/.3.1 — when a :class:`~core.response_contract.ResponseShape` is
+        supplied, its bounded STYLE directive is appended. That directive is purely
+        stylistic (answer first, no preamble, how much structure is appropriate); it
+        never grants a tool, widens scope, or changes what is true.
+        """
         name = settings.assistant_name
         user = settings.user_name
         parts = [
@@ -1932,9 +1938,15 @@ class LLM:
             parts.append(self.language_context.directive())
         except Exception:
             pass
+        if shape is not None:
+            try:
+                parts.append(shape.style_directive())
+            except Exception:
+                pass
         return "\n\n".join(parts)
 
-    async def _native_fast_stream(self, *, route, budget, timeouts, result):
+    async def _native_fast_stream(self, *, route, budget, timeouts, result,
+                                  gen=None, shape=None):
         """Stream a DIRECT_FAST turn from native /api/chat with reasoning disabled.
 
         Yields ONLY content text — reasoning (a native ``thinking`` field) is dropped
@@ -1942,6 +1954,14 @@ class LLM:
         :class:`_NativeFastUnavailable` ONLY when the native transport fails BEFORE
         any content, so the caller can fall back cleanly; a mid-stream failure ends
         gracefully with the partial answer rather than double-answering.
+
+        V69 M57.2 — ``gen`` is the turn's
+        :class:`~core.generation_budget.GenerationBudget`. When present it supplies
+        num_predict / temperature / sampling AND the num_ctx, which is deliberately
+        the configured ``fast_context`` rather than ``_adaptive_ctx``'s shrunken
+        value: warming the runner at 2048 and then serving at 1024 makes Ollama
+        reload it (M56.4 measured 8 723 ms of load on an already-resident model), so
+        the prewarm's whole purpose is defeated by a "cheaper" per-turn context.
         """
         from core.ollama_native import (
             CancellationToken,
@@ -1949,10 +1969,23 @@ class LLM:
             chat_stream as _native_chat_stream,
         )
         messages = [
-            {"role": "system", "content": self._fast_system_prompt()},
+            {"role": "system", "content": self._fast_system_prompt(shape)},
             *self.history,
         ]
-        _ctx = _adaptive_ctx(self.history, route.context)
+        if gen is not None:
+            _ctx = int(gen.num_ctx)
+            _max_tokens = int(gen.num_predict)
+            _temperature = float(gen.temperature)
+            _options_extra = gen.options()
+            _keep_alive = gen.keep_alive or route.keep_alive
+        else:
+            _ctx = _adaptive_ctx(self.history, route.context)
+            _max_tokens = route.max_tokens
+            _temperature = 0.3
+            _options_extra = None
+            _keep_alive = route.keep_alive
+        result["num_ctx"] = _ctx
+        result["num_predict"] = _max_tokens
         token = CancellationToken.from_event(
             getattr(_cancel_bus, "llm_stream_cancel", None)
         )
@@ -1969,14 +2002,15 @@ class LLM:
                 model=route.model,
                 messages=messages,
                 think=route.think,
-                max_tokens=route.max_tokens,
-                temperature=0.3,
+                max_tokens=_max_tokens,
+                temperature=_temperature,
                 budget=budget,
                 timeouts=timeouts,
                 cancellation=token,
                 ctx=_ctx,
-                keep_alive=route.keep_alive,
+                keep_alive=_keep_alive,
                 client=self._get_native_http(),
+                options_extra=_options_extra,
             ):
                 _chunks_received += 1
                 if token.cancelled or (
@@ -2039,9 +2073,26 @@ class LLM:
         result["final_state"] = state
         text = (result.get("text") or "").strip()
         status_msg: str | None = None
+        # V69 M57.2 — did generation stop because it ran out of CONTENT or out of
+        # BUDGET? Ollama answers this with done_reason="length"; a capped answer is
+        # not a completed explanation and must never be presented as one.
+        _capped = False
+        try:
+            from core.generation_budget import hit_generation_cap, truncation_note
+            _capped = bool(text) and hit_generation_cap(
+                result.get("done_reason"), result.get("eval_count"),
+                int(result.get("num_predict") or 0))
+        except Exception:  # noqa: BLE001
+            _capped = False
+        result["truncated_by_cap"] = _capped
         try:
             if state == "COMPLETED":
-                if text:
+                if text and _capped:
+                    # Truthful: the operator keeps everything generated, plus one
+                    # bounded line saying the budget cut it and how to continue.
+                    status_msg = truncation_note(language)
+                    self._close_turn_with_status(text + "\n\n" + status_msg)
+                elif text:
                     self._close_turn_with_status(text)      # append full answer
                 else:
                     # done/EOS but no content — keep history coherent, invite retry.
@@ -2074,6 +2125,19 @@ class LLM:
                         tokens_per_second=result.get("tokens_per_second"),
                         transport="native", think=route.think,
                     )
+        except Exception:
+            pass
+        # V69 M57.8.1 — fold this turn's OBSERVED throughput into the rolling
+        # estimate that sizes the next turn's budget. Only a completed generation
+        # is a valid sample: a cancelled or timed-out stream measures the deadline,
+        # not the host.
+        try:
+            if state == "COMPLETED":
+                from core.response_runtime import get_response_runtime
+                get_response_runtime().record_throughput(
+                    tokens_per_second=result.get("tokens_per_second"),
+                    first_token_ms=budget.snapshot().get("first_token_ms"),
+                )
         except Exception:
             pass
         try:
@@ -2270,6 +2334,48 @@ class LLM:
             logger.warning(f"FAST_ROUTE: skipped ({_fr_e})")
             _fast_route = None
 
+        # ── V69 M57.1/.2 — adaptive response contract + generation budget ─────
+        # Computed ONCE per turn from signals already resolved above (turn policy,
+        # routed role, active language, session profile, power profile). It decides
+        # only HOW to answer — never which model, which tools, or what is allowed.
+        _shape = None
+        _gen = None
+        try:
+            if bool(getattr(settings, "response_contracts_enabled", True)):
+                from core.generation_budget import budget_for_shape
+                from core.response_contract import select_contract
+                from core.response_runtime import get_response_runtime
+                from core.runtime_profile import get_runtime_profile
+                _rr = get_response_runtime()
+                try:
+                    _power = get_runtime_profile().policy()
+                except Exception:  # noqa: BLE001 — power detection is advisory
+                    _power = None
+                _shape = select_contract(
+                    user_message, turn_policy=_turn_policy, model_decision=decision,
+                    language=self.language_context.active_language(),
+                    session_profile=_rr.profile, power_policy=_power,
+                )
+                _gen = budget_for_shape(
+                    _shape, settings=settings,
+                    throughput=(_rr.throughput
+                                if getattr(settings, "response_adaptive_budget", True)
+                                else None),
+                    remaining_s=_budget.remaining_s(),
+                    total_turn_s=_budget.total_s,
+                )
+                self._last_shape, self._last_gen = _shape, _gen
+                logger.debug(
+                    "RESPONSE_CONTRACT: contract={} reason={} tokens={} ctx={} "
+                    "lang={} adapt={}".format(
+                        _shape.contract.value, _shape.reason.value, _gen.num_predict,
+                        _gen.num_ctx, _shape.language, _gen.adjustment_reason,
+                    )
+                )
+        except Exception as _rc_e:  # noqa: BLE001 — never break a turn on shaping
+            logger.warning(f"RESPONSE_CONTRACT: skipped ({_rc_e})")
+            _shape, _gen = None, None
+
         if _fast_route is not None and _fast_route.use_native:
             # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
             # transport-selected (classification + language + route). Measured at the
@@ -2302,7 +2408,7 @@ class LLM:
                 try:
                     async for _piece in self._native_fast_stream(
                         route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
-                        result=_fast_result,
+                        result=_fast_result, gen=_gen, shape=_shape,
                     ):
                         yield _piece
                 except _NativeFastUnavailable as _nfu:
@@ -2464,6 +2570,21 @@ class LLM:
             except Exception:
                 _base_ctx = 4096
             _ctx = _adaptive_ctx(self.history, _base_ctx)
+            # V69 M57.2 — prewarm parity on the FALLBACK path too. When /v1 is
+            # serving the SAME model the boot prewarm warmed (a fast-eligible turn
+            # that fell back because the native transport was unavailable), an
+            # adaptive ctx makes Ollama reload the runner for nothing. Only the
+            # warmed model is pinned; DEEP/CODER keep the adaptive value.
+            try:
+                _fast_model = (getattr(settings, "fast_model", "") or "").strip()
+                if not _fast_model:
+                    from core.model_router import ModelRole, model_for_role
+                    _fast_model = model_for_role(ModelRole.FAST) or ""
+                if _fast_model and _routed_model == _fast_model:
+                    from core.generation_budget import resolve_live_fast_context
+                    _ctx = resolve_live_fast_context(settings)
+            except Exception:  # noqa: BLE001 — never break a turn over a ctx hint
+                pass
             logger.debug(
                 f"LLM: {_routed_model} "
                 f"(role={decision.role.value}, score={decision.complexity:.2f}, "
@@ -2474,6 +2595,21 @@ class LLM:
             # question like "POO" can never be routed to query_knowledge; every other
             # tool (and its own downstream gate) is unchanged.
             _turn_tools = _turn_policy.filter_tools(TOOLS)
+            # V69 M57.2 — the /v1 path had NO generation cap at all: its only bound
+            # was wall-clock, so a rambling answer burned the whole turn budget. It
+            # now inherits the contract's CEILING (not the tighter adapted base),
+            # and ONLY when this leg offers no tools — a num_predict that lands
+            # mid-tool-call would truncate the JSON and break the agentic loop,
+            # which is a worse failure than a long answer.
+            _v1_options: dict = {"num_ctx": _ctx}
+            try:
+                if _shape is not None and not _turn_tools:
+                    _v1_options["num_predict"] = int(min(
+                        _shape.max_output_tokens,
+                        int(getattr(settings, "response_max_output_tokens", 512)),
+                    ))
+            except Exception:  # noqa: BLE001
+                _v1_options = {"num_ctx": _ctx}
             # V69 M54.1.5/.6 — the single `await` that hung the live run for
             # minutes. It covers Ollama's model swap (unload nomic, load qwen3:8b
             # off disk, prefill) and does not return until the FIRST SSE chunk. It
@@ -2506,7 +2642,7 @@ class LLM:
                         messages=messages_for_api,
                         tools=_turn_tools,
                         stream=True,
-                        extra_body={"options": {"num_ctx": _ctx}},
+                        extra_body={"options": _v1_options},
                     ),
                     timeout=_first_token_budget,
                 )

@@ -145,6 +145,12 @@ _META_KEYS = (
     "load_duration", "prompt_eval_duration", "eval_duration",
 )
 
+# V69 M57.2 — the ONLY per-turn sampling options a response contract may set.
+# Deliberately excludes num_ctx (owned by the prewarm-parity invariant), num_predict
+# and temperature (explicit arguments), and everything that could change what the
+# server does structurally (format, tools, keep_alive, mirostat, stop).
+_ALLOWED_EXTRA_OPTIONS: frozenset[str] = frozenset({"top_p", "repeat_penalty"})
+
 
 def build_chat_request(
     *,
@@ -156,6 +162,7 @@ def build_chat_request(
     ctx: int | None = None,
     keep_alive: str | None = None,
     stream: bool = True,
+    options_extra: dict | None = None,
 ) -> dict:
     """Build the native ``/api/chat`` request body (pure).
 
@@ -164,10 +171,19 @@ def build_chat_request(
     ``max_tokens`` maps to ``options.num_predict`` — the bound that keeps a simple
     turn from running to a multi-minute cap at ~5 tok/s. NO ``tools`` key is ever
     added here: the native FAST path is deliberately tool-free (M55.3/criterion 7).
+
+    ``options_extra`` (V69 M57.2) carries the response contract's remaining sampling
+    knobs (``top_p`` / ``repeat_penalty``). It is an ALLOWLIST, not a passthrough:
+    only keys in :data:`_ALLOWED_EXTRA_OPTIONS` survive, so a caller can never inject
+    an arbitrary server option, a tools key, or a second num_ctx that would silently
+    reload the runner the prewarm warmed.
     """
     options: dict = {"num_predict": int(max_tokens), "temperature": float(temperature)}
     if ctx is not None:
         options["num_ctx"] = int(ctx)
+    for key, value in (options_extra or {}).items():
+        if key in _ALLOWED_EXTRA_OPTIONS and isinstance(value, (int, float)):
+            options[key] = float(value)
     body: dict = {
         "model": model,
         "messages": list(messages),
@@ -292,6 +308,7 @@ async def chat_stream(
     keep_alive: str | None = None,
     client: httpx.AsyncClient | None = None,
     base_url: str | None = None,
+    options_extra: dict | None = None,
 ) -> AsyncIterator[ChatChunk]:
     """Live bounded stream from native ``POST /api/chat``.
 
@@ -306,6 +323,7 @@ async def chat_stream(
     body = build_chat_request(
         model=model, messages=messages, think=think, max_tokens=max_tokens,
         temperature=temperature, ctx=ctx, keep_alive=keep_alive, stream=True,
+        options_extra=options_extra,
     )
     url = (base_url or default_base_url()).rstrip("/") + _NATIVE_CHAT_PATH
     # httpx read backstop is set ABOVE our own wait_for bounds so OUR bounds always
