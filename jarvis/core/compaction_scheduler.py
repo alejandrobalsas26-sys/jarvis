@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Awaitable, Callable
 
@@ -143,6 +143,13 @@ class CompactionScheduler:
     cooldown_s: float = _DEFAULT_COOLDOWN_S
     timeout_s: float = _DEFAULT_TIMEOUT_S
     clock: Callable[[], float] = time.monotonic
+    # M59.4 — the model-assisted proposer runs under this governor at the dedicated
+    # BACKGROUND_COMPACTION priority; None keeps the historical ungoverned behaviour
+    # (tests / headless). The quality_gate is the deterministic authority over the
+    # proposed items; None keeps the M58 basic validator only.
+    governor: object | None = None
+    quality_gate: object | None = None
+    slot_timeout_s: float = 30.0
 
     _digest: ConversationDigest | None = None
     _digest_version: int = 0
@@ -162,6 +169,16 @@ class CompactionScheduler:
     last_input_tokens: int = 0
     last_output_tokens: int = 0
     context_tokens_saved: int = 0
+    # M59.4 governor + quality-gate metrics (content-free)
+    governor_wait_ms: float | None = None
+    preemptions: int = 0
+    candidates: int = 0
+    accepted: int = 0
+    rejected: int = 0
+    rejection_reasons: dict = field(default_factory=dict)
+    duplicate_suppressions: int = 0
+    compression_ratio: float | None = None
+    quality_state: str = "EMPTY"
 
     # ── the authoritative digest ─────────────────────────────────────────────
     def current_digest(self, history: list | None = None) -> ConversationDigest:
@@ -206,10 +223,17 @@ class CompactionScheduler:
         self.started += 1
         self._state = CompactionState.RUNNING
         t0 = self.clock()
+        slot = self._acquire_slot()
         try:
-            proposed = await asyncio.wait_for(
-                self.proposer(list(history or []), self.timeout_s),
-                timeout=self.timeout_s + 1.0)
+            # The model-assisted pass holds the governor slot for its whole duration,
+            # so it can never decode concurrently with the operator's live FAST turn.
+            async with slot:
+                self.governor_wait_ms = getattr(slot, "wait_ms", 0.0)
+                if self._cancel:
+                    raise asyncio.CancelledError()
+                proposed = await asyncio.wait_for(
+                    self.proposer(list(history or []), self.timeout_s),
+                    timeout=self.timeout_s + 1.0)
         except asyncio.TimeoutError:
             self.timed_out += 1
             self._state = CompactionState.TIMED_OUT
@@ -239,11 +263,30 @@ class CompactionScheduler:
             self._set_digest(base)  # fall back to the extractive digest
             self._last_run_at = self.clock()
             return self._state
+        # M59.4 — the deterministic quality gate is authoritative when wired: it drops
+        # invented entities, secrets, code, quotation and duplicates, and a model item
+        # can never mint EXPLICIT. The extractive base is always the fallback.
+        if self.quality_gate is not None:
+            accepted, qm = self.quality_gate.evaluate(
+                valid, base_digest=base, source_texts=self._source_texts(history))
+            self._record_quality(qm)
+            if not accepted:
+                self._set_digest(base)
+                self._last_run_at = self.clock()
+                if qm.candidates > 0:
+                    self.validation_failures += 1
+                    self._state = CompactionState.VALIDATION_FAILED
+                else:
+                    self.completed += 1
+                    self._state = CompactionState.COMPLETED
+                return self._state
+            valid = accepted
         augmented = merge_model_assisted(base, valid)
         before = base.estimated_tokens()
         after = augmented.estimated_tokens()
         # A digest that GREW cannot have saved context — clamp at zero, never negative.
         self.context_tokens_saved = max(0, before - after) if after < before else 0
+        self.compression_ratio = round(after / before, 3) if before else None
         self.last_input_tokens = self._history_tokens(history)
         self.last_output_tokens = after
         self.last_duration_ms = round((self.clock() - t0) * 1000.0, 1)
@@ -274,6 +317,37 @@ class CompactionScheduler:
                 break
         return out
 
+    # ── governor slot (BACKGROUND_COMPACTION) ─────────────────────────────────
+    def _acquire_slot(self):
+        """The governor slot at the dedicated BACKGROUND_COMPACTION priority, or a
+        no-op when no governor is wired (tests / headless)."""
+        if self.governor is None:
+            return _NullSlot()
+        try:
+            from core.residency_governor import Priority
+            return self.governor.slot(role="compaction",
+                                      priority=Priority.BACKGROUND_COMPACTION,
+                                      reason="idle_compaction",
+                                      timeout_s=self.slot_timeout_s)
+        except Exception:  # noqa: BLE001
+            return _NullSlot()
+
+    @staticmethod
+    def _source_texts(history: list) -> list:
+        """The transcript contents used ONLY for the quality gate's source-linkage
+        check. Never stored by the scheduler."""
+        return [str(m.get("content") or "") for m in (history or [])
+                if isinstance(m, dict)]
+
+    def _record_quality(self, qm) -> None:
+        """Fold one quality-gate evaluation's content-free metrics."""
+        self.candidates = int(getattr(qm, "candidates", 0))
+        self.accepted = int(getattr(qm, "accepted", 0))
+        self.rejected = int(getattr(qm, "rejected", 0))
+        self.rejection_reasons = dict(getattr(qm, "rejection_reasons", {}) or {})
+        self.duplicate_suppressions = int(getattr(qm, "duplicate_suppressions", 0))
+        self.quality_state = str(getattr(qm, "quality_state", "EMPTY"))
+
     # ── digest bookkeeping ───────────────────────────────────────────────────
     def _set_digest(self, digest: ConversationDigest) -> None:
         self._digest = digest
@@ -295,6 +369,7 @@ class CompactionScheduler:
         """User input arrived. Signal cancellation; the current digest is preserved and
         the active FAST turn proceeds immediately (this returns without awaiting)."""
         self._cancel = True
+        self.preemptions += 1
         task = self._task
         if task is not None and not task.done():
             task.cancel()
@@ -327,7 +402,29 @@ class CompactionScheduler:
             "digest_version": self._digest_version,
             "context_tokens_saved": self.context_tokens_saved,
             "digest": self._digest.snapshot() if self._digest is not None else None,
+            # ── governor + quality gate (M59.4) ──
+            "governor_wait_ms": self.governor_wait_ms,
+            "preemptions": self.preemptions,
+            "candidates": self.candidates,
+            "accepted": self.accepted,
+            "rejected": self.rejected,
+            "rejection_reasons": dict(self.rejection_reasons),
+            "duplicate_suppressions": self.duplicate_suppressions,
+            "compression_ratio": self.compression_ratio,
+            "quality_state": self.quality_state,
         }
+
+
+class _NullSlot:
+    """A no-op async context manager used when no residency governor is wired."""
+
+    wait_ms = 0.0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 # ── Process-global singleton ─────────────────────────────────────────────────
@@ -337,7 +434,19 @@ _scheduler: CompactionScheduler | None = None
 def get_compaction_scheduler() -> CompactionScheduler:
     global _scheduler
     if _scheduler is None:
-        _scheduler = CompactionScheduler()
+        governor = None
+        gate = None
+        try:
+            from core.residency_governor import get_governor
+            governor = get_governor()
+        except Exception:  # noqa: BLE001
+            governor = None
+        try:
+            from core.compaction_quality import get_quality_gate
+            gate = get_quality_gate()
+        except Exception:  # noqa: BLE001
+            gate = None
+        _scheduler = CompactionScheduler(governor=governor, quality_gate=gate)
     return _scheduler
 
 
