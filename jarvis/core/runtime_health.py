@@ -438,6 +438,7 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
     tl = tools if tools is not None else _live_tool_metrics()
     bi = barge if barge is not None else _live_barge_in()
     r = response if response is not None else _live_response_runtime()
+    sw = _live_session_warmth()
     if not (p or c or pw or cp or tl or bi):
         return SubsystemHealth("prompt_cache", HealthStatus.OPTIONAL,
                                "no interactive turn yet", {})
@@ -475,6 +476,14 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         "prewarm_runner_identity": (pw or {}).get("prewarm_runner_identity"),
         "live_runner_identity": (pw or {}).get("live_runner_identity"),
         "runner_parity": (pw or {}).get("runner_parity"),
+        # ── session warmth & predictive rewarm (M59.2) ──
+        "session_warmth_state": (sw or {}).get("session_state"),
+        "session_reuse_state": (sw or {}).get("reuse_state"),
+        "session_observation_count": (sw or {}).get("observation_count"),
+        "session_invalidations": (sw or {}).get("invalidation_count"),
+        "predictive_rewarm_attempts": (sw or {}).get("predictive_rewarm_attempts"),
+        "predictive_rewarm_successes": (sw or {}).get("predictive_rewarm_successes"),
+        "rewarm_cooldown_remaining_s": (sw or {}).get("cooldown_remaining"),
         # ── compaction ──
         "compaction_scheduled": (cp or {}).get("scheduled"),
         "compaction_completed": (cp or {}).get("completed"),
@@ -526,6 +535,14 @@ def _live_family_prewarm() -> dict:
     try:
         from core.contract_family import get_family_prewarm
         return get_family_prewarm().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_session_warmth() -> dict:
+    try:
+        from core.session_warmth import session_warmth_health
+        return session_warmth_health()
     except Exception:  # noqa: BLE001
         return {}
 
