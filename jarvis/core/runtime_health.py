@@ -471,6 +471,10 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         "family_last_first_token_ms": (pw or {}).get("last_first_token_ms"),
         "family_last_prompt_eval_ms": (pw or {}).get("last_prompt_eval_ms"),
         "stale_fingerprints": (pw or {}).get("stale_fingerprints"),
+        # ── sampling parity (M59.1) ──
+        "prewarm_runner_identity": (pw or {}).get("prewarm_runner_identity"),
+        "live_runner_identity": (pw or {}).get("live_runner_identity"),
+        "runner_parity": (pw or {}).get("runner_parity"),
         # ── compaction ──
         "compaction_scheduled": (cp or {}).get("scheduled"),
         "compaction_completed": (cp or {}).get("completed"),

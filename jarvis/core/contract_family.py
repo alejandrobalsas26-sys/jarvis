@@ -169,6 +169,10 @@ class FamilyRecord:
     success: bool = False
     invalidated_reason: str | None = None
     power_profile: str = "UNKNOWN"
+    # M59.1 — content-free profile-parity provenance for this attempt.
+    live_runner_identity: str = ""
+    prewarm_runner_identity: str = ""
+    runner_parity: bool | None = None
 
     def snapshot(self) -> dict:
         return {
@@ -181,6 +185,9 @@ class FamilyRecord:
             "first_token_ms": self.first_token_ms, "total_ms": self.total_ms,
             "success": self.success, "invalidated_reason": self.invalidated_reason,
             "power_profile": self.power_profile,
+            "live_runner_identity": self.live_runner_identity,
+            "prewarm_runner_identity": self.prewarm_runner_identity,
+            "runner_parity": self.runner_parity,
         }
 
 
@@ -198,9 +205,17 @@ async def run_family_prewarm(
     power_profile: str = "UNKNOWN",
     cancellation=None,
     client=None,
+    temperature: float = 0.0,
+    num_predict: int | None = None,
+    options_extra: dict | None = None,
 ) -> FamilyRecord:
     """Run ONE bounded native /api/chat prewarm for a family, over the real transport
-    with the real stable prefix. Never raises except CancelledError."""
+    with the real stable prefix. Never raises except CancelledError.
+
+    ``temperature`` / ``num_predict`` / ``options_extra`` (M59.1.1) let the caller pass
+    the sampling posture DERIVED from the family's live generation budget, so the
+    prewarm warms the same runner+prefix the live turn uses instead of a hand-written
+    ``temperature=0.0`` set. When omitted, the historical minimal defaults apply."""
     from core.ollama_native import NativeTransportError, chat_stream
     from core.turn_budget import StageTimeouts, TurnBudget
 
@@ -214,12 +229,14 @@ async def run_family_prewarm(
     budget = TurnBudget(total_s=timeout_s)
     timeouts = StageTimeouts(connect_s=5.0, first_token_s=timeout_s, idle_s=10.0,
                              total_s=timeout_s)
+    cap = int(num_predict) if num_predict is not None else _FAMILY_NUM_PREDICT
     try:
         async for chunk in chat_stream(
             model=model, messages=messages, think=False,
-            max_tokens=_FAMILY_NUM_PREDICT, temperature=0.0, budget=budget,
+            max_tokens=cap, temperature=float(temperature), budget=budget,
             timeouts=timeouts, ctx=int(num_ctx), keep_alive=keep_alive,
             cancellation=cancellation, client=client,
+            options_extra=options_extra,
         ):
             if chunk.content and rec.first_token_ms is None:
                 rec.first_token_ms = round((time.monotonic() - t0) * 1000.0, 1)
@@ -353,6 +370,7 @@ class FamilyPrewarm:
                 self.states[family] = FamilyState.RUNNING
                 self.attempts += 1
                 self.last_family = family.value
+                sampling = self._derive_sampling(family, shape)
                 run = await self._runner(
                     family, model=self.model, num_ctx=self.num_ctx,
                     keep_alive=self.keep_alive, timeout_s=self.timeout_s,
@@ -360,11 +378,17 @@ class FamilyPrewarm:
                     language_directive=self.language_directive,
                     compatibility_identity=identity,
                     prompt_fingerprint=manifest.stable_prefix_fingerprint,
-                    power_profile=power_profile, cancellation=cancellation)
+                    power_profile=power_profile, cancellation=cancellation,
+                    temperature=sampling["temperature"],
+                    num_predict=sampling["num_predict"],
+                    options_extra=sampling["options_extra"])
                 # preserve queue wait measured here
                 run.queue_wait_ms = rec.queue_wait_ms
                 run.compatibility_identity = identity
                 run.prompt_fingerprint = manifest.stable_prefix_fingerprint
+                run.live_runner_identity = sampling["live_runner_identity"]
+                run.prewarm_runner_identity = sampling["prewarm_runner_identity"]
+                run.runner_parity = sampling["runner_parity"]
                 rec = run
         except asyncio.CancelledError:
             self.cancellations += 1
@@ -380,6 +404,33 @@ class FamilyPrewarm:
             self._done.add(key)
             self._warmed_identity = identity
         return rec
+
+    def _derive_sampling(self, family: ContractFamily, shape) -> dict:
+        """Derive the prewarm sampling posture from the family's LIVE generation
+        budget (M59.1.1). Never raises — a derivation failure degrades to the historical
+        minimal defaults rather than breaking a best-effort prewarm."""
+        default = {"temperature": 0.0, "num_predict": None, "options_extra": None,
+                   "live_runner_identity": "", "prewarm_runner_identity": "",
+                   "runner_parity": None}
+        try:
+            from core.inference_profile import profile_compatibility, profiles_for_shape
+            from core.tool_schema import EMPTY_TOOL_SCHEMA_FINGERPRINT
+            live, prewarm = profiles_for_shape(
+                shape, model=self.model, num_ctx=self.num_ctx, transport="native",
+                think=False, language=self.language,
+                language_directive=self.language_directive,
+                tool_schema_fingerprint=EMPTY_TOOL_SCHEMA_FINGERPRINT)
+            verdict = profile_compatibility(prewarm, live)
+            return {
+                "temperature": prewarm.generation.temperature,
+                "num_predict": prewarm.generation.num_predict,
+                "options_extra": prewarm.generation.transport_options_extra(),
+                "live_runner_identity": live.runner.fingerprint(),
+                "prewarm_runner_identity": prewarm.runner.fingerprint(),
+                "runner_parity": verdict.runner_compatible,
+            }
+        except Exception:  # noqa: BLE001 — never break a best-effort prewarm
+            return default
 
     def _acquire_slot(self):
         """The governor slot context manager (lowest priority), or a no-op when no
@@ -476,6 +527,14 @@ class FamilyPrewarm:
             "stale_fingerprints": self.stale_fingerprints,
             "last_family": self.last_family,
             "warmed_identity": self._warmed_identity,
+            "runner_parity": (self.records.get(ContractFamily.CONCISE).runner_parity
+                              if ContractFamily.CONCISE in self.records else None),
+            "live_runner_identity": (
+                self.records.get(ContractFamily.CONCISE).live_runner_identity
+                if ContractFamily.CONCISE in self.records else ""),
+            "prewarm_runner_identity": (
+                self.records.get(ContractFamily.CONCISE).prewarm_runner_identity
+                if ContractFamily.CONCISE in self.records else ""),
             "last_first_token_ms": (self.records.get(
                 ContractFamily.CONCISE).first_token_ms
                 if ContractFamily.CONCISE in self.records else None),

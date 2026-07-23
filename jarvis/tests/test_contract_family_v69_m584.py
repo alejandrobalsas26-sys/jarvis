@@ -30,7 +30,8 @@ def _run(coro):
 def _fake_runner(record_calls):
     async def runner(family, *, model, num_ctx, keep_alive, timeout_s, language,
                      language_directive, compatibility_identity, prompt_fingerprint,
-                     power_profile="UNKNOWN", cancellation=None, client=None):
+                     power_profile="UNKNOWN", cancellation=None, client=None,
+                     **kwargs):  # M59.1: tolerate derived-sampling kwargs
         record_calls.append({"family": family, "model": model, "num_ctx": num_ctx,
                              "identity": compatibility_identity})
         return FamilyRecord(family=family.value, model=model, num_ctx=num_ctx,
