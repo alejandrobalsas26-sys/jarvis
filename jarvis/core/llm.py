@@ -2719,6 +2719,13 @@ class LLM:
         # unrelated tool family (the Packet Tracer bug).
         _turn_tool_failures: dict[str, int] = {}
         _turn_tool_retryable: dict[str, bool] = {}
+        # V69 M58.7 — bound the tool loop: max rounds / retries / malformed repairs.
+        # When the round budget is spent, tools are DROPPED so the model must produce
+        # a final answer (which then gets the contract num_predict) — the loop is
+        # bounded by a real limit, never only by wall-clock, and a JSON call is never
+        # truncated to enforce it.
+        from core.tool_loop import ToolLoopBudget, publish_tool_metrics, validate_tool_call
+        _tool_budget = ToolLoopBudget()
 
         # V61 Phase 4 — only consult long-term/episodic memory when it helps:
         # explicit recall/project intent (should_use_memory) or a deep/security
@@ -2801,6 +2808,23 @@ class LLM:
             # question like "POO" can never be routed to query_knowledge; every other
             # tool (and its own downstream gate) is unchanged.
             _turn_tools = _turn_policy.filter_tools(TOOLS)
+            # V69 M58.7 — round budget. Each loop iteration is a round; once the round
+            # limit is reached the tools are DROPPED so the model produces a bounded
+            # final answer (Phase 3) rather than requesting yet another tool round.
+            _tool_budget.begin_round()
+            if _tool_budget.force_final():
+                _turn_tools = []
+                logger.info("TOOL_LOOP: round budget spent — final response, tools "
+                            "dropped (rounds={})".format(_tool_budget.rounds))
+            # V69 M58.7.1 — canonical eligible-tool schema fingerprint + size (before/
+            # after filtering). DIRECT_FAST is tool-free; a tool-enabled turn records
+            # only the eligible subset the model actually sees.
+            try:
+                from core.tool_schema import build_tool_schema_fingerprint
+                _tool_fp = build_tool_schema_fingerprint(TOOLS, eligible_tools=_turn_tools)
+                _tool_budget_schema = _tool_fp.snapshot()
+            except Exception:  # noqa: BLE001
+                _tool_budget_schema = {}
             # V69 M57.2 — the /v1 path had NO generation cap at all: its only bound
             # was wall-clock, so a rambling answer burned the whole turn budget. It
             # now inherits the contract's CEILING (not the tighter adapted base),
@@ -3090,6 +3114,25 @@ class LLM:
                 except Exception:
                     pass
 
+                # V69 M58.7 — publish the bounded tool-loop metrics for runtime health.
+                # The final answer's token count + whether the length cap cut it are
+                # the Phase-3 record; content-free.
+                try:
+                    from core.generation_budget import hit_generation_cap
+                    from core.tool_loop import ToolTurnState
+                    _tool_budget.final_response_tokens = int(_tok_count)
+                    _fin_capped = hit_generation_cap(
+                        finish_reason, _tok_count,
+                        int(_v1_options.get("num_predict") or 0))
+                    _tool_budget.state = (ToolTurnState.FINAL_RESPONSE_TRUNCATED
+                                          if _fin_capped
+                                          else ToolTurnState.FINAL_RESPONSE_COMPLETE)
+                    _tm = _tool_budget.snapshot()
+                    _tm.update(_tool_budget_schema)
+                    publish_tool_metrics(_tm)
+                except Exception:
+                    pass
+
                 unregister_operation("llm_stream")  # v35.0
                 break
 
@@ -3100,10 +3143,16 @@ class LLM:
                 # final answer leaned on (possibly dangerous) tool output.
                 _turn_tool_used = True
                 _turn_tool_names.append(tool_name)
-                try:
-                    tool_input = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    tool_input = {}
+                # V69 M58.7 — validate the call BEFORE anything executes: reject
+                # malformed/partial JSON and names outside the eligible set. Truncated
+                # tool JSON and hallucinated tool names never reach the executor, and
+                # effectful arguments are never freely guessed/repaired.
+                _eligible_names = {
+                    t.get("function", {}).get("name")
+                    for t in _turn_tools if isinstance(t, dict)
+                } or None
+                _ok_call, tool_input, _bad_reason = validate_tool_call(
+                    tool_name, tc["function"]["arguments"], _eligible_names)
                 # V69 M54.13 — never print a raw/large tool payload into the
                 # interactive console. Summarize the argument keys and bound the
                 # rendered length; the full arguments are still in the DEBUG file log.
@@ -3122,7 +3171,29 @@ class LLM:
                 # Non-retryable failures allow 1 attempt total (no retry);
                 # retryable failures allow 2 (original + exactly one retry).
                 _max_attempts = 2 if _turn_tool_retryable.get(tool_name) else 1
-                if _cyber_block_tools:
+                if not _ok_call:
+                    # V69 M58.7 — malformed call or ineligible/hallucinated tool. It
+                    # NEVER executes; a bounded failure envelope keeps the tool_call/
+                    # tool pairing coherent so the loop cannot be driven to run an
+                    # unvalidated (possibly effectful) call.
+                    if _bad_reason == "tool_not_eligible":
+                        _tool_budget.note_denied()
+                        _err_class, _msg = "tool_not_eligible", (
+                            f"`{tool_name}` is not an eligible tool for this turn. It "
+                            "was not executed. Answer without it or state it is "
+                            "unavailable — do not invent tool names.")
+                    else:
+                        _tool_budget.note_malformed()
+                        _err_class, _msg = "malformed_tool_call", (
+                            f"The `{tool_name}` call arguments were malformed and were "
+                            "NOT executed. Reissue a single well-formed call or answer "
+                            "without it.")
+                    logger.warning(
+                        f"TOOL_LOOP: rejected '{tool_name}' ({_bad_reason}) — not executed")
+                    result = make_failure(
+                        tool=tool_name, error_class=_err_class, safe_message=_msg,
+                        retryable=False, fallback_allowed=True)
+                elif _cyber_block_tools:
                     # V68.1 M47 — offensive/operational request with no established
                     # authorization: refuse ALL tool execution this turn. No scan,
                     # no exploit search, no operational step. Fail-closed.
