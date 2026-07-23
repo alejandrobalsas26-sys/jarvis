@@ -167,7 +167,7 @@ async def _run(quick: bool) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"family prewarm skipped: {type(exc).__name__}")
     print("-" * 78)
-    hdr = ("label", "contract", "ctx", "dΔtok", "1st_ms", "peCount", "pe_ms",
+    hdr = ("label", "contract", "ctx", "dTok", "1st_ms", "peCount", "pe_ms",
            "load_ms", "cache_state")
     print("{:<12}{:<10}{:>5}{:>7}{:>8}{:>9}{:>9}{:>9}  {}".format(*hdr))
     rows = []
