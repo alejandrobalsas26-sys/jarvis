@@ -160,3 +160,40 @@ def test_threshold_profile_snapshot_shape():
     snap = p.snapshot()
     assert snap["max_stable_fp_count"] == 1
     assert snap["max_num_ctx_count"] == 1
+
+
+# ── release verdict (M59.6) ───────────────────────────────────────────────────
+def _all_green(**over):
+    base = dict(deterministic_ok=True, regression_ok=True, ruff_ok=True,
+                compile_ok=True, soak_ok=True)
+    base.update(over)
+    return base
+
+
+def test_release_pass_when_all_green_no_live():
+    from core.qualification import release_verdict
+    assert release_verdict(**_all_green(), live_verdict=None) == "PASS"
+
+
+def test_release_fail_on_any_mandatory_red():
+    from core.qualification import release_verdict
+    assert release_verdict(**_all_green(regression_ok=False)) == "FAIL"
+    assert release_verdict(**_all_green(ruff_ok=False)) == "FAIL"
+    assert release_verdict(**_all_green(compile_ok=False)) == "FAIL"
+
+
+def test_release_fail_on_live_regression():
+    from core.qualification import release_verdict
+    assert release_verdict(**_all_green(), live_verdict="FAIL") == "FAIL"
+
+
+def test_release_missing_live_is_pass_with_warnings():
+    from core.qualification import release_verdict
+    v = release_verdict(**_all_green(), live_verdict="INSUFFICIENT_EVIDENCE")
+    assert v == "PASS_WITH_WARNINGS"
+
+
+def test_release_security_failure_is_fail():
+    from core.qualification import release_verdict
+    assert release_verdict(**_all_green(), security_ok=False) == "FAIL"
+    assert release_verdict(**_all_green(), orphan_ok=False) == "FAIL"

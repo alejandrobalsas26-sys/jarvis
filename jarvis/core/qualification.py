@@ -341,6 +341,50 @@ def build_artifact(
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  M59.6 — release verdict aggregation
+# ══════════════════════════════════════════════════════════════════════════════
+class ReleaseVerdict(str, Enum):
+    PASS = "PASS"
+    PASS_WITH_WARNINGS = "PASS_WITH_WARNINGS"
+    FAIL = "FAIL"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+def release_verdict(
+    *,
+    deterministic_ok: bool,
+    regression_ok: bool,
+    ruff_ok: bool,
+    compile_ok: bool,
+    soak_ok: bool,
+    security_ok: bool = True,
+    bounded_ok: bool = True,
+    orphan_ok: bool = True,
+    live_verdict: str | None = None,
+    warnings: list | None = None,
+) -> str:
+    """Aggregate the release qualification result. Never conceals a failure.
+
+    PASS requires every mandatory gate green (deterministic tests, regression, ruff,
+    compile, soak, no security failure, no unbounded growth, no orphan task). A live
+    FAIL is a code regression → FAIL; a live INSUFFICIENT_EVIDENCE / DEGRADED (server
+    unavailable or an incomparable power state) yields PASS_WITH_WARNINGS, never a
+    silent PASS and never a false FAIL."""
+    mandatory = (deterministic_ok, regression_ok, ruff_ok, compile_ok, soak_ok,
+                 security_ok, bounded_ok, orphan_ok)
+    if not all(mandatory):
+        return ReleaseVerdict.FAIL.value
+    lv = (live_verdict or "").upper()
+    if lv == "FAIL":
+        return ReleaseVerdict.FAIL.value
+    if lv in ("INSUFFICIENT_EVIDENCE", "DEGRADED"):
+        return ReleaseVerdict.PASS_WITH_WARNINGS.value
+    if warnings:
+        return ReleaseVerdict.PASS_WITH_WARNINGS.value
+    return ReleaseVerdict.PASS.value
+
+
 def host_profile_snapshot() -> dict:
     """A bounded, content-safe host descriptor. No private paths, no environment."""
     import platform
