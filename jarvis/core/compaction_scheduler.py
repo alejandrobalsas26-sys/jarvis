@@ -347,6 +347,39 @@ def reset_compaction_scheduler(instance: CompactionScheduler | None = None) -> N
     _scheduler = instance
 
 
+_PROPOSABLE_KINDS: dict[str, ItemKind] = {
+    "TOPIC": ItemKind.TOPIC, "DECISION": ItemKind.DECISION,
+    "OPEN_QUESTION": ItemKind.OPEN_QUESTION, "QUESTION": ItemKind.OPEN_QUESTION,
+}
+
+
+def parse_proposed_items(text: str) -> list[DigestItem]:
+    """Parse a model's bounded compaction output into candidate DigestItems.
+
+    Deterministic and strict: only lines of the form ``KIND: text`` where KIND is a
+    proposable kind survive; everything else (prose, reasoning, JSON, secrets) is
+    dropped. The items are marked OBSERVED here, but ``merge_model_assisted`` re-labels
+    every one INFERRED regardless — a model can never mint EXPLICIT. Bounded output.
+    """
+    out: list[DigestItem] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip().lstrip("-*• ").strip()
+        if ":" not in line:
+            continue
+        kind_raw, _, body = line.partition(":")
+        kind = _PROPOSABLE_KINDS.get(kind_raw.strip().upper())
+        body = body.strip()
+        if kind is None or not body:
+            continue
+        if len(body) > _MAX_PROPOSED_ITEM_CHARS:
+            body = body[:_MAX_PROPOSED_ITEM_CHARS - 1] + "…"
+        from core.conversation_digest import Evidence
+        out.append(DigestItem(kind, body, Evidence.OBSERVED))
+        if len(out) >= _MAX_PROPOSED_ITEMS:
+            break
+    return out
+
+
 def build_conditions_from_runtime(history: list, *, context_budget: int = 2048
                                   ) -> CompactionConditions:
     """Assemble a live conditions snapshot from the process singletons. Best-effort:

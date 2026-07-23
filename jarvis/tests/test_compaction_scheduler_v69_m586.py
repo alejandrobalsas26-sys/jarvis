@@ -159,3 +159,30 @@ def test_cooldown_blocks_a_second_immediate_run():
     hist = _long_history()
     _run(sched.maybe_run(hist, _eligible()))
     assert sched.cooldown_expired() is False
+
+
+# ── model-output parser (native proposer) ─────────────────────────────────────
+def test_parse_proposed_items_keeps_only_structured_lines():
+    from core.compaction_scheduler import parse_proposed_items
+    text = (
+        "Let me think about this...\n"           # prose → dropped
+        "TOPIC: kerberos delegation\n"
+        "- DECISION: use the native transport\n"  # bullet prefix tolerated
+        "OPEN_QUESTION: how to bound the loop\n"
+        "random line without a kind\n"           # no kind → dropped
+        "PREFERENCE: something\n"                  # not a proposable kind → dropped
+    )
+    items = parse_proposed_items(text)
+    kinds = {i.kind for i in items}
+    assert ItemKind.TOPIC in kinds
+    assert ItemKind.DECISION in kinds
+    assert ItemKind.OPEN_QUESTION in kinds
+    assert ItemKind.PREFERENCE not in kinds  # a model cannot mint a preference here
+    for i in items:
+        assert i.evidence is Evidence.OBSERVED  # merge_model_assisted re-labels INFERRED
+
+
+def test_parse_proposed_items_is_bounded():
+    from core.compaction_scheduler import parse_proposed_items
+    text = "\n".join(f"TOPIC: item {i}" for i in range(50))
+    assert len(parse_proposed_items(text)) <= 6

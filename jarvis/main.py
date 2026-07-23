@@ -121,6 +121,101 @@ def _is_windows_admin() -> bool:
 # duplication. Nothing here re-implements segmentation.
 
 
+def _make_compaction_proposer(llm):
+    """A bounded native think=false proposer for idle compaction (M58.6).
+
+    Asks the FAST model to extract up to a few recurring TOPIC/DECISION/OPEN_QUESTION
+    lines from the OLDER conversation, then parses them deterministically. No chain of
+    thought, no secrets, no full-document dump: output is tiny and line-structured, and
+    every item is re-labelled INFERRED by merge_model_assisted downstream.
+    """
+    async def _proposer(history, timeout):
+        from core.compaction_scheduler import parse_proposed_items
+        from core.config import settings
+        from core.ollama_native import CancellationToken, chat_stream
+        from core.turn_budget import StageTimeouts, TurnBudget
+        older = [m for m in (history or []) if isinstance(m, dict)][:-6] or []
+        if not older:
+            return []
+        # A bounded, content-safe transcript slice (older turns only, truncated).
+        convo = "\n".join(
+            f"{m.get('role', '?')[:1]}: {str(m.get('content') or '')[:200]}"
+            for m in older[-30:])
+        sys_prompt = (
+            "You compress a conversation for memory. Output ONLY up to 5 short lines, "
+            "each 'TOPIC: ...', 'DECISION: ...' or 'OPEN_QUESTION: ...'. No prose, no "
+            "reasoning, no secrets, no code. If nothing recurs, output nothing.")
+        route_model = ""
+        try:
+            from core.model_router import ModelRole, model_for_role
+            route_model = model_for_role(ModelRole.FAST) or ""
+        except Exception:  # noqa: BLE001
+            route_model = getattr(settings, "fast_model", "") or ""
+        if not route_model:
+            return []
+        budget = TurnBudget(total_s=float(timeout))
+        timeouts = StageTimeouts(connect_s=5.0, first_token_s=float(timeout),
+                                 idle_s=8.0, total_s=float(timeout))
+        chunks: list[str] = []
+        try:
+            async for ch in chat_stream(
+                model=route_model,
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": convo}],
+                think=False, max_tokens=128, temperature=0.0, budget=budget,
+                timeouts=timeouts, ctx=int(getattr(settings, "fast_context", 2048)),
+                keep_alive=getattr(settings, "fast_keep_alive", "10m"),
+                cancellation=CancellationToken.from_event(None),
+                client=llm._get_native_http() if hasattr(llm, "_get_native_http") else None,
+            ):
+                if ch.content:
+                    chunks.append(ch.content)
+                if ch.done:
+                    break
+        except Exception:  # noqa: BLE001 — a proposer fault falls back to extractive
+            return []
+        return parse_proposed_items("".join(chunks))
+    return _proposer
+
+
+async def _idle_compaction_loop(llm) -> None:
+    """Bounded idle driver for the M58.6 compaction scheduler.
+
+    Wakes periodically, assembles a live conditions snapshot, and runs ONE compaction
+    pass only when every idle condition holds. Never blocks a turn (a turn preempts via
+    _run_turn), never raises into the loop, and stops the moment STOPPING begins.
+    """
+    from core.compaction_scheduler import (
+        build_conditions_from_runtime, get_compaction_scheduler)
+    from core.config import settings
+    from core.lifecycle import lifecycle
+    sched = get_compaction_scheduler()
+    if sched.proposer is None:
+        try:
+            sched.proposer = _make_compaction_proposer(llm)
+        except Exception:  # noqa: BLE001
+            sched.proposer = None
+    _ctx_budget = int(getattr(settings, "fast_context", 2048))
+    while True:
+        if lifecycle.is_stopping():
+            return
+        try:
+            await asyncio.sleep(45.0)
+        except asyncio.CancelledError:
+            return
+        if lifecycle.is_stopping():
+            return
+        try:
+            history = list(getattr(llm, "history", []) or [])
+            conds = build_conditions_from_runtime(history, context_budget=_ctx_budget)
+            if conds.eligible():
+                await sched.maybe_run(history, conds)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — idle work never crashes the runtime
+            logger.debug(f"COMPACTION: idle pass skipped ({type(exc).__name__})")
+
+
 async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = None) -> None:
     """
     Ejecuta un turno completo de conversación con el modelo Producer-Consumer.
@@ -203,6 +298,13 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         _barge.arm()
     except Exception:
         _barge = None
+    # V69 M58.6 — the active turn preempts any in-flight idle compaction immediately;
+    # the scheduler keeps its last valid digest and the FAST turn proceeds at once.
+    try:
+        from core.compaction_scheduler import get_compaction_scheduler
+        get_compaction_scheduler().preempt()
+    except Exception:
+        pass
     # The terminal state this turn will be recorded with. Pessimistic until the
     # stream proves otherwise, so a silent abort is never read as a completed turn.
     _turn_state = TurnState.FAILED
@@ -1600,6 +1702,18 @@ async def _main_async() -> None:
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"MCP: background start skipped: {exc}")
 
+    # V69 M58.6 — the idle-compaction driver. It runs the model-assisted digest pass
+    # ONLY when the host is idle (no active turn / HITL / effectful tool / answer TTS /
+    # high-priority embedding, lifecycle OPERATIONAL, power permits, context pressure
+    # high, cooldown expired). It yields immediately to an active turn (preempt) and is
+    # cancelled at shutdown. Never blocks TEXT_READY; never writes semantic memory.
+    if _lifecycle.can_start_task():
+        try:
+            asyncio.create_task(_idle_compaction_loop(llm), name="idle-compaction")
+            logger.info("COMPACTION: idle scheduler driver started (off turn path)")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"COMPACTION: idle driver start skipped: {exc}")
+
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
     # "exit cancel scope in a different task" error on Ctrl+C.
@@ -2899,6 +3013,13 @@ async def _main_async() -> None:
             get_barge_in_controller().shutdown()
         except Exception as e:  # noqa: BLE001
             logger.debug(f"SHUTDOWN: barge-in backend close suppressed: {e}")
+        # V69 M58.6 — cancel any in-flight idle compaction and await its teardown so
+        # no compaction task survives shutdown; the last valid digest is preserved.
+        try:
+            from core.compaction_scheduler import get_compaction_scheduler
+            await get_compaction_scheduler().cancel()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: compaction cancel suppressed: {e}")
 
         try:
             if aura_service is not None:
