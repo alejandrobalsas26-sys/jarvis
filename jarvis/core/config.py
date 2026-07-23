@@ -227,6 +227,112 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("JARVIS_FAST_MODEL", "fast_model"),
     )
 
+    # ── V69 M57 — adaptive response pipeline ──────────────────────────────────
+    # M55/M56 made the FIRST token fast; sustained generation stayed at ~5.2-6.4
+    # tok/s, so answer LENGTH became the dominant perceived latency. These bound
+    # the adaptive response contracts (M57.1/.2), the sentence-aware renderer
+    # (M57.3), progressive speech (M57.4) and the bounded context composer (M57.6).
+    # Every value is clamped: a typo must never unbound generation, speech or
+    # context on a 15W CPU host.
+    #   response_contracts_enabled   : master switch for contract-driven budgets
+    #   response_profile             : AUTO | BRIEF | STANDARD | DETAILED (session)
+    #   response_max_output_tokens   : hard num_predict ceiling for ANY contract
+    #   response_adaptive_budget     : let measured throughput move the budget
+    #   response_stream_flush_ms     : idle flush when no sentence boundary arrives
+    #   response_max_buffer_chars    : assembler buffer ceiling before a forced flush
+    #   response_progressive_tts     : speak completed sentences during generation
+    #   response_tts_backlog         : max pending spoken sentences for one answer
+    #   response_context_tokens      : live prompt budget (must fit fast_context)
+    #   response_digest_max_chars    : ceiling for the extractive conversation digest
+    response_contracts_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_CONTRACTS",
+                                      "response_contracts_enabled"),
+    )
+    response_profile: str = Field(
+        default="AUTO",
+        validation_alias=AliasChoices("JARVIS_RESPONSE_PROFILE", "response_profile"),
+    )
+    response_max_output_tokens: int = Field(
+        default=512,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_MAX_TOKENS",
+                                      "response_max_output_tokens"),
+    )
+    response_adaptive_budget: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_ADAPTIVE",
+                                      "response_adaptive_budget"),
+    )
+    response_stream_flush_ms: int = Field(
+        default=700,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_FLUSH_MS",
+                                      "response_stream_flush_ms"),
+    )
+    response_max_buffer_chars: int = Field(
+        default=400,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_BUFFER_CHARS",
+                                      "response_max_buffer_chars"),
+    )
+    response_progressive_tts: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("JARVIS_PROGRESSIVE_TTS",
+                                      "response_progressive_tts"),
+    )
+    response_tts_backlog: int = Field(
+        default=4,
+        validation_alias=AliasChoices("JARVIS_TTS_BACKLOG", "response_tts_backlog"),
+    )
+    response_context_tokens: int = Field(
+        default=1400,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_CONTEXT_TOKENS",
+                                      "response_context_tokens"),
+    )
+    response_digest_max_chars: int = Field(
+        default=900,
+        validation_alias=AliasChoices("JARVIS_RESPONSE_DIGEST_CHARS",
+                                      "response_digest_max_chars"),
+    )
+
+    @field_validator("response_profile")
+    @classmethod
+    def validate_response_profile(cls, v: str) -> str:
+        """Clamp, never raise — an unrecognized profile falls back to AUTO rather
+        than silently pinning the session to a verbosity nobody asked for."""
+        val = (v or "AUTO").strip().upper()
+        return val if val in {"AUTO", "BRIEF", "STANDARD", "DETAILED"} else "AUTO"
+
+    @field_validator("response_max_output_tokens")
+    @classmethod
+    def validate_response_max_tokens(cls, v: int) -> int:
+        # Upper bound = core.response_contract.HARD_MAX_OUTPUT_TOKENS. At ~6 tok/s
+        # even 1024 tokens is ~2.8 minutes, so this is already generous.
+        return max(32, min(int(v), 1024))
+
+    @field_validator("response_stream_flush_ms")
+    @classmethod
+    def validate_response_flush_ms(cls, v: int) -> int:
+        return max(100, min(int(v), 5000))
+
+    @field_validator("response_max_buffer_chars")
+    @classmethod
+    def validate_response_buffer_chars(cls, v: int) -> int:
+        return max(80, min(int(v), 4000))
+
+    @field_validator("response_tts_backlog")
+    @classmethod
+    def validate_response_tts_backlog(cls, v: int) -> int:
+        return max(1, min(int(v), 12))
+
+    @field_validator("response_context_tokens")
+    @classmethod
+    def validate_response_context_tokens(cls, v: int) -> int:
+        return max(256, min(int(v), 8192))
+
+    @field_validator("response_digest_max_chars")
+    @classmethod
+    def validate_response_digest_chars(cls, v: int) -> int:
+        return max(120, min(int(v), 4000))
+
     # ── V69 M56.4.1 — native FAST full-path prewarm ───────────────────────────
     # M55.1 warmed the DISPATCH path; the INFERENCE path stayed cold, so the first
     # real question still paid an 11-19s model activation. These control the bounded

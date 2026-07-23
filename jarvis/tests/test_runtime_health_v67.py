@@ -111,10 +111,14 @@ class TestShapeAndLive:
         # V69 M56.8 — residency (observed model residency, inference arbitration,
         # prewarm and power profile) EXTENDS the same surface; it is advisory (rank 0)
         # so an evicted model never degrades the overall verdict.
+        # V69 M57 — response_pipeline (contract selection, streaming, progressive
+        # speech, conversation context, interruption and output quality) EXTENDS the
+        # same surface rather than adding a second registry; it is advisory (rank 0)
+        # so a slow answer or a dropped utterance never degrades the overall verdict.
         assert names == {"collectors", "resource", "tasks", "inference",
                          "model_runtime", "spine", "verifier", "interactive",
                          "filesystem_watch", "fast_inference", "ollama_env",
-                         "residency"}
+                         "residency", "response_pipeline"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

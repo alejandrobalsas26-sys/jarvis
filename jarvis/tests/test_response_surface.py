@@ -99,7 +99,8 @@ class _CapturingTTS:
     def __init__(self):
         self.spoken: list[str] = []
 
-    async def speak_async(self, text: str, lang: str | None = None) -> None:
+    async def speak_async(self, text: str, lang: str | None = None, **kw) -> None:
+        # V69 M57.4 — accept the real API's keyword-only priority/coalesce_key.
         self.spoken.append(text)
 
 

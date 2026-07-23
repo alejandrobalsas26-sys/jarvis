@@ -39,7 +39,10 @@ class _FakeTTS:
     def __init__(self):
         self.spoken: list[tuple[str, str | None]] = []
 
-    async def speak_async(self, text: str, lang: str | None = None) -> None:
+    async def speak_async(self, text: str, lang: str | None = None, **kw) -> None:
+        # V69 M57.4 — the real TTS.speak_async takes keyword-only `priority` and
+        # `coalesce_key`; the progressive-speech path supplies both, so a double
+        # that refuses them silently stops speaking.
         self.spoken.append((text, lang))
 
 

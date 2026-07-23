@@ -1909,11 +1909,17 @@ class LLM:
             )
         return self._native_http
 
-    def _fast_system_prompt(self) -> str:
+    def _fast_system_prompt(self, shape=None, extra: str = "") -> str:
         """A LEAN system prompt for the native fast path. Deliberately NOT the full
         200-line tool/security manual: a smaller prompt prefills far faster on a CPU
         host AND keeps answers concise. Carries identity, host-clock grounding and
-        the active-language directive so continuity (M54.4/M54.8) is preserved."""
+        the active-language directive so continuity (M54.4/M54.8) is preserved.
+
+        V69 M57.1/.3.1 — when a :class:`~core.response_contract.ResponseShape` is
+        supplied, its bounded STYLE directive is appended. That directive is purely
+        stylistic (answer first, no preamble, how much structure is appropriate); it
+        never grants a tool, widens scope, or changes what is true.
+        """
         name = settings.assistant_name
         user = settings.user_name
         parts = [
@@ -1932,9 +1938,20 @@ class LLM:
             parts.append(self.language_context.directive())
         except Exception:
             pass
+        if shape is not None:
+            try:
+                parts.append(shape.style_directive())
+            except Exception:
+                pass
+        if extra:
+            # V69 M57.7 — the continuation block. It carries only DISPLAYED text
+            # plus a stylistic resume instruction; no hidden model state and no
+            # runtime error text ever reaches the model through it.
+            parts.append(extra)
         return "\n\n".join(parts)
 
-    async def _native_fast_stream(self, *, route, budget, timeouts, result):
+    async def _native_fast_stream(self, *, route, budget, timeouts, result,
+                                  gen=None, shape=None, continuation: str = ""):
         """Stream a DIRECT_FAST turn from native /api/chat with reasoning disabled.
 
         Yields ONLY content text — reasoning (a native ``thinking`` field) is dropped
@@ -1942,17 +1959,69 @@ class LLM:
         :class:`_NativeFastUnavailable` ONLY when the native transport fails BEFORE
         any content, so the caller can fall back cleanly; a mid-stream failure ends
         gracefully with the partial answer rather than double-answering.
+
+        V69 M57.2 — ``gen`` is the turn's
+        :class:`~core.generation_budget.GenerationBudget`. When present it supplies
+        num_predict / temperature / sampling AND the num_ctx, which is deliberately
+        the configured ``fast_context`` rather than ``_adaptive_ctx``'s shrunken
+        value: warming the runner at 2048 and then serving at 1024 makes Ollama
+        reload it (M56.4 measured 8 723 ms of load on an already-resident model), so
+        the prewarm's whole purpose is defeated by a "cheaper" per-turn context.
         """
         from core.ollama_native import (
             CancellationToken,
             NativeTransportError,
             chat_stream as _native_chat_stream,
         )
-        messages = [
-            {"role": "system", "content": self._fast_system_prompt()},
-            *self.history,
-        ]
-        _ctx = _adaptive_ctx(self.history, route.context)
+        # V69 M57.6 — the message list is COMPOSED, not concatenated. Sending the
+        # whole transcript every turn made prefill grow until the server dropped
+        # the oldest messages — and a server drops by POSITION, which means the
+        # security instructions at the front go first. The composer bounds the
+        # prompt with an explicit retention order instead.
+        _sys = self._fast_system_prompt(shape, extra=continuation)
+        _composed = None
+        try:
+            from core.context_composer import (
+                compose_context, context_cache_key, publish_context_metrics,
+                resolve_context_budget,
+            )
+            from core.conversation_digest import build_digest
+            _ctx_budget = resolve_context_budget(
+                settings=settings,
+                num_ctx=int(gen.num_ctx) if gen is not None else route.context)
+            _composed = compose_context(
+                system_prompt=_sys, history=self.history,
+                digest=build_digest(self.history),
+                token_budget=_ctx_budget,
+                language=self.language_context.active_language(),
+                cache_key=context_cache_key(
+                    model=route.model, role="fast", transport="native",
+                    num_ctx=int(gen.num_ctx) if gen is not None else route.context,
+                    system_prompt=_sys,
+                    language=self.language_context.active_language(),
+                    contract=getattr(getattr(shape, "contract", None), "value", ""),
+                ),
+            )
+            messages = _composed.messages
+            publish_context_metrics(_composed.snapshot())
+        except Exception as _cc_e:  # noqa: BLE001 — never break a turn on composition
+            logger.warning(f"CONTEXT_COMPOSER: skipped ({_cc_e})")
+            messages = [{"role": "system", "content": _sys}, *self.history]
+        result["context_tokens"] = getattr(_composed, "estimated_total_tokens", None)
+        if gen is not None:
+            _ctx = int(gen.num_ctx)
+            _max_tokens = int(gen.num_predict)
+            _temperature = float(gen.temperature)
+            _options_extra = gen.options()
+            _keep_alive = gen.keep_alive or route.keep_alive
+        else:
+            _ctx = _adaptive_ctx(self.history, route.context)
+            _max_tokens = route.max_tokens
+            _temperature = 0.3
+            _options_extra = None
+            _keep_alive = route.keep_alive
+        result["num_ctx"] = _ctx
+        result["num_predict"] = _max_tokens
         token = CancellationToken.from_event(
             getattr(_cancel_bus, "llm_stream_cancel", None)
         )
@@ -1969,14 +2038,15 @@ class LLM:
                 model=route.model,
                 messages=messages,
                 think=route.think,
-                max_tokens=route.max_tokens,
-                temperature=0.3,
+                max_tokens=_max_tokens,
+                temperature=_temperature,
                 budget=budget,
                 timeouts=timeouts,
                 cancellation=token,
                 ctx=_ctx,
-                keep_alive=route.keep_alive,
+                keep_alive=_keep_alive,
                 client=self._get_native_http(),
+                options_extra=_options_extra,
             ):
                 _chunks_received += 1
                 if token.cancelled or (
@@ -2021,7 +2091,8 @@ class LLM:
             result["infer_ms"] = round((_time.monotonic() - _infer_start) * 1000)
 
     def _finalize_native_turn(self, result: dict, budget, route, *, state: str,
-                              language: str | None) -> str | None:
+                              language: str | None, shape=None,
+                              question: str = "") -> str | None:
         """V69 M55.2 — the SINGLE idempotent finalizer for a native fast turn.
 
         Runs on every terminal state (COMPLETED / TIMED_OUT / CANCELLED / FAILED /
@@ -2039,9 +2110,26 @@ class LLM:
         result["final_state"] = state
         text = (result.get("text") or "").strip()
         status_msg: str | None = None
+        # V69 M57.2 — did generation stop because it ran out of CONTENT or out of
+        # BUDGET? Ollama answers this with done_reason="length"; a capped answer is
+        # not a completed explanation and must never be presented as one.
+        _capped = False
+        try:
+            from core.generation_budget import hit_generation_cap, truncation_note
+            _capped = bool(text) and hit_generation_cap(
+                result.get("done_reason"), result.get("eval_count"),
+                int(result.get("num_predict") or 0))
+        except Exception:  # noqa: BLE001
+            _capped = False
+        result["truncated_by_cap"] = _capped
         try:
             if state == "COMPLETED":
-                if text:
+                if text and _capped:
+                    # Truthful: the operator keeps everything generated, plus one
+                    # bounded line saying the budget cut it and how to continue.
+                    status_msg = truncation_note(language)
+                    self._close_turn_with_status(text + "\n\n" + status_msg)
+                elif text:
                     self._close_turn_with_status(text)      # append full answer
                 else:
                     # done/EOS but no content — keep history coherent, invite retry.
@@ -2074,6 +2162,54 @@ class LLM:
                         tokens_per_second=result.get("tokens_per_second"),
                         transport="native", think=route.think,
                     )
+        except Exception:
+            pass
+        # ── V69 M57.8 — deterministic quality checks over the finished artefact ──
+        # No model is called: this measures properties of the OUTPUT (repetition,
+        # an unclosed fence, a leaked reasoning marker), never whether the answer
+        # is correct. Everything the operator already saw stays exactly as it was;
+        # only a truthful status line may be added.
+        try:
+            if text:
+                from core.response_quality import (
+                    evaluate_answer, record_report, status_note,
+                )
+                _report = evaluate_answer(
+                    text, question=question, shape=shape, language=(language or "es"),
+                    truncated_by_cap=bool(result.get("truncated_by_cap")),
+                    pre_content=False)
+                record_report(_report)
+                result["quality"] = _report.snapshot()
+                if status_msg is None:
+                    _note = status_note(_report, language=(language or "es"))
+                    if _note and _note not in text:
+                        status_msg = _note
+        except Exception:
+            pass
+        # ── V69 M57.7 — capture what can be continued, from DISPLAYED text only ──
+        try:
+            from core.continuation import build_state, set_continuation
+            set_continuation(build_state(
+                turn_id=int(getattr(getattr(self, "_last_turn_handle", None),
+                                    "turn_id", 0) or 0),
+                contract=getattr(getattr(shape, "contract", None), "value", ""),
+                terminal_state=state, language=(language or "es"),
+                displayed_text=text, question=question,
+                truncated_by_cap=bool(result.get("truncated_by_cap")),
+            ))
+        except Exception:
+            pass
+        # V69 M57.8.1 — fold this turn's OBSERVED throughput into the rolling
+        # estimate that sizes the next turn's budget. Only a completed generation
+        # is a valid sample: a cancelled or timed-out stream measures the deadline,
+        # not the host.
+        try:
+            if state == "COMPLETED":
+                from core.response_runtime import get_response_runtime
+                get_response_runtime().record_throughput(
+                    tokens_per_second=result.get("tokens_per_second"),
+                    first_token_ms=budget.snapshot().get("first_token_ms"),
+                )
         except Exception:
             pass
         try:
@@ -2270,6 +2406,94 @@ class LLM:
             logger.warning(f"FAST_ROUTE: skipped ({_fr_e})")
             _fast_route = None
 
+        # ── V69 M57.1/.2 — adaptive response contract + generation budget ─────
+        # Computed ONCE per turn from signals already resolved above (turn policy,
+        # routed role, active language, session profile, power profile). It decides
+        # only HOW to answer — never which model, which tools, or what is allowed.
+        # ── V69 M57.7 — continuation / expansion of the PREVIOUS answer ───────
+        # Deterministic: no model decides whether this is a continuation. A turn
+        # that asks to continue an answer that does not exist (or that changed
+        # topic) is REFUSED here, in the operator's language, with zero generation.
+        _cont_directive = ""
+        _cont_recovering = False
+        _cont_active = False
+        try:
+            from core.continuation import (
+                ContinuationIntent, ContinuationRefusal, build_directive,
+                classify_continuation, describe_refusal, evaluate, get_continuation,
+            )
+            _cont_intent, _cont_ordinal = classify_continuation(user_message)
+            if _cont_intent is not ContinuationIntent.NONE:
+                _cont_state = get_continuation()
+                _refusal = evaluate(_cont_intent, _cont_state,
+                                    user_message=user_message)
+                _lang_now = self.language_context.active_language()
+                if _refusal is not ContinuationRefusal.OK:
+                    if _refusal is ContinuationRefusal.NO_PREVIOUS_ANSWER:
+                        _msg = describe_refusal(_refusal, language=_lang_now)
+                        logger.info(f"CONTINUATION: refused ({_refusal.value})")
+                        self.history.append({"role": "assistant", "content": _msg})
+                        yield _msg
+                        unregister_operation("llm_stream")
+                        return
+                    # A topic change is not an error — it just clears the cursor and
+                    # the turn proceeds as an ordinary new question.
+                    from core.continuation import clear_continuation
+                    clear_continuation()
+                elif _cont_state is not None:
+                    _cont_directive = build_directive(
+                        _cont_intent, _cont_state, language=_lang_now,
+                        ordinal=_cont_ordinal)
+                    _cont_active = True
+                    _cont_recovering = (_cont_intent is ContinuationIntent.CONTINUE
+                                        and _cont_state.terminal_state
+                                        not in ("COMPLETED", ""))
+                    logger.debug(
+                        "CONTINUATION: intent={} recovering={} boundary_chars={}".format(
+                            _cont_intent.value, _cont_recovering,
+                            len(_cont_state.last_boundary)))
+        except Exception as _ct_e:  # noqa: BLE001 — never break a turn on this
+            logger.warning(f"CONTINUATION: skipped ({_ct_e})")
+
+        _shape = None
+        _gen = None
+        try:
+            if bool(getattr(settings, "response_contracts_enabled", True)):
+                from core.generation_budget import budget_for_shape
+                from core.response_contract import select_contract
+                from core.response_runtime import get_response_runtime
+                from core.runtime_profile import get_runtime_profile
+                _rr = get_response_runtime()
+                try:
+                    _power = get_runtime_profile().policy()
+                except Exception:  # noqa: BLE001 — power detection is advisory
+                    _power = None
+                _shape = select_contract(
+                    user_message, turn_policy=_turn_policy, model_decision=decision,
+                    language=self.language_context.active_language(),
+                    session_profile=_rr.profile, power_policy=_power,
+                    continuation=_cont_active, recovering=_cont_recovering,
+                )
+                _gen = budget_for_shape(
+                    _shape, settings=settings,
+                    throughput=(_rr.throughput
+                                if getattr(settings, "response_adaptive_budget", True)
+                                else None),
+                    remaining_s=_budget.remaining_s(),
+                    total_turn_s=_budget.total_s,
+                )
+                self._last_shape, self._last_gen = _shape, _gen
+                logger.debug(
+                    "RESPONSE_CONTRACT: contract={} reason={} tokens={} ctx={} "
+                    "lang={} adapt={}".format(
+                        _shape.contract.value, _shape.reason.value, _gen.num_predict,
+                        _gen.num_ctx, _shape.language, _gen.adjustment_reason,
+                    )
+                )
+        except Exception as _rc_e:  # noqa: BLE001 — never break a turn on shaping
+            logger.warning(f"RESPONSE_CONTRACT: skipped ({_rc_e})")
+            _shape, _gen = None, None
+
         if _fast_route is not None and _fast_route.use_native:
             # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
             # transport-selected (classification + language + route). Measured at the
@@ -2302,7 +2526,8 @@ class LLM:
                 try:
                     async for _piece in self._native_fast_stream(
                         route=_fast_route, budget=_budget, timeouts=_fast_stage_t,
-                        result=_fast_result,
+                        result=_fast_result, gen=_gen, shape=_shape,
+                        continuation=_cont_directive,
                     ):
                         yield _piece
                 except _NativeFastUnavailable as _nfu:
@@ -2322,7 +2547,7 @@ class LLM:
                     self._note_fast_readiness("note_timeout", _tt.stage)
                     _status = self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state="TIMED_OUT", language=_fast_lang)
+                        shape=_shape, question=user_message, state="TIMED_OUT", language=_fast_lang)
                     if _status:
                         yield _status
                     unregister_operation("llm_stream")
@@ -2332,7 +2557,7 @@ class LLM:
                     self._note_fast_readiness("note_cancellation")
                     self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state="CANCELLED", language=_fast_lang)
+                        shape=_shape, question=user_message, state="CANCELLED", language=_fast_lang)
                     try:
                         await self._broadcast_cancel_event()
                     except Exception:
@@ -2345,7 +2570,7 @@ class LLM:
                         else "FAILED")
                     _status = self._finalize_native_turn(
                         _fast_result, _budget, _fast_route,
-                        state=_state, language=_fast_lang)
+                        shape=_shape, question=user_message, state=_state, language=_fast_lang)
                     if _status:
                         yield _status
                     unregister_operation("llm_stream")
@@ -2356,6 +2581,7 @@ class LLM:
                 self._note_fast_readiness("note_cancellation")
                 self._finalize_native_turn(
                     _fast_result, _budget, _fast_route,
+                    shape=_shape, question=user_message,
                     state="CANCELLED", language=_fast_lang)
                 raise
 
@@ -2464,6 +2690,21 @@ class LLM:
             except Exception:
                 _base_ctx = 4096
             _ctx = _adaptive_ctx(self.history, _base_ctx)
+            # V69 M57.2 — prewarm parity on the FALLBACK path too. When /v1 is
+            # serving the SAME model the boot prewarm warmed (a fast-eligible turn
+            # that fell back because the native transport was unavailable), an
+            # adaptive ctx makes Ollama reload the runner for nothing. Only the
+            # warmed model is pinned; DEEP/CODER keep the adaptive value.
+            try:
+                _fast_model = (getattr(settings, "fast_model", "") or "").strip()
+                if not _fast_model:
+                    from core.model_router import ModelRole, model_for_role
+                    _fast_model = model_for_role(ModelRole.FAST) or ""
+                if _fast_model and _routed_model == _fast_model:
+                    from core.generation_budget import resolve_live_fast_context
+                    _ctx = resolve_live_fast_context(settings)
+            except Exception:  # noqa: BLE001 — never break a turn over a ctx hint
+                pass
             logger.debug(
                 f"LLM: {_routed_model} "
                 f"(role={decision.role.value}, score={decision.complexity:.2f}, "
@@ -2474,6 +2715,21 @@ class LLM:
             # question like "POO" can never be routed to query_knowledge; every other
             # tool (and its own downstream gate) is unchanged.
             _turn_tools = _turn_policy.filter_tools(TOOLS)
+            # V69 M57.2 — the /v1 path had NO generation cap at all: its only bound
+            # was wall-clock, so a rambling answer burned the whole turn budget. It
+            # now inherits the contract's CEILING (not the tighter adapted base),
+            # and ONLY when this leg offers no tools — a num_predict that lands
+            # mid-tool-call would truncate the JSON and break the agentic loop,
+            # which is a worse failure than a long answer.
+            _v1_options: dict = {"num_ctx": _ctx}
+            try:
+                if _shape is not None and not _turn_tools:
+                    _v1_options["num_predict"] = int(min(
+                        _shape.max_output_tokens,
+                        int(getattr(settings, "response_max_output_tokens", 512)),
+                    ))
+            except Exception:  # noqa: BLE001
+                _v1_options = {"num_ctx": _ctx}
             # V69 M54.1.5/.6 — the single `await` that hung the live run for
             # minutes. It covers Ollama's model swap (unload nomic, load qwen3:8b
             # off disk, prefill) and does not return until the FIRST SSE chunk. It
@@ -2506,7 +2762,7 @@ class LLM:
                         messages=messages_for_api,
                         tools=_turn_tools,
                         stream=True,
-                        extra_body={"options": {"num_ctx": _ctx}},
+                        extra_body={"options": _v1_options},
                     ),
                     timeout=_first_token_budget,
                 )

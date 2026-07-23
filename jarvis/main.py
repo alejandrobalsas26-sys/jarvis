@@ -18,8 +18,8 @@ Uso:
 """
 
 import os
-import re
 import sys
+import time
 import asyncio
 import argparse
 import warnings
@@ -113,24 +113,12 @@ def _is_windows_admin() -> bool:
         return False
 
 
-# Regex para detectar final de oración — se usa en el sentence splitter
-_SENTENCE_END_RE = re.compile(r'(?<=[.!?;:])\s+')
-
-
-def _split_sentences(buffer: str) -> tuple[list[str], str]:
-    """
-    Divide el buffer en oraciones completas y el resto pendiente.
-
-    Returns:
-        (oraciones_completas, resto_sin_terminar)
-    """
-    parts = _SENTENCE_END_RE.split(buffer)
-    if len(parts) <= 1:
-        return [], buffer
-    # Si el buffer termina con puntuación, todas las partes están completas
-    if re.search(r'[.!?;:]\s*$', buffer):
-        return [p for p in parts if p.strip()], ""
-    return [p for p in parts[:-1] if p.strip()], parts[-1]
+# V69 M57.3 — the old `re.compile(r'(?<=[.!?;:])\s+')` sentence splitter lived here.
+# It split "3.14", "Dr. House", "https://a.co/b.c", "10:30" and every line of a code
+# block, and it ran on a buffer that was ALSO being printed one native delta at a
+# time. Both jobs now belong to core.stream_assembler, which understands enough
+# structure to emit readable fragments and guarantees exact ordering with no
+# duplication. Nothing here re-implements segmentation.
 
 
 async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = None) -> None:
@@ -146,7 +134,7 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     preserva el comportamiento previo (sin cambio de voz); usado por el modo
     texto, que no tiene una fuente de detección de idioma.
     """
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue()
 
     # V69 M54.1.5 — the budget starts HERE: the instant the user's message enters
     # the turn, before policy classification, routing, lock waiting or any model
@@ -183,14 +171,102 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         _console = None
         ConsoleChannel = None
 
+    # V69 M57.3/.4 — the response pipeline for THIS turn: one bounded assembler
+    # turning native deltas into readable fragments, and one pure planner turning
+    # eligible fragments into bounded speech. Neither owns a thread; the existing
+    # ConsoleCoordinator and TTS queue remain the only writers.
+    from core.speech_stream import (
+        SpeechPlanner, build_planner, cancel_answer_speech, pending_depth,
+        publish_speech_metrics,
+    )
+    from core.stream_assembler import FragmentKind, build_assembler
+    _t0 = time.monotonic()
+    _asm = build_assembler(started_at=_t0)
+    from core.response_runtime import TurnState, get_response_runtime
+    _rr = None
+    _handle = None
+    try:
+        _rr = get_response_runtime()
+        _handle = _rr.begin_turn(language=_active_language(llm) or "es")
+    except Exception:
+        _rr, _handle = None, None
+    _turn_id = getattr(_handle, "turn_id", 0)
+    # The terminal state this turn will be recorded with. Pessimistic until the
+    # stream proves otherwise, so a silent abort is never read as a completed turn.
+    _turn_state = TurnState.FAILED
+    try:
+        _planner: SpeechPlanner = build_planner(
+            shape=getattr(llm, "_last_shape", None),
+            muted=bool(getattr(_rr, "muted", False)),
+            turn_id=_turn_id, started_at=_t0)
+    except Exception:
+        _planner = None
+
     def _emit_chunk(chunk: str) -> None:
         if _console is not None:
             _console.post(chunk, ConsoleChannel.ASSISTANT)
         else:
             print(chunk, end="", flush=True)
 
+    def _emit_fragment(frag) -> None:
+        """Render ONE assembled fragment. Late output from a replaced turn is
+        refused here — this is the only place answer text reaches the screen."""
+        if _rr is not None and not _rr.accepts(_turn_id):
+            return
+        _emit_chunk(frag.text)
+        if _handle is not None:
+            _handle.chars_shown += len(frag.text)
+            if _handle.first_fragment_ms is None:
+                _handle.first_fragment_ms = round((time.monotonic() - _t0) * 1000, 1)
+            if (frag.kind is FragmentKind.SENTENCE
+                    and _handle.first_sentence_ms is None):
+                _handle.first_sentence_ms = round((time.monotonic() - _t0) * 1000, 1)
+
+    async def _speak_fragment(frag, *, final: bool = False) -> None:
+        """Queue this fragment's speech, if the contract and backlog allow it.
+
+        Speech NEVER gates the text: every failure path here is swallowed so the
+        answer and the prompt are unaffected (M57.4.1).
+        """
+        if _planner is None:
+            return
+        try:
+            for instr in _planner.plan(frag, pending=pending_depth(tts),
+                                       now=time.monotonic(), final=final):
+                await tts.speak_async(instr.text, lang=lang,
+                                      priority=instr.priority,
+                                      coalesce_key=instr.coalesce_key)
+                if _handle is not None and _handle.first_utterance_ms is None:
+                    _handle.first_utterance_ms = round(
+                        (time.monotonic() - _t0) * 1000, 1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A TTS fault must never break the turn or block prompt restoration —
+            # but it must be DIAGNOSABLE: name the exception type so a silent
+            # signature or engine failure is visible in the log instead of the
+            # answer simply going quiet.
+            logger.debug(
+                f"TTS: progressive speech failed ({type(exc).__name__}); "
+                "continuing turn")
+
+    async def _idle_flusher() -> None:
+        """Emit buffered text when the model goes quiet mid-sentence.
+
+        This MUST be a timer and not a post-chunk check: calling ``tick()`` right
+        after ``push()`` can never fire, because the push just reset the idle clock.
+        The gap is exactly when the operator is staring at a frozen half-sentence,
+        so the flush has to happen DURING it. Bounded, and always cancelled by the
+        producer's finally — no orphan task survives a turn.
+        """
+        interval = max(0.1, _asm.idle_flush_s / 2.0)
+        while True:
+            await asyncio.sleep(interval)
+            for frag in _asm.tick(now=time.monotonic()):
+                _emit_fragment(frag)
+                await queue.put(frag)
+
     async def producer() -> None:
-        buffer = ""
         if _console is not None:
             _console.begin_stream()
         # V69 M54.1.5 — THE outer boundary. This used to be a bare
@@ -203,42 +279,53 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         # async generator via aclose() so no late chunk and no orphan inference
         # survive the deadline.
         agen = llm.chat_stream(user_input)
-        async for chunk in bounded_stream(agen, budget=budget, timeouts=stage_t):
-            if _timed_out["v"]:
-                break            # never emit a chunk that arrived after the bound
-            _emit_chunk(chunk)
-            buffer += chunk
-            sentences, buffer = _split_sentences(buffer)
-            for sentence in sentences:
-                await queue.put(sentence)
-        # Volcar el remanente final (puede no tener puntuación al final)
-        if buffer.strip() and not _timed_out["v"]:
-            await queue.put(buffer.strip())
+        flusher = asyncio.ensure_future(_idle_flusher())
+        try:
+            async for chunk in bounded_stream(agen, budget=budget, timeouts=stage_t):
+                if _timed_out["v"]:
+                    break        # never emit a chunk that arrived after the bound
+                # V69 M57.3 — deltas go through the assembler, not straight to the
+                # console. A native chunk is a token, not a readable unit: printing
+                # it verbatim floods a queue whose ASSISTANT channel is droppable,
+                # and splitting it on `[.!?;:]\s+` broke decimals, abbreviations,
+                # clock times and every line of a code block.
+                for frag in _asm.push(chunk, now=time.monotonic()):
+                    _emit_fragment(frag)
+                    await queue.put(frag)
+        finally:
+            flusher.cancel()
+            try:
+                await flusher
+            except (asyncio.CancelledError, Exception):
+                pass
+        # Terminal flush: whatever is still buffered is emitted exactly once.
+        if not _timed_out["v"]:
+            for frag in _asm.finish(now=time.monotonic()):
+                _emit_fragment(frag)
+                await queue.put(frag)
+        else:
+            _asm.finish(now=time.monotonic())
         if _console is not None:
             _console.end_stream()
         await queue.put(None)  # sentinel: indica al consumer que terminó
 
     async def consumer() -> None:
-        # V63 M6 — the spoken channel is the VOICE surface: strip Markdown so TTS
-        # reads naturally instead of vocalizing `backticks`/**asterisks**/tables.
-        # The console (producer's print above) keeps the full TEXT surface — one
-        # reasoning result, rendered per surface, never re-reasoned.
-        from core.response_surface import ResponseSurface, render
+        # V69 M57.4 — progressive speech. The planner decides eligibility (prose
+        # only, no code, no Markdown syntax, bounded utterance length) and the
+        # backlog policy; this coroutine only applies the decision and always
+        # drains to the sentinel so the turn can finalize even if speech fails.
+        pending_frag = None
         while True:
-            sentence = await queue.get()
-            if sentence is None:
+            frag = await queue.get()
+            if frag is None:
+                if pending_frag is not None:
+                    await _speak_fragment(pending_frag, final=True)
                 break
-            spoken = render(sentence, ResponseSurface.VOICE)
-            if spoken:
-                # V69 M55.2.2 — a TTS fault must NEVER break the turn or block the
-                # prompt from being restored. Drop the utterance and keep draining so
-                # the producer's sentinel is always consumed and the turn finalizes.
-                try:
-                    await tts.speak_async(spoken, lang=lang)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.debug("TTS: speak_async failed; continuing turn")
+            # One fragment of lookahead, so the LAST fragment of the answer can be
+            # marked as the conclusion that survives speech backpressure.
+            if pending_frag is not None:
+                await _speak_fragment(pending_frag)
+            pending_frag = frag
 
     if _console is not None:
         _console.post(f"\n[{name}] ", ConsoleChannel.ASSISTANT)
@@ -252,8 +339,10 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     _turn_task = asyncio.ensure_future(asyncio.gather(producer(), consumer()))
     try:
         await asyncio.wait_for(_turn_task, timeout=budget.remaining_s())
+        _turn_state = TurnState.COMPLETED
     except (asyncio.TimeoutError, TimeoutError):
         _timed_out["v"] = True
+        _turn_state = TurnState.TIMED_OUT
         budget.timeout_stage = budget.timeout_stage or "total"
         _turn_task.cancel()
         try:
@@ -262,9 +351,12 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
             pass
         budget.cancel_success = _turn_task.done()
         # Drop anything the TTS consumer had not spoken yet: a stale answer must
-        # never be narrated after the operator has control back.
+        # never be narrated after the operator has control back. M57.4 raised the
+        # assistant's own sentences to HIGH/CRITICAL so cancel_boot_narration()
+        # (which only drops below HIGH) no longer reaches them — this turn's speech
+        # is cancelled explicitly instead.
         try:
-            tts.cancel_boot_narration()
+            cancel_answer_speech(tts)
         except Exception:
             pass
         _msg = _turn_timeout_message(_active_language(llm))
@@ -275,10 +367,38 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         )
         _emit_chunk("\n" + _msg)
     except asyncio.CancelledError:
+        # V69 M57.5 — an outer cancellation is either shutdown or the operator
+        # taking control back. Those are DIFFERENT terminal states and must not be
+        # conflated: a shutdown cancel is not an interrupted answer the operator
+        # can continue. The lifecycle is the authority on which one happened.
+        _stopping = False
+        try:
+            from core.lifecycle import lifecycle as _lc
+            _stopping = bool(_lc.is_stopping())
+        except Exception:
+            _stopping = False
+        _turn_state = (TurnState.CANCELLED_ON_SHUTDOWN if _stopping
+                       else TurnState.INTERRUPTED_BY_OPERATOR)
+        try:
+            cancel_answer_speech(tts)
+        except Exception:
+            pass
         _turn_task.cancel()
         raise
     finally:
         record_turn(budget.snapshot())
+        # V69 M57 — close the turn truthfully and publish bounded, content-free
+        # pipeline metrics. Prompt restoration NEVER waits on speech: nothing here
+        # awaits the TTS queue.
+        try:
+            if _rr is not None:
+                _rr.end_turn(_turn_state)
+            publish_speech_metrics({
+                **(_planner.snapshot() if _planner is not None else {}),
+                "stream": _asm.snapshot(),
+            })
+        except Exception:
+            pass
 
     if _console is not None:
         _console.post("\n", ConsoleChannel.ASSISTANT)
@@ -406,9 +526,68 @@ async def _handle_residency_command(user_input: str) -> bool:
     return True
 
 
+_CONTINUE_PHRASE = {"es": "continúa", "en": "continue"}
+
+
+async def _apply_response_command(cmd, llm, tts) -> None:
+    """Apply ONE parsed response-pipeline command. Bounded and never raising.
+
+    Read-only commands render a panel; the rest flip a single in-process session
+    value or cancel the ACTIVE turn. Nothing here touches the host, the model, the
+    Ollama posture, the filesystem or any authorization state.
+    """
+    from core.response_commands import ResponseCommand, describe
+    from core.response_runtime import TurnState, get_response_runtime
+    from core.response_status import render_panel
+    from core.speech_stream import cancel_answer_speech
+
+    language = _active_language(llm)
+    if cmd.read_only:
+        _console_emit(render_panel(cmd.command))
+        return
+    rr = get_response_runtime()
+    profile = cmd.profile_value()
+    if profile is not None:
+        rr.set_profile(profile)
+        _console_emit(describe(cmd.command, language=language))
+        return
+    if cmd.command in (ResponseCommand.MUTE, ResponseCommand.UNMUTE):
+        muted = cmd.command is ResponseCommand.MUTE
+        rr.set_muted(muted)
+        if muted:
+            try:
+                cancel_answer_speech(tts)
+            except Exception:
+                pass
+        _console_emit(describe(cmd.command, language=language))
+        return
+    if cmd.command is ResponseCommand.STOP:
+        # V69 M57.5 — operator barge-in. Text input is line-submitted, so this is
+        # the supported form: cancel whatever is still generating or speaking, mark
+        # the turn INTERRUPTED_BY_OPERATOR (distinct from a shutdown cancel), and
+        # give the prompt straight back. No raw-keystroke backend is assumed.
+        active = rr.current is not None and rr.current.is_active()
+        t0 = time.monotonic()
+        try:
+            from core.cancel_bus import cancel_llm_only
+            cancel_llm_only()
+        except Exception:
+            pass
+        try:
+            cancel_answer_speech(tts)
+        except Exception:
+            pass
+        if active:
+            rr.end_turn(TurnState.INTERRUPTED_BY_OPERATOR)
+        rr.note_cancellation_latency((time.monotonic() - t0) * 1000.0)
+        _console_emit(describe(cmd.command, language=language, active=active))
+        return
+
+
 async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
     from core.mode_commands import parse_mode_command, describe_mode
+    from core.response_commands import parse_response_command
     from core.lifecycle import lifecycle
     try:
         from core.console import get_console
@@ -480,6 +659,19 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             if result.stderr:
                 print(result.stderr)
             continue
+
+        # V69 M57.5/M57.9 — response-pipeline commands. EXACT-match allowlist: the
+        # whole line must be a known alias, so "/stop the scan" stays an ordinary
+        # turn. Read-only panels and bounded session flips only — never the host.
+        # /continue is deliberately NOT handled here: it is a conversational intent
+        # that must reach the model with continuation context (M57.7).
+        _resp_cmd = parse_response_command(user_input)
+        if _resp_cmd is not None:
+            if _resp_cmd.conversational:
+                user_input = _CONTINUE_PHRASE.get(_active_language(llm), "continúa")
+            else:
+                await _apply_response_command(_resp_cmd, llm, tts)
+                continue
 
         # V69 M56.2/M56.8 — Ollama posture + residency operator commands. TEXT ONLY and
         # deterministically parsed: the six verbs take NO arguments, so no variable,
