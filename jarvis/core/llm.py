@@ -1949,6 +1949,64 @@ class LLM:
             host_time_line=host_line, continuation=extra or "",
         )
 
+    def _fast_prompt_manifest(self, *, route, num_ctx: int, shape=None):
+        """Build the content-free prompt manifest for the current DIRECT_FAST turn.
+
+        DIRECT_FAST is tool-free, so the tool-schema identity is the empty-schema
+        fingerprint. Authority/scope on this path are the session defaults (the FAST
+        path never runs an effectful tool), carried only for the compatibility key.
+        """
+        from core.prompt_manifest import build_manifest
+        from core.tool_schema import EMPTY_TOOL_SCHEMA_FINGERPRINT
+        lang_directive = ""
+        try:
+            lang_directive = self.language_context.directive()
+        except Exception:  # noqa: BLE001
+            lang_directive = ""
+        language = "es"
+        try:
+            language = self.language_context.active_language() or "es"
+        except Exception:  # noqa: BLE001
+            language = "es"
+        return build_manifest(
+            model=route.model, transport="native", think=route.think,
+            num_ctx=int(num_ctx), language=language, language_directive=lang_directive,
+            authority_mode="STANDARD", scope_fingerprint="",
+            tool_schema_fingerprint=EMPTY_TOOL_SCHEMA_FINGERPRINT, shape=shape,
+        )
+
+    def _observe_prefix(self, result: dict, route, language, shape) -> None:
+        """Record one native turn's observable prefill evidence (M58.5). Content-free.
+
+        Publishes the manifest fingerprints and the classified cache state for the
+        advisory runtime-health subsystem. Never stores prompt or answer text.
+        """
+        from core.prefix_cache import get_prefix_cache_observer
+        from core.prompt_manifest import publish_manifest_metrics
+        manifest = self._fast_prompt_manifest(
+            route=route, num_ctx=int(result.get("num_ctx") or route.context),
+            shape=shape)
+        identity = manifest.compatibility_identity()
+        warmed = None
+        try:
+            from core.contract_family import get_family_prewarm
+            warmed = get_family_prewarm().warmed_identity()
+        except Exception:  # noqa: BLE001 — family prewarm optional / not yet warmed
+            warmed = None
+        state = get_prefix_cache_observer().classify(
+            compatibility_identity=identity,
+            prompt_eval_count=result.get("prompt_eval_count"),
+            prompt_eval_ms=result.get("prompt_eval_ms"),
+            load_ms=result.get("load_ms"),
+            first_content_ms=result.get("first_content_ms"),
+            warmed_identity=warmed,
+        )
+        result["cache_state"] = getattr(state, "value", str(state))
+        try:
+            publish_manifest_metrics(manifest.snapshot())
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _native_fast_stream(self, *, route, budget, timeouts, result,
                                   gen=None, shape=None, continuation: str = ""):
         """Stream a DIRECT_FAST turn from native /api/chat with reasoning disabled.
@@ -2057,6 +2115,11 @@ class LLM:
                     return
                 if ch.content:
                     chunks.append(ch.content)
+                    # V69 M58.5 — time to first CONTENT token (observable prefix
+                    # evidence; content-free). Captured once, before yielding.
+                    if result.get("first_content_ms") is None:
+                        result["first_content_ms"] = round(
+                            (_time.monotonic() - _infer_start) * 1000.0, 1)
                     # Capture the partial BEFORE yielding: if the outer turn-level
                     # deadline aclose()s us at the yield, the finalizer must still see
                     # everything shown so far (an `async for` does not close the inner
@@ -2068,6 +2131,15 @@ class LLM:
                     result["done_reason"] = ch.done_reason
                     result["tokens_per_second"] = ch.tokens_per_second()
                     result["eval_count"] = ch.eval_count
+                    # V69 M58.5 — observable prefill evidence for the prefix-cache
+                    # observer. NEVER user text: prefill token COUNT + durations only.
+                    result["prompt_eval_count"] = ch.prompt_eval_count
+                    if ch.prompt_eval_duration is not None:
+                        result["prompt_eval_ms"] = round(
+                            ch.prompt_eval_duration / 1e6, 1)
+                    _load_s = ch.load_seconds()
+                    if _load_s is not None:
+                        result["load_ms"] = round(_load_s * 1000.0, 1)
             # Clean end-of-stream. A `done` event OR content that streamed to a clean
             # StopAsyncIteration is COMPLETED (valid EOS); a stream that produced nothing
             # at all is FAILED (never surfaced as a successful empty answer).
@@ -2210,6 +2282,13 @@ class LLM:
                     first_token_ms=budget.snapshot().get("first_token_ms"),
                 )
         except Exception:
+            pass
+        # V69 M58.5 — fold the observable prefill evidence into the prefix-cache
+        # observer. Content-free (prompt_eval count/durations only); it classifies
+        # reuse WITHOUT ever inferring it from model residency alone.
+        try:
+            self._observe_prefix(result, route, language, shape)
+        except Exception:  # noqa: BLE001 — cache observation never breaks a turn
             pass
         try:
             if state in ("CANCELLED", "TIMED_OUT"):
