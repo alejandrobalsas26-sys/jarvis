@@ -123,15 +123,38 @@ def test_num_ctx_is_stable_across_contracts(monkeypatch):
     assert len(seen) == 1, "num_ctx must not vary per turn on the warmed FAST path"
 
 
-# ── style directive ───────────────────────────────────────────────────────────
-def test_style_directive_reaches_the_system_prompt(monkeypatch):
+# ── contract delta (V69 M58.3: replaces the M57 prose style tail) ─────────────
+def test_contract_delta_reaches_the_system_prompt(monkeypatch):
+    # M58: the FAST system prompt carries a COMPACT, machine-readable contract delta
+    # instead of the M57 natural-language style paragraph. The stable prefix comes
+    # first (byte-reusable) and the delta names the selected contract.
     calls: dict = {}
     _install_native(monkeypatch, calls)
     _turn("como saco la raiz cuadrada de algo", calls)
     system = calls["kw"]["messages"][0]
     assert system["role"] == "system"
-    assert "ESTILO" in system["content"]
-    assert "primera frase" in system["content"]
+    content = system["content"]
+    assert "[RESPONSE_CONTRACT]" in content
+    assert "contract=BRIEF" in content
+    # The stable prefix precedes the delta so the reusable region is a byte-prefix.
+    from core.prompt_manifest import stable_core_prefix
+    assert content.startswith(stable_core_prefix().split("\n\n", 1)[0])
+    assert content.index("local AI assistant") < content.index("[RESPONSE_CONTRACT]")
+
+
+def test_contract_delta_cannot_grant_tools_or_authority(monkeypatch):
+    # A delta is presentation only: no permission/tool/authority/scope vocabulary.
+    calls: dict = {}
+    _install_native(monkeypatch, calls)
+    _turn("como saco la raiz cuadrada de algo", calls)
+    content = calls["kw"]["messages"][0]["content"]
+    lo = content.lower()
+    delta = content[content.index("[RESPONSE_CONTRACT]"):]
+    dl = delta.lower()
+    for banned in ("authority", "scope", "tool", "permission", "risk", "nato"):
+        assert banned not in dl, f"delta must not carry {banned!r}"
+    assert "host clock" in lo  # the dynamic clock moved to the tail, after the delta
+    assert lo.index("[response_contract]") < lo.index("host clock")
 
 
 def test_system_prompt_never_leaks_reasoning_or_tool_vocabulary(monkeypatch):

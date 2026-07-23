@@ -115,10 +115,14 @@ class TestShapeAndLive:
         # speech, conversation context, interruption and output quality) EXTENDS the
         # same surface rather than adding a second registry; it is advisory (rank 0)
         # so a slow answer or a dropped utterance never degrades the overall verdict.
+        # V69 M58.9 — prompt_cache (prompt manifest, prefix reuse, family prewarm,
+        # idle compaction, tool bounds and active-console barge-in) EXTENDS the same
+        # surface; also advisory (rank 0) so a first-use prefill cost, a cold prefix or
+        # a COMMAND_ONLY barge-in mode never degrades the overall verdict.
         assert names == {"collectors", "resource", "tasks", "inference",
                          "model_runtime", "spine", "verifier", "interactive",
                          "filesystem_watch", "fast_inference", "ollama_env",
-                         "residency", "response_pipeline"}
+                         "residency", "response_pipeline", "prompt_cache"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

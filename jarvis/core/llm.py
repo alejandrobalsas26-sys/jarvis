@@ -1915,40 +1915,97 @@ class LLM:
         host AND keeps answers concise. Carries identity, host-clock grounding and
         the active-language directive so continuity (M54.4/M54.8) is preserved.
 
-        V69 M57.1/.3.1 — when a :class:`~core.response_contract.ResponseShape` is
-        supplied, its bounded STYLE directive is appended. That directive is purely
-        stylistic (answer first, no preamble, how much structure is appropriate); it
-        never grants a tool, widens scope, or changes what is true.
+        V69 M58.2/.3 — the layout is REUSE-PRESERVING::
+
+            STABLE_CORE (identity+security+answer discipline)
+            + SESSION (active language)
+            + CONTRACT_DELTA (compact, machine-readable, allowlisted)
+            + DYNAMIC_TAIL (host clock, continuation)
+
+        ``STABLE_CORE + SESSION`` is byte-identical across every eligible contract, so
+        a family prewarm (M58.4) can warm it once and each contract only re-prefills
+        its tiny delta. The host clock and continuation move to the END: the ISO
+        timestamp changes every second and, in M57's flat layout, sat at position 3 —
+        which defeated server-side prefix reuse after ~2 sentences (M58 root cause).
+
+        The contract delta is PRESENTATION ONLY: it can never grant a tool, widen
+        scope, or change what is true (M58.3). Those are inherited from TurnPolicy.
         """
-        name = settings.assistant_name
-        user = settings.user_name
-        parts = [
-            f"You are {name}, {user}'s local AI assistant.",
-            "Answer directly, concisely and correctly in the user's language. "
-            "Do NOT show reasoning or think out loud, do NOT emit tool/JSON calls, "
-            "and do NOT write a long essay for a short question — a few clear "
-            "sentences unless the user explicitly asks for more depth. Keep "
-            "technical terms (payload, buffer overflow, thread) in English.",
-        ]
+        from core.prompt_manifest import build_fast_system_prompt
+        lang_directive = ""
         try:
-            parts.append(_host_time.host_time_prompt_line())
-        except Exception:
-            pass
+            lang_directive = self.language_context.directive()
+        except Exception:  # noqa: BLE001
+            lang_directive = ""
+        host_line = ""
         try:
-            parts.append(self.language_context.directive())
-        except Exception:
+            host_line = _host_time.host_time_prompt_line()
+        except Exception:  # noqa: BLE001
+            host_line = ""
+        # ``extra`` is the M57.7 continuation block: only DISPLAYED text plus a
+        # stylistic resume instruction — no hidden model state, no runtime error text.
+        return build_fast_system_prompt(
+            language_directive=lang_directive, shape=shape,
+            host_time_line=host_line, continuation=extra or "",
+        )
+
+    def _fast_prompt_manifest(self, *, route, num_ctx: int, shape=None):
+        """Build the content-free prompt manifest for the current DIRECT_FAST turn.
+
+        DIRECT_FAST is tool-free, so the tool-schema identity is the empty-schema
+        fingerprint. Authority/scope on this path are the session defaults (the FAST
+        path never runs an effectful tool), carried only for the compatibility key.
+        """
+        from core.prompt_manifest import build_manifest
+        from core.tool_schema import EMPTY_TOOL_SCHEMA_FINGERPRINT
+        lang_directive = ""
+        try:
+            lang_directive = self.language_context.directive()
+        except Exception:  # noqa: BLE001
+            lang_directive = ""
+        language = "es"
+        try:
+            language = self.language_context.active_language() or "es"
+        except Exception:  # noqa: BLE001
+            language = "es"
+        return build_manifest(
+            model=route.model, transport="native", think=route.think,
+            num_ctx=int(num_ctx), language=language, language_directive=lang_directive,
+            authority_mode="STANDARD", scope_fingerprint="",
+            tool_schema_fingerprint=EMPTY_TOOL_SCHEMA_FINGERPRINT, shape=shape,
+        )
+
+    def _observe_prefix(self, result: dict, route, language, shape) -> None:
+        """Record one native turn's observable prefill evidence (M58.5). Content-free.
+
+        Publishes the manifest fingerprints and the classified cache state for the
+        advisory runtime-health subsystem. Never stores prompt or answer text.
+        """
+        from core.prefix_cache import get_prefix_cache_observer
+        from core.prompt_manifest import publish_manifest_metrics
+        manifest = self._fast_prompt_manifest(
+            route=route, num_ctx=int(result.get("num_ctx") or route.context),
+            shape=shape)
+        identity = manifest.compatibility_identity()
+        warmed = None
+        try:
+            from core.contract_family import get_family_prewarm
+            warmed = get_family_prewarm().warmed_identity()
+        except Exception:  # noqa: BLE001 — family prewarm optional / not yet warmed
+            warmed = None
+        state = get_prefix_cache_observer().classify(
+            compatibility_identity=identity,
+            prompt_eval_count=result.get("prompt_eval_count"),
+            prompt_eval_ms=result.get("prompt_eval_ms"),
+            load_ms=result.get("load_ms"),
+            first_content_ms=result.get("first_content_ms"),
+            warmed_identity=warmed,
+        )
+        result["cache_state"] = getattr(state, "value", str(state))
+        try:
+            publish_manifest_metrics(manifest.snapshot())
+        except Exception:  # noqa: BLE001
             pass
-        if shape is not None:
-            try:
-                parts.append(shape.style_directive())
-            except Exception:
-                pass
-        if extra:
-            # V69 M57.7 — the continuation block. It carries only DISPLAYED text
-            # plus a stylistic resume instruction; no hidden model state and no
-            # runtime error text ever reaches the model through it.
-            parts.append(extra)
-        return "\n\n".join(parts)
 
     async def _native_fast_stream(self, *, route, budget, timeouts, result,
                                   gen=None, shape=None, continuation: str = ""):
@@ -1989,9 +2046,17 @@ class LLM:
             _ctx_budget = resolve_context_budget(
                 settings=settings,
                 num_ctx=int(gen.num_ctx) if gen is not None else route.context)
+            # V69 M58.6 — prefer the idle-compaction scheduler's digest when it has a
+            # fresh (augmented) one; otherwise a freshly-built extractive digest. The
+            # extractive digest stays the authoritative fallback either way.
+            try:
+                from core.compaction_scheduler import get_compaction_scheduler
+                _digest = get_compaction_scheduler().current_digest(self.history)
+            except Exception:  # noqa: BLE001
+                _digest = build_digest(self.history)
             _composed = compose_context(
                 system_prompt=_sys, history=self.history,
-                digest=build_digest(self.history),
+                digest=_digest,
                 token_budget=_ctx_budget,
                 language=self.language_context.active_language(),
                 cache_key=context_cache_key(
@@ -2058,6 +2123,11 @@ class LLM:
                     return
                 if ch.content:
                     chunks.append(ch.content)
+                    # V69 M58.5 — time to first CONTENT token (observable prefix
+                    # evidence; content-free). Captured once, before yielding.
+                    if result.get("first_content_ms") is None:
+                        result["first_content_ms"] = round(
+                            (_time.monotonic() - _infer_start) * 1000.0, 1)
                     # Capture the partial BEFORE yielding: if the outer turn-level
                     # deadline aclose()s us at the yield, the finalizer must still see
                     # everything shown so far (an `async for` does not close the inner
@@ -2069,6 +2139,15 @@ class LLM:
                     result["done_reason"] = ch.done_reason
                     result["tokens_per_second"] = ch.tokens_per_second()
                     result["eval_count"] = ch.eval_count
+                    # V69 M58.5 — observable prefill evidence for the prefix-cache
+                    # observer. NEVER user text: prefill token COUNT + durations only.
+                    result["prompt_eval_count"] = ch.prompt_eval_count
+                    if ch.prompt_eval_duration is not None:
+                        result["prompt_eval_ms"] = round(
+                            ch.prompt_eval_duration / 1e6, 1)
+                    _load_s = ch.load_seconds()
+                    if _load_s is not None:
+                        result["load_ms"] = round(_load_s * 1000.0, 1)
             # Clean end-of-stream. A `done` event OR content that streamed to a clean
             # StopAsyncIteration is COMPLETED (valid EOS); a stream that produced nothing
             # at all is FAILED (never surfaced as a successful empty answer).
@@ -2211,6 +2290,13 @@ class LLM:
                     first_token_ms=budget.snapshot().get("first_token_ms"),
                 )
         except Exception:
+            pass
+        # V69 M58.5 — fold the observable prefill evidence into the prefix-cache
+        # observer. Content-free (prompt_eval count/durations only); it classifies
+        # reuse WITHOUT ever inferring it from model residency alone.
+        try:
+            self._observe_prefix(result, route, language, shape)
+        except Exception:  # noqa: BLE001 — cache observation never breaks a turn
             pass
         try:
             if state in ("CANCELLED", "TIMED_OUT"):
@@ -2633,6 +2719,13 @@ class LLM:
         # unrelated tool family (the Packet Tracer bug).
         _turn_tool_failures: dict[str, int] = {}
         _turn_tool_retryable: dict[str, bool] = {}
+        # V69 M58.7 — bound the tool loop: max rounds / retries / malformed repairs.
+        # When the round budget is spent, tools are DROPPED so the model must produce
+        # a final answer (which then gets the contract num_predict) — the loop is
+        # bounded by a real limit, never only by wall-clock, and a JSON call is never
+        # truncated to enforce it.
+        from core.tool_loop import ToolLoopBudget, publish_tool_metrics, validate_tool_call
+        _tool_budget = ToolLoopBudget()
 
         # V61 Phase 4 — only consult long-term/episodic memory when it helps:
         # explicit recall/project intent (should_use_memory) or a deep/security
@@ -2715,6 +2808,23 @@ class LLM:
             # question like "POO" can never be routed to query_knowledge; every other
             # tool (and its own downstream gate) is unchanged.
             _turn_tools = _turn_policy.filter_tools(TOOLS)
+            # V69 M58.7 — round budget. Each loop iteration is a round; once the round
+            # limit is reached the tools are DROPPED so the model produces a bounded
+            # final answer (Phase 3) rather than requesting yet another tool round.
+            _tool_budget.begin_round()
+            if _tool_budget.force_final():
+                _turn_tools = []
+                logger.info("TOOL_LOOP: round budget spent — final response, tools "
+                            "dropped (rounds={})".format(_tool_budget.rounds))
+            # V69 M58.7.1 — canonical eligible-tool schema fingerprint + size (before/
+            # after filtering). DIRECT_FAST is tool-free; a tool-enabled turn records
+            # only the eligible subset the model actually sees.
+            try:
+                from core.tool_schema import build_tool_schema_fingerprint
+                _tool_fp = build_tool_schema_fingerprint(TOOLS, eligible_tools=_turn_tools)
+                _tool_budget_schema = _tool_fp.snapshot()
+            except Exception:  # noqa: BLE001
+                _tool_budget_schema = {}
             # V69 M57.2 — the /v1 path had NO generation cap at all: its only bound
             # was wall-clock, so a rambling answer burned the whole turn budget. It
             # now inherits the contract's CEILING (not the tighter adapted base),
@@ -3004,6 +3114,25 @@ class LLM:
                 except Exception:
                     pass
 
+                # V69 M58.7 — publish the bounded tool-loop metrics for runtime health.
+                # The final answer's token count + whether the length cap cut it are
+                # the Phase-3 record; content-free.
+                try:
+                    from core.generation_budget import hit_generation_cap
+                    from core.tool_loop import ToolTurnState
+                    _tool_budget.final_response_tokens = int(_tok_count)
+                    _fin_capped = hit_generation_cap(
+                        finish_reason, _tok_count,
+                        int(_v1_options.get("num_predict") or 0))
+                    _tool_budget.state = (ToolTurnState.FINAL_RESPONSE_TRUNCATED
+                                          if _fin_capped
+                                          else ToolTurnState.FINAL_RESPONSE_COMPLETE)
+                    _tm = _tool_budget.snapshot()
+                    _tm.update(_tool_budget_schema)
+                    publish_tool_metrics(_tm)
+                except Exception:
+                    pass
+
                 unregister_operation("llm_stream")  # v35.0
                 break
 
@@ -3014,10 +3143,16 @@ class LLM:
                 # final answer leaned on (possibly dangerous) tool output.
                 _turn_tool_used = True
                 _turn_tool_names.append(tool_name)
-                try:
-                    tool_input = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    tool_input = {}
+                # V69 M58.7 — validate the call BEFORE anything executes: reject
+                # malformed/partial JSON and names outside the eligible set. Truncated
+                # tool JSON and hallucinated tool names never reach the executor, and
+                # effectful arguments are never freely guessed/repaired.
+                _eligible_names = {
+                    t.get("function", {}).get("name")
+                    for t in _turn_tools if isinstance(t, dict)
+                } or None
+                _ok_call, tool_input, _bad_reason = validate_tool_call(
+                    tool_name, tc["function"]["arguments"], _eligible_names)
                 # V69 M54.13 — never print a raw/large tool payload into the
                 # interactive console. Summarize the argument keys and bound the
                 # rendered length; the full arguments are still in the DEBUG file log.
@@ -3036,7 +3171,29 @@ class LLM:
                 # Non-retryable failures allow 1 attempt total (no retry);
                 # retryable failures allow 2 (original + exactly one retry).
                 _max_attempts = 2 if _turn_tool_retryable.get(tool_name) else 1
-                if _cyber_block_tools:
+                if not _ok_call:
+                    # V69 M58.7 — malformed call or ineligible/hallucinated tool. It
+                    # NEVER executes; a bounded failure envelope keeps the tool_call/
+                    # tool pairing coherent so the loop cannot be driven to run an
+                    # unvalidated (possibly effectful) call.
+                    if _bad_reason == "tool_not_eligible":
+                        _tool_budget.note_denied()
+                        _err_class, _msg = "tool_not_eligible", (
+                            f"`{tool_name}` is not an eligible tool for this turn. It "
+                            "was not executed. Answer without it or state it is "
+                            "unavailable — do not invent tool names.")
+                    else:
+                        _tool_budget.note_malformed()
+                        _err_class, _msg = "malformed_tool_call", (
+                            f"The `{tool_name}` call arguments were malformed and were "
+                            "NOT executed. Reissue a single well-formed call or answer "
+                            "without it.")
+                    logger.warning(
+                        f"TOOL_LOOP: rejected '{tool_name}' ({_bad_reason}) — not executed")
+                    result = make_failure(
+                        tool=tool_name, error_class=_err_class, safe_message=_msg,
+                        retryable=False, fallback_allowed=True)
+                elif _cyber_block_tools:
                     # V68.1 M47 — offensive/operational request with no established
                     # authorization: refuse ALL tool execution this turn. No scan,
                     # no exploit search, no operational step. Fail-closed.

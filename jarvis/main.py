@@ -121,6 +121,101 @@ def _is_windows_admin() -> bool:
 # duplication. Nothing here re-implements segmentation.
 
 
+def _make_compaction_proposer(llm):
+    """A bounded native think=false proposer for idle compaction (M58.6).
+
+    Asks the FAST model to extract up to a few recurring TOPIC/DECISION/OPEN_QUESTION
+    lines from the OLDER conversation, then parses them deterministically. No chain of
+    thought, no secrets, no full-document dump: output is tiny and line-structured, and
+    every item is re-labelled INFERRED by merge_model_assisted downstream.
+    """
+    async def _proposer(history, timeout):
+        from core.compaction_scheduler import parse_proposed_items
+        from core.config import settings
+        from core.ollama_native import CancellationToken, chat_stream
+        from core.turn_budget import StageTimeouts, TurnBudget
+        older = [m for m in (history or []) if isinstance(m, dict)][:-6] or []
+        if not older:
+            return []
+        # A bounded, content-safe transcript slice (older turns only, truncated).
+        convo = "\n".join(
+            f"{m.get('role', '?')[:1]}: {str(m.get('content') or '')[:200]}"
+            for m in older[-30:])
+        sys_prompt = (
+            "You compress a conversation for memory. Output ONLY up to 5 short lines, "
+            "each 'TOPIC: ...', 'DECISION: ...' or 'OPEN_QUESTION: ...'. No prose, no "
+            "reasoning, no secrets, no code. If nothing recurs, output nothing.")
+        route_model = ""
+        try:
+            from core.model_router import ModelRole, model_for_role
+            route_model = model_for_role(ModelRole.FAST) or ""
+        except Exception:  # noqa: BLE001
+            route_model = getattr(settings, "fast_model", "") or ""
+        if not route_model:
+            return []
+        budget = TurnBudget(total_s=float(timeout))
+        timeouts = StageTimeouts(connect_s=5.0, first_token_s=float(timeout),
+                                 idle_s=8.0, total_s=float(timeout))
+        chunks: list[str] = []
+        try:
+            async for ch in chat_stream(
+                model=route_model,
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": convo}],
+                think=False, max_tokens=128, temperature=0.0, budget=budget,
+                timeouts=timeouts, ctx=int(getattr(settings, "fast_context", 2048)),
+                keep_alive=getattr(settings, "fast_keep_alive", "10m"),
+                cancellation=CancellationToken.from_event(None),
+                client=llm._get_native_http() if hasattr(llm, "_get_native_http") else None,
+            ):
+                if ch.content:
+                    chunks.append(ch.content)
+                if ch.done:
+                    break
+        except Exception:  # noqa: BLE001 — a proposer fault falls back to extractive
+            return []
+        return parse_proposed_items("".join(chunks))
+    return _proposer
+
+
+async def _idle_compaction_loop(llm) -> None:
+    """Bounded idle driver for the M58.6 compaction scheduler.
+
+    Wakes periodically, assembles a live conditions snapshot, and runs ONE compaction
+    pass only when every idle condition holds. Never blocks a turn (a turn preempts via
+    _run_turn), never raises into the loop, and stops the moment STOPPING begins.
+    """
+    from core.compaction_scheduler import (
+        build_conditions_from_runtime, get_compaction_scheduler)
+    from core.config import settings
+    from core.lifecycle import lifecycle
+    sched = get_compaction_scheduler()
+    if sched.proposer is None:
+        try:
+            sched.proposer = _make_compaction_proposer(llm)
+        except Exception:  # noqa: BLE001
+            sched.proposer = None
+    _ctx_budget = int(getattr(settings, "fast_context", 2048))
+    while True:
+        if lifecycle.is_stopping():
+            return
+        try:
+            await asyncio.sleep(45.0)
+        except asyncio.CancelledError:
+            return
+        if lifecycle.is_stopping():
+            return
+        try:
+            history = list(getattr(llm, "history", []) or [])
+            conds = build_conditions_from_runtime(history, context_budget=_ctx_budget)
+            if conds.eligible():
+                await sched.maybe_run(history, conds)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — idle work never crashes the runtime
+            logger.debug(f"COMPACTION: idle pass skipped ({type(exc).__name__})")
+
+
 async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = None) -> None:
     """
     Ejecuta un turno completo de conversación con el modelo Producer-Consumer.
@@ -191,6 +286,25 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     except Exception:
         _rr, _handle = None, None
     _turn_id = getattr(_handle, "turn_id", 0)
+    # V69 M58.8 — arm the active-console key interrupt for THIS turn only. A single
+    # allowlisted key (Esc/Ctrl+G) then interrupts the generating/speaking answer
+    # immediately; when unsupported this is a no-op and /stop remains the path. The
+    # reader is disarmed in the finally so it never contends with the line reader.
+    _barge = None
+    try:
+        from core.barge_in import get_barge_in_controller
+        _barge = get_barge_in_controller()
+        _barge.loop = asyncio.get_running_loop()
+        _barge.arm()
+    except Exception:
+        _barge = None
+    # V69 M58.6 — the active turn preempts any in-flight idle compaction immediately;
+    # the scheduler keeps its last valid digest and the FAST turn proceeds at once.
+    try:
+        from core.compaction_scheduler import get_compaction_scheduler
+        get_compaction_scheduler().preempt()
+    except Exception:
+        pass
     # The terminal state this turn will be recorded with. Pessimistic until the
     # stream proves otherwise, so a silent abort is never read as a completed turn.
     _turn_state = TurnState.FAILED
@@ -387,6 +501,13 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         raise
     finally:
         record_turn(budget.snapshot())
+        # V69 M58.8 — disarm the key reader BEFORE control returns to the line reader,
+        # so the two never contend for the console. Always restores the terminal.
+        if _barge is not None:
+            try:
+                _barge.disarm()
+            except Exception:
+                pass
         # V69 M57 — close the turn truthfully and publish bounded, content-free
         # pipeline metrics. Prompt restoration NEVER waits on speech: nothing here
         # awaits the TTS queue.
@@ -580,6 +701,13 @@ async def _apply_response_command(cmd, llm, tts) -> None:
         if active:
             rr.end_turn(TurnState.INTERRUPTED_BY_OPERATOR)
         rr.note_cancellation_latency((time.monotonic() - t0) * 1000.0)
+        # V69 M58.8 — the /stop line-mode fallback is still a barge-in; record it so
+        # the barge-in health counts command interruptions distinctly from key ones.
+        try:
+            from core.barge_in import get_barge_in_controller
+            get_barge_in_controller().note_command_interrupt()
+        except Exception:
+            pass
         _console_emit(describe(cmd.command, language=language, active=active))
         return
 
@@ -640,6 +768,14 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             _first_interaction = False
             try:
                 tts.cancel_boot_narration()
+            except Exception:
+                pass
+            # V69 M58.4.1 — user input preempts the optional family prewarm. Request
+            # cancellation without awaiting teardown so the turn proceeds immediately;
+            # the governor slot frees and the background task tears down bounded.
+            try:
+                from core.contract_family import get_family_prewarm
+                asyncio.create_task(get_family_prewarm().cancel())
             except Exception:
                 pass
 
@@ -1501,6 +1637,32 @@ async def _main_async() -> None:
             except Exception as _pwe:  # noqa: BLE001 — never block boot
                 logger.debug(f"PREWARM: skipped: {_pwe}")
 
+            # V69 M58.4 — after the single-model prewarm has the weights resident,
+            # warm the SHARED stable prefix via the contract-family prewarm. CONCISE
+            # (the shared prefix + a minimal delta) runs first and benefits every FAST
+            # turn; EXPLANATORY only follows in BACKGROUND_FAMILIES mode. It takes the
+            # residency governor's lowest priority, never blocks input, is cancelled on
+            # the first user turn and never starts after STOPPING.
+            try:
+                from core.contract_family import (
+                    FamilyPrewarmMode, get_family_prewarm)
+                from core.runtime_profile import get_runtime_profile
+                _fp = get_family_prewarm()
+                _fp.note_config(model=fast.model)
+                _fprof = get_runtime_profile().detect()
+                _fpol = _fprof.policy()
+                if _fp.mode is FamilyPrewarmMode.OFF:
+                    pass
+                elif not _fpol.background_prewarm_allowed:
+                    logger.info("FAMILY_PREWARM: skipped by power policy profile={}"
+                                .format(_fprof.effective.value))
+                elif not _lifecycle.is_stopping():
+                    _fp.start_background(power_profile=_fprof.effective.value)
+                    logger.info("FAMILY_PREWARM: mode={} warming shared stable prefix "
+                                "in background".format(_fp.mode.value))
+            except Exception as _fpe:  # noqa: BLE001 — never block boot
+                logger.debug(f"FAMILY_PREWARM: skipped: {_fpe}")
+
             # V69 M56.8 — ONE compact residency line (not a wall of diagnostics).
             try:
                 from core.residency_status import render_summary
@@ -1539,6 +1701,18 @@ async def _main_async() -> None:
             logger.info("MCP: bridge connecting in background (off dispatch path)")
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"MCP: background start skipped: {exc}")
+
+    # V69 M58.6 — the idle-compaction driver. It runs the model-assisted digest pass
+    # ONLY when the host is idle (no active turn / HITL / effectful tool / answer TTS /
+    # high-priority embedding, lifecycle OPERATIONAL, power permits, context pressure
+    # high, cooldown expired). It yields immediately to an active turn (preempt) and is
+    # cancelled at shutdown. Never blocks TEXT_READY; never writes semantic memory.
+    if _lifecycle.can_start_task():
+        try:
+            asyncio.create_task(_idle_compaction_loop(llm), name="idle-compaction")
+            logger.info("COMPACTION: idle scheduler driver started (off turn path)")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"COMPACTION: idle driver start skipped: {exc}")
 
     # v58.2: tear down the MCP stdio session during graceful shutdown, before the
     # blanket task-cancellation step. Closing in-task avoids the anyio
@@ -2822,10 +2996,30 @@ async def _main_async() -> None:
             from core.fast_prewarm import get_fast_prewarm
             from core.residency_governor import get_governor
             await get_fast_prewarm().cancel()
+            # V69 M58.4 — the contract-family prewarm is the same orphan-task class.
+            try:
+                from core.contract_family import get_family_prewarm
+                await get_family_prewarm().cancel()
+            except Exception:  # noqa: BLE001
+                pass
             await get_governor().close()
             logger.debug("SHUTDOWN: prewarm cancelled and governor closed")
         except Exception as e:  # noqa: BLE001
             logger.debug(f"SHUTDOWN: residency stop suppressed: {e}")
+        # V69 M58.8.1 — close the active-console input backend on shutdown so no
+        # reader thread survives and the terminal is restored.
+        try:
+            from core.barge_in import get_barge_in_controller
+            get_barge_in_controller().shutdown()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: barge-in backend close suppressed: {e}")
+        # V69 M58.6 — cancel any in-flight idle compaction and await its teardown so
+        # no compaction task survives shutdown; the last valid digest is preserved.
+        try:
+            from core.compaction_scheduler import get_compaction_scheduler
+            await get_compaction_scheduler().cancel()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: compaction cancel suppressed: {e}")
 
         try:
             if aura_service is not None:
