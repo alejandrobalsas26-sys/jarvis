@@ -2046,9 +2046,17 @@ class LLM:
             _ctx_budget = resolve_context_budget(
                 settings=settings,
                 num_ctx=int(gen.num_ctx) if gen is not None else route.context)
+            # V69 M58.6 — prefer the idle-compaction scheduler's digest when it has a
+            # fresh (augmented) one; otherwise a freshly-built extractive digest. The
+            # extractive digest stays the authoritative fallback either way.
+            try:
+                from core.compaction_scheduler import get_compaction_scheduler
+                _digest = get_compaction_scheduler().current_digest(self.history)
+            except Exception:  # noqa: BLE001
+                _digest = build_digest(self.history)
             _composed = compose_context(
                 system_prompt=_sys, history=self.history,
-                digest=build_digest(self.history),
+                digest=_digest,
                 token_budget=_ctx_budget,
                 language=self.language_context.active_language(),
                 cache_key=context_cache_key(
