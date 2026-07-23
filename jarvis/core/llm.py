@@ -1915,40 +1915,39 @@ class LLM:
         host AND keeps answers concise. Carries identity, host-clock grounding and
         the active-language directive so continuity (M54.4/M54.8) is preserved.
 
-        V69 M57.1/.3.1 — when a :class:`~core.response_contract.ResponseShape` is
-        supplied, its bounded STYLE directive is appended. That directive is purely
-        stylistic (answer first, no preamble, how much structure is appropriate); it
-        never grants a tool, widens scope, or changes what is true.
+        V69 M58.2/.3 — the layout is REUSE-PRESERVING::
+
+            STABLE_CORE (identity+security+answer discipline)
+            + SESSION (active language)
+            + CONTRACT_DELTA (compact, machine-readable, allowlisted)
+            + DYNAMIC_TAIL (host clock, continuation)
+
+        ``STABLE_CORE + SESSION`` is byte-identical across every eligible contract, so
+        a family prewarm (M58.4) can warm it once and each contract only re-prefills
+        its tiny delta. The host clock and continuation move to the END: the ISO
+        timestamp changes every second and, in M57's flat layout, sat at position 3 —
+        which defeated server-side prefix reuse after ~2 sentences (M58 root cause).
+
+        The contract delta is PRESENTATION ONLY: it can never grant a tool, widen
+        scope, or change what is true (M58.3). Those are inherited from TurnPolicy.
         """
-        name = settings.assistant_name
-        user = settings.user_name
-        parts = [
-            f"You are {name}, {user}'s local AI assistant.",
-            "Answer directly, concisely and correctly in the user's language. "
-            "Do NOT show reasoning or think out loud, do NOT emit tool/JSON calls, "
-            "and do NOT write a long essay for a short question — a few clear "
-            "sentences unless the user explicitly asks for more depth. Keep "
-            "technical terms (payload, buffer overflow, thread) in English.",
-        ]
+        from core.prompt_manifest import build_fast_system_prompt
+        lang_directive = ""
         try:
-            parts.append(_host_time.host_time_prompt_line())
-        except Exception:
-            pass
+            lang_directive = self.language_context.directive()
+        except Exception:  # noqa: BLE001
+            lang_directive = ""
+        host_line = ""
         try:
-            parts.append(self.language_context.directive())
-        except Exception:
-            pass
-        if shape is not None:
-            try:
-                parts.append(shape.style_directive())
-            except Exception:
-                pass
-        if extra:
-            # V69 M57.7 — the continuation block. It carries only DISPLAYED text
-            # plus a stylistic resume instruction; no hidden model state and no
-            # runtime error text ever reaches the model through it.
-            parts.append(extra)
-        return "\n\n".join(parts)
+            host_line = _host_time.host_time_prompt_line()
+        except Exception:  # noqa: BLE001
+            host_line = ""
+        # ``extra`` is the M57.7 continuation block: only DISPLAYED text plus a
+        # stylistic resume instruction — no hidden model state, no runtime error text.
+        return build_fast_system_prompt(
+            language_directive=lang_directive, shape=shape,
+            host_time_line=host_line, continuation=extra or "",
+        )
 
     async def _native_fast_stream(self, *, route, budget, timeouts, result,
                                   gen=None, shape=None, continuation: str = ""):
