@@ -191,6 +191,18 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
     except Exception:
         _rr, _handle = None, None
     _turn_id = getattr(_handle, "turn_id", 0)
+    # V69 M58.8 — arm the active-console key interrupt for THIS turn only. A single
+    # allowlisted key (Esc/Ctrl+G) then interrupts the generating/speaking answer
+    # immediately; when unsupported this is a no-op and /stop remains the path. The
+    # reader is disarmed in the finally so it never contends with the line reader.
+    _barge = None
+    try:
+        from core.barge_in import get_barge_in_controller
+        _barge = get_barge_in_controller()
+        _barge.loop = asyncio.get_running_loop()
+        _barge.arm()
+    except Exception:
+        _barge = None
     # The terminal state this turn will be recorded with. Pessimistic until the
     # stream proves otherwise, so a silent abort is never read as a completed turn.
     _turn_state = TurnState.FAILED
@@ -387,6 +399,13 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         raise
     finally:
         record_turn(budget.snapshot())
+        # V69 M58.8 — disarm the key reader BEFORE control returns to the line reader,
+        # so the two never contend for the console. Always restores the terminal.
+        if _barge is not None:
+            try:
+                _barge.disarm()
+            except Exception:
+                pass
         # V69 M57 — close the turn truthfully and publish bounded, content-free
         # pipeline metrics. Prompt restoration NEVER waits on speech: nothing here
         # awaits the TTS queue.
@@ -580,6 +599,13 @@ async def _apply_response_command(cmd, llm, tts) -> None:
         if active:
             rr.end_turn(TurnState.INTERRUPTED_BY_OPERATOR)
         rr.note_cancellation_latency((time.monotonic() - t0) * 1000.0)
+        # V69 M58.8 — the /stop line-mode fallback is still a barge-in; record it so
+        # the barge-in health counts command interruptions distinctly from key ones.
+        try:
+            from core.barge_in import get_barge_in_controller
+            get_barge_in_controller().note_command_interrupt()
+        except Exception:
+            pass
         _console_emit(describe(cmd.command, language=language, active=active))
         return
 
@@ -2866,6 +2892,13 @@ async def _main_async() -> None:
             logger.debug("SHUTDOWN: prewarm cancelled and governor closed")
         except Exception as e:  # noqa: BLE001
             logger.debug(f"SHUTDOWN: residency stop suppressed: {e}")
+        # V69 M58.8.1 — close the active-console input backend on shutdown so no
+        # reader thread survives and the terminal is restored.
+        try:
+            from core.barge_in import get_barge_in_controller
+            get_barge_in_controller().shutdown()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"SHUTDOWN: barge-in backend close suppressed: {e}")
 
         try:
             if aura_service is not None:
