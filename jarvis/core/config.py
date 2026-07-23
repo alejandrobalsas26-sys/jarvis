@@ -351,6 +351,22 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("JARVIS_FAST_PREWARM_TIMEOUT_S",
                                       "fast_prewarm_timeout_s"),
     )
+    # V69 M58.4 — contract-family prefix prewarm. Warms the shared stable prefix plus
+    # a small number of family-representative deltas instead of ten contracts.
+    #   OFF | CONCISE_ONLY | BACKGROUND_FAMILIES | BEFORE_TEXT_READY_CONCISE
+    family_prewarm_mode: str = Field(
+        default="BACKGROUND_FAMILIES",
+        validation_alias=AliasChoices("JARVIS_FAMILY_PREWARM_MODE",
+                                      "family_prewarm_mode"),
+    )
+
+    @field_validator("family_prewarm_mode")
+    @classmethod
+    def validate_family_prewarm_mode(cls, v: str) -> str:
+        val = (v or "BACKGROUND_FAMILIES").strip().upper().replace("-", "_")
+        allowed = {"OFF", "CONCISE_ONLY", "BACKGROUND_FAMILIES",
+                   "BEFORE_TEXT_READY_CONCISE"}
+        return val if val in allowed else "BACKGROUND_FAMILIES"
 
     @field_validator("fast_prewarm_mode")
     @classmethod

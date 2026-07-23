@@ -642,6 +642,14 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
                 tts.cancel_boot_narration()
             except Exception:
                 pass
+            # V69 M58.4.1 — user input preempts the optional family prewarm. Request
+            # cancellation without awaiting teardown so the turn proceeds immediately;
+            # the governor slot frees and the background task tears down bounded.
+            try:
+                from core.contract_family import get_family_prewarm
+                asyncio.create_task(get_family_prewarm().cancel())
+            except Exception:
+                pass
 
         if not user_input:
             continue
@@ -1500,6 +1508,32 @@ async def _main_async() -> None:
                                 fast.state.value))
             except Exception as _pwe:  # noqa: BLE001 — never block boot
                 logger.debug(f"PREWARM: skipped: {_pwe}")
+
+            # V69 M58.4 — after the single-model prewarm has the weights resident,
+            # warm the SHARED stable prefix via the contract-family prewarm. CONCISE
+            # (the shared prefix + a minimal delta) runs first and benefits every FAST
+            # turn; EXPLANATORY only follows in BACKGROUND_FAMILIES mode. It takes the
+            # residency governor's lowest priority, never blocks input, is cancelled on
+            # the first user turn and never starts after STOPPING.
+            try:
+                from core.contract_family import (
+                    FamilyPrewarmMode, get_family_prewarm)
+                from core.runtime_profile import get_runtime_profile
+                _fp = get_family_prewarm()
+                _fp.note_config(model=fast.model)
+                _fprof = get_runtime_profile().detect()
+                _fpol = _fprof.policy()
+                if _fp.mode is FamilyPrewarmMode.OFF:
+                    pass
+                elif not _fpol.background_prewarm_allowed:
+                    logger.info("FAMILY_PREWARM: skipped by power policy profile={}"
+                                .format(_fprof.effective.value))
+                elif not _lifecycle.is_stopping():
+                    _fp.start_background(power_profile=_fprof.effective.value)
+                    logger.info("FAMILY_PREWARM: mode={} warming shared stable prefix "
+                                "in background".format(_fp.mode.value))
+            except Exception as _fpe:  # noqa: BLE001 — never block boot
+                logger.debug(f"FAMILY_PREWARM: skipped: {_fpe}")
 
             # V69 M56.8 — ONE compact residency line (not a wall of diagnostics).
             try:
@@ -2822,6 +2856,12 @@ async def _main_async() -> None:
             from core.fast_prewarm import get_fast_prewarm
             from core.residency_governor import get_governor
             await get_fast_prewarm().cancel()
+            # V69 M58.4 — the contract-family prewarm is the same orphan-task class.
+            try:
+                from core.contract_family import get_family_prewarm
+                await get_family_prewarm().cancel()
+            except Exception:  # noqa: BLE001
+                pass
             await get_governor().close()
             logger.debug("SHUTDOWN: prewarm cancelled and governor closed")
         except Exception as e:  # noqa: BLE001
