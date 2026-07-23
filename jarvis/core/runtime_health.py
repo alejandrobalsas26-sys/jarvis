@@ -420,6 +420,136 @@ def _live_quality_counters() -> dict:
         return {}
 
 
+def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = None,
+                            prewarm: dict | None = None, compaction: dict | None = None,
+                            tools: dict | None = None, barge: dict | None = None,
+                            response: dict | None = None) -> SubsystemHealth:
+    """V69 M58.9 — prompt prefix parity, cache-safe prewarm and real-time interruption.
+
+    Advisory ONLY (rank 0): a first-use prefill cost, a cold prefix or a COMMAND_ONLY
+    barge-in mode is a PERFORMANCE/comfort fact, never a runtime fault, so it must not
+    degrade the overall verdict. Every metric is a fingerprint, a count, a millisecond
+    or an enum — NEVER a prompt, an answer, a tool argument or a key value.
+    """
+    p = prompt if prompt is not None else _live_prompt_manifest()
+    c = cache if cache is not None else _live_prefix_cache()
+    pw = prewarm if prewarm is not None else _live_family_prewarm()
+    cp = compaction if compaction is not None else _live_compaction()
+    tl = tools if tools is not None else _live_tool_metrics()
+    bi = barge if barge is not None else _live_barge_in()
+    r = response if response is not None else _live_response_runtime()
+    if not (p or c or pw or cp or tl or bi):
+        return SubsystemHealth("prompt_cache", HealthStatus.OPTIONAL,
+                               "no interactive turn yet", {})
+    size = (p or {}).get("size", {}) or {}
+    metrics = {
+        # ── prompt manifest ──
+        "core_fingerprint": (p or {}).get("core_fingerprint"),
+        "session_fingerprint": (p or {}).get("session_fingerprint"),
+        "contract_schema_version": (p or {}).get("contract_schema_version"),
+        "stable_prefix_estimated_tokens": (p or {}).get("stable_prefix_estimated_tokens"),
+        "contract_delta_estimated_tokens": (p or {}).get("contract_delta_estimated_tokens"),
+        "compatibility_identity": (p or {}).get("compatibility_identity"),
+        "duplicate_sections_removed": size.get("duplicate_sections_removed"),
+        "prompt_budget_used": size.get("total_tokens"),
+        "prompt_budget_capacity": size.get("budget_tokens"),
+        # ── prefix reuse ──
+        "cache_state": (c or {}).get("cache_state"),
+        "invalidations": (c or {}).get("invalidations"),
+        "last_invalidation_reason": (c or {}).get("last_invalidation_reason"),
+        "recent_prompt_eval_ms": (c or {}).get("recent_prompt_eval_ms"),
+        "warm_prompt_eval_ms": (c or {}).get("warm_prompt_eval_ms"),
+        "cold_prompt_eval_ms": (c or {}).get("cold_prompt_eval_ms"),
+        "observed_reuse_ratio": (c or {}).get("observed_reuse_ratio"),
+        # ── prewarm ──
+        "prewarm_mode": (pw or {}).get("mode"),
+        "warmed_families": (pw or {}).get("family_states"),
+        "prewarm_attempts": (pw or {}).get("attempts"),
+        "prewarm_successes": (pw or {}).get("successes"),
+        "prewarm_cancellations": (pw or {}).get("cancellations"),
+        "last_family": (pw or {}).get("last_family"),
+        "family_last_first_token_ms": (pw or {}).get("last_first_token_ms"),
+        "family_last_prompt_eval_ms": (pw or {}).get("last_prompt_eval_ms"),
+        "stale_fingerprints": (pw or {}).get("stale_fingerprints"),
+        # ── compaction ──
+        "compaction_scheduled": (cp or {}).get("scheduled"),
+        "compaction_completed": (cp or {}).get("completed"),
+        "compaction_cancelled_for_user": (cp or {}).get("cancelled_for_user"),
+        "compaction_validation_failures": (cp or {}).get("validation_failures"),
+        "context_tokens_saved": (cp or {}).get("context_tokens_saved"),
+        "digest_version": (cp or {}).get("digest_version"),
+        "compaction_last_duration_ms": (cp or {}).get("last_duration_ms"),
+        # ── tool generation ──
+        "tool_rounds": (tl or {}).get("tool_rounds"),
+        "tool_malformed_calls": (tl or {}).get("malformed_calls"),
+        "tool_denied_calls": (tl or {}).get("denied_calls"),
+        "final_response_tokens": (tl or {}).get("final_response_tokens"),
+        "tool_schema_fingerprint": (tl or {}).get("tool_schema_fingerprint"),
+        "eligible_tool_count": (tl or {}).get("eligible_tool_count"),
+        "schema_estimated_tokens": (tl or {}).get("schema_estimated_tokens"),
+        # ── barge-in ──
+        "barge_in_mode": (bi or {}).get("mode"),
+        "barge_in_supported": (bi or {}).get("supported"),
+        "active_interruptions": (bi or {}).get("active_interruptions"),
+        "command_interruptions": (bi or {}).get("command_interruptions"),
+        "barge_in_cancellation_latency_ms": (bi or {}).get("cancellation_latency_ms"),
+        "late_chunks_suppressed": (r or {}).get("late_chunks_suppressed"),
+        "terminal_restore_failures": (bi or {}).get("terminal_restore_failures"),
+    }
+    detail = "cache={} prewarm={} barge_in={}".format(
+        (c or {}).get("cache_state") or "n/a", (pw or {}).get("mode") or "n/a",
+        (bi or {}).get("mode") or "n/a")
+    return SubsystemHealth("prompt_cache", HealthStatus.OPTIONAL, detail, metrics)
+
+
+def _live_prompt_manifest() -> dict:
+    try:
+        from core.prompt_manifest import last_manifest_metrics
+        return last_manifest_metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_prefix_cache() -> dict:
+    try:
+        from core.prefix_cache import get_prefix_cache_observer
+        return get_prefix_cache_observer().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_family_prewarm() -> dict:
+    try:
+        from core.contract_family import get_family_prewarm
+        return get_family_prewarm().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_compaction() -> dict:
+    try:
+        from core.compaction_scheduler import get_compaction_scheduler
+        return get_compaction_scheduler().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_tool_metrics() -> dict:
+    try:
+        from core.tool_loop import last_tool_metrics
+        return last_tool_metrics()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_barge_in() -> dict:
+    try:
+        from core.barge_in import get_barge_in_controller
+        return get_barge_in_controller().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _residency_subsystem(residency: dict | None = None, governor: dict | None = None,
                          prewarm: dict | None = None, power: dict | None = None
                          ) -> SubsystemHealth:
@@ -650,6 +780,9 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         # speech, context, interruption, quality). No new registry: the existing
         # single health collector gains one more entry.
         _response_pipeline_subsystem(),
+        # V69 M58.9 — ONE advisory prompt/prefix-cache subsystem (prompt manifest,
+        # prefix reuse, family prewarm, idle compaction, tool bounds, barge-in).
+        _prompt_cache_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}
