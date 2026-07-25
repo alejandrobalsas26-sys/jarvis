@@ -335,7 +335,10 @@ class SessionJournal:
     the ability to answer.
     """
 
-    def __init__(self, *, store=None, mode=None, clock=time.monotonic,
+    # ``perf_counter``, NOT ``monotonic``: on Windows monotonic ticks at ~15.6 ms, so
+    # a sub-millisecond SQLite write measures as either 0.0 or 16.0 and the M60
+    # thresholds (10 ms preferred / 25 ms warning) would be meaningless noise.
+    def __init__(self, *, store=None, mode=None, clock=time.perf_counter,
                  path: "str | Path | None" = None,
                  max_sessions: int = MAX_SESSIONS,
                  max_turns: int = MAX_TURNS_PER_SESSION,
