@@ -388,6 +388,141 @@ def _response_pipeline_subsystem(response: dict | None = None,
                            metrics)
 
 
+def _session_continuity_subsystem(persistence: dict | None = None,
+                                  recovery: dict | None = None,
+                                  supervisor: dict | None = None,
+                                  backup: dict | None = None,
+                                  diagnostics: dict | None = None
+                                  ) -> SubsystemHealth:
+    """V69 M60.9 — session continuity, recovery, supervision, backup, diagnostics.
+
+    ONE more entry on the EXISTING collector, not a second registry. Unlike the
+    response pipeline this one is NOT purely advisory: a journal that cannot write is
+    a real durability fault and must be able to degrade the overall verdict, because
+    the operator's next crash would silently lose the conversation. A journal that is
+    intentionally OFF is DORMANT (rank 0), not a failure — an explicit choice is not
+    a fault.
+
+    Every metric is a count, a state, a millisecond or a HASH. No session id, no
+    conversation text, no path, no tool argument and no secret can appear here: each
+    source builds its snapshot content-free and the health surface only copies it.
+    """
+    p = persistence if persistence is not None else _live_persistence()
+    r = recovery if recovery is not None else _live_recovery()
+    s = supervisor if supervisor is not None else _live_supervisor()
+    b = backup if backup is not None else _live_backup()
+    d = diagnostics if diagnostics is not None else _live_diagnostics()
+    if not (p or r or s or b or d):
+        return SubsystemHealth("session_continuity", HealthStatus.OPTIONAL,
+                               "continuity not initialised", {})
+
+    mode = (p or {}).get("persistence_mode")
+    jstate = (p or {}).get("journal_state")
+    if mode == "OFF" or jstate == "DISABLED":
+        status = HealthStatus.DORMANT
+    elif jstate in ("FAILED",):
+        status = HealthStatus.FAILED
+    elif jstate in ("DEGRADED", "VOLATILE"):
+        status = HealthStatus.DEGRADED
+    elif (r or {}).get("recovery_state") == "DEGRADED":
+        status = HealthStatus.DEGRADED
+    elif (s or {}).get("circuits_open"):
+        status = HealthStatus.DEGRADED
+    elif (r or {}).get("unresolved_tool_outcomes"):
+        # Uncertain effectful outcomes are an operator obligation, not a fault.
+        status = HealthStatus.WARMING
+    else:
+        status = HealthStatus.OK
+
+    metrics = {
+        # session continuity
+        "persistence_mode": mode,
+        "active_session_id_hash": (p or {}).get("active_session_id_hash"),
+        "sessions_retained": (p or {}).get("sessions_retained"),
+        "turns_retained": (p or {}).get("turns_retained"),
+        "journal_state": jstate,
+        "last_checkpoint_ms": (p or {}).get("last_checkpoint_ms"),
+        "checkpoint_failures": (p or {}).get("checkpoint_failures"),
+        "journal_write_failures": (p or {}).get("write_failures"),
+        "journal_slow_writes": (p or {}).get("slow_writes"),
+        "redactions_applied": (p or {}).get("redactions"),
+        "corrupt_records_quarantined": (p or {}).get("corrupt_records_quarantined"),
+        # recovery
+        "recovery_required": (r or {}).get("recovery_required"),
+        "recovery_state": (r or {}).get("recovery_state"),
+        "previous_run": (r or {}).get("run_classification"),
+        "interrupted_turns": (r or {}).get("interrupted_turns"),
+        "unresolved_tool_outcomes": (r or {}).get("unresolved_tool_outcomes"),
+        "actions_replayed": (r or {}).get("actions_replayed"),
+        # recovery supervisor
+        "services_registered": (s or {}).get("services_registered"),
+        "services_ready": (s or {}).get("services_ready"),
+        "services_degraded": (s or {}).get("services_degraded"),
+        "restart_attempts": (s or {}).get("restart_attempts"),
+        "circuits_open": (s or {}).get("circuits_open"),
+        "last_restart_reason": (s or {}).get("last_restart_reason"),
+        # backup
+        "last_backup_at": (b or {}).get("last_backup_at"),
+        "last_backup_state": (b or {}).get("last_backup_state"),
+        "last_backup_size": (b or {}).get("last_backup_size"),
+        "integrity_verified": (b or {}).get("integrity_verified"),
+        "restore_plan_state": (b or {}).get("restore_plan_state"),
+        "rollback_available": (b or {}).get("rollback_available"),
+        # diagnostics
+        "last_bundle_state": (d or {}).get("last_bundle_state"),
+        "files_included": (d or {}).get("files_included"),
+        "bundle_size": (d or {}).get("bundle_size"),
+        "bundle_redactions": (d or {}).get("redactions"),
+        "secret_scan_state": (d or {}).get("secret_scan_state"),
+    }
+    detail = "mode={} journal={} recovery={}".format(
+        mode or "n/a", jstate or "n/a",
+        (r or {}).get("recovery_state") or "n/a")
+    return SubsystemHealth("session_continuity", status, detail, metrics)
+
+
+def _live_persistence() -> dict:
+    try:
+        from core.session_continuity import get_session_journal
+        return get_session_journal().health()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_recovery() -> dict:
+    try:
+        from core.recovery_state import last_recovery_snapshot
+        return last_recovery_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_supervisor() -> dict:
+    try:
+        from core.recovery_supervisor import get_recovery_supervisor
+        snap = get_recovery_supervisor().snapshot()
+        snap.pop("services", None)
+        return snap
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_backup() -> dict:
+    try:
+        from core.recovery_state import last_backup_snapshot
+        return last_backup_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_diagnostics() -> dict:
+    try:
+        from core.recovery_state import last_diagnostics_snapshot
+        return last_diagnostics_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _live_response_runtime() -> dict:
     try:
         from core.response_runtime import get_response_runtime
@@ -845,6 +980,10 @@ def collect_runtime_health(*, fabric_metrics: dict | None = None,
         # V69 M58.9 — ONE advisory prompt/prefix-cache subsystem (prompt manifest,
         # prefix reuse, family prewarm, idle compaction, tool bounds, barge-in).
         _prompt_cache_subsystem(),
+        # V69 M60.9 — ONE session-continuity subsystem (journal, recovery, restart
+        # supervision, backup, diagnostics). Not advisory: a journal that cannot
+        # write is a real durability fault and is allowed to degrade the verdict.
+        _session_continuity_subsystem(),
     ]
     overall = max(subsystems, key=lambda s: _STATUS_RANK.get(s.status, 0)).status
     metrics: dict = {}

@@ -961,6 +961,71 @@ _PARTIAL_STREAM_EN = (
 )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M60.1 — session-journal hooks
+# ══════════════════════════════════════════════════════════════════════════════
+#  Three tiny, fully guarded helpers. They are the ONLY place the inference path
+#  touches durable session state, and every one of them fails silently by design:
+#  a journal problem must cost continuity, never an answer the runtime could give.
+def _journal_turn_pair(user_message: str):
+    """Journal the completed USER turn and open the assistant turn as ACTIVE.
+
+    Returns the assistant :class:`TurnRecord` (or None when persistence is off /
+    unavailable). The unfinalized assistant record is the crash anchor recovery
+    looks for.
+    """
+    try:
+        from core.session_continuity import get_session_journal
+        journal = get_session_journal()
+        if not journal.enabled or journal.active_session is None:
+            return None
+        # A previous turn still ACTIVE here means its own finalizer was never
+        # reached. It is provably not running any more, so close it truthfully —
+        # otherwise the next boot would classify this process as crashed.
+        journal.finalize_stale_active_turns(terminal_state="REPLACED_BY_NEW_TURN")
+        user_turn = journal.open_turn(role="user")
+        journal.finalize_turn(user_turn, terminal_state="COMPLETED",
+                              content=user_message)
+        return journal.open_turn(role="assistant")
+    except Exception:  # noqa: BLE001 — persistence never breaks a turn
+        return None
+
+
+async def _finalize_journal_turn(turn, state: str, content: str | None,
+                                 *, visible_chars: int | None = None) -> None:
+    """Close a journalled turn OFF the event loop (the /v1 streaming path)."""
+    if turn is None:
+        return
+    try:
+        from core.session_continuity import get_session_journal
+        await get_session_journal().finalize_turn_async(
+            turn, terminal_state=state, content=content,
+            visible_chars=visible_chars)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _finalize_journal_turn_sync(turn, state: str, content: str | None,
+                                *, visible_chars: int | None = None) -> None:
+    """Close a journalled turn synchronously.
+
+    Used by ``_finalize_native_turn``, which is sync and must stay sync: it also runs
+    from the GeneratorExit path where scheduling a task is not possible and a
+    fire-and-forget task would be cancelled by shutdown, losing exactly the record
+    that proves the turn was interrupted. One bounded local SQLite upsert; the
+    journal itself counts and reports any write that exceeds the slow threshold.
+    """
+    if turn is None:
+        return
+    try:
+        from core.session_continuity import get_session_journal
+        get_session_journal().finalize_turn(
+            turn, terminal_state=state, content=content,
+            visible_chars=visible_chars)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _partial_stream_message(language: str | None) -> str:
     """The bounded 'answer left incomplete' status in the turn's ACTIVE language."""
     lang = (language or "es").lower()
@@ -2211,6 +2276,14 @@ class LLM:
         result["finalized"] = True
         result["final_state"] = state
         text = (result.get("text") or "").strip()
+        # V69 M60.1 — the journal is closed HERE, inside the single idempotent
+        # finalizer, so every terminal state (including the GeneratorExit /
+        # CANCELLED path) is recorded exactly once with the text the operator
+        # actually saw. Leaving it to the success path would leave a cancelled turn
+        # ACTIVE forever and make the next boot report a crash that never happened.
+        _finalize_journal_turn_sync(getattr(self, "_journal_turn", None), state,
+                                    text, visible_chars=len(text))
+        self._journal_turn = None
         status_msg: str | None = None
         # V69 M57.2 — did generation stop because it ran out of CONTENT or out of
         # BUDGET? Ollama answers this with done_reason="length"; a capped answer is
@@ -2421,6 +2494,15 @@ class LLM:
         _threat_ctx = ""
 
         self.history.append({"role": "user", "content": user_message})
+
+        # V69 M60.1 — journal the user turn IMMEDIATELY and open the assistant turn
+        # in the ACTIVE state. That pair is the crash anchor: if the process dies
+        # during generation, recovery finds a finalized user message followed by an
+        # unfinalized assistant turn, and reconciles it as interrupted instead of
+        # dropping it or presenting a partial answer as complete. Fully guarded —
+        # persistence must never be able to break a turn that could otherwise run.
+        _journal = _journal_turn_pair(user_message)
+        self._journal_turn = _journal
 
         # V69 M54.3 — deterministic pre-tool + verification policy, computed once.
         # Decides whether this turn may touch the private Knowledge Vault and how
@@ -3122,6 +3204,12 @@ class LLM:
                     save_session(self.history)
                 except Exception:
                     pass
+
+                # V69 M60.1 — finalize the journalled assistant turn with its TRUE
+                # terminal state and only the text that actually reached the
+                # operator. Off the event loop and bounded; a persistence failure
+                # is counted and degrades continuity, never the answer.
+                await _finalize_journal_turn(_journal, "COMPLETED", final_answer)
 
                 # V62.0 Phase 5 — response-surface foundation (best-effort).
                 await self._maybe_broadcast_response(final_answer, full_text, decision)

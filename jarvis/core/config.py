@@ -249,6 +249,49 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("JARVIS_RESPONSE_CONTRACTS",
                                       "response_contracts_enabled"),
     )
+
+    # ── V69 M60 — crash-safe session continuity ───────────────────────────────
+    #   session_persistence_mode : OFF | METADATA_ONLY | LOCAL_REDACTED |
+    #                              LOCAL_FULL_EXPLICIT. Default LOCAL_REDACTED —
+    #                              bounded visible conversation AFTER deterministic
+    #                              redaction. NEVER silently upgraded; an unknown
+    #                              value falls back to the default, not to the most
+    #                              permissive mode.
+    #   session_max_sessions     : retained sessions (the ACTIVE one is never pruned)
+    #   session_max_turns        : retained turns per session
+    #   session_max_turn_chars   : ceiling on stored visible characters per turn
+    #   session_restore_turns    : turns offered back on /session-resume-last
+    #   recovery_supervisor_enabled : bounded automatic restart of OPTIONAL services
+    session_persistence_mode: str = Field(
+        default="LOCAL_REDACTED",
+        validation_alias=AliasChoices("JARVIS_SESSION_PERSISTENCE",
+                                      "session_persistence_mode"),
+    )
+    session_max_sessions: int = Field(
+        default=20,
+        validation_alias=AliasChoices("JARVIS_SESSION_MAX_SESSIONS",
+                                      "session_max_sessions"),
+    )
+    session_max_turns: int = Field(
+        default=200,
+        validation_alias=AliasChoices("JARVIS_SESSION_MAX_TURNS",
+                                      "session_max_turns"),
+    )
+    session_max_turn_chars: int = Field(
+        default=4000,
+        validation_alias=AliasChoices("JARVIS_SESSION_MAX_TURN_CHARS",
+                                      "session_max_turn_chars"),
+    )
+    session_restore_turns: int = Field(
+        default=12,
+        validation_alias=AliasChoices("JARVIS_SESSION_RESTORE_TURNS",
+                                      "session_restore_turns"),
+    )
+    recovery_supervisor_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("JARVIS_RECOVERY_SUPERVISOR",
+                                      "recovery_supervisor_enabled"),
+    )
     response_profile: str = Field(
         default="AUTO",
         validation_alias=AliasChoices("JARVIS_RESPONSE_PROFILE", "response_profile"),

@@ -119,10 +119,17 @@ class TestShapeAndLive:
         # idle compaction, tool bounds and active-console barge-in) EXTENDS the same
         # surface; also advisory (rank 0) so a first-use prefill cost, a cold prefix or
         # a COMMAND_ONLY barge-in mode never degrades the overall verdict.
+        # V69 M60.9 — session_continuity (journal, recovery, restart supervision,
+        # backup, diagnostics) EXTENDS the same surface. Unlike the four above it is
+        # NOT advisory: a journal that cannot write is a real durability fault and is
+        # allowed to degrade the verdict, because the operator's next crash would
+        # otherwise lose the conversation silently. An intentionally OFF journal is
+        # DORMANT (rank 0) — an explicit choice is not a fault.
         assert names == {"collectors", "resource", "tasks", "inference",
                          "model_runtime", "spine", "verifier", "interactive",
                          "filesystem_watch", "fast_inference", "ollama_env",
-                         "residency", "response_pipeline", "prompt_cache"}
+                         "residency", "response_pipeline", "prompt_cache",
+                         "session_continuity"}
 
     def test_metrics_are_flat_and_bounded(self):
         d = _snap().to_dict()

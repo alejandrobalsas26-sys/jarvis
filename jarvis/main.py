@@ -734,6 +734,10 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.mode_commands import parse_mode_command, describe_mode
     from core.response_commands import parse_response_command
     from core.runtime_commands import apply_runtime_command, parse_runtime_command
+    from core.deployment_planner import (
+        apply_deployment_command, parse_deployment_command,
+    )
+    from core.session_commands import apply_session_command, parse_session_command
     from core.lifecycle import lifecycle
     try:
         from core.console import get_console
@@ -871,6 +875,43 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
                 raise
             except Exception as _rce:  # noqa: BLE001
                 logger.debug(f"RUNTIME_CMD: {type(_rce).__name__}")
+            continue
+
+        # V69 M60.3.1/M60.5.1 — session-continuity and deployment commands. Same
+        # posture as the M59 surface: EXACT-match allowlist, NO argument parsing, so
+        # no path, session id or plan name can arrive from free text. The deployment
+        # verbs are strictly read-only planners — none of them installs a service,
+        # a scheduled task or a startup entry, and none mutates the host.
+        _sess_cmd = parse_session_command(user_input)
+        if _sess_cmd is not None:
+            try:
+                from core.llm import TOOLS as _CMD_TOOLS
+                from core.session_continuity import (
+                    current_fingerprints, get_session_journal,
+                )
+                from core.turn_reconciliation import last_recovery_report
+                _console_emit(apply_session_command(
+                    _sess_cmd, language=_active_language(llm),
+                    journal=get_session_journal(),
+                    recovery=last_recovery_report(),
+                    fingerprints=current_fingerprints(
+                        getattr(llm.tool_executor, "authority", None),
+                        tools=_CMD_TOOLS)))
+            except asyncio.CancelledError:
+                raise
+            except Exception as _sce:  # noqa: BLE001
+                logger.debug(f"SESSION_CMD: {type(_sce).__name__}")
+            continue
+
+        _dep_ok, _dep_target = parse_deployment_command(user_input)
+        if _dep_ok:
+            try:
+                _console_emit(apply_deployment_command(
+                    _dep_target, language=_active_language(llm)))
+            except asyncio.CancelledError:
+                raise
+            except Exception as _dce:  # noqa: BLE001
+                logger.debug(f"DEPLOY_CMD: {type(_dce).__name__}")
             continue
 
         # V69 M56.2/M56.8 — Ollama posture + residency operator commands. TEXT ONLY and
@@ -1966,6 +2007,64 @@ async def _main_async() -> None:
         except Exception:
             pass
     register_shutdown_callback(_flush_session)
+
+    # ── V69 M60 — crash-safe session continuity ───────────────────────────────
+    # Open the RUN record, reconcile whatever the PREVIOUS process left behind, and
+    # open this process's session. Bounded and fully guarded: persistence is a
+    # continuity feature, so a journal that cannot open degrades continuity and
+    # never blocks a runtime that can still answer. Nothing here starts inference,
+    # replays an action or restores an authorization — recovery is classification
+    # only, and every fingerprint below is RE-MEASURED, never read back from disk.
+    try:
+        from core.recovery_state import publish_recovery
+        from core.session_continuity import current_fingerprints, get_session_journal
+        from core.turn_reconciliation import (
+            publish_recovery_report, reconcile, render_recovery_panel,
+        )
+
+        from core.llm import TOOLS as _LIVE_TOOLS
+
+        _journal = get_session_journal()
+        _journal.begin_run(runtime_version="v69-m60")
+        _fingerprints = current_fingerprints(authority_state, tools=_LIVE_TOOLS)
+        _recovery = reconcile(_journal, current_fingerprints_map=_fingerprints)
+        publish_recovery(_recovery.snapshot())
+        publish_recovery_report(_recovery)
+        _journal.begin_session(
+            language=_active_language(llm),
+            response_profile=str(getattr(settings, "response_profile", "AUTO")),
+            **_fingerprints)
+        if _recovery.recovery_required:
+            # Only surfaced when there is something to say — startup stays concise.
+            _console_emit(render_recovery_panel(
+                _recovery, language=_active_language(llm)))
+        logger.info(
+            f"CONTINUITY: mode={_journal.mode.value} "
+            f"journal={_journal.journal_state().value} "
+            f"previous_run={_recovery.run_classification.value} "
+            f"interrupted={_recovery.interrupted_turns} "
+            f"review={_recovery.unresolved_tool_outcomes} replayed=0")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"CONTINUITY: unavailable ({type(e).__name__}); "
+                       f"the runtime continues without session persistence")
+
+    async def _finalize_continuity_run():
+        """Write the clean-shutdown marker. Its ABSENCE is what a crash looks like,
+        so this callback is the single source of 'the previous run ended cleanly'."""
+        try:
+            from core.session_continuity import SessionState, get_session_journal
+            j = get_session_journal()
+            # A turn still ACTIVE at shutdown was cancelled by the shutdown itself —
+            # record that, so the next boot does not read it as a crash.
+            j.finalize_stale_active_turns(terminal_state="CANCELLED_ON_SHUTDOWN")
+            j.close_session(state=SessionState.CLOSED)
+            j.finalize_run(clean=True,
+                           lifecycle_state=_lifecycle.state.name,
+                           recovery_result="clean")
+            j.close()
+        except Exception:
+            pass
+    register_shutdown_callback(_finalize_continuity_run)
 
     # v27.0: store executor reference for HUD bidirectional command dispatch
     try:
