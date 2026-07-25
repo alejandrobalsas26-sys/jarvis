@@ -36,6 +36,11 @@ _SESSIONS = "data/sessions"
 _DIAGNOSTICS = "data/diagnostics"
 _BACKUPS = "data/backups"
 _EXPORTS = "data/exports"
+# V69 M61.4 — the runtime log tree. Pre-M61 this was the CWD-relative string
+# ``"jarvis.log"`` passed straight to ``logger.add``, which produced one 2.7 MB log
+# per directory JARVIS had ever been launched from. Same discipline as the rest of
+# this module: absolute, application-owned, never caller-supplied.
+_LOGS = "logs"
 
 # A leaf name may only contain these characters. Deliberately narrower than the
 # filesystem allows: no dots-only names, no spaces, no unicode homoglyphs.
@@ -87,6 +92,21 @@ def backups_dir(*, create: bool = True) -> Path:
 
 def exports_dir(*, create: bool = True) -> Path:
     return _resolve(_EXPORTS, create=create)
+
+
+def logs_dir(*, create: bool = True) -> Path:
+    """The managed runtime log tree (V69 M61.4). Absolute, never CWD-relative."""
+    return _resolve(_LOGS, create=create)
+
+
+def runtime_log_path(*, create: bool = True) -> Path:
+    """The single rotating runtime log file (``logs/jarvis.log``)."""
+    return logs_dir(create=create) / "jarvis.log"
+
+
+def audit_log_path(*, create: bool = True) -> Path:
+    """The append-only tactic/shutdown audit trail (``logs/tactic_audit.jsonl``)."""
+    return logs_dir(create=create) / "tactic_audit.jsonl"
 
 
 def continuity_db_path(*, create: bool = True) -> Path:
@@ -143,4 +163,5 @@ def describe() -> dict:
         "diagnostics": _DIAGNOSTICS,
         "backups": _BACKUPS,
         "exports": _EXPORTS,
+        "logs": _LOGS,
     }

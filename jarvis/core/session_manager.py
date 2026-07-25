@@ -8,17 +8,21 @@ Survives restarts, power cuts, and crashes.
 
 import json
 import time
-from pathlib import Path
 from datetime import datetime, timezone
 from loguru import logger
 
+from core.managed_paths import logs_dir
 from core.memory_router import redact_secrets
 
-SESSION_DIR   = Path("logs/sessions")
+# V69 M61.4 — this was ``Path("logs/sessions")`` plus an import-time ``mkdir``. The
+# file it writes holds REDACTED CONVERSATION TURNS, so scattering it across whichever
+# directory the process was launched from is a privacy problem, not only a tidiness
+# one. It now resolves absolutely inside the application tree. The name is kept
+# (tests monkeypatch ``SESSION_DIR``) and the directory is created on write, not on
+# import.
+SESSION_DIR   = logs_dir(create=False) / "sessions"
 MAX_TURNS     = 20           # turns to persist
 RESUME_WINDOW = 3600         # sessions older than this (seconds) are not offered
-
-SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _redact_turn(turn: dict) -> dict:
@@ -45,11 +49,18 @@ def save_session(history: list[dict], session_id: str = "default") -> None:
             "timestamp":  time.time(),
             "turns":      [_redact_turn(t) for t in history[-MAX_TURNS:]],
         }
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2,
                                    default=str),
                         encoding="utf-8")
-    except Exception as e:
-        logger.debug(f"SESSION: save failed: {e}")
+    except Exception as e:  # noqa: BLE001
+        # V69 M61.4 — raised from debug to warning. This is the crash-resume
+        # snapshot: if it silently stops writing, the operator only discovers the
+        # loss after the crash it was meant to survive. Content-free — the exception
+        # TYPE only, never its message (which can quote a redacted turn or a path).
+        logger.warning(
+            f"SESSION: crash-resume snapshot NOT saved ({type(e).__name__}) — "
+            f"this conversation will not be resumable")
 
 
 def load_session(session_id: str = "default") -> list[dict] | None:
