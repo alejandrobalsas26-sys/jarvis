@@ -361,6 +361,21 @@ def _resolve_within_allowed(path: str) -> "Path | None":
     return None
 
 
+# ── Structured filesystem status codes ────────────────────────────────────────
+# Deterministic, language-independent identifiers returned alongside the
+# human-facing (Spanish) `error` text by the sandboxed file handlers. Callers and
+# tests MUST branch on these codes: the prose is presentation and may be
+# translated, and a message-substring assertion cannot distinguish "denied by the
+# sandbox" from "allowed but absent" — the exact distinction a traversal
+# regression test has to make.
+ERR_PATH_NOT_ALLOWED = "PATH_NOT_ALLOWED"
+ERR_FILE_NOT_FOUND = "FILE_NOT_FOUND"
+ERR_UNSUPPORTED_EXTENSION = "UNSUPPORTED_EXTENSION"
+ERR_READ_FAILED = "READ_FAILED"
+ERR_INVALID_MODE = "INVALID_MODE"
+ERR_WRITE_FAILED = "WRITE_FAILED"
+
+
 def _strip_override(tool_name: str, tool_input: dict) -> dict:
     """Return a copy of *tool_input* with any model-supplied FORCE_OVERRIDE removed.
 
@@ -1227,18 +1242,22 @@ class ToolExecutor:
 
     def _tool_read_file(self, path: str, max_chars: int = 8000) -> dict:
         """[SANDBOXED] Lee archivos solo dentro de Downloads, Documents o el proyecto."""
-        p = Path(path).expanduser().resolve()
-        allowed_dirs = [
-            Path.home() / "Downloads",
-            Path.home() / "Documents",
-            Path.cwd(),
-        ]
-        is_allowed = any(p.is_relative_to(a.resolve()) for a in allowed_dirs)
-        if not is_allowed:
-            logger.warning(f"Intento de lectura bloqueado: {p}")
-            return {"error": "Seguridad: No tengo permiso para leer fuera de Downloads o Documents."}
+        # One hardened containment definition for every path-taking handler.
+        # `.resolve()` normalizes `..` and follows symlinks BEFORE the membership
+        # test, so relative traversal, absolute escapes and symlink escapes all
+        # fail closed here identically on POSIX and Windows.
+        p = _resolve_within_allowed(path)
+        if p is None:
+            logger.warning("Intento de lectura bloqueado (fuera del sandbox).")
+            return {
+                "error": "Seguridad: No tengo permiso para leer fuera de Downloads o Documents.",
+                "error_code": ERR_PATH_NOT_ALLOWED,
+            }
         if not p.exists():
-            return {"error": f"Archivo no encontrado: {path}"}
+            return {
+                "error": f"Archivo no encontrado: {path}",
+                "error_code": ERR_FILE_NOT_FOUND,
+            }
 
         ext = p.suffix.lower()
         try:
@@ -1261,7 +1280,10 @@ class ToolExecutor:
             elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"):
                 content = self._read_image_ocr(p)
             else:
-                return {"error": f"Extensión '{ext}' no soportada."}
+                return {
+                    "error": f"Extensión '{ext}' no soportada.",
+                    "error_code": ERR_UNSUPPORTED_EXTENSION,
+                }
 
             if len(content) > max_chars:
                 content = content[:max_chars] + f"\n\n[...truncado a {max_chars} chars]"
@@ -1274,7 +1296,7 @@ class ToolExecutor:
                 "chars": len(content),
             }
         except Exception as e:
-            return {"error": f"Error leyendo {path}: {e}"}
+            return {"error": f"Error leyendo {path}: {e}", "error_code": ERR_READ_FAILED}
 
     def _read_pdf(self, path: Path) -> str:
         import pdfplumber
@@ -2306,23 +2328,27 @@ class ToolExecutor:
 
     def _tool_write_file(self, path: str, content: str, mode: str = "w") -> dict:
         """[HITL] Write text content to a file in Downloads, Documents, or project dir."""
-        p = Path(path).expanduser().resolve()
-        allowed_dirs = [
-            Path.home() / "Downloads",
-            Path.home() / "Documents",
-            Path.cwd(),
-        ]
-        if not any(p.is_relative_to(a.resolve()) for a in allowed_dirs):
-            return {"error": "Seguridad: solo puedo escribir en Downloads, Documents o el proyecto."}
+        # Same single containment definition as _tool_read_file — see
+        # _resolve_within_allowed. Fail-closed before any directory is created.
+        p = _resolve_within_allowed(path)
+        if p is None:
+            logger.warning("Intento de escritura bloqueado (fuera del sandbox).")
+            return {
+                "error": "Seguridad: solo puedo escribir en Downloads, Documents o el proyecto.",
+                "error_code": ERR_PATH_NOT_ALLOWED,
+            }
         if mode not in ("w", "a"):
-            return {"error": "mode debe ser 'w' (write/overwrite) o 'a' (append)."}
+            return {
+                "error": "mode debe ser 'w' (write/overwrite) o 'a' (append).",
+                "error_code": ERR_INVALID_MODE,
+            }
         p.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(p, mode, encoding="utf-8") as f:
                 f.write(content)
             return {"written": str(p), "bytes": len(content.encode("utf-8")), "mode": mode}
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": str(e), "error_code": ERR_WRITE_FAILED}
 
     def _tool_code_execute(self, code: str, timeout: int = 15) -> dict:
         """[HITL] Execute a Python snippet in an isolated subprocess. Returns stdout/stderr."""
