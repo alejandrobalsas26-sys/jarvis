@@ -1,26 +1,44 @@
 # JARVIS
 
-A complete autonomous Purple Team security platform.
+Local-first, operator-controlled AI workstation and authorized Purple Team/SOC
+homelab platform.
 
-Built across 46 versions on a Ryzen 5 7430U + 64GB DDR4 dual-channel.
-Local LLM inference via Ollama. No external AI APIs.
+Current release: **V69 M61** (see `core/version.py` — the canonical version source;
+every other version statement in this repository derives from or is verified against
+it). Developed on a Ryzen 5 7430U + 64 GB DDR4 dual-channel. Local LLM inference via
+Ollama; cloud backends are opt-in and off by default.
+
+> **Authorized lab use only.** JARVIS ships offensive-capable modules (MITM proxy,
+> C2 bridges, Metasploit RPC, RF tooling). They are not installed by the `base`
+> profile, and at runtime every one of them is behind human approval (HITL / NATO
+> vocal challenge) plus the operator-set `JARVIS_TRUSTED_LAB` flag. See
+> [../SECURITY.md](../SECURITY.md) and [../docs/THREAT_MODEL.md](../docs/THREAT_MODEL.md).
 
 ---
 
 ## What JARVIS Is
 
-JARVIS is your Purple Team analyst. It:
+JARVIS is an operator-directed Purple Team analyst. Under operator control it:
 
-- Listens to your voice via Whisper
-- Reasons via local Ollama (qwen2.5 7B/14B)
+- Listens to your voice via Whisper (voice mode; text mode is the default)
+- Reasons via local Ollama — the configured role table resolves FAST `qwen3:8b`,
+  CODER `qwen2.5-coder:latest`, DEEP `qwen3:14b`, VISION `gemma3:4b`,
+  EMBEDDING `nomic-embed-text:latest`, VERIFIER `qwen3:8b`
 - Speaks via TTS
 - Monitors your lab via ETW, Sysmon, Zeek, canaries, sensors
 - Detects threats via correlation, YARA, Sigma, network baselining
-- Hunts proactively using 12 ATT&CK hypotheses every 4 hours
-- Attacks autonomously via ARES Red Team Operator
-- Defends adaptively via auto-generated Sigma rules
-- Remembers everything via ChromaDB + SQLite intelligence fusion
-- Talks to you anywhere via Telegram bridge
+- Hunts proactively using 12 ATT&CK hypotheses on a scheduled cadence
+- Runs ARES red-team emulation **only when the operator authorizes each campaign** —
+  execution is gated, scope-bound and audited; it never self-initiates an attack
+- Proposes adaptive defences via auto-generated Sigma rules (operator reviews before
+  they are promoted)
+- Remembers within policy via ChromaDB + SQLite intelligence fusion, with
+  crash-safe session continuity (V69 M60) and secret-refusing memory writes
+- Reaches you via the Telegram bridge when you enable it
+
+**Authority model.** Nothing in the list above is autonomous. High-risk OS/network
+actions require HITL or NATO OTP authorization, the tool executor runs `shell=False`
+against an allowlist, and the verifier pass is advisory — it flags, it does not act.
 
 ---
 

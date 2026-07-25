@@ -2,7 +2,8 @@
 
 **Branch:** `jarvis-v69-m60-crash-safe-session-continuity`
 **Base:** `384c147` (V69 M59 merged into `master`)
-**Status:** complete, pushed, **NOT merged**
+**Status:** complete and **merged to `master`** as `df35289` (merge status corrected in V69
+M61.1 — this line was stale)
 
 ---
 

@@ -1,8 +1,9 @@
 # JARVIS V69 M58 — Prompt-Prefix Parity, Cache-Safe Prewarm & Real-Time Interruption
 
-**Branch:** `jarvis-v69-m58-prompt-prefix-parity` (NOT merged)
+**Branch:** `jarvis-v69-m58-prompt-prefix-parity`
 **Base:** `dc1e34b` (M57) — verified ancestor of `master`
-**Status:** complete, pushed, awaiting review. Do not merge automatically.
+**Status:** complete and **merged to `master`** as `8c0a390` (merge status corrected in V69
+M61.1 — this line was stale).
 
 ---
 

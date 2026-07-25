@@ -3,7 +3,8 @@
 **Branch:** `jarvis-v69-m59-predictive-warmth-runtime-qualification`
 **Base:** M58 `58b52dd` (proven ancestor of `master`)
 **Status:** **M59 COMPLETE** — M59.1 · M59.2 · M59.3 · M59.4 · M59.5 · M59.6, deterministic
-and bounded-live validated. Not merged.
+and bounded-live validated, and **merged to `master`** as `384c147` (merge status corrected in
+V69 M61.1 — this line was stale).
 
 M59 consolidates M58 and eliminates its measurable limitations: prewarm/live sampling
 divergence, no session warmth baseline, manual (non-repeatable) prefix benchmarks, and
