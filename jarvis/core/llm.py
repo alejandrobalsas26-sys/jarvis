@@ -2002,6 +2002,29 @@ class LLM:
             warmed_identity=warmed,
         )
         result["cache_state"] = getattr(state, "value", str(state))
+        # V69 M59.5 — fold this turn's MEASURED evidence into the session warmth
+        # baseline. This is the only path that can promote the session past PREWARMED:
+        # the classification above is a measurement, not an assumption. A posture
+        # change is detected inside and invalidates BEFORE the evidence is folded.
+        try:
+            from core.warmth_runtime import get_warmth_runtime
+            _runner_id = ""
+            try:
+                from core.inference_profile import RunnerIdentity
+                _runner_id = RunnerIdentity(
+                    model=route.model, transport="native", think=route.think,
+                    num_ctx=int(manifest.num_ctx)).fingerprint()
+            except Exception:  # noqa: BLE001
+                _runner_id = ""
+            get_warmth_runtime().observe_turn(
+                manifest=manifest, cache_state=result["cache_state"],
+                runner_identity=_runner_id, model=route.model, transport="native",
+                prompt_eval_count=result.get("prompt_eval_count"),
+                prompt_eval_ms=result.get("prompt_eval_ms"),
+                load_ms=result.get("load_ms"),
+                first_content_ms=result.get("first_content_ms"))
+        except Exception:  # noqa: BLE001 — warmth accounting never breaks a turn
+            pass
         try:
             publish_manifest_metrics(manifest.snapshot())
         except Exception:  # noqa: BLE001

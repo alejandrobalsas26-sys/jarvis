@@ -310,6 +310,101 @@ class ConsoleCoordinator:
             }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M59.5 — single-owner console INPUT ownership
+# ══════════════════════════════════════════════════════════════════════════════
+# The coordinator owns every console WRITE. Reading is the mirror problem: the
+# line reader (`input()` in an executor) and the active-console key backend both
+# consume this process's console, and two live readers race for the same bytes —
+# a half-eaten accented character, a swallowed Enter, a duplicated interrupt.
+# M58 avoided it by convention (arm/disarm around a turn); M59.5 makes it a
+# checkable invariant so a portable backend cannot silently become a second
+# reader.
+#
+# This is deliberately NOT a lock the caller can block on: an input backend that
+# cannot take ownership must degrade (COMMAND_ONLY), never wait. Ownership is a
+# process-local string label; no key, no typed text, and no handle is stored.
+class ConsoleInputOwnership:
+    """Bounded, content-free registry of which backend owns console input."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._owner: str | None = None
+        self.grants: int = 0
+        self.denials: int = 0
+        # Releases requested by a label that did not hold ownership — the exact
+        # signature of a leaked/duplicated reader.
+        self.foreign_releases: int = 0
+
+    def acquire(self, owner: str) -> bool:
+        """Claim console input for ``owner``. Re-entrant for the SAME owner so a
+        re-arm is idempotent; refused (False) while another backend holds it."""
+        label = str(owner or "unknown")
+        with self._lock:
+            if self._owner is not None and self._owner != label:
+                self.denials += 1
+                return False
+            self._owner = label
+            self.grants += 1
+            return True
+
+    def release(self, owner: str) -> None:
+        """Release ownership. A release from a label that does not hold it is
+        counted and ignored — it never steals the console from the real owner."""
+        label = str(owner or "unknown")
+        with self._lock:
+            if self._owner is None:
+                return
+            if self._owner != label:
+                self.foreign_releases += 1
+                return
+            self._owner = None
+
+    @property
+    def owner(self) -> str | None:
+        with self._lock:
+            return self._owner
+
+    def held_by(self, owner: str) -> bool:
+        return self.owner == str(owner or "unknown")
+
+    def snapshot(self) -> dict:
+        return {"input_owner": self.owner, "input_grants": self.grants,
+                "input_denials": self.denials,
+                "input_foreign_releases": self.foreign_releases}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._owner = None
+            self.grants = self.denials = self.foreign_releases = 0
+
+
+_input_ownership = ConsoleInputOwnership()
+
+
+def get_console_input_ownership() -> ConsoleInputOwnership:
+    """The process console-input ownership registry."""
+    return _input_ownership
+
+
+def acquire_console_input(owner: str) -> bool:
+    """Claim console input for ``owner`` (False when another backend holds it)."""
+    return _input_ownership.acquire(owner)
+
+
+def release_console_input(owner: str) -> None:
+    _input_ownership.release(owner)
+
+
+def console_input_owner() -> str | None:
+    return _input_ownership.owner
+
+
+def reset_console_input_ownership() -> None:
+    """Tests / a fresh process."""
+    _input_ownership.reset()
+
+
 # ── Process-global singleton + logger sink integration ───────────────────────
 _console: ConsoleCoordinator | None = None
 
@@ -330,12 +425,15 @@ def install_console(stream: TextIO | None = None, *, start: bool = True) -> Cons
 
 
 def reset_console() -> None:
-    """Tear down the global console (tests / shutdown)."""
+    """Tear down the global console (tests / shutdown). Also drops console-input
+    ownership: once the coordinator is gone there is no console for a backend to own,
+    and a leaked owner would block the next reader forever."""
     global _console
     remove_stdlib_logging_bridge()
     if _console is not None:
         _console.stop()
     _console = None
+    reset_console_input_ownership()
 
 
 # Loguru level -> console channel mapping for the sink.

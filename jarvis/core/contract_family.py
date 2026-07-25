@@ -403,6 +403,16 @@ class FamilyPrewarm:
             self.successes += 1
             self._done.add(key)
             self._warmed_identity = identity
+        # V69 M59.5 — publish the attempt to the session warmth baseline. EVERY warm
+        # path (boot, background, predictive rewarm) goes through here, so the session
+        # record is folded exactly once and can never disagree with what actually ran.
+        # A successful prewarm becomes PREWARMED and NOTHING stronger: reuse is only
+        # ever promoted by a live turn's measured prefill.
+        try:
+            from core.warmth_runtime import get_warmth_runtime
+            get_warmth_runtime().note_family_record(rec)
+        except Exception:  # noqa: BLE001 — warmth accounting never breaks a prewarm
+            pass
         return rec
 
     def _derive_sampling(self, family: ContractFamily, shape) -> dict:

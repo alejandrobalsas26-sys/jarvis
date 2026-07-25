@@ -368,9 +368,14 @@ class Settings(BaseSettings):
                    "BEFORE_TEXT_READY_CONCISE"}
         return val if val in allowed else "BACKGROUND_FAMILIES"
 
-    # V69 M58.8 — active-console barge-in. AUTO picks the msvcrt key reader on a real
-    # Windows console and COMMAND_ONLY (only /stop) elsewhere; COMMAND_ONLY forces the
-    # line-mode fallback. NEVER a global keyboard hook.
+    # V69 M58.8 / M59.5 — portable active-console barge-in backend.
+    #   AUTO            prompt_toolkit (when installed + terminal-compatible)
+    #                   -> Windows msvcrt console -> COMMAND_ONLY
+    #   PROMPT_TOOLKIT  force the portable backend; degrades HONESTLY when absent
+    #   WINDOWS_MSVCRT  force the Windows console reader
+    #   COMMAND_ONLY    force the line-mode /stop fallback
+    # ACTIVE_CONSOLE_KEY is kept as the M58 alias for AUTO. NEVER a global keyboard
+    # hook, never an OS-wide hotkey, never keylogging — console-local only.
     barge_in_mode: str = Field(
         default="AUTO",
         validation_alias=AliasChoices("JARVIS_BARGE_IN_MODE", "barge_in_mode"),
@@ -380,7 +385,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_barge_in_mode(cls, v: str) -> str:
         val = (v or "AUTO").strip().upper().replace("-", "_")
-        return val if val in {"AUTO", "ACTIVE_CONSOLE_KEY", "COMMAND_ONLY"} else "AUTO"
+        allowed = {"AUTO", "ACTIVE_CONSOLE_KEY", "PROMPT_TOOLKIT",
+                   "WINDOWS_MSVCRT", "COMMAND_ONLY"}
+        return val if val in allowed else "AUTO"
 
     @field_validator("fast_prewarm_mode")
     @classmethod
