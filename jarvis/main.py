@@ -305,6 +305,14 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
         get_compaction_scheduler().preempt()
     except Exception:
         pass
+    # V69 M59.5 — and it preempts any in-flight SPECULATIVE rewarm. A predictive
+    # rewarm exists to make the operator's next turn faster; letting it hold the
+    # inference slot while that turn is waiting would invert its whole purpose.
+    try:
+        from core.warmth_runtime import get_warmth_runtime
+        get_warmth_runtime().preempt()
+    except Exception:
+        pass
     # The terminal state this turn will be recorded with. Pessimistic until the
     # stream proves otherwise, so a silent abort is never read as a completed turn.
     _turn_state = TurnState.FAILED
@@ -520,6 +528,15 @@ async def _run_turn(llm, tts, user_input: str, name: str, lang: str | None = Non
             })
         except Exception:
             pass
+        # V69 M59.5 — the turn is over, so a deterministic invalidation raised DURING
+        # it (model/ctx/language/authority/scope/policy/tool-schema change, or an
+        # observed eviction) may now schedule ONE bounded, governed rewarm. Never
+        # awaited: the prompt returns first, always.
+        try:
+            from core.warmth_runtime import get_warmth_runtime
+            get_warmth_runtime().consume_pending()
+        except Exception:
+            pass
 
     if _console is not None:
         _console.post("\n", ConsoleChannel.ASSISTANT)
@@ -716,6 +733,7 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
     from core.consent_commands import parse_consent_command, apply_consent_command
     from core.mode_commands import parse_mode_command, describe_mode
     from core.response_commands import parse_response_command
+    from core.runtime_commands import apply_runtime_command, parse_runtime_command
     from core.lifecycle import lifecycle
     try:
         from core.console import get_console
@@ -750,6 +768,19 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
         if _console is not None:
             _console.set_prompt("Tú: ")
         _prompt = "" if _console is not None else "Tú: "
+        # V69 M59.5 — the line reader takes console-input ownership for the duration
+        # of the blocking read. Exactly one input backend owns the console at a time:
+        # while this is held, an active-console key backend refuses to arm instead of
+        # becoming a second consumer of the same keystrokes (which is how an accented
+        # character or a submitted line gets eaten).
+        release_console_input = None
+        try:
+            from core.console import acquire_console_input
+            from core.console import release_console_input as _release_input
+            acquire_console_input("line_reader")
+            release_console_input = _release_input
+        except Exception:
+            release_console_input = None
         try:
             # run_in_executor para no bloquear el event loop con input()
             user_input = await loop.run_in_executor(None, input, _prompt)
@@ -759,6 +790,11 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             _mark_input_reader_live(False)
             break
         finally:
+            try:
+                if release_console_input is not None:
+                    release_console_input("line_reader")
+            except Exception:
+                pass
             if _console is not None:
                 _console.set_prompt(None)
 
@@ -776,6 +812,17 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             try:
                 from core.contract_family import get_family_prewarm
                 asyncio.create_task(get_family_prewarm().cancel())
+            except Exception:
+                pass
+            # V69 M59.5 — the same preemption applies to a speculative rewarm, and a
+            # prewarm the operator cut short is recorded as exactly that: the intended
+            # warm never happened, which is a legitimate reason to retry later — it is
+            # NOT evidence that anything measured became untrue.
+            try:
+                from core.warmth_runtime import get_warmth_runtime
+                _wr = get_warmth_runtime()
+                _wr.preempt()
+                _wr.note_prewarm_cancelled("CONCISE")
             except Exception:
                 pass
 
@@ -808,6 +855,23 @@ async def _loop_text(llm, tts, name: str, consent=None, state=None) -> None:
             else:
                 await _apply_response_command(_resp_cmd, llm, tts)
                 continue
+
+        # V69 M59.5 — M59 runtime status + bounded actions. TEXT ONLY, EXACT-match
+        # allowlist, no argument parsing: "/rewarm concise" and "/qualify quick" are
+        # literal aliases, so no value, path, model or host setting can arrive from
+        # free text. The five status verbs are read-only; the three actions each drive
+        # ONE already-bounded, already-governed subsystem and never touch the host,
+        # Git, the Ollama configuration or a semantic collection.
+        _rt_cmd = parse_runtime_command(user_input)
+        if _rt_cmd is not None:
+            try:
+                _console_emit(await apply_runtime_command(
+                    _rt_cmd, language=_active_language(llm), llm=llm))
+            except asyncio.CancelledError:
+                raise
+            except Exception as _rce:  # noqa: BLE001
+                logger.debug(f"RUNTIME_CMD: {type(_rce).__name__}")
+            continue
 
         # V69 M56.2/M56.8 — Ollama posture + residency operator commands. TEXT ONLY and
         # deterministically parsed: the six verbs take NO arguments, so no variable,
@@ -3000,6 +3064,14 @@ async def _main_async() -> None:
             try:
                 from core.contract_family import get_family_prewarm
                 await get_family_prewarm().cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            # V69 M59.5 — a speculative rewarm is the same orphan-task class: cancel
+            # it and AWAIT its teardown before the governor closes, so no rewarm task
+            # and no queued waiter survives shutdown.
+            try:
+                from core.warmth_runtime import get_warmth_runtime
+                await get_warmth_runtime().cancel()
             except Exception:  # noqa: BLE001
                 pass
             await get_governor().close()

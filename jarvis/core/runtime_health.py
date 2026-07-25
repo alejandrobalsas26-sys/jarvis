@@ -438,6 +438,7 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
     tl = tools if tools is not None else _live_tool_metrics()
     bi = barge if barge is not None else _live_barge_in()
     r = response if response is not None else _live_response_runtime()
+    sw = _live_session_warmth()
     if not (p or c or pw or cp or tl or bi):
         return SubsystemHealth("prompt_cache", HealthStatus.OPTIONAL,
                                "no interactive turn yet", {})
@@ -456,7 +457,11 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         # ── prefix reuse ──
         "cache_state": (c or {}).get("cache_state"),
         "invalidations": (c or {}).get("invalidations"),
-        "last_invalidation_reason": (c or {}).get("last_invalidation_reason"),
+        # M59.5 — renamed from `last_invalidation_reason`: the session-warmth block
+        # below owns that canonical name, and two dict entries sharing one key means
+        # the second SILENTLY discards the first. These are different facts (the cache
+        # observer's last reason vs the session baseline's) and both must survive.
+        "prefix_last_invalidation_reason": (c or {}).get("last_invalidation_reason"),
         "recent_prompt_eval_ms": (c or {}).get("recent_prompt_eval_ms"),
         "warm_prompt_eval_ms": (c or {}).get("warm_prompt_eval_ms"),
         "cold_prompt_eval_ms": (c or {}).get("cold_prompt_eval_ms"),
@@ -471,6 +476,18 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         "family_last_first_token_ms": (pw or {}).get("last_first_token_ms"),
         "family_last_prompt_eval_ms": (pw or {}).get("last_prompt_eval_ms"),
         "stale_fingerprints": (pw or {}).get("stale_fingerprints"),
+        # ── sampling parity (M59.1) ──
+        "prewarm_runner_identity": (pw or {}).get("prewarm_runner_identity"),
+        "live_runner_identity": (pw or {}).get("live_runner_identity"),
+        "runner_parity": (pw or {}).get("runner_parity"),
+        # ── session warmth & predictive rewarm (M59.2) ──
+        "session_warmth_state": (sw or {}).get("session_state"),
+        "session_reuse_state": (sw or {}).get("reuse_state"),
+        "session_observation_count": (sw or {}).get("observation_count"),
+        "session_invalidations": (sw or {}).get("invalidation_count"),
+        "predictive_rewarm_attempts": (sw or {}).get("predictive_rewarm_attempts"),
+        "predictive_rewarm_successes": (sw or {}).get("predictive_rewarm_successes"),
+        "rewarm_cooldown_remaining_s": (sw or {}).get("cooldown_remaining"),
         # ── compaction ──
         "compaction_scheduled": (cp or {}).get("scheduled"),
         "compaction_completed": (cp or {}).get("completed"),
@@ -487,7 +504,7 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         "tool_schema_fingerprint": (tl or {}).get("tool_schema_fingerprint"),
         "eligible_tool_count": (tl or {}).get("eligible_tool_count"),
         "schema_estimated_tokens": (tl or {}).get("schema_estimated_tokens"),
-        # ── barge-in ──
+        # ── barge-in (M58.8) ──
         "barge_in_mode": (bi or {}).get("mode"),
         "barge_in_supported": (bi or {}).get("supported"),
         "active_interruptions": (bi or {}).get("active_interruptions"),
@@ -495,10 +512,37 @@ def _prompt_cache_subsystem(prompt: dict | None = None, cache: dict | None = Non
         "barge_in_cancellation_latency_ms": (bi or {}).get("cancellation_latency_ms"),
         "late_chunks_suppressed": (r or {}).get("late_chunks_suppressed"),
         "terminal_restore_failures": (bi or {}).get("terminal_restore_failures"),
+        # ── portable barge-in backend (M59.5) ──
+        # WHICH console-local backend runs, and the honest reason it is not a better
+        # one. `orphan_reader_count` is the leak detector: nonzero means an input
+        # reader outlived its turn. No key value can appear here by construction —
+        # a non-interrupt key never leaves the reader thread.
+        "selected_backend": (bi or {}).get("selected_backend"),
+        "portable_backend_available": (bi or {}).get("portable_backend_available"),
+        "fallback_reason": (bi or {}).get("fallback_reason"),
+        "cancellation_latency_ms": (bi or {}).get("cancellation_latency_ms"),
+        "orphan_reader_count": (bi or {}).get("orphan_reader_count"),
+        "barge_in_arm_failures": (bi or {}).get("arm_failures"),
+        "console_busy_denials": (bi or {}).get("console_busy_denials"),
+        "non_interrupt_keys_dropped": (bi or {}).get("ignored_keys"),
+        # ── session warmth, live-wired (M59.5) ──
+        # The canonical M59 names, sourced from the LIVE warmth runtime bridge.
+        "session_state": (sw or {}).get("session_state"),
+        "active_family": (sw or {}).get("active_family"),
+        "observation_count": (sw or {}).get("observation_count"),
+        "reuse_state": (sw or {}).get("reuse_state"),
+        "invalidation_count": (sw or {}).get("invalidation_count"),
+        "last_invalidation_reason": (sw or {}).get("last_invalidation_reason"),
+        "cooldown_remaining": (sw or {}).get("cooldown_remaining"),
+        "rewarm_deferred": (sw or {}).get("rewarm_deferred"),
+        "rewarm_skipped": (sw or {}).get("rewarm_skipped"),
+        "rewarm_preemptions": (sw or {}).get("rewarm_preemptions"),
+        "rewarm_pending": (sw or {}).get("rewarm_pending"),
     }
-    detail = "cache={} prewarm={} barge_in={}".format(
+    detail = "cache={} prewarm={} barge_in={} warmth={}".format(
         (c or {}).get("cache_state") or "n/a", (pw or {}).get("mode") or "n/a",
-        (bi or {}).get("mode") or "n/a")
+        (bi or {}).get("selected_backend") or (bi or {}).get("mode") or "n/a",
+        (sw or {}).get("session_state") or "n/a")
     return SubsystemHealth("prompt_cache", HealthStatus.OPTIONAL, detail, metrics)
 
 
@@ -522,6 +566,24 @@ def _live_family_prewarm() -> dict:
     try:
         from core.contract_family import get_family_prewarm
         return get_family_prewarm().snapshot()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_session_warmth() -> dict:
+    """The LIVE warmth block. Prefers the M59.5 runtime bridge (it carries the wiring
+    counters the raw baseline cannot know: deferrals, preemptions, pending rewarm) and
+    degrades to the M59.2 baseline block when the bridge is unavailable."""
+    try:
+        from core.warmth_runtime import warmth_runtime_health
+        out = warmth_runtime_health()
+        if out:
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from core.session_warmth import session_warmth_health
+        return session_warmth_health()
     except Exception:  # noqa: BLE001
         return {}
 

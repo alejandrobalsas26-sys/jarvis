@@ -16,8 +16,9 @@ inference is SERIALIZED by default, and the ordering is by explicit priority:
     2 INTERACTIVE    the operator's live FAST turn
     3 VERIFICATION   verification of an effectful operation
     4 SEMANTIC_QUERY a requested semantic lookup (the operator is waiting on it)
-    5 BACKGROUND     background semantic work (consolidation, indexing)
-    6 PREWARM        the optional warmup — always last, by definition optional
+    5 BACKGROUND     background semantic work (consolidation, indexing, embedding)
+    6 BACKGROUND_COMPACTION  idle model-assisted digest compaction (M59.4)
+    7 PREWARM        the optional warmup — always last, by definition optional
 
 The rule that motivated all of this: a background embedding batch must never make the
 operator's live turn wait. But the mirror rule matters just as much — background work
@@ -56,8 +57,9 @@ class Priority(IntEnum):
     INTERACTIVE = 2     # the operator's live FAST turn
     VERIFICATION = 3    # verification of an effectful operation
     SEMANTIC_QUERY = 4  # a requested semantic lookup
-    BACKGROUND = 5      # background semantic work
-    PREWARM = 6         # optional warmup — always last
+    BACKGROUND = 5      # background semantic work (incl. foreground embedding)
+    BACKGROUND_COMPACTION = 6  # idle model-assisted digest compaction (M59.4)
+    PREWARM = 7         # optional warmup — always last
 
 
 # Roles that are ON DEMAND: they are granted, but they are never kept resident and
