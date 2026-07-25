@@ -687,6 +687,30 @@ class SessionJournal:
             self._apply_content(turn, content, visible_chars=turn.content_chars)
         return self._put(D_TURN, turn.turn_id, turn.to_dict())
 
+    def finalize_stale_active_turns(self, *, terminal_state: str,
+                                    session_id: str | None = None) -> int:
+        """Close any still-ACTIVE turn of a session with a truthful in-process state.
+
+        Without this, a turn that failed or was cancelled somewhere the inference
+        finalizer does not cover would stay unfinalized on disk, and the NEXT boot
+        would report a crash that never happened. Called when a new turn replaces it
+        and at clean shutdown — the two moments where "still active" is known to be
+        false. It never invents content: only the terminal state changes.
+        """
+        sid = session_id or (self.active_session.session_id
+                             if self.active_session else None)
+        if sid is None or not self.enabled:
+            return 0
+        closed = 0
+        for turn in self.turns(sid):
+            if turn.finalized:
+                continue
+            turn.terminal_state = str(terminal_state)[:40]
+            turn.finalized_at = _now_iso()
+            if self._put(D_TURN, turn.turn_id, turn.to_dict()).ok:
+                closed += 1
+        return closed
+
     def turns(self, session_id: str) -> list[TurnRecord]:
         out: list[TurnRecord] = []
         prefix = f"{session_id}#"

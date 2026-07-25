@@ -453,6 +453,28 @@ def _reconciled_stamp(record) -> str:
     return f"{getattr(record, 'started_at', '') or ''}|reconciled"
 
 
+# ── Last-report holder ───────────────────────────────────────────────────────
+# ONE report per process (recovery runs once, at boot). ``/recovery-status`` and the
+# session panel read it back rather than re-running recovery — a status command must
+# never re-classify, re-write or re-reconcile anything.
+_last_report: RecoveryReport | None = None
+
+
+def publish_recovery_report(report: RecoveryReport) -> None:
+    global _last_report
+    _last_report = report
+
+
+def last_recovery_report() -> RecoveryReport:
+    """The boot recovery report, or an empty NOT_REQUIRED one before boot ran."""
+    return _last_report if _last_report is not None else RecoveryReport()
+
+
+def reset_recovery_report() -> None:
+    global _last_report
+    _last_report = None
+
+
 # ── Operator panel (bounded, ASCII, content-free) ────────────────────────────
 def render_recovery_panel(report: RecoveryReport, *, language: str = "es") -> str:
     """The RECOVERY panel. ``actions_replayed=0`` is printed as a fact, every time."""
