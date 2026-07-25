@@ -1,0 +1,210 @@
+name: JARVIS CI
+
+# V69 M61.2 — deterministic quality gates.
+#
+# Supersedes the previous main.yml, which had two defects that made it unfit as a
+# release gate: `pip-audit ... || true` discarded the audit's exit code AND its
+# visibility, and a `docker-build` job required a Docker daemon. Nothing here needs
+# Ollama, a downloaded model, a microphone, TTS hardware, a Docker daemon, Redis,
+# PostgreSQL, Zeek, Sysmon, Sliver, Metasploit, an API key, trusted-lab mode or
+# administrator privileges. Tests that need a live service skip behind their marker.
+#
+# No mandatory gate uses `|| true` or `continue-on-error`. The single advisory job
+# (dependency-audit) is explicitly labelled, documents why it is advisory, and still
+# prints its full result — a silent pass is not an outcome this workflow can produce.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  JARVIS_ENV: test
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Host mutation is opt-in since M61.3; assert the default holds in CI too.
+  JARVIS_AUTO_INSTALL_DEPS: "false"
+
+# A new push to the same branch cancels the previous run: CI minutes are not a
+# correctness signal.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Gate 1: release truth. Cheapest gate, so it runs first and alone. ───────
+  consistency:
+    name: Release truth & dependency authority
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Deliberately NO dependency install: the consistency checker is pure stdlib,
+      # so this gate cannot be broken by a resolution failure elsewhere.
+      - name: Version, documentation and dependency consistency
+        working-directory: jarvis
+        run: python scripts/check_release_consistency.py
+
+  # ── Gate 2: lint + grammar on the authoritative interpreter. ────────────────
+  lint:
+    name: Ruff & compileall (3.11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Install dev profile (constrained)
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c requirements/constraints-ci.txt -r requirements/dev.txt
+      - name: Ruff (correctness gate — E9 + full pyflakes)
+        working-directory: jarvis
+        run: ruff check .
+      - name: compileall
+        working-directory: jarvis
+        run: python -m compileall -q core tools scripts aura main.py __main__.py
+
+  # ── Gate 3: THE authoritative deterministic suite. ──────────────────────────
+  # Runs the complete suite (jarvis/tests + the repo-level tests/) on the
+  # authoritative interpreter. This is the job that must be green to merge.
+  tests:
+    name: Deterministic suite (3.11, authoritative)
+    runs-on: ubuntu-latest
+    env:
+      RBAC_DEFAULT_ACTOR: "test-actor:Admin"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Install dev + soc (drivers the suite imports)
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c requirements/constraints-ci.txt \
+            -r requirements/dev.txt -r requirements/soc.txt
+      - name: Full deterministic suite
+        working-directory: jarvis
+        run: python -m pytest -q --tb=short
+      - name: Deterministic stabilization soak (M61.6.1)
+        working-directory: jarvis
+        run: python scripts/soak_stabilization_m61.py --json
+      - name: Doctor (must not error a service-free environment)
+        working-directory: jarvis
+        run: python scripts/doctor.py
+
+  # ── Gate 4: compatibility. Lightweight — smoke, not the full suite. ─────────
+  compat:
+    name: Compatibility smoke (3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Install dev profile (constrained)
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c requirements/constraints-ci.txt -r requirements/dev.txt
+      - name: Consistency + grammar + M61 suites
+        working-directory: jarvis
+        run: |
+          python scripts/check_release_consistency.py
+          python -m compileall -q core tools scripts main.py
+          python -m pytest -q tests/test_version_v69_m611.py \
+            tests/test_dependency_authority_v69_m613.py \
+            tests/test_packaging_v69_m615.py \
+            tests/test_managed_logging_v69_m614.py
+
+  # ── Gate 5: a base install must stay a BASE install. ────────────────────────
+  # Proves the text-mode floor imports with only requirements/base.txt present —
+  # no voice, no OCR, no SOC drivers, no lab/offensive tooling.
+  base-install:
+    name: Base text-mode install purity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Install ONLY the base profile
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/base.txt
+      - name: Base import surface must resolve
+        working-directory: jarvis
+        run: python scripts/check_base_import.py
+      - name: Optional packages must be ABSENT (else this job proves nothing)
+        working-directory: jarvis
+        run: python scripts/check_base_import.py --assert-optional-absent
+
+  # ── Gate 6: packaging. Build, then prove what is inside. ───────────────────
+  packaging:
+    name: Wheel & sdist build + manifest scan
+    runs-on: ubuntu-latest
+    needs: [consistency]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+      - name: Build wheel and sdist
+        working-directory: jarvis
+        run: python -m build --outdir "${RUNNER_TEMP}/dist"
+      - name: Manifest & secret scan of the built artifacts
+        working-directory: jarvis
+        run: python scripts/check_package_manifest.py --dist "${RUNNER_TEMP}/dist"
+      # Artifacts are NOT uploaded. A build artifact from this repository could
+      # carry runtime state; the manifest scan above is the evidence, and it runs
+      # in-job where its failure is a gate rather than a download.
+
+  # ── Advisory: dependency vulnerability audit. NON-BLOCKING, and here is why. ─
+  # pip-audit resolves against live advisory feeds, so a new CVE published against
+  # a transitive dependency turns an unchanged, correct commit red with no code
+  # change to make. That is a maintenance signal, not a correctness gate, so it
+  # does not block merges. It is NOT silenced: `continue-on-error` keeps the step's
+  # real exit status and full output visible in the run summary, unlike the
+  # `|| true` this replaces, which discarded the result entirely.
+  dependency-audit:
+    name: Dependency audit (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install scanners
+        run: python -m pip install --upgrade pip bandit pip-audit
+      - name: Bandit (high severity — blocking)
+        working-directory: jarvis
+        run: bandit -r core tools -ll -q
+      - name: pip-audit (advisory, result visible)
+        id: pip_audit
+        continue-on-error: true
+        working-directory: jarvis
+        run: pip-audit -r requirements/base.txt
+      - name: Report the advisory outcome
+        if: always()
+        run: |
+          echo "pip-audit outcome: ${{ steps.pip_audit.outcome }}" >> "$GITHUB_STEP_SUMMARY"
