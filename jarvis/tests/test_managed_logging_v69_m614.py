@@ -17,7 +17,6 @@ These tests pin four things:
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 
 import pytest
@@ -67,17 +66,31 @@ def test_describe_reports_relative_paths_only():
 
 
 # ── no CWD scatter ───────────────────────────────────────────────────────────
-def test_importing_the_runtime_creates_nothing_in_the_cwd(tmp_path, monkeypatch):
-    """Import-time side effects were real: session_journal used to mkdir on import."""
-    monkeypatch.chdir(tmp_path)
-    before = set(os.listdir(tmp_path))
+def test_importing_the_runtime_creates_nothing_in_the_cwd(tmp_path):
+    """Import-time side effects were real: session_journal used to mkdir on import.
 
-    import importlib
-    for module in ("core.session_journal", "core.session_manager",
-                   "core.managed_logging", "core.managed_paths"):
-        importlib.reload(importlib.import_module(module))
+    Run in a SUBPROCESS with the temp directory as its CWD. That is the real scenario
+    (a service manager launching from an arbitrary directory), and it avoids
+    ``importlib.reload`` on shared core modules — reloading rebinds the module's
+    classes, so a later suite catching ``managed_paths.UnsafeLeafName`` would be
+    comparing against a different class object and fail for a reason that has nothing
+    to do with the code under test.
+    """
+    import subprocess
+    import sys
 
-    assert set(os.listdir(tmp_path)) == before, "import scattered files into the CWD"
+    script = (
+        "import sys, os\n"
+        f"sys.path.insert(0, {str(_APP_ROOT)!r})\n"
+        "import core.session_journal, core.session_manager\n"
+        "import core.managed_logging, core.managed_paths, main\n"
+        "print('\\n'.join(sorted(os.listdir('.'))))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], cwd=str(tmp_path),
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, f"import failed: {result.stderr[-400:]}"
+    residue = [line for line in result.stdout.splitlines() if line.strip()]
+    assert residue == [], f"import scattered {residue} into the CWD"
 
 
 def test_continuity_modules_no_longer_mkdir_at_import_time():
