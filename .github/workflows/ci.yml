@@ -94,9 +94,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -c requirements/constraints-ci.txt \
             -r requirements/dev.txt -r requirements/soc.txt
-      - name: Full deterministic suite
-        working-directory: jarvis
-        run: python -m pytest -q --tb=short
+      # Run from the REPOSITORY ROOT with both trees named explicitly. This is the
+      # authoritative invocation (the one the release qualification and the M61
+      # baseline use) and it is deliberately not `working-directory: jarvis`:
+      # `tests/test_security.py::TestReadFile::test_relative_traversal_blocked`
+      # resolves its `../../etc/passwd` fixture RELATIVE TO THE CWD, so the two
+      # invocations exercise different paths and disagree. Naming the trees also
+      # removes the dependency on pytest's rootdir/ini discovery.
+      - name: Full deterministic suite (both trees)
+        run: python -m pytest -q --tb=short jarvis/tests tests
       - name: Deterministic stabilization soak (M61.6.1)
         working-directory: jarvis
         run: python scripts/soak_stabilization_m61.py --json

@@ -1,5 +1,56 @@
 # Changelog
 
+## V69 M61 — Production stabilization, CI & release engineering
+
+Full report: [`jarvis/docs/V69_M61_PRODUCTION_STABILIZATION.md`](jarvis/docs/V69_M61_PRODUCTION_STABILIZATION.md).
+
+A stabilization release. **No new agent, model, security subsystem or autonomous
+capability.** Every change establishes a source of truth, verifies an existing claim,
+or removes an unrequested side effect.
+
+- **Canonical version.** `jarvis/core/version.py` is the single authority
+  (`69.61.0`); `pyproject.toml` derives from it as dynamic metadata. Package metadata
+  had been stuck at `63.0.0` for six milestones. `core/release_check.py` verifies the
+  documentation against it as a mandatory CI gate.
+- **Documentation truth.** Corrected the `JARVIS.md` claim of "a complete autonomous
+  Purple Team security platform" that "attacks autonomously" (every offensive path is
+  behind HITL/NATO approval plus the trusted-lab flag), the superseded `qwen2.5 7B/14B`
+  model claim (the live table resolves qwen3), the version count, and four release
+  documents still saying NOT merged for work already on `master`.
+- **GitHub Actions.** New `.github/workflows/ci.yml` (push to master, PR to master,
+  manual dispatch) with seven gates. Replaces `main.yml`, whose audit step ended in
+  `|| true` and whose docker job required a Docker daemon. No mandatory gate can
+  silently pass; exactly one step is advisory and its result stays visible. CI needs
+  no Ollama, model, microphone, Docker, Redis, PostgreSQL, API key or elevation.
+- **One dependency authority.** `requirements/<profile>.txt` is authoritative;
+  `pyproject.toml` mirrors it, verified by `core.dependency_authority.audit()`. Fixed
+  real drift (8 packages missing from the `soc` extra, 7 from `lab`). The 170-line
+  legacy `requirements.txt` is deprecated to a pointer, verified lossless.
+  `requirements/constraints-ci.txt` bounds the test toolchain only.
+- **No unrequested host mutation.** The boot sequence ran
+  `pip install --break-system-packages` and `winget install jqlang.jq` on every start.
+  Both are report-only unless `JARVIS_AUTO_INSTALL_DEPS=true`;
+  `--break-system-packages` is gone entirely.
+- **Packaging.** The project had never been built — the flat layout defeats setuptools
+  auto-discovery. Layout, package data and exclusions are now declared; `MANIFEST.in`
+  plus `scripts/check_package_manifest.py` keep `.env`, signing keys, logs, databases
+  and tests out of the artifacts. Wheel, sdist, editable install and all launch paths
+  verified.
+- **Managed logging.** The DEBUG sink was CWD-relative, producing one 2.7 MB log per
+  launch directory. It now resolves absolutely, declares rotation/retention once, and
+  redacts before writing. The crash-resume snapshot and session journal moved off the
+  CWD too, and no longer create directories at import time.
+- **Silent failures.** Corrected eight suppressions where a hidden failure mattered
+  (console ownership, shutdown audit trail, shutdown event, SIGINT handler, watchdog
+  stop, crash-resume write). Optional degradation stays non-fatal; every new message
+  is content-free.
+- **Qualification & soak.** `scripts/qualify_release_m61.py` (13 gates, mutates
+  nothing) and `scripts/soak_stabilization_m61.py` (40 cycles: 0 thread/task growth,
+  0 journal failures, 0 temp residue, `actions_replayed` structurally 0).
+
+Full suite **3481 passed / 18 skipped / 0 failed** (from 3286/18/0, +195 tests);
+ruff and compileall clean.
+
 ## V63.0 — General-purpose agent runtime (in progress)
 
 Evolves JARVIS from a cyber-focused local assistant toward a general-purpose,

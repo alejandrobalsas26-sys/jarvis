@@ -144,3 +144,52 @@ def test_model_detector_accepts_the_current_coder_model(monkeypatch):
         release_check, "_current_texts",
         lambda: {"fake.md": "CODER role resolves qwen2.5-coder:latest"})
     assert release_check.check_models() == []
+
+
+# ── the status detector: negative controls ───────────────────────────────────
+# The first implementation read milestone numbers out of the document BODY as well
+# as the filename. A "corrected in V69 M61.1" note inside the M60 document then made
+# it look like an M61 document, exempting it — the checker silently stopped detecting
+# exactly the drift it exists for. These controls are why that was caught.
+@pytest.mark.parametrize("doc,shipped_marker", [
+    ("V69_M60_CRASH_SAFE_SESSION_CONTINUITY.md", "**merged to `master`** as `df35289`"),
+    ("V69_M58_PROMPT_PREFIX_PARITY.md", "**merged to `master`** as `8c0a390`"),
+    ("V69_M55_NATIVE_FAST_PATH.md", "**merged to `master`** as `d101a83`"),
+])
+def test_status_detector_catches_a_shipped_milestone_claiming_unmerged(
+        doc, shipped_marker, tmp_path, monkeypatch):
+    """Plant the stale claim back and require the checker to find it."""
+    source = _APP_ROOT / "docs" / doc
+    original = source.read_text(encoding="utf-8")
+    assert shipped_marker in original, f"{doc} no longer records its merge commit"
+
+    fake_docs = tmp_path / "docs"
+    fake_docs.mkdir()
+    (fake_docs / doc).write_text(
+        original.replace(shipped_marker, "NOT merged"), encoding="utf-8")
+    monkeypatch.setattr(release_check, "_APP_ROOT", tmp_path)
+
+    problems = release_check.check_release_status()
+    assert len(problems) == 1
+    assert doc in problems[0]
+    assert "already shipped" in problems[0]
+
+
+def test_status_detector_exempts_the_current_in_flight_milestone(tmp_path, monkeypatch):
+    """M61's own document legitimately says it is awaiting review."""
+    fake_docs = tmp_path / "docs"
+    fake_docs.mkdir()
+    (fake_docs / "V69_M61_PRODUCTION_STABILIZATION.md").write_text(
+        "# JARVIS V69 M61\n\n**Status:** complete, pushed. Not merged automatically.\n",
+        encoding="utf-8")
+    monkeypatch.setattr(release_check, "_APP_ROOT", tmp_path)
+    assert release_check.check_release_status() == []
+
+
+def test_status_detector_exempts_a_future_milestone(tmp_path, monkeypatch):
+    fake_docs = tmp_path / "docs"
+    fake_docs.mkdir()
+    (fake_docs / "V69_M62_SOMETHING.md").write_text(
+        "# JARVIS V69 M62\n\n**Status:** NOT merged\n", encoding="utf-8")
+    monkeypatch.setattr(release_check, "_APP_ROOT", tmp_path)
+    assert release_check.check_release_status() == []

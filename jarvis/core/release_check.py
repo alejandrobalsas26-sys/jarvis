@@ -76,8 +76,10 @@ _FORBIDDEN_CLAIMS = (
     "autonomously attack",
 )
 
-#: A release document may say "NOT merged" only about a milestone ABOVE the
-#: canonical one (i.e. work in flight). Matches ``V69 M58``/``V69_M58``/``M58``.
+#: A release document may say "NOT merged" only about the CURRENT milestone or a
+#: later one — i.e. work still in flight. The canonical milestone's own document is
+#: legitimately unmerged while it is being reviewed; a document for work that already
+#: shipped is not. Matches ``V69 M58``/``V69_M58``/``M58``.
 _MILESTONE_RE = re.compile(r"\bM(\d{2})\b")
 _NOT_MERGED_RE = re.compile(r"not\s+merged", re.IGNORECASE)
 
@@ -163,7 +165,12 @@ def check_claims() -> list[str]:
 
 
 def check_release_status() -> list[str]:
-    """A milestone at or below the canonical one may not be documented 'NOT merged'."""
+    """A milestone BELOW the canonical one may not be documented 'NOT merged'.
+
+    Strictly below, not "at or below": the canonical milestone is the one currently in
+    flight, and its own release document correctly states that it is awaiting review.
+    Only work that has already shipped must not claim to be unmerged.
+    """
     problems = []
     docs_dir = _APP_ROOT / "docs"
     if not docs_dir.is_dir():
@@ -172,12 +179,18 @@ def check_release_status() -> list[str]:
         text = _read(path)
         if not _NOT_MERGED_RE.search(text):
             continue
-        milestones = [int(m) for m in _MILESTONE_RE.findall(path.name)]
-        milestones += [int(m) for m in _MILESTONE_RE.findall(text[:400])]
-        if any(m <= MILESTONE for m in milestones):
+        # The FILENAME is the document's identity. Reading milestones out of the body
+        # too was wrong: a "corrected in V69 M61.1" note inside the M60 document made
+        # it look like an M61 document and exempted it — the checker stopped detecting
+        # exactly the drift it exists for. Caught by the negative control below.
+        milestones = [int(m) for m in _MILESTONE_RE.findall(path.stem)]
+        if not milestones:
+            heading = text.splitlines()[0] if text else ""
+            milestones = [int(m) for m in _MILESTONE_RE.findall(heading)]
+        if milestones and all(m < MILESTONE for m in milestones):
             problems.append(
-                f"docs/{path.name} says 'NOT merged' for a milestone at or below "
-                f"the canonical V{GENERATION} M{MILESTONE}")
+                f"docs/{path.name} says 'NOT merged' for a milestone below the "
+                f"canonical V{GENERATION} M{MILESTONE} — that work already shipped")
     return problems
 
 
