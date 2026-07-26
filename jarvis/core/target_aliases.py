@@ -14,16 +14,29 @@ import json
 from pathlib import Path
 from loguru import logger
 
-_ALIASES_PATH = Path("logs/target_aliases.json")
+from core.managed_paths import log_artifact_path
+
 _aliases: dict[str, str] = {}   # name → ip/hostname
+
+
+def _aliases_path(*, create: bool = True) -> Path:
+    """The managed operator alias registry (V69 M61 RC1).
+
+    Durable operator state: a CWD-relative location made the aliases silently
+    disappear whenever JARVIS was launched from a different directory. This
+    module loads at import, so the read passes ``create=False`` — importing must
+    not write to the filesystem.
+    """
+    return log_artifact_path("target_aliases.json", create=create)
 
 
 def _load() -> None:
     global _aliases
-    if _ALIASES_PATH.exists():
+    path = _aliases_path(create=False)
+    if path.exists():
         try:
             _aliases = json.loads(
-                _ALIASES_PATH.read_text(encoding="utf-8")
+                path.read_text(encoding="utf-8")
             )
             logger.info(
                 f"TARGET_ALIASES: loaded {len(_aliases)} aliases"
@@ -33,8 +46,7 @@ def _load() -> None:
 
 
 def _save() -> None:
-    _ALIASES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _ALIASES_PATH.write_text(
+    _aliases_path().write_text(
         json.dumps(_aliases, indent=2), encoding="utf-8"
     )
 

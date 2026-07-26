@@ -35,7 +35,12 @@ _MIN_SEV = float(os.environ.get("JARVIS_MOBILE_C2_MIN_SEV", "8.0"))
 _RATE_WINDOW = 60
 _RATE_LIMIT = 20
 _DEDUP_TTL = 30
-_AUDIT_PATH = Path("logs/mobile_c2_audit.jsonl")
+from core.managed_paths import log_artifact_path
+
+
+def _audit_path() -> Path:
+    """Managed, installation-owned audit trail (V69 M61 RC1) — see punisher."""
+    return log_artifact_path("mobile_c2_audit.jsonl")
 
 _loop = None
 _session = None
@@ -46,8 +51,7 @@ _recent_cmds = defaultdict(lambda: deque(maxlen=_RATE_LIMIT * 2))
 
 def _audit(rec):
     try:
-        _AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _AUDIT_PATH.open("a", encoding="utf-8") as f:
+        with _audit_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, default=str) + "\n")
     except Exception:
         pass

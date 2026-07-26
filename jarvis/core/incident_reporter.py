@@ -23,8 +23,12 @@ from pathlib import Path
 from loguru import logger
 
 
-_REPORTS_DIR = Path("logs/reports")
-_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _reports_dir() -> Path:
+    """The managed incident-report directory (V69 M61 RC1) — see forensic_reporter."""
+    return logs_subdir("reports")
 
 _REPORT_SYSTEM = """You are a senior Purple Team security analyst writing a
 formal incident report. Be precise, technical, and thorough. Use proper
@@ -127,7 +131,7 @@ Write the full report with these sections:
 
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"incident_{inc_id}_{ts}.md"
-        filepath = _REPORTS_DIR / filename
+        filepath = _reports_dir() / filename
         filepath.write_text(report_text, encoding="utf-8")
 
         logger.info(f"REPORTER: incident report saved → {filename}")

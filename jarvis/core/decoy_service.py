@@ -18,7 +18,18 @@ except Exception:
     psutil = None; _PSUTIL_OK = False
 
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
-_LOG_PATH = Path("logs/decoy_service.jsonl")
+from core.managed_paths import log_artifact_path
+
+
+def _log_path() -> Path:
+    """Managed, installation-owned evidence trail (V69 M61 RC1) — see punisher.
+
+    Decoy interactions are attacker evidence: splitting them across launch
+    directories loses the very correlation they exist to provide.
+    """
+    return log_artifact_path("decoy_service.jsonl")
+
+
 _ALERT_TTL = 600
 _CAPTURE = 512
 _alerted = {}
@@ -67,8 +78,7 @@ def _allowlisted(ip):
 
 def _audit(rec):
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_PATH.open("a", encoding="utf-8") as f:
+        with _log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, default=str) + "\n")
     except Exception:
         pass

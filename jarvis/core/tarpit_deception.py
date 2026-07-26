@@ -33,7 +33,14 @@ _DRIP_SECONDS = 15
 _MAX_CONNS = 500
 _ALERT_TTL = 600
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
-_LOG_PATH = Path("logs/tarpit_deception.jsonl")
+from core.managed_paths import log_artifact_path
+
+
+def _log_path() -> Path:
+    """Managed, installation-owned evidence trail (V69 M61 RC1) — see decoy_service."""
+    return log_artifact_path("tarpit_deception.jsonl")
+
+
 
 _active = 0
 _alerted: dict = {}             # ip -> ts
@@ -76,8 +83,7 @@ def _is_allowlisted(ip: str) -> bool:
 
 def _audit(rec: dict) -> None:
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_PATH.open("a", encoding="utf-8") as f:
+        with _log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, default=str) + "\n")
     except Exception:
         pass

@@ -114,6 +114,36 @@ def continuity_db_path(*, create: bool = True) -> Path:
     return sessions_dir(create=create) / "session_continuity.db"
 
 
+def log_artifact_path(name: str, *, create: bool = True) -> Path:
+    """A validated leaf inside the managed log tree (V69 M61 RC1).
+
+    For the durable artifacts that are NOT the runtime log: append-only action
+    audit trails, comparison baselines and small state databases. These were
+    ``Path("logs/…")`` constants evaluated at import time, i.e. bound to whatever
+    directory the process happened to start in. An audit trail with that property
+    is not an audit trail — one host produces a separate file per launch directory
+    — and a baseline read from the wrong directory returns "nothing recorded",
+    which a drift detector reports as *clean*.
+
+    Pass ``create=False`` on a read so that merely looking for a state file does
+    not materialise a directory tree.
+    """
+    return managed_path(logs_dir(create=create), name)
+
+
+def logs_subdir(name: str, *, create: bool = True) -> Path:
+    """A validated subdirectory of the managed log tree (report/artifact folders)."""
+    target = managed_path(logs_dir(create=create), name)
+    if create:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Same degradation contract as _resolve: a read-only tree surfaces on
+            # the caller's write, it does not abort the runtime.
+            pass
+    return target
+
+
 def safe_leaf(name: str, *, suffix: str = "") -> str:
     """Validate a proposed leaf file name. Raises :class:`UnsafeLeafName` otherwise.
 

@@ -10,8 +10,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_REPORTS_DIR = Path("logs/reports")
-_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _reports_dir() -> Path:
+    """The managed incident-report directory (V69 M61 RC1).
+
+    Three modules write here — forensic_reporter, incident_reporter and the
+    intel-fusion digest. Each built its own CWD-relative constant, so a single
+    incident could scatter its report set across directories. One accessor, one
+    directory, created on first write rather than on import.
+    """
+    return logs_subdir("reports")
 
 _EXEC_SUMMARY_SYSTEM = """You are a senior cybersecurity consultant
 writing an executive summary for a non-technical stakeholder.
@@ -247,7 +257,7 @@ def _build_docx(
         # Save
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"incident_{inc_id}_{ts}.docx"
-        filepath = _REPORTS_DIR / filename
+        filepath = _reports_dir() / filename
         doc.save(str(filepath))
         return str(filepath)
 

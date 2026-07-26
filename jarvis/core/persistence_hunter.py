@@ -31,7 +31,21 @@ except Exception:
 
 _SWEEP_SECONDS = 4 * 3600
 _WARMUP_SECONDS = 60
-_STATE_PATH = Path("logs/persistence_baseline.json")
+from core.managed_paths import log_artifact_path
+
+
+def _state_path(*, create: bool = True) -> Path:
+    """The managed persistence baseline (V69 M61 RC1).
+
+    This one is not merely untidy when it follows the CWD: the baseline is the
+    set of already-alerted autoruns. Read from the wrong directory it comes back
+    empty, so every known-good entry is re-alerted — and, worse, a *sweep* that
+    finds nothing new is indistinguishable from a sweep whose baseline was lost.
+    ``create=False`` on the read keeps a lookup from materialising the tree.
+    """
+    return log_artifact_path("persistence_baseline.json", create=create)
+
+
 _NO_WINDOW = 0x08000000 if _IS_WINDOWS else 0
 
 _OBF = re.compile(
@@ -253,16 +267,17 @@ def _suspicious(value: str, sig_status: str | None = None):
 
 def _load_state():
     try:
-        return set(json.loads(_STATE_PATH.read_text(encoding="utf-8")).get("alerted", []))
+        return set(json.loads(
+            _state_path(create=False).read_text(encoding="utf-8")
+        ).get("alerted", []))
     except Exception:
         return set()
 
 
 def _save_state(alerted: set):
     try:
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(json.dumps({"alerted": sorted(alerted)}),
-                               encoding="utf-8")
+        _state_path().write_text(json.dumps({"alerted": sorted(alerted)}),
+                                 encoding="utf-8")
     except Exception as e:
         logger.debug("persistence: state save failed: %s", e)
 

@@ -37,7 +37,18 @@ _QUARANTINE_ENABLED = True
 _AUTO_THRESHOLD = 9.0
 _MAX_ACTIVE = 16
 _RULE_PREFIX = "JARVIS-QUARANTINE"
-_LOG_PATH = Path("logs/network_quarantine.jsonl")
+from core.managed_paths import log_artifact_path
+
+
+def _log_path() -> Path:
+    """Managed, installation-owned audit trail (V69 M61 RC1) — see punisher.
+
+    Host isolation is an effectful, operator-visible action; its record must live
+    at one installation-owned location regardless of where JARVIS was launched.
+    """
+    return log_artifact_path("network_quarantine.jsonl")
+
+
 _NAC_WEBHOOK = os.environ.get("JARVIS_NAC_WEBHOOK")        # optional NAC/switch API
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
 
@@ -113,8 +124,7 @@ def _run(cmd: list[str]):
 
 def _audit(res: dict) -> None:
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_PATH.open("a", encoding="utf-8") as f:
+        with _log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(res, default=str) + "\n")
     except Exception as e:
         logger.debug("network_quarantine: audit write failed: %s", e)
@@ -228,7 +238,7 @@ async def start(correlator=None) -> None:
         logger.warning("NETWORK_QUARANTINE: not elevated (admin required) — dormant")
         await asyncio.Event().wait(); return
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _log_path()
     except Exception as e:
         logger.warning("NETWORK_QUARANTINE: log path unavailable (%s) — dormant", e)
         await asyncio.Event().wait(); return

@@ -13,8 +13,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_MITIGATION_DIR = Path("logs/mitigations")
-_MITIGATION_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _mitigation_dir() -> Path:
+    """The managed drafted-mitigation directory (V69 M61 RC1).
+
+    Created lazily, on the first draft — importing this module previously made a
+    ``logs/mitigations`` folder in whatever directory the importer was standing
+    in, including during test collection and packaging. The scripts held here are
+    proposed host changes awaiting approval, so their location must be a property
+    of the installation.
+    """
+    return logs_subdir("mitigations")
 
 _SYSTEM_PROMPT = """You are an elite Windows security engineer.
 Generate a PowerShell mitigation script for the provided security alert.
@@ -111,7 +122,7 @@ async def draft_mitigation(
         # Save script
         ts          = datetime.now().strftime("%Y%m%d_%H%M%S")
         script_name = f"mitigate_{incident_id}_{ts}.ps1"
-        script_path = _MITIGATION_DIR / script_name
+        script_path = _mitigation_dir() / script_name
         script_path.write_text(ps_code, encoding="utf-8")
 
         logger.info(f"REMEDIATOR: draft saved → {script_name}")

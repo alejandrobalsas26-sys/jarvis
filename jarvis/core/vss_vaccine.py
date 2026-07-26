@@ -26,7 +26,14 @@ _IS_WINDOWS = os.name == "nt"
 _VOLUME = os.environ.get("JARVIS_VSS_VOLUME", "C:\\")
 _ROLLING_HOURS = int(os.environ.get("JARVIS_VSS_INTERVAL_HOURS", "6"))
 _KEEP = int(os.environ.get("JARVIS_VSS_KEEP", "8"))
-_LOG_PATH = Path("logs/vss_vaccine.jsonl")
+from core.managed_paths import log_artifact_path
+
+
+def _log_path() -> Path:
+    """Managed, installation-owned audit trail (V69 M61 RC1) — see punisher."""
+    return log_artifact_path("vss_vaccine.jsonl")
+
+
 _NO_WINDOW = 0x08000000 if _IS_WINDOWS else 0
 _TRIGGER = {"decoy_tamper", "data_encrypted", "data_destruction", "data_staging"}
 _correlator = None
@@ -63,8 +70,7 @@ def _run_ps(cmd, timeout=120):
 
 def _audit(rec):
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_PATH.open("a", encoding="utf-8") as f:
+        with _log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, default=str) + "\n")
     except Exception:
         pass
