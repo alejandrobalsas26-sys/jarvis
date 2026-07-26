@@ -30,8 +30,9 @@ import socketserver
 import threading
 import webbrowser
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 import psutil
 import requests
@@ -229,24 +230,114 @@ MCP_TOOL_ALLOWLIST: frozenset[str] = frozenset({
 _MCP_FILENAME_ARG_KEYS: frozenset[str] = frozenset({"nombre_archivo"})
 
 
+#: Stable machine codes for an MCP filename rejection. The audit trail and the
+#: tests assert on THESE, never on the Spanish sentence: a message is a
+#: translation string, and a security test that pins one is asserting the locale.
+MCP_FILENAME_REASONS: dict[str, str] = {
+    "empty":             "Nombre de archivo vacío o inválido.",
+    "not_a_string":      "Nombre de archivo vacío o inválido.",
+    "nul_byte":          "Nombre de archivo contiene un byte nulo.",
+    "control_char":      "Nombre de archivo contiene un carácter de control.",
+    "too_long":          "Nombre de archivo demasiado largo.",
+    "separator":         "Nombre de archivo contiene separadores de ruta.",
+    "encoded_separator": "Nombre de archivo contiene un separador codificado.",
+    "drive_letter":      "Nombre de archivo contiene una letra de unidad.",
+    "colon":             "Nombre de archivo contiene ':' (flujo de datos alterno).",
+    "dot_segment":       "Nombre de archivo es un segmento de ruta ('.' o '..').",
+    "not_bare_name":     "Nombre de archivo no es un nombre simple.",
+    "reserved_device":   "Nombre de archivo es un dispositivo reservado.",
+}
+
+#: Windows reserved device names, rejected on EVERY platform: a file written on
+#: Linux must not become unopenable — or become a device handle — on the target.
+_MCP_RESERVED_DEVICES: frozenset[str] = frozenset({
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+})
+
+#: Percent-encoded separators and dot segments. Nothing here decodes them, but a
+#: bridge downstream might, and no legitimate basename needs one. Fail closed.
+_MCP_ENCODED_SEPARATOR = re.compile(r"%(?:2e|2f|5c|252e|252f|255c)", re.IGNORECASE)
+
+
+def _classify_mcp_filename(value: str) -> str | None:
+    """Return a STABLE machine code naming the rejection reason, or None if safe.
+
+    WHY THIS IS NOT ``Path(value).name != value``
+    ----------------------------------------------
+    That was the previous guard, and its docstring claimed it caught
+    "drive-letter/UNC prefixes". It caught them ON WINDOWS ONLY. ``pathlib.Path``
+    binds to the HOST flavour, so on a POSIX host a backslash is an ordinary
+    filename character: ``PurePosixPath("..\\\\..\\\\Windows\\\\evil.dll").name``
+    returns the whole string unchanged, the comparison succeeds, and the traversal
+    is ACCEPTED. ``C:\\Windows\\System32\\evil.dll`` passed the same way.
+
+    The MCP bridge is a Windows-facing component (Packet Tracer), so the payloads
+    most likely to arrive are exactly the ones a Linux CI host could not reject —
+    and the CI host is where the guard is tested. Validation is therefore done
+    against BOTH path flavours plus explicit character rules, so the verdict is a
+    property of the STRING and identical on every operating system.
+    """
+    if not isinstance(value, str):
+        return "not_a_string"
+    if not value:
+        return "empty"
+    if "\x00" in value:
+        return "nul_byte"
+    if len(value) > 255:
+        return "too_long"
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return "control_char"
+
+    # Compare the NFKC-normalised form too: U+FF0F FULLWIDTH SOLIDUS and friends
+    # fold to '/' in normalisation, so a name that is separator-free as typed can
+    # acquire one later. Both forms must be clean.
+    candidates = {value}
+    try:
+        candidates.add(unicodedata.normalize("NFKC", value))
+    except (TypeError, ValueError):  # pragma: no cover — defensive
+        pass
+
+    for candidate in candidates:
+        # Most specific first, so the audit code is the most informative one that
+        # applies. Every branch below is a rejection, so the order changes only
+        # the reported reason, never the verdict.
+        if len(candidate) >= 2 and candidate[1] == ":" and candidate[0].isalpha():
+            return "drive_letter"       # 'C:\x', and drive-RELATIVE 'C:x' too
+        if "/" in candidate or "\\" in candidate:
+            return "separator"          # covers POSIX, Windows, mixed and UNC
+        if _MCP_ENCODED_SEPARATOR.search(candidate):
+            return "encoded_separator"
+        if ":" in candidate:
+            return "colon"              # NTFS alternate data stream
+        if candidate in (".", ".."):
+            return "dot_segment"
+        # Belt and braces: BOTH flavours must agree this is one bare component.
+        for flavour in (PurePosixPath, PureWindowsPath):
+            parsed = flavour(candidate)
+            if parsed.is_absolute() or parsed.name != candidate \
+                    or len(parsed.parts) != 1:
+                return "not_bare_name"
+        if candidate.split(".", 1)[0].lower() in _MCP_RESERVED_DEVICES:
+            return "reserved_device"
+    return None
+
+
 def _validate_mcp_filename(value: str) -> str | None:
     """Reject anything that isn't a safe bare filename.
 
-    Returns a human-readable error string, or None if *value* is safe to
-    join onto a fixed base directory. Catches path traversal ('../x'),
-    absolute paths, and drive-letter/UNC prefixes by comparing against
-    Path(value).name — any of those makes the basename differ from the
-    original string.
+    Returns a human-readable error string, or None if *value* is safe to join onto
+    a fixed base directory. The decision itself lives in
+    :func:`_classify_mcp_filename`; this wrapper only renders it, so the call sites
+    and their ``if err:`` contract are unchanged.
     """
-    if not value or not isinstance(value, str):
-        return "Nombre de archivo vacío o inválido."
-    if "\x00" in value:
-        return "Nombre de archivo contiene un byte nulo."
-    if len(value) > 255:
-        return "Nombre de archivo demasiado largo."
-    if value in (".", "..") or Path(value).name != value:
-        return f"Nombre de archivo inválido (path traversal o separadores no permitidos): '{value}'"
-    return None
+    code = _classify_mcp_filename(value)
+    if code is None:
+        return None
+    detail = MCP_FILENAME_REASONS.get(code, MCP_FILENAME_REASONS["not_bare_name"])
+    shown = value if isinstance(value, str) else type(value).__name__
+    return f"[{code}] {detail} ('{shown[:80]}')"
 
 # Patrones SAST precompilados para _tool_analizar_codigo_sast
 _SAST_PATTERNS: list[tuple] = [
@@ -1039,10 +1130,15 @@ class ToolExecutor:
             return {"error": f"Tool MCP '{tool_name}' no está permitida."}
 
         for key in _MCP_FILENAME_ARG_KEYS & tool_input.keys():
-            err = _validate_mcp_filename(str(tool_input[key]))
-            if err:
+            raw = str(tool_input[key])
+            code = _classify_mcp_filename(raw)
+            if code is not None:
+                err = _validate_mcp_filename(raw)
+                # The machine code goes in the ACTION field so the audit trail is
+                # greppable by reason and does not depend on the message locale.
                 self._audit.log_action(
-                    tool_name, reasoning, "blocked:mcp_path_traversal", "blocked", err[:200],
+                    tool_name, reasoning, f"blocked:mcp_path_traversal:{code}",
+                    "blocked", err[:200],
                 )
                 return {"error": err}
 
