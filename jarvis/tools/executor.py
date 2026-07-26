@@ -427,6 +427,27 @@ def _sandbox_allowed_dirs() -> tuple[Path, ...]:
     )
 
 
+def _is_foreign_flavour_path(path: str) -> bool:
+    """True when *path* is written in the OTHER platform's path flavour.
+
+    V69 M61 RC1. ``pathlib`` binds to the HOST flavour, so on POSIX a backslash is
+    an ordinary filename character. ``..\\..\\..\\Windows\\System32\\evil.png``
+    therefore resolved to a single garbage FILENAME inside the project root, the
+    containment test passed, and the screenshot handler reported success — while
+    the very same string is a genuine escape on the Windows deployment target.
+
+    Only the non-Windows direction needs this. On Windows both separators are
+    legitimate and ``Path`` already normalises them, so nothing is rejected there
+    and valid in-scope paths are preserved on both hosts.
+    """
+    if os.name == "nt":
+        return False
+    if "\\" in path:
+        return True
+    stripped = path.strip()
+    return len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha()
+
+
 def _resolve_within_allowed(path: str) -> "Path | None":
     """Resolve *path* and return it iff it is contained within an allowed dir.
 
@@ -438,6 +459,10 @@ def _resolve_within_allowed(path: str) -> "Path | None":
     (malformed path, OS error) is likewise treated as not-allowed.
     """
     if not isinstance(path, str) or not path.strip():
+        return None
+    if _is_foreign_flavour_path(path):
+        logger.warning(
+            "Sandbox: rejected a Windows-shaped path on a POSIX host: %r", path[:120])
         return None
     try:
         p = Path(path).expanduser().resolve()

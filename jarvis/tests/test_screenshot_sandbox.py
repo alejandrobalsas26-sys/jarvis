@@ -10,6 +10,7 @@ the screen is never captured when a path is rejected.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -159,3 +160,42 @@ def test_resolve_within_allowed_rejects_symlink_escape(monkeypatch, tmp_path):
 
     # The symlink lives inside an allowed dir, but resolves outside → rejected.
     assert _resolve_within_allowed(str(link)) is None
+
+
+# ── V69 M61 RC1: the sandbox verdict must not depend on the host flavour ─────
+# Found only once the conftest GUI stubs let this suite actually run: the
+# ``..\..\..\Windows\System32\evil.png`` case had been failing in the test
+# HARNESS (monkeypatch importing a missing pyautogui), which masked the fact that
+# the guard accepted the payload and reported {"saved": ".../..\\..\\..\\Windows
+# \\System32\\evil.png"}. ``pathlib`` binds to the host flavour, so on POSIX the
+# whole string is one filename that lands inside an allowed root — while the same
+# string is a genuine escape on the Windows deployment target.
+@pytest.mark.skipif(os.name == "nt",
+                    reason="on Windows both separators are legitimate and Path "
+                           "normalises them; this asserts the POSIX direction")
+@pytest.mark.parametrize("payload", [
+    r"..\..\..\Windows\System32\evil.png",
+    r"..\evil.png",
+    r"C:\Windows\System32\evil.png",
+    r"C:evil.png",
+    r"\\server\share\evil.png",
+    "Downloads\\evil.png",
+])
+def test_windows_shaped_paths_are_refused_on_a_posix_host(monkeypatch, tmp_path,
+                                                          payload):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / "Downloads").mkdir()
+    assert _resolve_within_allowed(payload) is None, (
+        "a Windows-flavour path was accepted on POSIX; it is an escape on the "
+        "deployment target"
+    )
+
+
+def test_posix_paths_inside_the_sandbox_are_still_accepted(monkeypatch, tmp_path):
+    """Positive control: the fix must not reject legitimate in-scope paths."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    target = downloads / "capture.png"
+    resolved = _resolve_within_allowed(str(target))
+    assert resolved is not None and resolved == target.resolve()

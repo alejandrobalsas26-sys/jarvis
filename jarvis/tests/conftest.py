@@ -63,7 +63,64 @@ def _install_win32_stubs() -> None:
         sys.modules["scapy.layers.all"] = _stub("scapy.layers.all")
 
 
+def _install_optional_gui_stubs() -> None:
+    """Stub the GUI/clipboard/imaging packages when their profile is not installed.
+
+    V69 M61 RC1. ``pyautogui`` and ``pyperclip`` live in requirements/lab.txt and
+    ``Pillow`` in requirements/docs.txt; the authoritative CI job installs dev +
+    soc, so none of the three is present there.
+
+    The suites that exercise the SECURITY properties of these tools — the consent
+    gate and the screenshot path sandbox — were patching them with
+    ``monkeypatch.setattr("pyautogui.screenshot", ...)``, which resolves the dotted
+    target by IMPORTING the real package. So the test harness, not the product,
+    raised ModuleNotFoundError, and fourteen consent- and traversal-rejection tests
+    failed for a reason unrelated to what they assert.
+
+    Skipping them was the alternative and it is the worse one: these prove that
+    screen capture is refused without consent and that a traversal path never
+    reaches the capture call, and skipping would remove exactly those proofs from
+    the only job that gates a merge. A stub module keeps them running with no
+    optional dependency at all. Where the real package IS installed it is left
+    alone, so nothing is masked.
+
+    The stubs deliberately implement no behaviour: every test that needs any
+    installs its own fake over the top.
+    """
+    if "pyautogui" not in sys.modules:
+        try:
+            import pyautogui  # noqa: F401
+        except Exception:
+            sys.modules["pyautogui"] = _stub(
+                "pyautogui",
+                screenshot=MagicMock(), hotkey=MagicMock(), write=MagicMock(),
+                click=MagicMock(), moveTo=MagicMock(), press=MagicMock(),
+                position=MagicMock(return_value=(0, 0)),
+                size=MagicMock(return_value=(1920, 1080)),
+                FAILSAFE=True,
+            )
+    if "pyperclip" not in sys.modules:
+        try:
+            import pyperclip  # noqa: F401
+        except Exception:
+            sys.modules["pyperclip"] = _stub(
+                "pyperclip", paste=MagicMock(return_value=""), copy=MagicMock())
+    if "PIL" not in sys.modules:
+        try:
+            import PIL  # noqa: F401
+        except Exception:
+            pil = _stub("PIL")
+            image = _stub("PIL.Image", open=MagicMock())
+            grab = _stub("PIL.ImageGrab", grab=MagicMock())
+            pil.Image = image
+            pil.ImageGrab = grab
+            sys.modules["PIL"] = pil
+            sys.modules["PIL.Image"] = image
+            sys.modules["PIL.ImageGrab"] = grab
+
+
 _install_win32_stubs()
+_install_optional_gui_stubs()
 
 
 # ── Subprocess guard — block destructive OS commands in tests ─────────────────
