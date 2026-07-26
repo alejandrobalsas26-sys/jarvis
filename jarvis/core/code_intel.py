@@ -19,10 +19,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_INBOX_DIR   = Path("analyze_inbox")
-_REPORTS_DIR = Path("logs/code_analysis")
-_INBOX_DIR.mkdir(exist_ok=True)
-_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import app_subdir, logs_subdir
+
+
+def inbox_dir(*, create: bool = True) -> Path:
+    """The operator drop folder, anchored on the INSTALLATION (V69 M61 RC1).
+
+    Public because ``main.py`` announces this path to the operator at boot: when it
+    printed ``Path("analyze_inbox").absolute()`` while the watcher observed a
+    different CWD-relative folder, the banner named a directory nothing was
+    watching. One accessor, one folder.
+    """
+    return app_subdir("analyze_inbox", create=create)
+
+
+def _reports_dir() -> Path:
+    """The managed code-analysis report directory, created on first report."""
+    return logs_subdir("code_analysis")
 
 _ANALYZED: set[str] = set()   # prevent double-analysis
 
@@ -222,7 +235,7 @@ async def analyze_file(
 
     # Save report
     report_name = f"{file_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    report_path = _REPORTS_DIR / report_name
+    report_path = _reports_dir() / report_name
     report_md   = f"""# Code Intelligence Report: {file_path.name}
 
 **SHA256:** `{sha256}`
@@ -280,7 +293,7 @@ async def start_inbox_watcher(
     Watch analyze_inbox/ for new files.
     Auto-analyzes everything that appears.
     """
-    logger.info(f"CODE_INTEL: watching {_INBOX_DIR.absolute()} for files")
+    logger.info(f"CODE_INTEL: watching {inbox_dir()} for files")
 
     try:
         from watchdog.observers import Observer
@@ -297,7 +310,7 @@ async def start_inbox_watcher(
                     )
 
         observer = Observer()
-        observer.schedule(_Handler(), str(_INBOX_DIR), recursive=False)
+        observer.schedule(_Handler(), str(inbox_dir()), recursive=False)
         observer.start()
 
         if tts:

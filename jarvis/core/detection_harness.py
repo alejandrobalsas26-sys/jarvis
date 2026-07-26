@@ -14,7 +14,19 @@ logger = logging.getLogger("jarvis.detection_harness")
 
 SIM_ACTIVE = False
 LAST_RESULTS = {}
-_RESULTS_PATH = Path("logs/detection_validation.json")
+from core.managed_paths import log_artifact_path
+
+
+def _results_path(*, create: bool = True) -> Path:
+    """Managed detection-validation results (V69 M61 RC1).
+
+    This is a security-evidence artifact: it records which detections actually
+    fired during a simulation. Split across launch directories, a later run reads
+    an absent file and reports an unvalidated control as simply "not yet run".
+    """
+    return log_artifact_path("detection_validation.json", create=create)
+
+
 
 _EXPECTED = {
     "T1055": "ram_hunter/ntdll_monitor",
@@ -97,8 +109,7 @@ async def run(techniques=None) -> dict:
                           "coverage_pct": round(100 * det / max(1, len(techs)), 1)}
     LAST_RESULTS = results
     try:
-        _RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _RESULTS_PATH.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+        _results_path().write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     except Exception as e:
         logger.debug("harness: results write failed: %s", e)
     logger.info("DETECTION_HARNESS: %d/%d detected (%.1f%%)",

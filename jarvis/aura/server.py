@@ -29,8 +29,9 @@ from loguru import logger
 
 _INDEX_PATH = Path(__file__).parent / "index.html"
 _STATIC_DIR = Path(__file__).parent.parent / "static"
-_MESHES_DIR = _STATIC_DIR / "meshes"
-_MESHES_DIR.mkdir(parents=True, exist_ok=True)
+# V69 M61 RC1 — the ``_MESHES_DIR`` constant and its import-time ``mkdir`` are
+# gone: nothing in the codebase read that constant, it existed only for the side
+# effect, and the mount below now handles an absent asset tree explicitly.
 
 _loading: bool = False
 
@@ -279,7 +280,21 @@ app = FastAPI(
     title="AURA", version="27.0",
     lifespan=_lifespan, docs_url=None, redoc_url=None,
 )
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+# V69 M61 RC1 — the mount is CONDITIONAL. ``StaticFiles`` raises if its directory
+# is absent, and until now the only thing that made it present was the import-time
+# ``_MESHES_DIR.mkdir()`` two hundred lines above: importing the HUD server created
+# ``static/meshes`` as a side effect, in whatever directory the importer stood, and
+# that accident was load-bearing. With the side effect removed, an absent asset tree
+# must degrade to "HUD without static assets", never to an import-time crash that
+# takes the whole optional subsystem down with it.
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+else:
+    logger.warning(
+        "AURA: static asset directory missing (%s) — HUD served without /static",
+        _STATIC_DIR.name,
+    )
 
 
 # ── HUD Command Handlers ──────────────────────────────────────────────────────

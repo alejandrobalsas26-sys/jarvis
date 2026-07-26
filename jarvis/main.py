@@ -1503,6 +1503,7 @@ async def _main_async() -> None:
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
+    from core.code_intel          import inbox_dir as _inbox_dir
     from core.code_intel          import start_inbox_watcher
     from core.lab_manager         import list_vms as list_lab_vms
     # v38.0 — Visual Intelligence (vision/browser/diagrams/screen monitor)
@@ -2461,7 +2462,6 @@ async def _main_async() -> None:
                 logger.warning(f"Could not register cve-monitor: {e}")
 
             try:
-                from pathlib import Path as _P
                 watchdog.register(
                     "code-intel",
                     lambda: start_inbox_watcher(
@@ -2472,7 +2472,7 @@ async def _main_async() -> None:
                 )
                 logger.info(
                     f"CODE_INTEL: drop folder watcher registered — "
-                    f"{_P('analyze_inbox').absolute()}"
+                    f"{_inbox_dir()}"
                 )
             except Exception as e:
                 logger.warning(f"Could not register code-intel: {e}")

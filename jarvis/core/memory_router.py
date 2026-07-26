@@ -29,7 +29,12 @@ MemoryScope = Literal["session", "project", "long_term", "none"]
 _SECRET_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"(?i)\b(api[_-]?key|secret|token|password|passwd|contraseña)\b\s*[:=]\s*\S{4,}"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{16,}"),
-    re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"),                       # OpenAI-style
+    # V69 M61 RC1 — was ``\bsk-[A-Za-z0-9]{16,}\b`` and labelled "OpenAI-style".
+    # That is exactly what it matched: an Anthropic key is ``sk-ant-api03-…``, whose
+    # hyphens end the character class after three characters, so the key format this
+    # runtime is most likely to actually hold was the one format not redacted.
+    # Hyphen and underscore are now inside the class, which covers both vendors.
+    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{15,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),               # GitHub tokens
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                          # AWS access key id
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),             # Slack tokens

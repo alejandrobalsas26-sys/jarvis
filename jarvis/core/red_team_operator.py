@@ -27,8 +27,12 @@ from pathlib import Path
 
 from loguru import logger
 
-_CAMPAIGNS_DIR = Path("logs/ares_campaigns")
-_CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _campaigns_dir() -> Path:
+    """Managed campaign-record directory (V69 M61 RC1), created on first save."""
+    return logs_subdir("ares_campaigns")
 
 # Campaign stages in order
 _STAGES = ["RECON", "SCAN", "ENUMERATE", "EXPLOIT", "POST", "REPORT"]
@@ -95,7 +99,7 @@ class AresCampaign:
         }
 
     def save(self) -> None:
-        path = _CAMPAIGNS_DIR / f"{self.campaign_id}.json"
+        path = _campaigns_dir() / f"{self.campaign_id}.json"
         path.write_text(
             json.dumps(self.to_dict(), indent=2, default=str),
             encoding="utf-8",

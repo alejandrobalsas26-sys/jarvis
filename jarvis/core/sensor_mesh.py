@@ -24,8 +24,12 @@ from pathlib import Path
 from loguru import logger
 
 _SENSOR_PORT = 9999   # WebSocket server for incoming agent connections
-_SENSOR_DIR  = Path("logs/sensor_mesh")
-_SENSOR_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _sensor_dir() -> Path:
+    """Managed sensor-mesh artifact directory (V69 M61 RC1), created on first write."""
+    return logs_subdir("sensor_mesh")
 
 # Connected agents: {agent_id: {ip, hostname, os, ws_connection}}
 _connected_agents: dict[str, dict] = {}

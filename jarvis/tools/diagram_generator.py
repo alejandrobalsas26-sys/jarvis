@@ -17,8 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_DIAGRAMS_DIR = Path("logs/visuals/diagrams")
-_DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _diagrams_dir() -> Path:
+    """Managed diagram output directory (V69 M61 RC1), created on first render."""
+    return logs_subdir("visuals", "diagrams")
 
 
 def _ts() -> str:
@@ -114,7 +118,7 @@ def _draw_topology(hosts: list[dict]) -> Path | None:
         ax.axis("off")
         plt.tight_layout()
 
-        path = _DIAGRAMS_DIR / f"network_topology_{_ts()}.png"
+        path = _diagrams_dir() / f"network_topology_{_ts()}.png"
         plt.savefig(str(path), dpi=120, bbox_inches="tight",
                     facecolor="#07090f")
         plt.close()
@@ -205,7 +209,7 @@ def _draw_timeline(incident: dict) -> Path | None:
             spine.set_edgecolor("#1a1a2a")
 
         plt.tight_layout()
-        path = _DIAGRAMS_DIR / f"timeline_{incident.get('incident_id','unk')}_{_ts()}.png"
+        path = _diagrams_dir() / f"timeline_{incident.get('incident_id','unk')}_{_ts()}.png"
         plt.savefig(str(path), dpi=110, bbox_inches="tight",
                     facecolor="#07090f")
         plt.close()
@@ -260,7 +264,7 @@ def _draw_qr(data: str, label: str) -> Path | None:
         ax.axis("off")
         plt.tight_layout()
 
-        path = _DIAGRAMS_DIR / f"qr_{label[:20].replace(' ','_')}_{_ts()}.png"
+        path = _diagrams_dir() / f"qr_{label[:20].replace(' ','_')}_{_ts()}.png"
         plt.savefig(str(path), dpi=150, bbox_inches="tight",
                     facecolor="#07090f")
         plt.close()

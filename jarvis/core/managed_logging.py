@@ -25,11 +25,20 @@ needs:
 
 WHAT THIS MODULE DOES NOT DO
 ----------------------------
-It does not own the console sink (``core.console`` does), it does not replace loguru,
-and it does not migrate the ~30 legacy modules that still resolve ``Path("logs/…")``
-relative to the CWD — that is a broad rewrite M61 deliberately refuses. Those are
-inventoried by ``cwd_relative_log_modules()`` so the remaining exposure is measured
-and reported rather than quietly assumed away.
+It does not own the console sink (``core.console`` does) and it does not replace
+loguru.
+
+V69 M61 RC1 — WHAT CHANGED SINCE THE PARAGRAPH ABOVE
+----------------------------------------------------
+M61.4 shipped with the migration deliberately unfinished: the runtime log sink and
+the shutdown audit trail were fixed, and the ~30 remaining feature modules were left
+resolving ``Path("logs/…")`` against the CWD, inventoried behind a ceiling so the
+exposure was at least measured. RC1 finished the job. The active runtime surface —
+``core/``, ``tools/``, ``aura/`` and the entry points — now holds ZERO relative
+multi-segment path literals and ZERO import-time directory creations, and the
+inventories below assert exactly that rather than a ceiling. They are kept, and
+broadened, because an inventory that reads zero is the only kind that cannot drift
+back up unnoticed.
 """
 from __future__ import annotations
 
@@ -183,6 +192,81 @@ def _core_modules():
             yield path, ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             continue
+
+
+#: Directories that make up the ACTIVE runtime surface, plus the entry points. Tests
+#: and docs are excluded on purpose: a fixture may legitimately build a relative path
+#: inside its own ``tmp_path``, and prose is not code.
+_RUNTIME_TREES = ("core", "tools", "aura")
+
+
+def _runtime_modules():
+    """Yield ``(relative_name, ast)`` for every parseable ACTIVE runtime module."""
+    root = app_root()
+    paths = []
+    for tree in _RUNTIME_TREES:
+        paths.extend(sorted((root / tree).rglob("*.py")))
+    paths.extend(p for p in (root / "main.py", root / "__main__.py") if p.exists())
+    for path in paths:
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            yield path.relative_to(root).as_posix(), ast.parse(
+                path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+
+
+def runtime_relative_path_literals() -> list[str]:
+    """Every ACTIVE module that still builds a multi-segment RELATIVE path literal.
+
+    Broader than :func:`cwd_relative_log_modules` in two ways that matter: it covers
+    ``tools/`` and ``aura/`` as well as ``core/``, and it is not limited to the
+    ``logs/`` and ``data/`` roots — ``Path("core/sigma_rules")`` and
+    ``Path("tools/external")`` were the same defect wearing a different prefix, and
+    the narrower inventory reported them as clean.
+
+    A single-segment literal (``Path("jarvis.log")``) is NOT matched here; that is
+    the ``logger.add`` defect, and it has its own dedicated test.
+
+    Returns ``"<module>:<line>"`` entries so a regression names the exact site.
+    """
+    found = []
+    for name, tree in _runtime_modules():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            call = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if call not in ("Path", "open", "makedirs"):
+                continue
+            first = node.args[0]
+            if not (isinstance(first, ast.Constant)
+                    and isinstance(first.value, str) and first.value):
+                continue
+            value = first.value
+            if value.startswith(("/", "~")) or (len(value) > 1 and value[1] == ":"):
+                continue  # already absolute
+            if "/" in value or "\\" in value:
+                found.append(f"{name}:{node.lineno}")
+    return found
+
+
+def runtime_import_time_mkdir() -> list[str]:
+    """Every ACTIVE module that creates a directory AT IMPORT TIME, tree-wide.
+
+    Module scope only — a ``mkdir`` inside a function body is lazy creation, which is
+    the pattern this milestone migrated TO.
+    """
+    found = []
+    for name, tree in _runtime_modules():
+        for node in tree.body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                func = node.value.func
+                if isinstance(func, ast.Attribute) and func.attr in (
+                        "mkdir", "makedirs"):
+                    found.append(f"{name}:{node.lineno}")
+    return found
 
 
 def module_uses_managed_paths(module_name: str) -> bool:

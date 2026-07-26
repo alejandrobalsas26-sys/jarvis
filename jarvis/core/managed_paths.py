@@ -131,9 +131,20 @@ def log_artifact_path(name: str, *, create: bool = True) -> Path:
     return managed_path(logs_dir(create=create), name)
 
 
-def logs_subdir(name: str, *, create: bool = True) -> Path:
-    """A validated subdirectory of the managed log tree (report/artifact folders)."""
-    target = managed_path(logs_dir(create=create), name)
+def logs_subdir(*names: str, create: bool = True) -> Path:
+    """A validated subdirectory of the managed log tree (report/artifact folders).
+
+    Accepts more than one segment (``logs_subdir("visuals", "browser")``) because
+    several artifact trees are genuinely two levels deep. Each segment is validated
+    INDIVIDUALLY by :func:`safe_leaf` and containment is re-proved at every step, so
+    a nested call is exactly as constrained as a flat one — there is no path string
+    anywhere in which a separator could hide.
+    """
+    if not names:
+        raise UnsafeLeafName("logs_subdir requires at least one path segment")
+    target = logs_dir(create=create)
+    for segment in names:
+        target = managed_path(target, segment)
     if create:
         try:
             target.mkdir(parents=True, exist_ok=True)
@@ -142,6 +153,43 @@ def logs_subdir(name: str, *, create: bool = True) -> Path:
             # the caller's write, it does not abort the runtime.
             pass
     return target
+
+
+def app_subdir(*names: str, create: bool = True) -> Path:
+    """A validated subdirectory of the APPLICATION root (V69 M61 RC1).
+
+    For the package-internal asset directories that are not log artifacts:
+    ``core/sigma_rules`` (generated detection rules), ``tools/external`` (cloned
+    third-party tooling) and ``analyze_inbox`` (the operator drop folder). All three
+    were ``Path("core/sigma_rules")``-style CWD-relative literals, which is why
+    ``sigma_generator`` (anchored on ``__file__``) and ``detection_engineer``
+    (anchored on the CWD) could disagree about where the rules live.
+
+    Same validation as the log tree: per-segment :func:`safe_leaf`, containment
+    re-proved at every step, creation lazy and failure-tolerant.
+    """
+    if not names:
+        raise UnsafeLeafName("app_subdir requires at least one path segment")
+    target = _JARVIS_DIR
+    for segment in names:
+        target = managed_path(target, segment)
+    if create:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return target
+
+
+def sigma_rules_dir(*, create: bool = True) -> Path:
+    """The single generated-Sigma-rule directory (``core/sigma_rules``).
+
+    Public and shared on purpose: ``sigma_generator`` writes the rules,
+    ``detection_engineer`` promotes drafts and ``daily_briefing`` counts them. Three
+    private literals meant a briefing run from another directory reported "0 drafts"
+    while drafts were waiting — a detection backlog reported as an empty one.
+    """
+    return app_subdir("core", "sigma_rules", create=create)
 
 
 def safe_leaf(name: str, *, suffix: str = "") -> str:

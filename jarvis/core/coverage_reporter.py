@@ -11,7 +11,14 @@ from pathlib import Path
 
 logger = logging.getLogger("jarvis.coverage_reporter")
 
-_OUT = Path("logs/attck_navigator_layer.json")
+from core.managed_paths import log_artifact_path
+
+
+def _out_path(*, create: bool = True) -> Path:
+    """Managed ATT&CK Navigator layer (V69 M61 RC1), resolved at write time."""
+    return log_artifact_path("attck_navigator_layer.json", create=create)
+
+
 _INTERVAL = 24 * 3600
 
 _STATIC = {
@@ -55,11 +62,11 @@ def _build_layer():
 
 def _write():
     try:
-        _OUT.parent.mkdir(parents=True, exist_ok=True)
-        _OUT.write_text(json.dumps(_build_layer(), indent=2), encoding="utf-8")
+        out = _out_path()
+        out.write_text(json.dumps(_build_layer(), indent=2), encoding="utf-8")
         logger.info("coverage_reporter: Navigator layer written %s (%d techniques)",
-                    _OUT, len(_build_layer()["techniques"]))
-        return str(_OUT)
+                    out, len(_build_layer()["techniques"]))
+        return str(out)
     except Exception as e:
         logger.error("coverage_reporter: write failed: %s", e)
         return None

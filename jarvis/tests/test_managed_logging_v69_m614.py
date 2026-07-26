@@ -96,15 +96,15 @@ def test_importing_the_runtime_creates_nothing_in_the_cwd(tmp_path):
 def test_continuity_modules_no_longer_mkdir_at_import_time():
     """`Path("logs/...").mkdir()` at module scope is the pattern that caused this.
 
-    Bounded rather than zero: 12 feature modules still do it, and migrating them is
-    the broad rewrite M61 refuses. What must be true is that the modules holding
-    conversation state and the shutdown audit trail are OUT of that set, and that the
-    set does not grow.
+    V69 M61 RC1 tightened this from a ceiling of 12 to ZERO. The ceiling was honest
+    while the migration was unfinished, but a ceiling that sits above the real number
+    stops being a test: 12 would still have passed after every module was fixed, and
+    would have gone on passing while four new ones regressed.
     """
     offenders = managed_logging.import_time_mkdir_modules()
     for fixed in ("session_journal.py", "session_manager.py", "shutdown_manager.py"):
         assert fixed not in offenders, f"core/{fixed} still creates a directory on import"
-    assert len(offenders) <= 12, f"import-time mkdir spread to: {offenders}"
+    assert offenders == [], f"import-time mkdir returned to core/: {offenders}"
 
 
 @pytest.mark.parametrize("module", [
@@ -208,14 +208,14 @@ def test_redacting_filter_survives_a_redaction_failure(monkeypatch):
 
 # ── the residual CWD exposure is MEASURED, not assumed away ─────────────────
 def test_cwd_relative_log_inventory_is_bounded_and_shrinking():
-    """M61.4 fixed the critical control paths; the feature-artifact residue is pinned.
+    """M61.4 pinned the residue at a ceiling of 24; RC1 drove it to zero.
 
-    This is deliberately a ceiling, not zero: migrating ~30 feature modules is the
-    broad rewrite M61 refuses. The number may go DOWN in a later milestone; it must
-    never go up without someone changing this line on purpose.
+    Kept rather than deleted: the inventory is what stops the pattern coming back,
+    and it is strictly more useful now that it reads zero — any reintroduction of a
+    ``Path("logs/…")`` constant in ``core/`` fails here and names the module.
     """
     residue = managed_logging.cwd_relative_log_modules()
-    assert len(residue) <= 24, f"CWD-relative log paths grew: {residue}"
+    assert residue == [], f"CWD-relative log paths returned to core/: {residue}"
     # The paths on the critical control path are OUT of the residue.
     for fixed in ("session_journal.py", "session_manager.py", "shutdown_manager.py"):
         assert fixed not in residue

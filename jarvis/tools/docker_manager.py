@@ -26,8 +26,12 @@ from pathlib import Path
 from loguru import logger
 
 _LABS_YAML    = Path(__file__).parent / "docker_labs.yaml"
-_COMPOSE_DIR  = Path("logs/docker_compose")
-_COMPOSE_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _compose_dir() -> Path:
+    """Managed compose-file directory (V69 M61 RC1), created on first lab build."""
+    return logs_subdir("docker_compose")
 
 # Lazy Docker client — never initialized at import time
 _docker_client = None
@@ -204,7 +208,7 @@ async def _deploy_compose(
     if not compose_content:
         return None
 
-    compose_path = _COMPOSE_DIR / f"{lab_name}_docker-compose.yml"
+    compose_path = _compose_dir() / f"{lab_name}_docker-compose.yml"
     compose_path.write_text(compose_content, encoding="utf-8")
 
     docker_compose = shutil.which("docker-compose") or shutil.which("docker")
@@ -269,7 +273,7 @@ async def teardown_lab(
     logger.warning(f"DOCKER: tearing down lab '{lab_name}'")
 
     if is_compose:
-        compose_path = _COMPOSE_DIR / f"{lab_name}_docker-compose.yml"
+        compose_path = _compose_dir() / f"{lab_name}_docker-compose.yml"
 
         def _compose_down():
             if shutil.which("docker-compose"):

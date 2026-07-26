@@ -205,7 +205,10 @@ def redact_text(text: str, *, max_chars: int = 4000,
 # ── Secret scanner (the M60.6 pre-finalize gate) ─────────────────────────────
 _LEAK_MARKERS = (
     ("reasoning", tuple(re.compile(rf"<{t}\b", re.IGNORECASE) for t in _REASONING_TAGS)),
-    ("secret", (re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"),
+    # The scanner must not be narrower than the redactor, or a bundle passes its
+    # leak gate holding a credential the redactor never removed. Kept in step with
+    # ``core.memory_router._SECRET_PATTERNS`` — see the RC1 note there.
+    ("secret", (re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{15,}\b"),
                 re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
                 re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
                 re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
