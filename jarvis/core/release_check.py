@@ -200,6 +200,19 @@ _DISABLED_CAPABILITY_CLAIMS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
 )
 
+#: Words that turn one of the patterns above into an honest *denial* of the capability.
+#: Without this the scanner cannot tell "executes plugin source" from "no longer
+#: executes plugin source", which would force every accurate sentence about a removed
+#: capability to be written around the checker — the brittleness this family exists to
+#: avoid. The window is deliberately small: a negation five words earlier is negating
+#: something else.
+_NEGATION_WINDOW = 44
+_NEGATION_RE = re.compile(
+    r"\b(?:no|not|never|non|none|nothing|neither|cannot|can't|won't|refus\w*|"
+    r"disabl\w*|remov\w*|reject\w*|prevent\w*|without|absent|stopp?\w*|unless|"
+    r"instead|opt-in|report-only)\b",
+    re.IGNORECASE)
+
 #: Structural anchors SECURITY.md must carry, one per posture that would otherwise be
 #: left to inference. Labels, not sentences: the check is for a declared section, not
 #: for a particular phrasing of it.
@@ -537,8 +550,14 @@ def check_security_result() -> list[str]:
     return problems
 
 
+def _negated(text: str, start: int) -> bool:
+    """Whether the match at ``start`` sits inside a denial rather than a claim."""
+    window = text[max(0, start - _NEGATION_WINDOW):start]
+    return _NEGATION_RE.search(window) is not None
+
+
 def check_security_posture() -> list[str]:
-    """No current-facing document may advertise a capability the code refuses.
+    """No OPERATOR-facing document may advertise a capability the code refuses.
 
     The three refused capabilities are the ones a reader is most likely to assume are
     active because an older document said so: dynamic plugin execution (removed, no
@@ -546,20 +565,31 @@ def check_security_posture() -> list[str]:
     per-service opt-in) and boot-time dependency installation (now report-only). Each is
     also required to be *stated* in SECURITY.md, because "we quietly stopped doing it"
     is not a security posture an operator can rely on.
+
+    **Scope, and why it stops where it does.** Only operator-facing documentation — the
+    two READMEs, the ``JARVIS.md`` header, the installation and troubleshooting guides —
+    is scanned for the claims. Those documents describe how the system behaves *now*.
+    Release and milestone documents legitimately narrate before-and-after ("these four
+    services bound all interfaces unconditionally, and now do not"), and scanning them
+    would either produce false positives or force accurate history to be written around
+    the checker. The SECURITY.md anchor requirement covers those postures instead, in
+    the one document where a reader goes to find them.
     """
     problems: list[str] = []
-    scope = {**_current_texts(), **_release_texts()}
+    scope = dict(_current_texts())
     for path in _OPERATOR_DOCS:
         if path.is_file():
             scope.setdefault(_relative(path), _read(path))
 
     for name, text in sorted(scope.items()):
         for key, pattern, reality in _DISABLED_CAPABILITY_CLAIMS:
-            match = pattern.search(text)
-            if match:
+            for match in pattern.finditer(text):
+                if _negated(text, match.start()):
+                    continue
                 line = text[:match.start()].count("\n") + 1
                 problems.append(
                     f"{name}:{line} advertises {key!r} as active; in fact {reality}")
+                break
 
     if _SECURITY_POLICY.is_file():
         policy = _read(_SECURITY_POLICY)
