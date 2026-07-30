@@ -75,6 +75,13 @@ _M61_TESTS = (
     "tests/test_plugin_exec_v69_m617.py",
     "tests/test_url_and_xml_v69_m617.py",
     "tests/test_network_binding_v69_m617.py",
+    # V69 M61.8 — release closure: documentation truth, evidence, checksums, SBOMs and
+    # the non-increasing Bandit Low ceiling.
+    "tests/test_release_closure_v69_m618.py",
+    "tests/test_release_evidence_v69_m618.py",
+    "tests/test_release_artifacts_v69_m618.py",
+    "tests/test_sbom_v69_m618.py",
+    "tests/test_bandit_low_baseline_v69_m618.py",
 )
 #: M52-M60 regression the stabilization release must keep green. M61 changes the
 #: logging, shutdown and continuity seams, so these are the suites that would notice.

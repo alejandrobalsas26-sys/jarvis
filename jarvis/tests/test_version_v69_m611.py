@@ -92,9 +92,25 @@ def test_release_truth_audit_passes():
     assert result["canonical_version"] == version.VERSION
 
 
-@pytest.mark.parametrize("family", ["version", "models", "claims", "status", "install"])
+@pytest.mark.parametrize("family", [
+    "version", "models", "claims", "status", "install",
+    # V69 M61.8 added these three. Listed here rather than only in the M61.8 suite so
+    # that a family added to the audit and forgotten here is visible in one place.
+    "counts", "security", "posture",
+])
 def test_each_release_truth_family_is_clean(family):
     assert release_check.audit()["families"][family] == 0
+
+
+def test_the_parametrized_family_list_covers_every_family():
+    """A new family must not be able to enter the audit unwatched by this module."""
+    declared = set(release_check.audit()["families"])
+    watched = {"version", "models", "claims", "status", "install",
+               "counts", "security", "posture"}
+    assert declared == watched, (
+        f"release_check.audit() families changed: "
+        f"added {sorted(declared - watched)}, removed {sorted(watched - declared)}"
+    )
 
 
 def test_current_docs_name_the_current_release():
