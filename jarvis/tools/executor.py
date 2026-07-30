@@ -2269,7 +2269,14 @@ class ToolExecutor:
         i = 0
         while i < len(words):
             chunk = " ".join(words[i : i + chunk_size])
-            chunk_id = hashlib.md5(f"{url}:{i}".encode()).hexdigest()
+            # V69 M61.7 (Bandit B324): vector-store primary key derived from
+            # "<url>:<word offset>" so re-ingesting a page overwrites its own
+            # chunks instead of duplicating them. Existing VectorMemory rows are
+            # keyed by this digest, so the algorithm is a persisted format.
+            # Not authentication, not integrity — declared non-security.
+            chunk_id = hashlib.md5(
+                f"{url}:{i}".encode(), usedforsecurity=False
+            ).hexdigest()
             self._memory.add(chunk, chunk_id, {"source": url, "chunk": chunks_indexed})
             chunks_indexed += 1
             i += chunk_size - overlap

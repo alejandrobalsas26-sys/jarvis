@@ -353,7 +353,16 @@ class KnowledgeVault:
                 chunks = _char_chunks(text)
                 source = str(file_path.relative_to(folder))
                 for i, chunk in enumerate(chunks):
-                    doc_id = hashlib.md5(f"{source}:{i}".encode()).hexdigest()
+                    # V69 M61.7 (Bandit B324): a Chroma primary key derived from
+                    # "<relative source>:<chunk index>", used ONLY so re-indexing
+                    # the same folder upserts over the same rows instead of
+                    # duplicating them. Existing collections on disk are already
+                    # keyed by this digest, so changing the algorithm would orphan
+                    # every previously indexed chunk. Not authentication, not
+                    # integrity, not a trust decision — declared non-security.
+                    doc_id = hashlib.md5(
+                        f"{source}:{i}".encode(), usedforsecurity=False
+                    ).hexdigest()
                     self._collection.upsert(
                         embeddings=[self._embed(chunk)],
                         documents=[chunk],

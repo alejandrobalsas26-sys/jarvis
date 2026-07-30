@@ -140,9 +140,21 @@ async def analyze_file(
         logger.debug(f"CODE_INTEL: read error: {e}")
         return None
 
-    # File hash
+    # File hashes.
+    #
+    # SHA-256 is THE identity/integrity hash for this report: it is the value
+    # broadcast, the value an operator compares, and the only digest any trust
+    # decision may read.
+    #
+    # V69 M61.7 (Bandit B324): MD5 stays, but strictly as a legacy **IOC lookup
+    # key**. Threat-intel corpora (and ``core.soar_enrichment``, which reads the
+    # "md5" key) are still indexed by MD5, so dropping it would silently lose
+    # malware-analysis pivots. ``usedforsecurity=False`` states the contract the
+    # code already honours — this use is explicitly NON-SECURITY: the digest is a
+    # corpus index, never authentication, never integrity, never a signature, and
+    # no severity/verdict path reads it.
     sha256 = hashlib.sha256(data).hexdigest()
-    md5    = hashlib.md5(data).hexdigest()
+    md5    = hashlib.md5(data, usedforsecurity=False).hexdigest()
 
     # Entropy
     entropy = _shannon_entropy(data)
@@ -238,8 +250,8 @@ async def analyze_file(
     report_path = _reports_dir() / report_name
     report_md   = f"""# Code Intelligence Report: {file_path.name}
 
-**SHA256:** `{sha256}`
-**MD5:** `{md5}`
+**SHA256:** `{sha256}`  *(identity / integrity)*
+**MD5:** `{md5}`  *(legacy IOC lookup key — NOT an integrity check)*
 **Size:** {len(data)} bytes
 **Entropy:** {entropy} {'⚠ PACKED/ENCRYPTED' if is_packed else '✓ normal'}
 **YARA Hits:** {', '.join(yara_hits) if yara_hits else 'none'}
