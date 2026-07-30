@@ -110,10 +110,116 @@ def test_the_advisory_job_still_surfaces_its_result(workflow):
 
 
 def test_bandit_remains_a_blocking_gate(workflow):
-    """High-severity static analysis is a correctness gate, not an advisory one."""
-    steps = _steps(workflow["jobs"]["dependency-audit"])
-    bandit = [s for s in steps if "bandit" in str(s.get("run", ""))]
-    assert bandit and not bandit[0].get("continue-on-error")
+    """Static security analysis is a correctness gate, not an advisory one.
+
+    V69 M61.7 — Bandit moved out of ``dependency-audit`` into its own mandatory
+    ``security-scan`` job. It was a blocking step inside a job labelled "advisory",
+    which meant the job list actively misled a reader.
+    """
+    assert "security-scan" not in ADVISORY_JOBS
+    job = workflow["jobs"]["security-scan"]
+    assert not job.get("continue-on-error")
+    gate = [
+        s for s in _steps(job)
+        if str(s.get("run", "")).strip().startswith("bandit ") and not s.get("if")
+    ]
+    assert gate, "no unconditional Bandit invocation in security-scan"
+    assert len(gate) == 1, "exactly one blocking Bandit invocation is expected"
+    assert not gate[0].get("continue-on-error")
+
+
+# ── V69 M61.7: the Bandit gate tells the truth about its own threshold ───────
+def _bandit_gate_step(workflow: dict) -> dict:
+    """The step that INVOKES bandit — not the step that pip-installs it."""
+    for step in _steps(workflow["jobs"]["security-scan"]):
+        command = str(step.get("run", "")).strip()
+        if command.startswith("bandit ") and not step.get("if"):
+            return step
+    raise AssertionError("no blocking Bandit invocation found in security-scan")
+
+
+def test_the_bandit_command_is_exactly_the_documented_gate(workflow):
+    """The threshold was NOT lowered to make the label true."""
+    assert _bandit_gate_step(workflow)["run"].strip() == "bandit -r core tools -ll -q"
+
+
+def test_the_bandit_step_label_matches_the_threshold_it_enforces(workflow):
+    """`-ll` reports MEDIUM and above. A "high severity" label understated the gate.
+
+    21 Medium findings were blocking merges while the workflow claimed only High did.
+    """
+    label = _bandit_gate_step(workflow)["name"].lower()
+    assert "medium" in label and "high" in label, label
+    assert "blocking" in label, label
+
+
+def test_the_bandit_job_name_also_states_the_threshold(workflow):
+    name = workflow["jobs"]["security-scan"]["name"].lower()
+    assert "medium" in name and "high" in name and "blocking" in name, name
+
+
+def test_no_step_label_claims_high_only(workflow):
+    """Regression against reintroducing the misleading label anywhere."""
+    for job_name, job in workflow["jobs"].items():
+        for step in _steps(job):
+            label = str(step.get("name", "")).lower()
+            if "bandit" not in label:
+                continue
+            if "high" in label and "medium" not in label:
+                pytest.fail(f"{job_name}: step label understates the threshold: {label!r}")
+
+
+def test_the_bandit_gate_does_not_swallow_its_exit_code(workflow):
+    """No `|| true`, no `continue-on-error`, no captured-and-discarded status."""
+    step = _bandit_gate_step(workflow)
+    command = str(step["run"])
+    assert "|| true" not in command
+    assert "|| exit 0" not in command
+    assert "set +e" not in command
+    assert "continue-on-error" not in str(step)
+
+
+def test_pip_audit_runs_independently_of_the_bandit_result(workflow):
+    """A Bandit failure must not cost the dependency audit its run.
+
+    As a step, Bandit failing SKIPPED the pip-audit step after it. Separate jobs with
+    no `needs:` between them run independently, so both results always exist.
+    """
+    audit = workflow["jobs"]["dependency-audit"]
+    assert "needs" not in audit, "the advisory audit must not depend on the gate"
+    audit_commands = "\n".join(str(s.get("run", "")) for s in _steps(audit))
+    assert "pip-audit" in audit_commands
+    assert "bandit" not in audit_commands, "the gate must not be duplicated here"
+
+
+def test_the_bandit_job_does_not_run_pip_audit(workflow):
+    """Symmetry: the blocking job must not carry the advisory one's failure modes."""
+    commands = "\n".join(
+        str(s.get("run", "")) for s in _steps(workflow["jobs"]["security-scan"])
+    )
+    assert "pip-audit" not in commands
+
+
+def test_no_step_in_the_security_job_swallows_a_failure(workflow):
+    """Not even a diagnostic one.
+
+    A summary step would have to tolerate Bandit's non-zero exit in order to run
+    after it, and a failure-swallowing command inside a mandatory job is what the
+    M61.2 invariants forbid. Bandit's own `-q` output already enumerates every
+    blocking finding, and the machine-readable inventory lives in the release
+    qualification instead.
+    """
+    for step in _steps(workflow["jobs"]["security-scan"]):
+        command = str(step.get("run", ""))
+        assert "|| true" not in command, step.get("name")
+        assert "set +e" not in command, step.get("name")
+        assert not step.get("continue-on-error"), step.get("name")
+
+
+def test_the_security_scan_job_is_treated_as_mandatory_by_the_other_tests(workflow):
+    """Non-vacuity: security-scan must be inside the mandatory set the suite checks."""
+    mandatory = {n for n in workflow["jobs"] if n not in ADVISORY_JOBS}
+    assert "security-scan" in mandatory
 
 
 # ── the required gates are actually present ─────────────────────────────────

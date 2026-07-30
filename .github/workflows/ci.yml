@@ -12,6 +12,12 @@ name: JARVIS CI
 # No mandatory gate uses `|| true` or `continue-on-error`. The single advisory job
 # (dependency-audit) is explicitly labelled, documents why it is advisory, and still
 # prints its full result — a silent pass is not an outcome this workflow can produce.
+#
+# V69 M61.7 — the Bandit gate moved out of `dependency-audit` into its own mandatory
+# `security-scan` job, and its label now states the threshold it actually enforces
+# (medium AND high, which is what `-ll` means). Previously a blocking gate lived inside
+# an advisory-labelled job, and its label claimed high-only while 21 Medium findings
+# were blocking. The command is unchanged; only the label and the job boundary are.
 
 on:
   push:
@@ -185,6 +191,49 @@ jobs:
       # carry runtime state; the manifest scan above is the evidence, and it runs
       # in-job where its failure is a gate rather than a download.
 
+  # ── Gate 7: static security analysis. BLOCKING. ─────────────────────────────
+  #
+  # V69 M61.7 — this used to be a step inside `dependency-audit`, a job named
+  # "Dependency audit (advisory)". Two things were untrue about that:
+  #
+  #   1. The step was labelled "Bandit (high severity — blocking)" while the
+  #      command it ran, `-ll`, reports MEDIUM *and* HIGH. The label understated
+  #      the gate: 21 Medium findings were blocking merges while the workflow
+  #      claimed only High did. The command is unchanged and the label is now
+  #      accurate — the threshold was NOT lowered to match the old label.
+  #   2. A blocking gate lived inside an advisory-labelled job, so anyone reading
+  #      the job list saw "advisory" and inferred nothing there could block.
+  #
+  # It is now its own mandatory job. That also fixes a real sequencing defect: as
+  # a step, a Bandit failure skipped the pip-audit step that followed it, so a
+  # security regression silently cost the dependency audit too. Separate jobs run
+  # independently, so both results are always produced.
+  #
+  # No `|| true`, no `continue-on-error`, no captured-and-discarded exit status:
+  # the command's own exit code is the job's verdict.
+  security-scan:
+    name: Static security analysis (medium/high — blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Bandit
+        run: python -m pip install --upgrade pip bandit
+      # `-ll` == report MEDIUM and above. Both are blocking; see the M61.7 triage
+      # in docs/V69_M61_PRODUCTION_STABILIZATION.md for every finding's disposition.
+      # Bandit's own `-q` output already enumerates every blocking finding in this
+      # step's log, so there is deliberately NO second "inventory" step here. A
+      # summary step would have to tolerate Bandit's non-zero exit to run after it,
+      # and a failure-swallowing command inside a MANDATORY job is exactly what the
+      # M61.2 workflow invariants forbid. The machine-readable inventory (with the
+      # non-vacuity and suppression-growth checks) lives in the release
+      # qualification instead: tests/test_bandit_gate_v69_m617.py.
+      - name: Bandit (medium/high severity — blocking)
+        working-directory: jarvis
+        run: bandit -r core tools -ll -q
+
   # ── Advisory: dependency vulnerability audit. NON-BLOCKING, and here is why. ─
   # pip-audit resolves against live advisory feeds, so a new CVE published against
   # a transitive dependency turns an unchanged, correct commit red with no code
@@ -192,6 +241,8 @@ jobs:
   # does not block merges. It is NOT silenced: `continue-on-error` keeps the step's
   # real exit status and full output visible in the run summary, unlike the
   # `|| true` this replaces, which discarded the result entirely.
+  #
+  # Deliberately has no `needs:` — it must report even when security-scan is red.
   dependency-audit:
     name: Dependency audit (advisory)
     runs-on: ubuntu-latest
@@ -200,11 +251,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install scanners
-        run: python -m pip install --upgrade pip bandit pip-audit
-      - name: Bandit (high severity — blocking)
-        working-directory: jarvis
-        run: bandit -r core tools -ll -q
+      - name: Install scanner
+        run: python -m pip install --upgrade pip pip-audit
       - name: pip-audit (advisory, result visible)
         id: pip_audit
         continue-on-error: true

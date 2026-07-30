@@ -113,7 +113,8 @@ workflow had no manual dispatch).
 | `compat` | 3.12 | consistency, grammar, the M61 suites |
 | `base-install` | 3.11 | installs **only** `requirements/base.txt`, imports the declared text-mode surface, and asserts the optional packages are genuinely **absent** |
 | `packaging` | 3.11 | builds wheel + sdist, then scans the artifacts |
-| `dependency-audit` | 3.11 | bandit (blocking) + pip-audit (**advisory**) |
+| `security-scan` | 3.11 | **bandit (medium+high — blocking)**. Its own job since M61.7 |
+| `dependency-audit` | 3.11 | pip-audit (**advisory**) |
 
 The `base-install` job's second step is the one that makes it worth having: without
 `--assert-optional-absent`, a green run in a fat environment proves nothing.
@@ -127,6 +128,27 @@ unlike the `|| true` it replaces, which discarded the result entirely. Bandit st
 blocking. `tests/test_ci_workflow_v69_m612.py` asserts that no *mandatory* job
 contains `|| true` or `continue-on-error`, that exactly one advisory step exists and
 that it is reported.
+
+**M61.7 — the Bandit gate now states its real threshold, and is its own job.** Two
+things about the M61.2 arrangement were untrue:
+
+1. The step was labelled `Bandit (high severity — blocking)` while the command it ran,
+   `bandit -r core tools -ll -q`, reports **medium and high**. The label understated
+   the gate: 21 Medium findings were blocking merges while the workflow claimed only
+   High did. The label is now `Bandit (medium/high severity — blocking)`. **The command
+   is unchanged and the threshold was not lowered to match the old label** — the 29
+   findings were fixed instead (§13).
+2. A blocking gate lived inside a job named *Dependency audit (advisory)*, so the job
+   list told a reader that nothing there could block.
+
+Bandit therefore moved into its own mandatory `security-scan` job. That also fixes a
+real sequencing defect: as a step, a Bandit failure **skipped** the pip-audit step that
+followed it, so one security regression silently cost the dependency audit its run too.
+The two jobs now have no `needs:` between them, so both results always exist. There is
+deliberately no second "inventory" step in `security-scan`: it would have to tolerate
+Bandit's non-zero exit to run after it, and a failure-swallowing command inside a
+mandatory job is exactly what the M61.2 invariants forbid. The machine-readable
+inventory lives in `tests/test_bandit_gate_v69_m617.py` instead.
 
 CI requires no Ollama, model, microphone, TTS hardware, Docker daemon, Redis,
 PostgreSQL, Zeek, Sysmon, Sliver, Metasploit, API key, trusted-lab mode or elevation.
@@ -427,3 +449,140 @@ Two things moved in the *safer* direction:
 - automatic dependency installation on the operator's host is now **opt-in and off by
   default**, and `--break-system-packages` is gone;
 - the runtime DEBUG log is redacted before it reaches disk, which it previously was not.
+
+---
+
+## 13. Bandit gate remediation (M61.7)
+
+The blocking gate `bandit -r core tools -ll -q` reported **29 findings: 21 Medium and
+8 High** over 72,984 lines. It now reports **0 Medium and 0 High** over 73,834 lines,
+exit code 0, with the **command and threshold unchanged**. 488 Low findings remain and
+are outside this release gate, recorded honestly rather than suppressed.
+
+Nothing was excluded, no module was skipped, no threshold lowered, no `|| true` added,
+no `continue-on-error` placed on Bandit, and no test deleted. The tree contains
+**exactly two** suppressions, both precise, id-scoped, documented beside the line and
+backed by a regression test that proves the property claimed.
+
+### Triage summary
+
+| ID | Sev | Count | Classification | Resolution |
+|---|---|---|---|---|
+| B324 | High | 5 | 1 UNSAFE_DEFAULT, 4 INTENTIONAL_NON_SECURITY_USE | `screen_monitor` fingerprint to SHA-256 (real fix); `code_intel` (legacy IOC key), `knowledge` + `executor` (persisted store keys) declared `usedforsecurity=False` |
+| B613 | High | 1 | REAL_VULNERABILITY | Literal U+200F removed from the anti-Trojan-Source module's own table; declared as integer code points |
+| B507 | High | 2 | REAL_VULNERABILITY | `AutoAddPolicy` to `RejectPolicy`, two host-key stores, two-step operator enrollment |
+| B108 | Med | 1 | REAL_VULNERABILITY | Fixed `/tmp/jarvis_sensor.py` to a unique 128-bit, `0600`, home-relative path from the SFTP session |
+| B601 | Med | 2 | 1 REAL_VULNERABILITY, 1 FALSE_POSITIVE | Remote exec removed from `sensor_mesh` entirely; `ebpf_bridge` keeps one `# nosec B601` on a compile-time constant |
+| B102 | Med | 1 | REAL_VULNERABILITY | Dynamic plugin `exec` removed; fail-closed with an honest migration path |
+| B314 | Med | 1 | REAL_VULNERABILITY | `defusedxml`, no ElementTree fallback, plus input size bounds |
+| B310 | Med | 4 | UNSAFE_DEFAULT | New `core/url_policy.py`: scheme allowlist, redirect re-validation, no credentials, local-only Ollama |
+| B104 | Med | 12 | 7 FALSE_POSITIVE, 5 UNSAFE_DEFAULT | Comparisons reference named constants; the five real binds are loopback-first with an explicit opt-in |
+
+### The findings that were more than lint
+
+**B102 — the plugin sandbox did not exist.** `core/plugin_loader.py` claimed
+"cryptographically-verified" plugins, a "signed manifest" and a restricted `exec`
+environment with `open`, `os`, `subprocess`, `socket`, `ctypes` and `importlib` blocked.
+All four claims were false. An `exec` globals dict with trimmed `__builtins__` restricts
+a *namespace*, not privileges: the injected `re`/`json`/`time`/`hashlib` module objects
+each expose `__globals__["__builtins__"]` — the real builtins, `__import__` included —
+and `().__class__.__base__.__subclasses__()` is an independent second route. Three lines
+inside the "sandbox" were verified to import `os`, read arbitrary files and spawn a
+subprocess. The manifest hash was never a signature (it sat in the same directory as the
+plugin, so whoever could write one could write the other), `JARVIS_PLUGIN_DIR` redirected
+the directory, and `start()` plus watchdog hot-reload meant a dropped file executed with
+no operator approval. Net effect: arbitrary in-process code execution gated only by
+write access to a directory.
+
+M61 is a stabilization release, so this takes the smallest safe option — refuse to
+execute — with no environment variable to re-enable it, because an opt-in flag is the
+same vulnerability behind a different default. Manifest parsing, integrity verification
+and reporting are intact; `REFUSED_PLUGINS` and `status()["dynamic_exec_supported"]`
+keep the refusal visible, so a dashboard cannot show "0 plugins" and leave an operator
+believing the directory was empty.
+
+**B507/B108/B601 — SSH trusted whatever answered.** `AutoAddPolicy()` is
+trust-on-first-use with nobody in the loop: on the flat lab networks these bridges point
+at, the first machine to respond became permanently trusted, authenticated with the
+operator's own private key. `deploy_sensor_to_vm` then uploaded executable Python to a
+shared world-writable `/tmp/jarvis_sensor.py` (pre-createable as a symlink, swappable
+between upload and execution), ran `pip install` on the remote host, and executed the
+uploaded file. New `core/ssh_policy.py` is fail-closed, and automated deployment is now
+**off by default**, returning an operator action plan; the opt-in stages a file and never
+installs or starts anything.
+
+**B613 — the anti-Trojan-Source module was a Trojan Source carrier.** Its zero-width
+translation table embedded a real U+200F RIGHT-TO-LEFT MARK, so the file's rendered text
+could disagree with what the interpreter executes. Now integer code points, with
+membership test-pinned. `tests/test_injection_firewall.py` carried the same hazard and
+was fixed too — a test file is source.
+
+**B310 — `urlopen` is not an HTTP function.** Its default opener also serves `file:`,
+`ftp:` and `data:`. A `file:///` value in a `.env` made the Ollama health probe report a
+read local file as "responsive", made `_ollama_chat` parse a local file as a model
+answer, and made network **containment** report success while the host stayed on the
+network. Validating the initial URL alone is insufficient: stdlib `HTTPRedirectHandler`
+follows a 302 into `ftp:`, so every redirect hop is re-validated.
+
+### The false positives, and why they are not "just suppressed"
+
+Seven B104 findings compare an address rather than bind a socket. Two deserve naming:
+`core/asset_discovery.py` was flagged for *detecting* that a discovered listener is bound
+to all interfaces — Bandit flagged the detection of the condition Bandit cares about. And
+`core/network_quarantine.py`'s address set is a **safety interlock** preventing JARVIS
+from quarantining its own host; changing its semantics to satisfy a scanner could let
+JARVIS isolate itself off the network. All seven now reference named constants in the new
+`core/net_binding.py`, so the network semantics are byte-for-byte unchanged while the
+literal is declared once.
+
+### The two suppressions
+
+| Location | ID | Why no safer expression exists | Proof |
+|---|---|---|---|
+| `tools/ebpf_bridge.py` | `B601` | Paramiko has no non-shell exec primitive — SSH "exec" is *defined* as a command string. The argument is the module constant `FALCO_CMD` | `test_ssh_hostkeys_v69_m617.py` parses the AST: no f-string, `%`, `.format()` or name reference in `FALCO_CMD`, and it is the only value `exec_command` receives |
+| `core/net_binding.py` | `B104` | B104 matches the string literal itself, so every spelling of the correct value is flagged; computing it from integers would hide the value from the reader as well as from the scanner | `test_network_binding_v69_m617.py` proves the module contains no `bind`/`listen`/`connect`/`socket`/`start_server` call and no `socket` import |
+
+### Real binds: the four that had no gate
+
+`decoy_service`, `tarpit_deception`, `active_tarpit` and `dns_sinkhole` bound `0.0.0.0`
+unconditionally, so starting JARVIS on a laptop published decoy SSH/SMB/RDP/MSSQL
+listeners and a DNS resolver to whatever network that laptop was on. `core/canary.py`
+already had the correct shape (V68.1 M50) and **its contract is unchanged** —
+`test_bind_and_dedup_v681.py` passes untouched. `net_binding.resolve_bind_host`
+generalises that proven pattern: loopback default, `JARVIS_<SERVICE>_EXPOSE` opt-in, an
+operator-named single address honoured as the narrower option, and a WARNING naming the
+service and the proven bind address on every exposure. The safe default logs nothing, so
+the warning still means something.
+
+### Hash compatibility
+
+`screen_monitor`'s fingerprint is in-process only and never compared to a stored digest,
+so SHA-256 truncated to the same 32 hex chars is a drop-in replacement — `_change_score`
+keeps its denominator and the `0.15` threshold keeps its meaning. The other three are
+**persisted formats**: Chroma and VectorMemory rows and threat-intel corpora are keyed by
+those digests, so changing the algorithm would orphan every indexed chunk and lose IOC
+pivots. They are declared `usedforsecurity=False`, and the property that licenses the
+declaration is test-pinned: the `code_intel` severity verdict never reads an MD5 value,
+and SHA-256 remains the identity/integrity hash that is broadcast and compared.
+
+### New dependency
+
+`defusedxml>=0.7.1` is declared in `requirements/soc.txt` and mirrored into the
+`pyproject.toml` `soc` extra, which the M61.3 dependency authority enforces (`all.txt`
+and the `all` extra inherit it). It is deliberately **not** added to
+`constraints-ci.txt`, whose documented scope is the test/lint toolchain and whose own
+test asserts an exact five-name set.
+
+### Tests added
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `test_security_hashes_v69_m617.py` | 48 | Tree-wide invisible-character scan (non-vacuity via a planted U+202E fixture), stripping preserved, SHA-256 fingerprint, no bare `hashlib.md5(`, no security decision reads MD5, persisted digests known-answer pinned |
+| `test_ssh_hostkeys_v69_m617.py` | 36 | Fake paramiko: reject policy, unknown/mismatched keys refused, known host connects, two-step race-proof enrollment, unique/private/unguessable staging paths, staging off by default, hostile `KALI_HOST` unable to reach the command, no remote package install |
+| `test_plugin_exec_v69_m617.py` | 25 | Structural (no `exec`/`eval`/`compile`, literal `False` flag, no env opt-in) **and** behavioural (the real escape corpus inert, authority unchanged, hot-reload unable to execute a dropped file) |
+| `test_url_and_xml_v69_m617.py` | 63 | Scheme/credential/port/fragment negative controls, DNS-rebinding and split-horizon hosts, redirect re-validation, opener lacking file/ftp/data handlers, XML entity-expansion/XXE/external-DTD/parameter-entity payloads, oversized input, payload never logged |
+| `test_network_binding_v69_m617.py` | 57 | Constants and address sets pinned to historical membership, suppression property proven structurally, loopback default and opt-in matrix across all five services, no hardcoded all-interfaces bind, false-positive behaviour preserved |
+| `test_bandit_gate_v69_m617.py` | 28 | Re-runs the gate in JSON: zero medium/high, non-vacuity floors, both targets scanned, planted `shell=True` still detected, no config/pyproject/flag exclusions, suppression inventory pinned by location and id, bounded count, cross-checked against Bandit's own `skipped_tests`, honest skip that becomes a FAILURE under `JARVIS_REQUIRE_BANDIT` |
+
+`scripts/qualify_release_m61.py` runs the exact CI gate as a mandatory gate, sets
+`JARVIS_REQUIRE_BANDIT=1`, and adds `bandit_ok` to the conjunction that forces `FAIL`.

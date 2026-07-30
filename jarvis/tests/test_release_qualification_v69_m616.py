@@ -199,10 +199,44 @@ def test_any_mandatory_gate_red_is_a_fail(failing):
 
 
 def test_m61_specific_gates_also_force_a_fail():
-    """release_verdict does not know about consistency/base-import/build."""
+    """release_verdict does not know about consistency/base-import/build/bandit.
+
+    V69 M61.7 added ``bandit_ok`` to this conjunction: the qualification must not be
+    able to report PASS while the blocking CI security gate would fail.
+    """
     source = _QUALIFY.read_text(encoding="utf-8")
-    assert "if not (consistency_ok and base_ok and build_ok):" in source
+    assert (
+        "if not (consistency_ok and base_ok and build_ok and bandit_ok):" in source
+    )
     assert 'verdict = "FAIL"' in source
+
+
+def test_the_bandit_gate_is_the_exact_ci_command():
+    """The qualification must run the gate CI runs, not a weaker variant."""
+    source = _QUALIFY.read_text(encoding="utf-8")
+    assert '"-m", "bandit", "-r", "core", "tools", "-ll", "-q"' in source
+    assert 'command="bandit -r core tools -ll -q"' in source
+
+
+def test_a_missing_scanner_cannot_silently_pass_qualification():
+    """JARVIS_REQUIRE_BANDIT turns "bandit absent" into a failure, not a skip."""
+    source = _QUALIFY.read_text(encoding="utf-8")
+    assert 'os.environ["JARVIS_REQUIRE_BANDIT"] = "1"' in source
+
+
+def test_the_m617_security_suites_are_in_the_focused_set():
+    """Otherwise a --quick qualification would not exercise the M61.7 remediations."""
+    source = _QUALIFY.read_text(encoding="utf-8")
+    for suite in (
+        "test_bandit_gate_v69_m617.py",
+        "test_security_hashes_v69_m617.py",
+        "test_ssh_hostkeys_v69_m617.py",
+        "test_plugin_exec_v69_m617.py",
+        "test_url_and_xml_v69_m617.py",
+        "test_network_binding_v69_m617.py",
+    ):
+        assert suite in source, suite
+        assert (_APP_ROOT / "tests" / suite).is_file(), f"{suite} does not exist"
 
 
 def test_skipping_a_gate_records_a_warning():

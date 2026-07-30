@@ -11,12 +11,14 @@ checkers — it never mutates:
    5. base import smoke            scripts/check_base_import.py
    6. ruff
    7. compileall
-   8. deterministic tests          the M61 suites, or the complete suite with --full
-   9. packaging build              wheel + sdist into a TEMPORARY directory
-  10. package manifest scan        scripts/check_package_manifest.py
-  11. secret scan                  the same scanner, over the built artifacts
-  12. bounded runtime soak         scripts/soak_stabilization_m61.py
-  13. optional bounded live smoke  --live only; a missing Ollama is a WARNING
+   8. Bandit static analysis       the EXACT CI gate (medium+high blocking, M61.7);
+                                   a missing scanner FAILS, it does not skip
+   9. deterministic tests          the M61 suites, or the complete suite with --full
+  10. packaging build              wheel + sdist into a TEMPORARY directory
+  11. package manifest scan        scripts/check_package_manifest.py
+  12. secret scan                  the same scanner, over the built artifacts
+  13. bounded runtime soak         scripts/soak_stabilization_m61.py
+  14. optional bounded live smoke  --live only; a missing Ollama is a WARNING
 
 SAFETY POSTURE — what this harness will NEVER do
 ------------------------------------------------
@@ -66,6 +68,13 @@ _M61_TESTS = (
     "tests/test_managed_logging_v69_m614.py",
     "tests/test_packaging_v69_m615.py",
     "tests/test_release_qualification_v69_m616.py",
+    # V69 M61.7 — the Bandit gate and the security remediations behind it.
+    "tests/test_bandit_gate_v69_m617.py",
+    "tests/test_security_hashes_v69_m617.py",
+    "tests/test_ssh_hostkeys_v69_m617.py",
+    "tests/test_plugin_exec_v69_m617.py",
+    "tests/test_url_and_xml_v69_m617.py",
+    "tests/test_network_binding_v69_m617.py",
 )
 #: M52-M60 regression the stabilization release must keep green. M61 changes the
 #: logging, shutdown and continuity seams, so these are the suites that would notice.
@@ -248,6 +257,22 @@ def main() -> int:
                          timeout=300)
     _gate("compile", "compileall", compile_ok)
 
+    # V69 M61.7 — the EXACT CI gate, run here too. `-ll` reports MEDIUM and above and
+    # both block; the qualification must not be able to pass while the release gate
+    # would fail. A missing scanner is a FAILURE here (not a skip): a security gate
+    # that did not run is not a passing security gate, and this is the environment
+    # that qualifies the release. JARVIS_REQUIRE_BANDIT makes
+    # tests/test_bandit_gate_v69_m617.py enforce the same rule.
+    os.environ["JARVIS_REQUIRE_BANDIT"] = "1"
+    bandit_ok, bandit_tail = _run(
+        [sys.executable, "-m", "bandit", "-r", "core", "tools", "-ll", "-q"],
+        timeout=900,
+    )
+    _gate("bandit", "Bandit static analysis (medium/high - blocking)", bandit_ok,
+          command="bandit -r core tools -ll -q")
+    if not bandit_ok:
+        print(f"      {bandit_tail[-600:]}")
+
     det_ok, det_tail = _pytest(_M61_TESTS, timeout=900)
     _gate("m61_deterministic", f"M61 deterministic suites ({len(_M61_TESTS)})", det_ok)
     if not det_ok:
@@ -308,7 +333,7 @@ def main() -> int:
         warnings=warnings,
     )
     # The M61-specific gates are mandatory too; release_verdict does not know them.
-    if not (consistency_ok and base_ok and build_ok):
+    if not (consistency_ok and base_ok and build_ok and bandit_ok):
         verdict = "FAIL"
 
     result = {
