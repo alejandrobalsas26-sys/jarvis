@@ -94,20 +94,28 @@ def test_compile_refuses_every_plugin_including_wellformed_ones():
 
 @pytest.fixture
 def restore_manifest():
-    """Snapshot and restore plugins/manifest.json + LOADED_PLUGINS around a test."""
-    orig = _MANIFEST.read_text(encoding="utf-8") if _MANIFEST.exists() else "[]"
+    """Snapshot and restore plugins/manifest.json + LOADED_PLUGINS around a test.
+
+    V69 M61.7 — restores BYTES, not text. ``write_text`` translates newlines on
+    Windows, so restoring an LF-committed file produced CRLF and left
+    ``plugins/manifest.json`` permanently modified in the working tree after any
+    suite run. That is how the release qualification acquired a standing
+    ``working_tree_not_clean`` warning: a test was mutating a tracked file.
+    """
+    orig = _MANIFEST.read_bytes() if _MANIFEST.exists() else b"[]\n"
     saved = dict(pl.LOADED_PLUGINS)
     yield
-    _MANIFEST.write_text(orig, encoding="utf-8")
+    _MANIFEST.write_bytes(orig)
     pl.LOADED_PLUGINS.clear()
     pl.LOADED_PLUGINS.update(saved)
 
 
 def _write_manifest(sha: str):
+    # newline="" so this fixture never rewrites the file's line endings either.
     _MANIFEST.write_text(json.dumps([{
         "name": "threat_escalator", "file": "threat_escalator.example.py",
         "sha256": sha, "version": "0.1", "enabled": True,
-    }], indent=2), encoding="utf-8")
+    }], indent=2), encoding="utf-8", newline="")
 
 
 def test_a_sha_verified_plugin_is_still_not_executed(restore_manifest):
