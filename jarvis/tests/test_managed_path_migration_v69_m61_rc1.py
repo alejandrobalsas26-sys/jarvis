@@ -210,14 +210,35 @@ def test_write_paths_create_their_directory_lazily(tmp_path, monkeypatch):
 
 
 def test_a_read_only_managed_root_degrades_instead_of_crashing(tmp_path, monkeypatch):
-    """A full disk or read-only tree must surface on the caller's write, not on import."""
+    """A full disk or read-only tree must surface on the caller's write, not on import.
+
+    V69 M61.7 — the invariant under test is "``logs_subdir`` does not raise", and that
+    is asserted on every platform. The follow-on "and therefore created nothing" is
+    only meaningful where the read-only mode actually took effect: ``os.chmod`` on
+    Windows toggles a file's read-only attribute and does **not** stop subdirectory
+    creation, so on Windows the directory legitimately does get created and the
+    original unconditional assertion failed for a reason that had nothing to do with
+    the code under test. The check is now conditioned on observed reality rather than
+    on an assumed POSIX filesystem — the same platform-determinism discipline M61
+    applied to the traversal tests.
+    """
     root = tmp_path / "ro"
     root.mkdir()
     monkeypatch.setattr(managed_paths, "_JARVIS_DIR", root)
     root.chmod(0o500)
     try:
-        target = managed_paths.logs_subdir("blocked")  # must NOT raise
-        assert not target.exists()
+        # Probe whether this filesystem honours the mode bits at all.
+        probe = root / "_probe"
+        try:
+            probe.mkdir()
+            read_only_enforced = False
+            probe.rmdir()
+        except OSError:
+            read_only_enforced = True
+
+        target = managed_paths.logs_subdir("blocked")  # must NOT raise, ever
+        if read_only_enforced:
+            assert not target.exists(), "creation must fail silently, not partially"
     finally:
         root.chmod(0o700)
 
