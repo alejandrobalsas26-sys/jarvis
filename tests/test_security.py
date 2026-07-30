@@ -21,7 +21,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "jarvis"))
 
 import pytest
-from tools.executor import ToolExecutor, _validate_command, COMMAND_ALLOWLIST
+import tools.executor as executor_mod
+from tools.executor import (
+    COMMAND_ALLOWLIST,
+    ERR_FILE_NOT_FOUND,
+    ERR_PATH_NOT_ALLOWED,
+    ToolExecutor,
+    _validate_command,
+)
 
 
 @pytest.fixture
@@ -195,35 +202,178 @@ class TestRunShellCommand:
 # read_file — Path Traversal
 # ─────────────────────────────────────────────────────────────────────────────
 
+SENTINEL_CONTENT = "JARVIS-M61-SENTINEL-MUST-NEVER-BE-RETURNED"
+
+
+@pytest.fixture
+def sandbox(monkeypatch, tmp_path):
+    """A fully synthetic filesystem sandbox, independent of OS and of the CWD.
+
+    The historical version of these tests asked read_file for ``../../etc/passwd``
+    and asserted on the Spanish denial text. That is nondeterministic: ``..`` is
+    resolved against the *process CWD*, so the very same string denotes a path
+    outside every allowed root when pytest runs from the repository root and a
+    path *inside* ``~/Downloads`` when it runs from the application directory
+    (this checkout lives under Downloads). The sandbox was always correct — the
+    fixture was ambiguous.
+
+    Here the allowed root, the CWD and the out-of-root sentinel are all created
+    by the test, so ``../`` has exactly one meaning on every platform and from
+    every invocation directory.
+    """
+    root = tmp_path / "allowed_root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text(SENTINEL_CONTENT, encoding="utf-8")
+
+    # The one containment definition every path-taking handler shares.
+    monkeypatch.setattr(executor_mod, "_sandbox_allowed_dirs", lambda: (root,))
+    # Relative paths must be interpreted from inside the allowed root.
+    monkeypatch.chdir(root)
+
+    return {"root": root, "outside": outside, "sentinel": sentinel}
+
+
+def _assert_no_sentinel_leak(result: dict) -> None:
+    """No field of *result* may carry the out-of-root sentinel content."""
+    blob = repr(result)
+    assert SENTINEL_CONTENT not in blob
+
+
 class TestReadFile:
-    """Verifica que el sandbox de read_file bloquea path traversal."""
+    """read_file must contain every read inside the authorized roots.
 
-    def test_relative_traversal_blocked(self, executor):
-        result = executor.execute("read_file", {"path": "../../etc/passwd"})
-        assert "error" in result
-        assert "permiso" in result["error"].lower() or "seguridad" in result["error"].lower()
+    Assertions use the structured ``error_code`` rather than translated prose so
+    that "denied by the sandbox" is never confused with "allowed but absent".
+    """
 
-    def test_absolute_system_path_blocked(self, executor):
-        result = executor.execute("read_file", {"path": "/etc/shadow"})
-        assert "error" in result
+    # ── Positive control: the guard is not simply denying everything ─────────
 
-    def test_windows_system32_blocked(self, executor):
+    def test_file_inside_root_is_readable(self, executor, sandbox):
+        target = sandbox["root"] / "notes.txt"
+        target.write_text("in-scope payload", encoding="utf-8")
+
+        result = executor.execute("read_file", {"path": str(target)})
+
+        assert "error" not in result
+        assert result["content"] == "in-scope payload"
+
+    def test_relative_file_inside_root_is_readable(self, executor, sandbox):
+        (sandbox["root"] / "sub").mkdir()
+        (sandbox["root"] / "sub" / "notes.txt").write_text("nested", encoding="utf-8")
+
+        result = executor.execute("read_file", {"path": "sub/notes.txt"})
+
+        assert "error" not in result
+        assert result["content"] == "nested"
+
+    # ── Negative controls: every escape shape fails closed ───────────────────
+
+    def test_relative_traversal_blocked(self, executor, sandbox):
+        """``../`` out of the authorized root is denied, and nothing leaks."""
+        result = executor.execute("read_file", {"path": "../outside/sentinel.txt"})
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        _assert_no_sentinel_leak(result)
+
+    def test_nested_normalized_traversal_blocked(self, executor, sandbox):
+        """A traversal that only escapes after normalization is denied too."""
+        (sandbox["root"] / "sub").mkdir()
+
         result = executor.execute(
-            "read_file", {"path": r"C:\Windows\System32\drivers\etc\hosts"}
+            "read_file", {"path": "sub/../../outside/sentinel.txt"}
         )
-        assert "error" in result
 
-    def test_dot_dot_slash_sequence_blocked(self, executor):
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        _assert_no_sentinel_leak(result)
+
+    def test_deep_traversal_blocked(self, executor, sandbox):
         result = executor.execute(
-            "read_file", {"path": "../../../../root/.ssh/id_rsa"}
+            "read_file", {"path": "../../../../../../outside/sentinel.txt"}
         )
-        assert "error" in result
 
-    def test_encoded_traversal_blocked(self, executor):
-        """Path con %2e%2e debe ser bloqueado (Path.resolve() normaliza)."""
-        result = executor.execute("read_file", {"path": "..%2F..%2Fetc%2Fpasswd"})
-        # resolve() no decodifica URL encoding, pero el path no existirá
-        assert "error" in result
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        _assert_no_sentinel_leak(result)
+
+    def test_absolute_outside_path_blocked(self, executor, sandbox):
+        """An absolute path to the sentinel is denied on POSIX and Windows alike."""
+        result = executor.execute("read_file", {"path": str(sandbox["sentinel"])})
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        _assert_no_sentinel_leak(result)
+
+    def test_symlink_escape_blocked(self, executor, sandbox):
+        """A link inside the root whose target is outside it is still denied."""
+        link = sandbox["root"] / "link.txt"
+        try:
+            link.symlink_to(sandbox["sentinel"])
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this host")
+
+        result = executor.execute("read_file", {"path": "link.txt"})
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        _assert_no_sentinel_leak(result)
+
+    def test_url_encoded_traversal_never_leaks(self, executor, sandbox):
+        """``%2F`` is not a separator: the request stays in-root and finds nothing.
+
+        The invariant under test is the one that matters — the sentinel is never
+        returned — not which of the two refusals is emitted.
+        """
+        result = executor.execute("read_file", {"path": "..%2F..%2Foutside%2Fsentinel.txt"})
+
+        assert result.get("error_code") in {ERR_PATH_NOT_ALLOWED, ERR_FILE_NOT_FOUND}
+        _assert_no_sentinel_leak(result)
+
+    # ── The two refusals must remain distinguishable ─────────────────────────
+
+    def test_missing_in_scope_file_reports_not_found(self, executor, sandbox):
+        """An authorized but absent path is not-found, never a traversal denial."""
+        result = executor.execute("read_file", {"path": "does_not_exist.txt"})
+
+        assert result.get("error_code") == ERR_FILE_NOT_FOUND
+
+    def test_empty_path_fails_closed(self, executor, sandbox):
+        result = executor.execute("read_file", {"path": "   "})
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+
+
+class TestWriteFile:
+    """write_file shares the same containment definition and must not create
+    anything outside the authorized root — the directory is created only after
+    the path clears the guard."""
+
+    def test_write_inside_root_succeeds(self, executor, sandbox):
+        result = executor.execute(
+            "write_file", {"path": "out/report.txt", "content": "ok"}
+        )
+
+        assert "error" not in result
+        assert (sandbox["root"] / "out" / "report.txt").read_text(encoding="utf-8") == "ok"
+
+    def test_write_traversal_blocked_and_creates_nothing(self, executor, sandbox):
+        before = sorted(p.name for p in sandbox["outside"].iterdir())
+
+        result = executor.execute(
+            "write_file", {"path": "../outside/evil/pwn.txt", "content": "x"}
+        )
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        assert not (sandbox["outside"] / "evil").exists()
+        assert sorted(p.name for p in sandbox["outside"].iterdir()) == before
+
+    def test_write_does_not_overwrite_sentinel(self, executor, sandbox):
+        result = executor.execute(
+            "write_file", {"path": str(sandbox["sentinel"]), "content": "overwritten"}
+        )
+
+        assert result.get("error_code") == ERR_PATH_NOT_ALLOWED
+        assert sandbox["sentinel"].read_text(encoding="utf-8") == SENTINEL_CONTENT
 
 
 # ─────────────────────────────────────────────────────────────────────────────

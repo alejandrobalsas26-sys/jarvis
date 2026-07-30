@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from core.asset_graph import AssetType, ObservationSource, RelationshipType
+from core import net_binding
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -71,7 +72,10 @@ def exposure_for_bind(ip: str | None) -> str:
     v = (ip or "").strip()
     if not v:
         return "unknown"
-    if v in ("0.0.0.0", "::", "*"):
+    if v in net_binding.UNSPECIFIED_HOSTS:
+        # Bandit B104 flagged this as "possible binding to all interfaces". It is the
+        # opposite: it DETECTS that condition in a discovered listener. Same set,
+        # now named once in core.net_binding.
         return "external"       # bound to all interfaces → externally reachable
     try:
         addr = ipaddress.ip_address(v)

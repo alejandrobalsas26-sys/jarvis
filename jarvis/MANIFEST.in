@@ -1,0 +1,60 @@
+# MANIFEST.in — V69 M61.5: what may leave this machine inside an sdist.
+#
+# setuptools builds an sdist from a working tree that, on a developer host, also
+# contains the operator's .env, a 2.7 MB DEBUG log, SQLite stores holding
+# conversation state, diagnostics bundles, backup archives and the HMAC signing keys
+# the root .gitignore already refuses to commit. None of that is a source
+# distribution, and several items are outright secrets.
+#
+# The rule below is EXCLUDE-first and explicit. `scripts/check_package_manifest.py`
+# re-verifies the built artifacts afterwards, because a manifest rule that is quietly
+# wrong looks exactly like one that works.
+
+include README.md
+include JARVIS.md
+include pyproject.toml
+include .env.example
+recursive-include requirements *.txt
+
+# Declarative rule/config assets the runtime loads.
+recursive-include core *.yaml
+recursive-include core/playbooks *.yaml *.yml
+recursive-include core/sigma_rules *.yml
+recursive-include core/signatures *.yar
+
+# ── Secrets and signing material (gitignored; must never be packaged) ────────
+exclude .env
+global-exclude .env
+global-exclude .env.*
+exclude core/telemetry_keys.json
+exclude core/trust_profile.json
+exclude core/feed_hashes.json
+exclude core/integrity_baseline.json
+exclude jarvis_config.yaml
+
+# ── Runtime state, logs and databases ───────────────────────────────────────
+prune data
+prune logs
+prune .venv
+prune .chroma_db
+prune brain
+prune training
+global-exclude *.log
+global-exclude *.db
+global-exclude *.db-wal
+global-exclude *.db-shm
+global-exclude *.sqlite
+global-exclude *.sqlite3
+global-exclude *.jsonl
+
+# ── Development-only trees ──────────────────────────────────────────────────
+prune tests
+prune evals
+prune .github
+prune .idea
+prune .claude
+exclude conftest.py
+exclude docker-compose.yml
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store

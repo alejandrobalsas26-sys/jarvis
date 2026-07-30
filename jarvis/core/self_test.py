@@ -346,7 +346,11 @@ async def _run_test(test_id: str) -> tuple[bool, str]:
                 return False, "easyocr missing"
 
         elif test_id == "intel_fusion":
-            db_path = Path("logs/intel_fusion.db")
+            # The SAME accessor the fusion engine writes through — a private copy
+            # of the path here would let the self-test report on a file that does
+            # not exist while the real database sits elsewhere.
+            from core.intel_fusion import db_path as _fusion_db_path
+            db_path = _fusion_db_path(create=False)
             return (
                 (True, f"{db_path.stat().st_size//1024}KB")
                 if db_path.exists()

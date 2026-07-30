@@ -21,9 +21,24 @@ _CHANGE_THRESHOLD = 0.15   # 15% pixel change = significant
 _last_hash: str | None = None
 
 
+#: Hex length of a change-detection fingerprint. Fixed at 32 so ``_change_score``
+#: keeps its historical denominator (it divides differing hex chars by the digest
+#: length); the previous MD5 hexdigest was also 32 chars, so the 0.15 threshold
+#: means exactly what it meant before.
+_FINGERPRINT_HEX_LEN = 32
+
+
 def _image_hash(image_data: bytes) -> str:
-    """Fast perceptual hash for change detection."""
-    # Downsample to 8x8 for comparison (not cryptographic)
+    """Fast perceptual fingerprint for change detection.
+
+    V69 M61.7 (Bandit B324): this was MD5. It is a *change detector*, never an
+    integrity or authenticity check — nothing trusts this value and no security
+    decision reads it — but the fingerprint lives only in the in-process
+    ``_last_hash`` global, is never persisted and is never compared against a
+    stored digest, so there is no compatibility reason to keep a broken hash.
+    SHA-256 truncated to the same 32 hex chars is a drop-in replacement.
+    """
+    # Downsample for comparison (not cryptographic).
     try:
         from PIL import Image
         from io import BytesIO
@@ -31,9 +46,9 @@ def _image_hash(image_data: bytes) -> str:
         pixels = list(img.getdata())
         avg    = sum(pixels) / len(pixels)
         bits   = "".join("1" if p > avg else "0" for p in pixels)
-        return hashlib.md5(bits.encode()).hexdigest()
+        return hashlib.sha256(bits.encode()).hexdigest()[:_FINGERPRINT_HEX_LEN]
     except Exception:
-        return hashlib.md5(image_data[:1000]).hexdigest()
+        return hashlib.sha256(image_data[:1000]).hexdigest()[:_FINGERPRINT_HEX_LEN]
 
 
 def _change_score(hash1: str, hash2: str) -> float:

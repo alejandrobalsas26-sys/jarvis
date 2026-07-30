@@ -1,19 +1,67 @@
 """
-core/plugin_loader.py — JARVIS V55.0 OMNI-REDUNDANCY
-Dynamic detection plugin system. Loads cryptographically-verified Python plugins
-from the plugins/ directory without restarting JARVIS. Each plugin's SHA-256 must
-match the signed manifest (plugins/manifest.json) before it executes — unsigned or
-modified plugins are refused. Plugins run in a RESTRICTED exec environment:
-  BLOCKED: open, os, subprocess, socket, ctypes, importlib, __import__ (None).
-  ALLOWED: re, json, time, hashlib, and safe builtins only.
-Each plugin must export analyze(event:dict) -> Optional[dict]. On returning a dict,
-the enriched event is re-ingested into the correlator (with _plugin_enriched=True
-to prevent loops). Execution is non-blocking (thread executor, per-plugin timeout).
-Hot-reload on plugin directory change via watchdog. LOADED_PLUGINS is exposed for
-health_watchdog and the C2 dashboard.
+core/plugin_loader.py — detection plugin inventory. **Execution is DISABLED.**
+
+V69 M61.7 — dynamic source-code plugin execution is refused, fail-closed. This module
+now reads and integrity-checks the plugin manifest and reports what it found; it does
+not run plugin code. ``LOADED_PLUGINS`` therefore stays empty and ``REFUSED_PLUGINS``
+carries the honest inventory.
+
+WHY — the previous docstring described a security boundary that did not exist
+--------------------------------------------------------------------------------
+It claimed "cryptographically-verified", "signed manifest" and a "RESTRICTED exec
+environment" with ``open``, ``os``, ``subprocess``, ``socket``, ``ctypes`` and
+``importlib`` BLOCKED. Bandit flagged the ``exec`` (B102). Every one of those claims
+was false, and the gap was not theoretical:
+
+  1. **The sandbox was not a sandbox.** A ``globals()`` dict with a trimmed
+     ``__builtins__`` restricts nothing in CPython, because the plugin still reaches
+     live objects. The exec environment handed plugins the ``re``, ``json``, ``time``
+     and ``hashlib`` *module objects*, and any function on them carries
+     ``__globals__['__builtins__']`` — the real builtins, ``__import__`` included.
+     Three lines inside the "sandbox" were verified to import ``os``, read arbitrary
+     files and spawn a subprocess. ``().__class__.__base__.__subclasses__()`` is a
+     second, independent route to the same place. A Python ``exec`` globals dict is a
+     namespace, not a privilege boundary, and it cannot be made into one.
+  2. **The manifest was never signed.** Integrity was a SHA-256 in
+     ``plugins/manifest.json``, sitting in the same directory as the plugin. Anyone
+     who could write the plugin could write its expected hash, so the check detected
+     accidental corruption and nothing adversarial.
+  3. **The directory was redirectable.** ``JARVIS_PLUGIN_DIR`` moved the whole
+     plugin+manifest pair to any path in the environment.
+  4. **No operator was in the loop.** ``start()`` loaded everything at boot and a
+     watchdog hot-reloaded on any file change, so a dropped file executed with no
+     approval, no prompt and no audit decision.
+
+Taken together that is arbitrary code execution inside the JARVIS process, with the
+process's own credentials and network reach, gated only by write access to a
+directory. M61 is a stabilization release, so the fix is the smallest safe one:
+**refuse to execute**, and say so honestly.
+
+WHAT STILL WORKS
+----------------
+Manifest parsing, SHA-256 verification and reporting are intact, so an operator can
+still see which plugins exist, whether their hashes match and why each was refused.
+``route_event`` remains wired to the correlator and is a no-op while nothing is
+loaded. Nothing silently pretends to work.
+
+MIGRATION
+---------
+There is deliberately no environment variable that turns ``exec`` back on: an opt-in
+flag would be the same vulnerability behind a different default. A plugin that needs
+to run must become one of:
+  * a normal reviewed module inside ``core``/``tools``, shipped and tested with the
+    application; or
+  * an installed, allowlisted Python entry point (a real package, versioned and
+    auditable); or
+  * an out-of-process worker with a bounded timeout, no inherited secrets, a minimal
+    environment, no shell and an explicit protocol.
+Each of those is a reviewable boundary. ``exec`` on operator-writable source is not.
 """
 from __future__ import annotations
-import asyncio, hashlib, json, logging, os, re, time
+# ``re``/``time`` are gone with the sandbox: they were only ever injected INTO the
+# exec globals, and every function on them exposed __globals__['__builtins__'] — one
+# of the two escape routes described above.
+import asyncio, hashlib, json, logging, os
 from pathlib import Path
 
 logger = logging.getLogger("jarvis.plugin_loader")
@@ -33,21 +81,29 @@ _MANIFEST = _PLUGIN_DIR / "manifest.json"
 _EXEC_TIMEOUT = 5.0
 _MIN_SEV = 7.0
 
-LOADED_PLUGINS: dict = {}      # name -> {fn, sha256, version, load_time, calls, errors}
+#: Whether this build can execute plugin source. Structurally False — there is no
+#: code path and no environment variable that makes it True. Read by ``status()``,
+#: the health watchdog and the release-qualification tests.
+DYNAMIC_EXEC_SUPPORTED = False
+
+#: Name -> plugin record. Stays EMPTY while dynamic execution is disabled; kept so
+#: ``correlator`` and the C2 dashboard keep working unchanged.
+LOADED_PLUGINS: dict = {}
+
+#: Name -> {file, expected_sha256, actual_sha256, integrity, reason}. The honest
+#: inventory: what exists on disk, whether it verified, and why it did not run.
+REFUSED_PLUGINS: dict = {}
+
+#: Reported verbatim to the operator, once per refused plugin.
+REFUSAL_REASON = (
+    "dynamic source-code plugin execution is disabled (V69 M61.7): an exec globals "
+    "dict is not a privilege boundary, and the manifest hash is not a signature. "
+    "Port the plugin to a reviewed core/tools module, an installed allowlisted entry "
+    "point, or an out-of-process worker."
+)
 
 _correlator = None
 _loop = None
-
-_SAFE_BUILTINS = {
-    "print": print, "len": len, "str": str, "int": int, "float": float,
-    "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple,
-    "range": range, "enumerate": enumerate, "zip": zip, "map": map,
-    "filter": filter, "sorted": sorted, "min": min, "max": max, "sum": sum,
-    "abs": abs, "round": round, "any": any, "all": all, "hex": hex,
-    "ord": ord, "chr": chr, "repr": repr, "type": type,
-    "isinstance": isinstance, "hasattr": hasattr, "getattr": getattr,
-    "__import__": None,        # BLOCKED — dynamic imports disallowed in plugins
-}
 
 
 def _sha256(path):
@@ -72,48 +128,57 @@ def _load_manifest():
 
 
 def _compile_one(name, code_text):
-    try:
-        sandbox = {"__builtins__": _SAFE_BUILTINS, "__name__": name,
-                   "re": re, "time": time, "json": json, "hashlib": hashlib}
-        exec(compile(code_text, f"plugin:{name}", "exec"), sandbox)  # noqa: S102
-        fn = sandbox.get("analyze")
-        if not callable(fn):
-            logger.error("plugin_loader: %s missing required analyze(event) function", name)
-            return None
-        return fn
-    except Exception as e:
-        logger.error("plugin_loader: compile error in %s: %s", name, e)
-        return None
+    """Refuse to execute plugin source. Always returns ``None``.
+
+    Deliberately kept as the single choke point rather than deleted: every caller
+    already routes through it, so there is exactly one place where execution could be
+    reintroduced, and ``tests/test_plugin_exec_v69_m617.py`` asserts that this module
+    contains no ``exec``/``compile``/``eval`` node at all.
+
+    ``code_text`` is accepted and dropped unread. It is never compiled, so a malicious
+    plugin's syntax, imports and payload are all inert.
+    """
+    logger.error("plugin_loader: REFUSED '%s' — %s", name, REFUSAL_REASON)
+    return None
 
 
 def load_all():
+    """Inventory the manifest, verify integrity, execute nothing."""
     manifest = _load_manifest()
+    REFUSED_PLUGINS.clear()
     for name, meta in manifest.items():
         p = _PLUGIN_DIR / meta.get("file", name + ".py")
         expected = meta.get("sha256", "")
         actual = _sha256(p)
-        if not actual or actual != expected:
-            logger.error("plugin_loader: %s SHA-256 MISMATCH — REFUSED (expected %s got %s)",
+        integrity = "match" if (actual and actual == expected) else "mismatch"
+        if integrity != "match":
+            # Still reported: a hash mismatch is useful operator signal even though
+            # a matching hash would not have caused execution either.
+            logger.error("plugin_loader: %s SHA-256 MISMATCH (expected %s got %s)",
                          name, expected[:12], (actual or "missing")[:12])
             LOADED_PLUGINS.pop(name, None)
-            continue
-        try:
-            code = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception as e:
-            logger.error("plugin_loader: cannot read %s: %s", name, e)
-            continue
-        fn = _compile_one(name, code)
-        if fn is None:
-            continue
-        LOADED_PLUGINS[name] = {"fn": fn, "sha256": actual,
-                                "version": meta.get("version", "0.1"),
-                                "load_time": time.time(), "calls": 0, "errors": 0}
-        logger.info("plugin_loader: loaded '%s' v%s (sha256=%s…)",
-                    name, meta.get("version", "0.1"), actual[:12])
+        REFUSED_PLUGINS[name] = {
+            "file": str(p.name),
+            "expected_sha256": expected[:12],
+            "actual_sha256": (actual or "missing")[:12],
+            "integrity": integrity,
+            "version": meta.get("version", "0.1"),
+            "reason": REFUSAL_REASON,
+        }
+        # The source is never read, so nothing about it can influence this process.
+        _compile_one(name, None)
+
     removed = [n for n in list(LOADED_PLUGINS) if n not in manifest]
     for n in removed:
         LOADED_PLUGINS.pop(n)
         logger.info("plugin_loader: unloaded '%s' (removed from manifest)", n)
+
+    if REFUSED_PLUGINS:
+        logger.warning(
+            "PLUGIN_LOADER: %d plugin(s) present and NOT executed — dynamic source "
+            "execution is disabled. See core/plugin_loader.py for the migration path.",
+            len(REFUSED_PLUGINS),
+        )
 
 
 def _run_sync(plugin, event):
@@ -166,9 +231,18 @@ async def route_event(event: dict) -> None:
 
 
 def status():
-    return {n: {"version": p["version"], "sha256": p["sha256"][:12],
-                "calls": p["calls"], "errors": p["errors"]}
-            for n, p in LOADED_PLUGINS.items()}
+    """Honest health payload: what ran, what did not, and why.
+
+    ``dynamic_exec_supported`` is reported so a dashboard cannot show "0 plugins" and
+    leave an operator believing the plugin directory was empty.
+    """
+    return {
+        "dynamic_exec_supported": DYNAMIC_EXEC_SUPPORTED,
+        "loaded": {n: {"version": p["version"], "sha256": p["sha256"][:12],
+                       "calls": p["calls"], "errors": p["errors"]}
+                   for n, p in LOADED_PLUGINS.items()},
+        "refused": dict(REFUSED_PLUGINS),
+    }
 
 
 class _PluginWatcher(FileSystemEventHandler):
@@ -199,8 +273,12 @@ async def start(correlator=None):
         observer = Observer()
         observer.schedule(_PluginWatcher(), str(_PLUGIN_DIR), recursive=False)
         observer.start()
-    logger.info("PLUGIN_LOADER: armed — %d plugin(s), hot-reload=%s",
-                len(LOADED_PLUGINS), bool(observer))
+    # Hot-reload now only refreshes the refusal inventory: a file dropped into the
+    # plugin directory can no longer cause code to run, with or without a watcher.
+    logger.info(
+        "PLUGIN_LOADER: inventory only — execution DISABLED, %d loaded, %d refused, "
+        "watcher=%s", len(LOADED_PLUGINS), len(REFUSED_PLUGINS), bool(observer),
+    )
     try:
         await asyncio.Event().wait()
     finally:

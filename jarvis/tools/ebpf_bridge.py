@@ -89,14 +89,48 @@ async def start_ebpf_bridge(broadcast_fn) -> None:
 
 
 def _connect_falco():
-    """Blocking — runs in executor. Returns (client, stdout) or (None, None)."""
+    """Blocking — runs in executor. Returns (client, stdout) or (None, None).
+
+    V69 M61.7 (Bandit B507, HIGH): this used ``paramiko.AutoAddPolicy()``, i.e.
+    trust-on-first-use with no operator in the loop. On the flat lab network this
+    bridge points at, whatever answered on ``KALI_HOST`` first became permanently
+    trusted — handing an on-path attacker a JARVIS-authenticated SSH session
+    authenticated with the operator's own private key. Host-key verification is now
+    fail-closed and centralised in ``core.ssh_policy``.
+    """
     try:
         import paramiko
-        key    = paramiko.RSAKey.from_private_key_file(KALI_KEY_PATH)
+
+        from core import ssh_policy
+    except Exception:
+        # paramiko absent (base text-mode install) — stay dormant, as before.
+        return None, None
+
+    try:
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(KALI_HOST, username=KALI_USER, pkey=key, timeout=10)
-        _, stdout, _ = client.exec_command(FALCO_CMD, get_pty=False)
+        posture = ssh_policy.harden_client(client)
+        ssh_policy.connect_verified(
+            client, KALI_HOST, username=KALI_USER, key_path=KALI_KEY_PATH, timeout=10
+        )
+        logger.debug(
+            f"EBPF_BRIDGE: host key verified for {KALI_HOST} "
+            f"(policy={posture.policy}, stores={posture.stores})"
+        )
+        # B601 SUPPRESSION JUSTIFICATION (the directive itself is on the call line,
+        # and it names exactly one test id):
+        #   FALCO_CMD is a module-level CONSTANT string declared at the top of this
+        #   file — no f-string, no %-format, no .format(), no concatenation — so no
+        #   host, user, path or model-supplied value can reach the remote shell.
+        #   Paramiko offers no non-shell exec primitive (SSH "exec" is *defined* as a
+        #   command string), so there is no safer equivalent expression to write.
+        #   tests/test_ssh_hostkeys_v69_m617.py proves the constant-ness by parsing
+        #   this module's AST: interpolating anything into FALCO_CMD fails that test.
+        _, stdout, _ = client.exec_command(FALCO_CMD, get_pty=False)  # nosec B601
         return client, stdout
+    except ssh_policy.HostKeyVerificationError as exc:
+        # A rejected host key is a security event, not an ordinary outage, so it is
+        # reported at WARNING even though this bridge is otherwise silent by design.
+        logger.warning(f"EBPF_BRIDGE: refusing to connect to {KALI_HOST} — {exc}")
+        return None, None
     except Exception:
         return None, None

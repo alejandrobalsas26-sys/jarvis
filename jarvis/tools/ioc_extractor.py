@@ -18,8 +18,12 @@ from pathlib import Path
 
 from loguru import logger
 
-_IOC_EXPORT_DIR = Path("logs/stix_exports")
-_IOC_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _ioc_export_dir() -> Path:
+    """Managed STIX export directory (V69 M61 RC1), created on first export."""
+    return logs_subdir("stix_exports")
 
 _JARVIS_IDENTITY_ID = "identity--jarvis-purple-team-v33"
 
@@ -155,7 +159,7 @@ async def export_incident_stix(incident: dict, broadcast_fn) -> str | None:
         bundle   = extract_iocs_from_incident(incident)
         inc_id   = incident.get("incident_id", "unk")
         filename = f"stix_{inc_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = _IOC_EXPORT_DIR / filename
+        filepath = _ioc_export_dir() / filename
 
         filepath.write_text(
             json.dumps(bundle, indent=2, ensure_ascii=False, default=str),

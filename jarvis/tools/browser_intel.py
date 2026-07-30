@@ -19,8 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_SCREENSHOTS_DIR = Path("logs/visuals/browser")
-_SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _screenshots_dir() -> Path:
+    """Managed browser-capture directory (V69 M61 RC1), created on first capture."""
+    return logs_subdir("visuals", "browser")
 
 # Allowlist of domains JARVIS can autonomously browse
 # Operator can extend via JARVIS_BROWSE_ALLOWLIST env var
@@ -130,7 +134,7 @@ async def browse_and_extract(
             if take_screenshot:
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"browser_{ts}.png"
-                path     = _SCREENSHOTS_DIR / filename
+                path     = _screenshots_dir() / filename
                 await page.screenshot(path=str(path), full_page=False)
                 result["screenshot_path"] = str(path)
 

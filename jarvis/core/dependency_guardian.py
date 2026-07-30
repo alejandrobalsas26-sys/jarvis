@@ -1,12 +1,29 @@
 """
-core/dependency_guardian.py — Dependency auto-resolution (v30.0).
+core/dependency_guardian.py — Dependency resolution & reporting (v30.0).
 
-At boot: ensures Ollama is running, finds the best available model,
-installs jq silently, checks disk space, and auto-installs missing
-Python packages — all before JARVIS tries to use any of them.
+At boot: ensures Ollama is running, finds the best available model, checks disk
+space, and REPORTS missing Python packages — before JARVIS tries to use any of them.
+
+V69 M61.3 — HOST MUTATION IS NOW OPT-IN
+---------------------------------------
+This module used to install things onto the operator's machine on every boot,
+without being asked: ``pip install --break-system-packages`` for eight packages, and
+``winget install jqlang.jq``. Two problems with that, both real:
+
+  * ``--break-system-packages`` exists specifically to override the guard that stops
+    pip from writing into an externally-managed Python. Running it unattended at boot
+    can damage a system interpreter the operator did not volunteer;
+  * an assistant that silently changes the machine it runs on cannot be reasoned
+    about. A missing package should be *reported* honestly, not papered over — that is
+    what ``scripts/doctor.py`` and the startup diagnostic are for.
+
+Both paths are preserved but now require an explicit opt-in:
+``JARVIS_AUTO_INSTALL_DEPS=true``. The default is REPORT-ONLY: the same names are
+surfaced, prefixed ``would_install:``, with the exact command the operator can run.
 """
 
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +35,18 @@ from core.model_router import normalize_ollama_host
 
 OLLAMA_HOST  = normalize_ollama_host()
 MIN_DISK_GB  = 10.0
+
+#: Opt-in flag for host mutation. Absent/false ⇒ report-only (the default).
+_AUTO_INSTALL_ENV = "JARVIS_AUTO_INSTALL_DEPS"
+
+
+def host_mutation_allowed() -> bool:
+    """True only when the operator explicitly authorized host package installs.
+
+    Read at call time, never cached, so a test or an operator can flip it without
+    reimporting the module.
+    """
+    return os.environ.get(_AUTO_INSTALL_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 # Legacy ordered fallback chains — retained for backward compatibility only.
 # The live path now resolves models through core.model_router.resolve_role_model
@@ -198,46 +227,84 @@ async def _check_disk_space() -> str:
         return f"error: {e}"
 
 
-async def _install_missing_packages() -> list[str]:
+def missing_packages() -> list[str]:
+    """The pip names from :data:`AUTO_INSTALL_PACKAGES` that are not importable.
+
+    Pure detection: imports nothing that is already absent beyond the probe itself,
+    mutates nothing. This is what the report-only default surfaces.
     """
-    Auto-install Python packages that keep appearing as MISSING
-    in the startup diagnostic. Runs pip in a subprocess — non-blocking.
-    Only installs what's actually missing.
+    missing = []
+    for import_name, pip_name in AUTO_INSTALL_PACKAGES:
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing.append(pip_name)
+    return missing
+
+
+async def _install_missing_packages() -> list[str]:
+    """Report — and, ONLY with explicit opt-in, install — missing Python packages.
+
+    Default (``JARVIS_AUTO_INSTALL_DEPS`` unset): returns ``["would_install:<name>",
+    …]`` and logs the exact command the operator can run. Nothing is executed.
+
+    With the opt-in set: installs into the CURRENT interpreter. Note that
+    ``--break-system-packages`` is deliberately NOT passed any more — if the
+    interpreter is externally managed, pip's own guard is the correct outcome and the
+    failure is reported rather than overridden.
     """
     loop = asyncio.get_running_loop()
+    missing = await loop.run_in_executor(None, missing_packages)
+    if not missing:
+        return []
+
+    if not host_mutation_allowed():
+        logger.warning(
+            f"GUARDIAN: {len(missing)} package(s) missing — NOT installing "
+            f"(host mutation is opt-in). Install them yourself with: "
+            f"pip install -r requirements/soc.txt   [{_AUTO_INSTALL_ENV}=true to "
+            f"let JARVIS do it]")
+        return [f"would_install:{name}" for name in missing]
 
     def _do_install():
         installed = []
-        for import_name, pip_name in AUTO_INSTALL_PACKAGES:
+        for pip_name in missing:
+            logger.info(f"GUARDIAN: installing missing package: {pip_name}")
             try:
-                __import__(import_name)
-            except ImportError:
-                logger.info(f"GUARDIAN: installing missing package: {pip_name}")
-                try:
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install",
-                         "--quiet", "--break-system-packages", pip_name],
-                        timeout=120,
-                        capture_output=True,
-                    )
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
+                    timeout=120, capture_output=True,
+                )
+                if result.returncode == 0:
                     installed.append(pip_name)
-                except Exception as e:
-                    logger.debug(f"GUARDIAN: pip install {pip_name} failed: {e}")
+                else:
+                    # Content-free: the package NAME and the exit code only. pip's
+                    # stderr can echo a private path, so it is not logged.
+                    logger.warning(
+                        f"GUARDIAN: pip install {pip_name} failed (exit "
+                        f"{result.returncode})")
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning(
+                    f"GUARDIAN: pip install {pip_name} failed: {type(e).__name__}")
         return installed
 
     installed = await loop.run_in_executor(None, _do_install)
     if installed:
-        logger.info(f"GUARDIAN: auto-installed packages: {installed}")
+        logger.info(f"GUARDIAN: operator-authorized install: {installed}")
     return installed
 
 
 async def _ensure_jq() -> str:
-    """
-    Install jq via winget if missing — silences the Warp hook error
-    that has appeared in every session since v20.
+    """Report whether ``jq`` is present; install it via winget ONLY with the opt-in.
+
+    ``jq`` is not a JARVIS runtime dependency — it was installed to silence a
+    third-party shell hook. Installing an OS-level package unattended is exactly the
+    class of host mutation M61.3 removed from the default path.
     """
     if shutil.which("jq"):
         return "already_installed"
+    if not host_mutation_allowed():
+        return "missing_not_installed"
 
     loop = asyncio.get_running_loop()
 
@@ -246,16 +313,20 @@ async def _ensure_jq() -> str:
         if not winget:
             return "winget_not_found"
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [winget, "install", "--silent", "jqlang.jq",
                  "--accept-source-agreements",
                  "--accept-package-agreements"],
                 timeout=60,
                 capture_output=True,
             )
-            logger.info("GUARDIAN: jq installed — Warp hook errors eliminated")
+            if result.returncode != 0:
+                logger.warning(f"GUARDIAN: jq install failed (exit {result.returncode})")
+                return "install_failed"
+            logger.info("GUARDIAN: jq installed (operator-authorized)")
             return "installed"
-        except Exception as e:
-            return f"error: {e}"
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.warning(f"GUARDIAN: jq install failed: {type(e).__name__}")
+            return f"error: {type(e).__name__}"
 
     return await loop.run_in_executor(None, _install)

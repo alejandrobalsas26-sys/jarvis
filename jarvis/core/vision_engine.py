@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
+from core.managed_paths import logs_subdir
 from core.model_router import ModelRole, resolve_role_model
 
 # V66.1: resolve the VISION model through the unified role resolver. The legacy
@@ -178,8 +179,7 @@ async def analyze_image_file(
 
 def _save_screenshot(image_data: bytes, label: str) -> Path:
     """Save screenshot to logs/visuals/ with timestamp."""
-    visuals_dir = Path("logs/visuals")
-    visuals_dir.mkdir(parents=True, exist_ok=True)
+    visuals_dir = logs_subdir("visuals")
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{label}_{ts}.png"
     path     = visuals_dir / filename
@@ -257,8 +257,7 @@ async def analyze_room(
 
     # Save for reference
     ts = int(time.time())
-    snap_path = Path("logs/visuals") / f"room_{ts}.jpg"
-    snap_path.parent.mkdir(parents=True, exist_ok=True)
+    snap_path = logs_subdir("visuals") / f"room_{ts}.jpg"
     snap_path.write_bytes(frame_bytes)
 
     try:

@@ -15,12 +15,9 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-
 from loguru import logger
 
-SIGMA_RULES_DIR = Path(__file__).parent / "sigma_rules"
-SIGMA_RULES_DIR.mkdir(exist_ok=True)
+from core.managed_paths import sigma_rules_dir
 
 _SIGMA_SYSTEM_PROMPT = """You are a Sigma rule expert. Generate a valid Sigma detection rule YAML.
 Rules MUST follow Sigma v1 specification exactly.
@@ -121,7 +118,7 @@ Map all techniques to correct ATT&CK tags (attack.tXXXX format).
 
         rule_id = str(uuid.uuid4())
         filename = f"auto_{incident.get('incident_id', 'unk')}_{rule_id[:8]}.yaml"
-        rule_path = SIGMA_RULES_DIR / filename
+        rule_path = sigma_rules_dir() / filename
         rule_path.write_text(yaml_text, encoding="utf-8")
 
         logger.info(f"SIGMA_GEN: rule generated → {filename}")
@@ -147,7 +144,7 @@ Map all techniques to correct ATT&CK tags (attack.tXXXX format).
 def list_generated_rules() -> list[dict]:
     """List all auto-generated Sigma rules with metadata."""
     rules: list[dict] = []
-    for path in sorted(SIGMA_RULES_DIR.glob("auto_*.yaml")):
+    for path in sorted(sigma_rules_dir(create=False).glob("auto_*.yaml")):
         try:
             text = path.read_text(encoding="utf-8")
             title = next(

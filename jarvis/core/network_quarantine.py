@@ -37,7 +37,19 @@ _QUARANTINE_ENABLED = True
 _AUTO_THRESHOLD = 9.0
 _MAX_ACTIVE = 16
 _RULE_PREFIX = "JARVIS-QUARANTINE"
-_LOG_PATH = Path("logs/network_quarantine.jsonl")
+from core.managed_paths import log_artifact_path
+from core import net_binding
+
+
+def _log_path() -> Path:
+    """Managed, installation-owned audit trail (V69 M61 RC1) — see punisher.
+
+    Host isolation is an effectful, operator-visible action; its record must live
+    at one installation-owned location regardless of where JARVIS was launched.
+    """
+    return log_artifact_path("network_quarantine.jsonl")
+
+
 _NAC_WEBHOOK = os.environ.get("JARVIS_NAC_WEBHOOK")        # optional NAC/switch API
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
 
@@ -79,7 +91,10 @@ def _gateways() -> set:
 
 
 def _is_protected(ip: str) -> bool:
-    if ip in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+    # SAFETY INTERLOCK: never quarantine JARVIS's own host. Bandit flagged the
+    # "0.0.0.0" literal here (B104); nothing binds. The set is unchanged — altering
+    # it to satisfy a scanner could let JARVIS isolate itself off the network.
+    if ip in net_binding.OWN_HOST_ADDRESSES:
         return True
     if ip in _local_ips() or ip in _gateways():
         return True
@@ -113,8 +128,7 @@ def _run(cmd: list[str]):
 
 def _audit(res: dict) -> None:
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_PATH.open("a", encoding="utf-8") as f:
+        with _log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(res, default=str) + "\n")
     except Exception as e:
         logger.debug("network_quarantine: audit write failed: %s", e)
@@ -126,13 +140,31 @@ async def _nac_isolate(ip: str, reason: str) -> bool:
     loop = asyncio.get_running_loop()
 
     def _post():
+        # V69 M61.7 (Bandit B310): JARVIS_NAC_WEBHOOK is operator configuration that
+        # reaches `urlopen`, whose default opener also serves file:/ftp:/data:. A
+        # `file://` value would make this "isolation" silently succeed against a local
+        # file while the host stayed on the network — a containment action reported as
+        # done and never performed.
+        #
+        # Unlike the Ollama probes this is NOT pinned to a local destination: a NAC
+        # appliance or SaaS controller is legitimately remote. Everything else applies
+        # — http/https only, no embedded credentials, no fragment, valid port, and
+        # every redirect hop re-validated. The destination class is logged so an
+        # operator can see whether containment left their network.
         import urllib.request
+
+        from core.url_policy import UrlPolicyError, describe, open_url
         body = json.dumps({"action": "quarantine", "ip": ip, "reason": reason}).encode()
-        req = urllib.request.Request(_NAC_WEBHOOK, data=body,
-                                     headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
+            req = urllib.request.Request(_NAC_WEBHOOK, data=body,
+                                         headers={"Content-Type": "application/json"})
+            with open_url(req, timeout=10, label="nac_webhook") as r:
+                logger.info("network_quarantine: NAC webhook target=%s",
+                            describe(_NAC_WEBHOOK))
                 return 200 <= getattr(r, "status", 200) < 300
+        except UrlPolicyError as e:
+            logger.error("network_quarantine: NAC webhook URL refused by policy: %s", e)
+            return False
         except Exception as e:
             logger.error("network_quarantine: NAC webhook failed: %s", e)
             return False
@@ -228,7 +260,7 @@ async def start(correlator=None) -> None:
         logger.warning("NETWORK_QUARANTINE: not elevated (admin required) — dormant")
         await asyncio.Event().wait(); return
     try:
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _log_path()
     except Exception as e:
         logger.warning("NETWORK_QUARANTINE: log path unavailable (%s) — dormant", e)
         await asyncio.Event().wait(); return

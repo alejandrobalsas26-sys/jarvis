@@ -10,6 +10,7 @@ dormant if non-Windows, pywin32 missing, or not elevated.
 from __future__ import annotations
 import asyncio, logging, os, re, time
 from collections import deque
+from core import net_binding
 
 logger = logging.getLogger("jarvis.itdr_sentinel")
 
@@ -46,7 +47,8 @@ def _extract(inserts):
             continue
         if ip is None:
             m = _IPV4.search(s)
-            if m and m.group(0) not in ("0.0.0.0", "127.0.0.1"):
+            if m and m.group(0) not in (net_binding.ALL_INTERFACES_V4,
+                                        net_binding.LOOPBACK_V4):
                 ip = m.group(0)
         if "NTLM" in s:
             ntlm = True

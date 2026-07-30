@@ -69,8 +69,13 @@ def handle_shutdown_signal(signame: str) -> str:
         logger.warning(f"SHUTDOWN: {signame} received — initiating graceful shutdown")
         try:
             get_shutdown_event().set()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # V69 M61.4 — waiters block on this event. If it cannot be set they will
+            # never wake, and the shutdown stalls until the force-exit threshold.
+            # Previously a bare `except: pass` made that stall unexplainable.
+            logger.error(
+                f"SHUTDOWN: could not set the shutdown event ({type(e).__name__}); "
+                f"waiters will not wake — press Ctrl+C again to force exit")
         return "initiated"
     # Already stopping — do NOT start another shutdown sequence.
     if _signal_count >= _FORCE_EXIT_SIGNAL_COUNT:
@@ -110,8 +115,14 @@ def install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
         import signal as _sig
         try:
             _sig.signal(_sig.SIGINT, lambda s, f: handle_shutdown_signal("SIGINT"))
-        except Exception:
-            pass
+        except (ValueError, OSError, RuntimeError) as e:
+            # V69 M61.4 — this is the ONLY Ctrl+C path on Windows. If it fails,
+            # ordered shutdown is unreachable and Ctrl+C will hard-kill the process
+            # mid-write. `ValueError` is the expected case (not the main thread);
+            # it still has to be visible, because the consequence is identical.
+            logger.error(
+                f"SHUTDOWN: SIGINT handler NOT installed ({type(e).__name__}) — "
+                f"Ctrl+C will terminate without an ordered shutdown")
 
 
 async def run_graceful_shutdown(watchdog=None) -> None:
@@ -140,15 +151,28 @@ async def run_graceful_shutdown(watchdog=None) -> None:
     _lc.begin_stopping()
 
     # 2. Stop watchdog (prevents task restarts during shutdown).
+    #
+    # V69 M61.4 — a silent failure here is a LIFECYCLE CORRUPTION: a watchdog that is
+    # still running will restart supervised tasks *while* step 3 is cancelling them,
+    # so the process never converges on exit. The loop is kept (the two method names
+    # are a real compatibility shim), but a failure is now reported.
     if watchdog:
+        _watchdog_stopped = False
         for _name in ("request_stop", "stop"):
             try:
                 fn = getattr(watchdog, _name, None)
                 if callable(fn):
                     fn()
+                    _watchdog_stopped = True
                     break
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"SHUTDOWN: watchdog.{_name}() raised ({type(e).__name__}); "
+                    f"trying the next stop method")
+        if not _watchdog_stopped:
+            logger.warning(
+                "SHUTDOWN: watchdog could NOT be stopped — supervised tasks may be "
+                "restarted while they are being cancelled")
 
     # 3. Cancel all remaining tasks except the current one, BEFORE flushing/closing
     #    storage — this is what guarantees writers are stopped before their stores
@@ -188,18 +212,28 @@ async def run_graceful_shutdown(watchdog=None) -> None:
         await asyncio.gather(*(_run_cb(cb) for cb in _shutdown_callbacks))
 
     # 5. Final audit log entry.
+    #
+    # V69 M61.4 — two defects fixed here. The path was `Path("logs")` relative to the
+    # CWD, so the shutdown audit trail landed wherever the process happened to start
+    # (and under a service/scheduler launch, somewhere nobody would look). And the
+    # write failure was swallowed by a bare `except: pass`, so an unwritable audit
+    # trail was indistinguishable from a written one — for an AUDIT record that is
+    # the one failure mode that must never be silent.
     try:
-        from pathlib import Path
-        Path("logs").mkdir(parents=True, exist_ok=True)
-        audit_path = "logs/tactic_audit.jsonl"
-        with open(audit_path, "a", encoding="utf-8") as f:
+        from core.managed_paths import audit_log_path
+        with open(audit_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "event":     "system_shutdown",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "elapsed_s": round(time.monotonic() - t0, 2),
             }) + "\n")
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        # LOG_AND_CONTINUE: shutdown must complete even if the disk is full or the
+        # tree is read-only — refusing to stop would be worse. But the operator is
+        # told, content-free (exception TYPE only: the message can quote a path).
+        logger.warning(
+            f"SHUTDOWN: audit trail write FAILED ({type(e).__name__}) — this "
+            f"shutdown is not recorded in the audit log")
 
     # 6. Mark terminal state — the runtime is fully stopped.
     _lc.mark_stopped()

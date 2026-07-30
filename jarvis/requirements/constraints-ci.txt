@@ -1,0 +1,31 @@
+# requirements/constraints-ci.txt — V69 M61.3: reproducible CI resolution.
+#
+# Used ONLY by CI, via `pip install -c requirements/constraints-ci.txt -r ...`.
+# It is a CONSTRAINTS file, not a requirements file: it pins nothing into the
+# environment on its own, it only bounds what pip may resolve for a package that
+# something else already requested.
+#
+# SCOPE — deliberately narrow.
+# Only the test/lint toolchain is bounded here. That is the part of the
+# environment whose version actually changes whether CI passes: a pytest or
+# pytest-asyncio major bump changes collection and async fixture semantics, and a
+# ruff minor bump adds new rules that turn a green tree red without any source
+# change. Everything else is left to normal resolution.
+#
+# WHAT IS DELIBERATELY *NOT* PINNED.
+# The runtime dependencies are left on their `>=` lower bounds because several
+# require platform-specific resolution that has not been tested across the matrix
+# — `pyaudio`, `yara-python`, `capstone`, `opencv-python`, `torch-directml` and
+# `pywintrace` all resolve to different wheels (or build from source) depending on
+# OS, architecture and Python ABI. Hard-pinning them globally without testing each
+# platform would trade a reproducibility problem for an installability problem.
+#
+# Bounds are upper-exclusive at the next MAJOR: patch and minor upgrades still
+# flow, so security fixes are not blocked, but a breaking release cannot silently
+# redefine the gate.
+
+pytest>=8.0.0,<9.0.0
+pytest-asyncio>=0.23.0,<1.0.0
+ruff>=0.4.0,<1.0.0
+bandit>=1.7.0,<2.0.0
+pip-audit>=2.7.0,<3.0.0

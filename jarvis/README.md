@@ -1,9 +1,15 @@
 # JARVIS — application package
 
-Modular local-first AI assistant: voice agent, SOC/DFIR automation, and a
-guarded tool executor. This directory is the app root (flat layout — top-level
-`core/`, `tools/`, `aura/`). For the project overview and install matrix see the
+Local-first, operator-controlled AI workstation and authorized Purple Team/SOC
+homelab platform: voice agent, SOC/DFIR automation, and a guarded tool executor.
+This directory is the app root (flat layout — top-level `core/`, `tools/`,
+`aura/`). For the project overview and install matrix see the
 [root README](../README.md) and [docs/INSTALLATION.md](../docs/INSTALLATION.md).
+
+**Current release: V69 M61.** The canonical version is `core/version.py`;
+`pyproject.toml` derives from it as dynamic metadata and
+`core.release_check.audit()` verifies that this file, the root README and
+`JARVIS.md` agree with it. Never hand-write a version string.
 
 ## Architecture (real runtime)
 
@@ -110,6 +116,23 @@ controls to make a tool easier to call. See [../SECURITY.md](../SECURITY.md).
 ## Tests / lint
 
 ```bash
-python -m pytest -q          # app suite
+python -m pytest -q          # app suite + the repo-level tests/ tree
 ruff check .                 # E9 + full pyflakes gate (must pass)
+python -m compileall -q core tools scripts main.py
 ```
+
+The same gates run in CI ([../.github/workflows/ci.yml](../.github/workflows/ci.yml))
+plus the release-truth, dependency-authority and packaging checks. CI requires no
+Ollama, models, microphone, Docker daemon, Redis/Postgres or API keys.
+
+## Dependency authority (V69 M61.3)
+
+`requirements/<profile>.txt` is authoritative; the `pyproject.toml` extras mirror
+it and are verified by `core.dependency_authority.audit()`. Add a dependency to
+the profile **first**, then mirror it into `pyproject.toml` — the drift checker
+fails the build otherwise. `requirements.txt` at this level is a deprecated
+pointer to `requirements/all.txt`.
+
+JARVIS never installs packages onto the operator's host by itself. The boot-time
+dependency guardian reports what is missing; it only installs when the operator
+explicitly sets `JARVIS_AUTO_INSTALL_DEPS=true`.

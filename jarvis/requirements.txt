@@ -1,170 +1,33 @@
-# ── Audio capture ──────────────────────────────────────────────
-sounddevice>=0.4.6
-soundfile>=0.12.1
-numpy>=1.24.0
-
-# ── STT ────────────────────────────────────────────────────────
-faster-whisper>=1.0.0
-
-# ── LLM (Ollama — OpenAI-compatible REST) ──────────────────────
-openai>=1.0.0             # AsyncOpenAI → http://localhost:11434/v1
-
-# ── TTS (100% local) ───────────────────────────────────────────
-pyttsx3>=2.90             # síntesis de voz offline, cross-platform
-
-# ── Lectura de archivos ────────────────────────────────────────
-pdfplumber>=0.10.0        # PDF (texto + tablas)
-python-docx>=1.1.0        # DOCX / Word
-openpyxl>=3.1.0           # XLSX / Excel
-pandas>=2.0.0             # CSV / XLSX (leer_archivo_universal — primeras 50 filas)
-python-pptx>=0.6.23       # PPTX / PowerPoint
-Pillow>=10.0.0            # Imágenes + OCR base
-pytesseract>=0.3.10       # OCR (requiere tesseract instalado en el OS)
-easyocr>=1.7.0            # OCR alternativo sin dependencias del OS
-striprtf>=0.0.26          # RTF
-markdown>=3.5.0           # Render de Markdown
-
-# ── Web ────────────────────────────────────────────────────────
-duckduckgo-search>=6.0    # Búsqueda web sin API key
-beautifulsoup4>=4.12.0    # Scraping / parseo HTML
-lxml>=5.0.0
-
-# ── Sistema ────────────────────────────────────────────────────
-psutil>=5.9.8             # CPU, RAM, disco, procesos
-pyautogui>=0.9.54         # GUI automation + screenshots
-pyperclip>=1.8.2          # Clipboard — cross-platform clipboard access (v44.0 clipboard intel)
-keyboard>=0.13.5          # Hotkeys globales
-
-# ── Packet Tracer / Networking ─────────────────────────────────
-paramiko>=3.4.0           # SSH
-scapy>=2.5.0              # Manipulación de paquetes
-
-# ── Config / Validación ────────────────────────────────────────
-pydantic>=2.0.0           # Modelos de datos con validación de tipos
-pydantic-settings>=2.0.0  # Lectura segura de .env con Pydantic
-
-# ── Utilities ──────────────────────────────────────────────────
-python-dotenv>=1.0.0
-requests>=2.31.0
-loguru>=0.7.0
-rich>=13.0.0              # Output bonito en terminal
-schedule>=1.2.0           # Rutinas programadas
-
-# ── MCP (Model Context Protocol) ──────────────────────────────
-mcp>=1.0.0                # Cliente/servidor MCP — integración Packet Tracer bridge
-
-# ── Memoria Vectorial (RAG local) ──────────────────────────────
-chromadb>=0.5.0           # Vector store persistente (guarda en .chroma_db/)
-# V69 M52: los embeddings los produce el runtime unificado (core.embedding_runtime),
-# cuyo proveedor PRIMARIO es el rol EMBEDDING configurado (nomic-embed-text via
-# Ollama). sentence-transformers pasa a ser un FALLBACK OPCIONAL, activado solo si
-# el operador pone JARVIS_EMBEDDING_FALLBACK=true (embedding_fallback_enabled).
-sentence-transformers>=3.0.0  # (opcional) fallback all-MiniLM-L6-v2, solo si se habilita
-
-# ── AURA UI (WebSocket telemetry pipeline) ─────────────────────
-fastapi>=0.111.0          # ASGI framework + WebSocket support
-uvicorn[standard]>=0.29.0 # ASGI server — runs as asyncio.create_task()
-websockets>=12.0          # WebSocket protocol (starlette dependency)
-
-# ── Forensics ──────────────────────────────────────────────────
-piexif>=1.1.3             # EXIF metadata extraction (GPS→Cartesian forensics)
-
-# ── Active Defense (SOC suite) ─────────────────────────────────
-yara-python>=4.5.0        # YARA rule engine — Layer 0 command scanner
-
-# ── Multimodal Engines ─────────────────────────────────────────
-torch-directml>=0.1.0     # DirectML backend for PyTorch (Windows AMD/Intel GPU)
-trimesh>=4.0.0            # 3D mesh I/O and processing (mesh_generator output)
-schemdraw>=0.15           # Circuit schematic drawing (schematic_compiler)
-matplotlib>=3.8.0         # Headless rendering backend required by schemdraw SVG export
-
-# ── Binary Triage (RE engine) ──────────────────────────────────
-pefile>=2023.2.7              # PE parsing — IAT, sections, overlay detection
-capstone>=5.0.1               # Capstone disassembly — XOR loops, GPA chains, JMP-reg
-
-# ── RF/RFID Bridge ─────────────────────────────────────────────
-pyserial>=3.5                 # serial port enumeration (rf_bridge COM port detection)
-pyserial-asyncio>=0.6         # async serial I/O
-
-# ── AD Attack Graph Engine ─────────────────────────────────────
-ijson>=3.2.3                  # streaming JSON parser — O(1) memory for >500MB BloodHound exports
-igraph>=0.11.0                # fast C-backed graph library for Dijkstra pathfinding
-
-# ── Environmental Intel & Threat Feeds (v21.0) ─────────────────
-aiohttp>=3.9.3                # async HTTP — weather + threat feeds, no blocking requests
-ntplib>=0.4.0                 # NTP forensic chrono-sync
-feedparser>=6.0.12            # CISA RSS feed parser
-
-# ── Adversary Emulation & Packet Inspection (v22.0) ────────────────────────────
-pymetasploit3>=1.0.3     # Metasploit RPC client
-aiofiles>=23.2.1         # async file tail for Zeek logs
-
-# ── Sliver C2 gRPC Bridge (v26.0) ──────────────────────────────────────────────
-grpcio>=1.62.0            # Sliver C2 gRPC transport
-grpcio-tools>=1.62.0      # Sliver protobuf compilation
-sliver-py>=0.0.19         # Sliver Python operator client
-
-# ── v27.0 Temporal Correlation ─────────────────────────────────────────────────
-mmh3>=4.1.0                   # MurmurHash3 — fast non-cryptographic hash for correlation buckets
-
-# ── v28.0 SOAR + RF-OOB ────────────────────────────────────────────────────────
-PyYAML>=6.0.1             # SOAR playbook definition parsing
-cryptography>=42.0.0      # AES-256-GCM for RF-OOB command encryption
-watchdog>=4.0.0           # hot-reload playbook files on disk change
-
-# ── v31.0 CPU Dominance — WebRTC VAD pre-filter ───────────────────────────────
-webrtcvad>=2.0.10             # Google WebRTC VAD — 30ms frame speech detection
-pyaudio>=0.2.14               # audio capture backend (may already be present transitively)
-
-# ── v33.0 Adversarial Intelligence ────────────────────────────
-stix2>=3.0.0              # STIX 2.1 IOC/TTP export standard
-scipy>=1.12.0             # statistical anomaly detection (z-score)
-
-# ── v37.0 Autonomous Intelligence & GitHub Tool Ecosystem ─────
-gitpython>=3.1.40         # GitHub repo cloning and management
-nvdlib>=0.7.5             # NVD CVE database access (no auth required)
-shodan>=1.31.0            # Shodan IP intelligence (needs SHODAN_API_KEY)
-playwright>=1.40.0        # Headless browser for web OSINT
-
-# ── v38.0 Visual Intelligence — Vision/Browser/Diagrams ───────
-mss>=9.0.1                # ultra-fast cross-platform screenshot
-qrcode>=7.4.2             # QR code generation for phishing sim
-networkx>=3.2.0           # graph drawing for network topology
-
-# ── v40.0 Omni-Vision, Ghost Hands & Forensic Reporter ────────
-easyocr>=1.7.1            # OCR for hex dumps, assembly, terminal output
-pyautogui>=0.9.54         # GUI automation for lab environment setup
-pygetwindow>=0.0.9        # Window management and organization
-python-docx>=1.1.0        # Professional Word forensic report generation
-
-# ── v41.0 Ephemeral Docker Labs & Adaptive OCR ────────────────
-docker>=7.0.0             # Docker SDK for Python — ephemeral lab orchestration
-opencv-python>=4.9.0      # Adaptive image pre-processing for OCR (dark/light/hex)
-
-# ── v42.0 ARES PROTOCOL — Red Team Operator, MITM Proxy, Sensor Mesh ─
-mitmproxy>=10.3.0         # MITM proxy with async Python API (proxy_intel)
-# websockets>=12.0 — already declared above (AURA UI section), reused for sensor mesh
-
-# ── v45.0 PROMETHEUS — Telegram Mobile Bridge & Intel Fusion ──
-python-telegram-bot>=20.7  # Async Telegram Bot API
-aiosqlite>=0.20.0          # Async SQLite for persistent IOC database
-
-# ── v55.0 OMNI-REDUNDANCY — Kernel ETW Telemetry ──────────────
-pywintrace>=0.2.0         # real-time Microsoft-Windows-Kernel-Process ETW session
-                         # (kernel_telemetry — dormant until run elevated)
-
-# ── Testing ────────────────────────────────────────────────────
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-
-# ── V55.0 TITAN — Persistent state & SIEM forwarding ───────────
-asyncpg>=0.29.0           # async PostgreSQL driver (DBManager)
-redis>=5.0.0              # redis.asyncio client (dedup, cache, pub/sub)
-# aiohttp already declared above (v21.0 section)
-
-# ── V55.0 TITAN — Linting ───────────────────────────────────────
-ruff>=0.4.0               # fast Python linter / formatter
-
-# ── V57.0 NEXUS — Cisco Bare-Metal & PCAP Forensics ─────────────
-asyncssh>=2.14.0          # native async SSH (preferred Cisco IOS transport)
-netmiko>=4.3.0            # multi-vendor SSH automation (asyncssh fallback)
+# ═══════════════════════════════════════════════════════════════════════════
+#  DEPRECATED (V69 M61.3) — this file is no longer a dependency list.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# It used to be a 170-line monolith that mixed text-mode, OCR, RAG and
+# GUI-automation/offensive packages in one flat list, maintained independently of
+# both `requirements/*.txt` and `pyproject.toml`. Three rival lists is how
+# `pip install jarvis[soc]` and `pip install -r requirements/soc.txt` ended up
+# producing different environments.
+#
+# THE AUTHORITY IS NOW `requirements/<profile>.txt`. `pyproject.toml` mirrors it
+# and is verified by `core.dependency_authority.audit()`, a mandatory CI gate.
+#
+# Nothing is lost: every package this file declared was verified to be a strict
+# subset of `requirements/all.txt` (90 packages, 0 legacy-only) before it was
+# replaced, so `pip install -r requirements.txt` still resolves the same set.
+# But `all` includes the offensive/lab and GUI-automation tooling — for a normal
+# workstation install the profile you actually want:
+#
+#     pip install -r requirements/base.txt     # text mode (the default)
+#     pip install -r requirements/voice.txt    # + STT / TTS
+#     pip install -r requirements/docs.txt     # + document reading / OCR
+#     pip install -r requirements/soc.txt      # + defensive SOC / DFIR
+#     pip install -r requirements/dev.txt      # + tests / lint / scanners
+#     pip install -r requirements/lab.txt      # LAB ONLY — offensive-capable
+#     pip install -r requirements/all.txt      # everything, including lab
+#
+# Equivalently, from the package metadata (same contents, verified equal):
+#
+#     pip install .                            # base / text mode
+#     pip install ".[voice,docs,soc,dev]"      # profiles as extras
+#
+-r requirements/all.txt

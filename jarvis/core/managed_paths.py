@@ -36,6 +36,11 @@ _SESSIONS = "data/sessions"
 _DIAGNOSTICS = "data/diagnostics"
 _BACKUPS = "data/backups"
 _EXPORTS = "data/exports"
+# V69 M61.4 — the runtime log tree. Pre-M61 this was the CWD-relative string
+# ``"jarvis.log"`` passed straight to ``logger.add``, which produced one 2.7 MB log
+# per directory JARVIS had ever been launched from. Same discipline as the rest of
+# this module: absolute, application-owned, never caller-supplied.
+_LOGS = "logs"
 
 # A leaf name may only contain these characters. Deliberately narrower than the
 # filesystem allows: no dots-only names, no spaces, no unicode homoglyphs.
@@ -89,9 +94,102 @@ def exports_dir(*, create: bool = True) -> Path:
     return _resolve(_EXPORTS, create=create)
 
 
+def logs_dir(*, create: bool = True) -> Path:
+    """The managed runtime log tree (V69 M61.4). Absolute, never CWD-relative."""
+    return _resolve(_LOGS, create=create)
+
+
+def runtime_log_path(*, create: bool = True) -> Path:
+    """The single rotating runtime log file (``logs/jarvis.log``)."""
+    return logs_dir(create=create) / "jarvis.log"
+
+
+def audit_log_path(*, create: bool = True) -> Path:
+    """The append-only tactic/shutdown audit trail (``logs/tactic_audit.jsonl``)."""
+    return logs_dir(create=create) / "tactic_audit.jsonl"
+
+
 def continuity_db_path(*, create: bool = True) -> Path:
     """The session-continuity SQLite file (its own store, same proven engine)."""
     return sessions_dir(create=create) / "session_continuity.db"
+
+
+def log_artifact_path(name: str, *, create: bool = True) -> Path:
+    """A validated leaf inside the managed log tree (V69 M61 RC1).
+
+    For the durable artifacts that are NOT the runtime log: append-only action
+    audit trails, comparison baselines and small state databases. These were
+    ``Path("logs/…")`` constants evaluated at import time, i.e. bound to whatever
+    directory the process happened to start in. An audit trail with that property
+    is not an audit trail — one host produces a separate file per launch directory
+    — and a baseline read from the wrong directory returns "nothing recorded",
+    which a drift detector reports as *clean*.
+
+    Pass ``create=False`` on a read so that merely looking for a state file does
+    not materialise a directory tree.
+    """
+    return managed_path(logs_dir(create=create), name)
+
+
+def logs_subdir(*names: str, create: bool = True) -> Path:
+    """A validated subdirectory of the managed log tree (report/artifact folders).
+
+    Accepts more than one segment (``logs_subdir("visuals", "browser")``) because
+    several artifact trees are genuinely two levels deep. Each segment is validated
+    INDIVIDUALLY by :func:`safe_leaf` and containment is re-proved at every step, so
+    a nested call is exactly as constrained as a flat one — there is no path string
+    anywhere in which a separator could hide.
+    """
+    if not names:
+        raise UnsafeLeafName("logs_subdir requires at least one path segment")
+    target = logs_dir(create=create)
+    for segment in names:
+        target = managed_path(target, segment)
+    if create:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Same degradation contract as _resolve: a read-only tree surfaces on
+            # the caller's write, it does not abort the runtime.
+            pass
+    return target
+
+
+def app_subdir(*names: str, create: bool = True) -> Path:
+    """A validated subdirectory of the APPLICATION root (V69 M61 RC1).
+
+    For the package-internal asset directories that are not log artifacts:
+    ``core/sigma_rules`` (generated detection rules), ``tools/external`` (cloned
+    third-party tooling) and ``analyze_inbox`` (the operator drop folder). All three
+    were ``Path("core/sigma_rules")``-style CWD-relative literals, which is why
+    ``sigma_generator`` (anchored on ``__file__``) and ``detection_engineer``
+    (anchored on the CWD) could disagree about where the rules live.
+
+    Same validation as the log tree: per-segment :func:`safe_leaf`, containment
+    re-proved at every step, creation lazy and failure-tolerant.
+    """
+    if not names:
+        raise UnsafeLeafName("app_subdir requires at least one path segment")
+    target = _JARVIS_DIR
+    for segment in names:
+        target = managed_path(target, segment)
+    if create:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return target
+
+
+def sigma_rules_dir(*, create: bool = True) -> Path:
+    """The single generated-Sigma-rule directory (``core/sigma_rules``).
+
+    Public and shared on purpose: ``sigma_generator`` writes the rules,
+    ``detection_engineer`` promotes drafts and ``daily_briefing`` counts them. Three
+    private literals meant a briefing run from another directory reported "0 drafts"
+    while drafts were waiting — a detection backlog reported as an empty one.
+    """
+    return app_subdir("core", "sigma_rules", create=create)
 
 
 def safe_leaf(name: str, *, suffix: str = "") -> str:
@@ -143,4 +241,5 @@ def describe() -> dict:
         "diagnostics": _DIAGNOSTICS,
         "backups": _BACKUPS,
         "exports": _EXPORTS,
+        "logs": _LOGS,
     }

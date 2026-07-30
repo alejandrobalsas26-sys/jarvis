@@ -1,7 +1,15 @@
 """
 core/sensor_mesh.py — Distributed lab sensor mesh orchestrator (v42.0).
 
-Deploys JARVIS micro-agents to lab VMs via paramiko SSH.
+Stages JARVIS micro-agents onto lab VMs via paramiko SSH.
+
+V69 M61.7 — deployment is NOT automatic. Host-key verification is fail-closed
+(``core.ssh_policy``: RejectPolicy, no trust-on-first-use), and by default this module
+mutates no remote host at all: ``deploy_sensor_to_vm`` returns an operator action plan.
+With ``JARVIS_SENSOR_DEPLOY=true`` *and* trusted-lab mode it will stage the agent file
+to a unique, private, ``0600`` home-relative path — and still never installs a package
+and never executes anything on the target. Starting the agent is the operator's action.
+
 Each agent is a self-contained 80-line Python script that:
   - Monitors process creation (psutil)
   - Monitors new network connections
@@ -12,7 +20,8 @@ Main JARVIS runs a WebSocket server on port 9999 for agent connections.
 Agents connect automatically and stream telemetry.
 All connected agents appear as live nodes in the AURA 3D scene.
 
-Voice: "JARVIS deploy sensor to 192.168.1.100" → SSH → deploy → stream
+Voice: "JARVIS deploy sensor to 192.168.1.100" → SSH host-key check → stage (opt-in)
+or refuse with a plan (default) → the operator starts the agent → stream.
 """
 
 import asyncio
@@ -24,8 +33,13 @@ from pathlib import Path
 from loguru import logger
 
 _SENSOR_PORT = 9999   # WebSocket server for incoming agent connections
-_SENSOR_DIR  = Path("logs/sensor_mesh")
-_SENSOR_DIR.mkdir(parents=True, exist_ok=True)
+from core import ssh_policy
+from core.managed_paths import logs_subdir
+
+
+def _sensor_dir() -> Path:
+    """Managed sensor-mesh artifact directory (V69 M61 RC1), created on first write."""
+    return logs_subdir("sensor_mesh")
 
 # Connected agents: {agent_id: {ip, hostname, os, ws_connection}}
 _connected_agents: dict[str, dict] = {}
@@ -136,6 +150,31 @@ async def start_sensor_server(broadcast_fn) -> None:
 
 # ── SSH agent deployment ──────────────────────────────────────────────────────
 
+def _deployment_plan(host_ip: str, ssh_user: str, staged_path: str | None) -> dict:
+    """The operator action plan returned instead of mutating a remote host."""
+    target = staged_path or "<staged path — run with staging enabled to obtain it>"
+    return {
+        "target_ip": host_ip,
+        "ssh_user": ssh_user,
+        "staged_path": staged_path,
+        "jarvis_listener": f"127.0.0.1:{_SENSOR_PORT}",
+        "operator_action": [
+            f"1. Confirm {host_ip} is a machine you own and have authorization to change.",
+            "2. Enroll its SSH host key once, after verifying the fingerprint out of "
+            "band: core.ssh_policy.enrollment_plan(host) then enroll_verified_host(...).",
+            "3. Install the agent's dependencies YOURSELF on the target: "
+            "python3 -m pip install --user psutil websockets",
+            f"4. Start the staged agent yourself: python3 {target}",
+            "5. JARVIS listens on loopback only; expose a tunnel if the VM is remote.",
+        ],
+        "why_not_automatic": (
+            "Automatic deployment would (a) install packages on a machine JARVIS does "
+            "not own, and (b) execute uploaded code there. Both are unreviewable host "
+            "mutations, so they are the operator's action, not the agent's."
+        ),
+    }
+
+
 async def deploy_sensor_to_vm(
     host_ip: str,
     ssh_user: str,
@@ -143,70 +182,117 @@ async def deploy_sensor_to_vm(
     broadcast_fn,
     tts=None,
 ) -> bool:
+    """Stage the JARVIS micro-agent onto a VM. **Does not execute it.**
+
+    V69 M61.7 — this function used to do four things the release gate correctly
+    refuses (Bandit B507 HIGH, B108, B601):
+
+      * ``paramiko.AutoAddPolicy()`` — trust-on-first-use, so whatever answered on
+        ``host_ip`` first became permanently trusted, with the operator's private key
+        doing the authenticating (B507);
+      * upload to a fixed, shared, world-writable ``/tmp/jarvis_sensor.py`` — any
+        local user on the target could pre-create that name as a symlink to redirect
+        the write, or swap the contents between upload and execution (B108);
+      * ``pip install psutil websockets`` on the remote host — automatic dependency
+        installation on a machine JARVIS does not own;
+      * ``nohup python3 /tmp/jarvis_sensor.py &`` — remote execution of uploaded code
+        (B601), started from a path an attacker could have replaced.
+
+    What it does now: host-key verification is fail-closed (``core.ssh_policy``), and
+    the *default* is to mutate nothing at all and return an operator action plan.
+    Staging is opt-in via ``JARVIS_SENSOR_DEPLOY=true`` **and** trusted-lab mode; even
+    then JARVIS only writes the script to a unique, private, home-relative path with
+    ``0600`` permissions, and never installs or starts anything. Returns ``False``
+    when nothing was staged.
     """
-    Deploy JARVIS micro-agent to a VM via SSH.
-    Agent auto-connects back to main JARVIS sensor server.
-    Requires paramiko (installed in v26).
-    """
-    logger.info(f"SENSOR_MESH: deploying agent to {host_ip}")
+    if not ssh_policy.remote_staging_enabled():
+        plan = _deployment_plan(host_ip, ssh_user, None)
+        logger.warning(
+            f"SENSOR_MESH: automated deployment to {host_ip} is DISABLED by default "
+            f"(set JARVIS_SENSOR_DEPLOY=true with trusted-lab mode to stage the agent "
+            f"file; JARVIS never installs or starts it). Returning an operator plan."
+        )
+        await broadcast_fn({
+            "type":      "sensor_deploy_requires_operator",
+            "target_ip": host_ip,
+            "severity":  "WARNING",
+            "plan":      plan,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        if tts:
+            asyncio.create_task(tts.speak_async(
+                f"Automated sensor deployment to {host_ip} is disabled. "
+                f"An operator action plan is on the console."
+            ))
+        return False
+
+    logger.info(f"SENSOR_MESH: staging agent file to {host_ip} (no remote execution)")
 
     loop = asyncio.get_running_loop()
 
-    def _deploy():
+    def _stage() -> tuple[bool, str | None, str | None]:
+        """Returns ``(staged, remote_path, error)``. Blocking — runs in executor."""
+        client = None
+        sftp = None
         try:
             import paramiko
 
-            # Get host IP for agent callback (the IP of the JARVIS host
-            # as seen from the VM — usually the VMware gateway)
-            jarvis_ip = os.getenv(
-                "JARVIS_HOST_IP", "192.168.1.1"
-            )
-
-            # Generate agent script with embedded connection details
+            # The IP of the JARVIS host as seen from the VM (usually the hypervisor
+            # gateway). Config only — never a value from a model or a remote host.
+            jarvis_ip = os.getenv("JARVIS_HOST_IP", "192.168.1.1")
             agent_code = _generate_agent_script(jarvis_ip, _SENSOR_PORT)
 
-            # SSH connect
-            key = paramiko.RSAKey.from_private_key_file(ssh_key_path)
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(host_ip, username=ssh_user, pkey=key, timeout=15)
-
-            # Upload agent script
-            sftp = client.open_sftp()
-            with sftp.open("/tmp/jarvis_sensor.py", "w") as f:
-                f.write(agent_code)
-            sftp.close()
-
-            # Install psutil if needed and start agent
-            client.exec_command(
-                "pip install psutil websockets --quiet 2>/dev/null; "
-                "nohup python3 /tmp/jarvis_sensor.py &"
+            ssh_policy.harden_client(client)
+            ssh_policy.connect_verified(
+                client, host_ip, username=ssh_user, key_path=ssh_key_path, timeout=15
             )
-            client.close()
-            return True
 
-        except Exception as e:
-            logger.error(f"SENSOR_MESH: deploy failed: {e}")
-            return False
+            sftp = client.open_sftp()
+            remote_path = ssh_policy.remote_staging_path(sftp, "sensor", ".py")
+            with sftp.open(remote_path, "w") as handle:
+                handle.write(agent_code)
+            # Owner-only, and no execute bit: JARVIS does not start this file.
+            sftp.chmod(remote_path, ssh_policy.REMOTE_STAGING_MODE)
+            return True, remote_path, None
 
-    success = await loop.run_in_executor(None, _deploy)
+        except ssh_policy.HostKeyVerificationError as exc:
+            return False, None, str(exc)
+        except Exception as exc:
+            return False, None, f"{type(exc).__name__}: {exc}"
+        finally:
+            for resource in (sftp, client):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except Exception:
+                        pass
+
+    staged, remote_path, error = await loop.run_in_executor(None, _stage)
+
+    if not staged:
+        logger.warning(f"SENSOR_MESH: staging to {host_ip} failed — {error}")
 
     await broadcast_fn({
-        "type":      "sensor_deployed" if success else "sensor_deploy_failed",
+        "type":      "sensor_staged" if staged else "sensor_deploy_failed",
         "target_ip": host_ip,
-        "severity":  "INFO" if success else "WARNING",
+        "severity":  "INFO" if staged else "WARNING",
+        "staged_path": remote_path,
+        "error":     error,
+        "plan":      _deployment_plan(host_ip, ssh_user, remote_path),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 
     if tts:
         msg = (
-            f"Sensor deployed to {host_ip}. Awaiting connection."
-            if success else
-            f"Failed to deploy sensor to {host_ip}."
+            f"Sensor agent staged on {host_ip}. Start it manually — "
+            f"JARVIS does not execute remote code."
+            if staged else
+            f"Failed to stage sensor on {host_ip}."
         )
         asyncio.create_task(tts.speak_async(msg))
 
-    return success
+    return staged
 
 
 def _generate_agent_script(jarvis_ip: str, jarvis_port: int) -> str:

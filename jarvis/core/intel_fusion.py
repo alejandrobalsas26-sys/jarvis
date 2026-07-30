@@ -27,15 +27,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_DB_PATH = Path("logs/intel_fusion.db")
+from core.managed_paths import log_artifact_path
+
+
+def db_path(*, create: bool = True) -> Path:
+    """The managed intel-fusion database (V69 M61 RC1).
+
+    Public because ``core.self_test`` reports on this same file: when both sides
+    built ``Path("logs/intel_fusion.db")`` independently, a self-test run from a
+    different directory inspected a file the fusion engine had never written and
+    reported "will create on first ingest" about a database that already held
+    the operator's whole intel history. One accessor, one file.
+    """
+    return log_artifact_path("intel_fusion.db", create=create)
 
 
 @asynccontextmanager
 async def _get_db():
     """Async SQLite connection context manager (single thread start, auto-close)."""
     import aiosqlite
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = await aiosqlite.connect(str(_DB_PATH))
+    db = await aiosqlite.connect(str(db_path()))
     db.row_factory = aiosqlite.Row
     try:
         yield db
@@ -364,8 +375,10 @@ async def generate_weekly_digest(
 
     # Save digest
     ts   = datetime.now().strftime("%Y%m%d")
-    path = Path("logs/reports") / f"intel_digest_{ts}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Same managed directory the incident reporters write to — see
+    # forensic_reporter._reports_dir.
+    from core.managed_paths import logs_subdir
+    path = logs_subdir("reports") / f"intel_digest_{ts}.md"
     path.write_text(
         f"# JARVIS Weekly Intelligence Digest\n"
         f"*{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"

@@ -190,7 +190,25 @@ _DESCRIPTIVE = re.compile(
     re.IGNORECASE,
 )
 
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍‎‏﻿­⁠"), None)
+# Invisible characters stripped by ``_normalize`` before pattern matching.
+#
+# V69 M61.7 (Bandit B613 — "Trojan Source"): these code points are declared as
+# INTEGERS, never as literal characters inside the source. Embedding a real
+# U+200F RIGHT-TO-LEFT MARK here made this file itself carry a bidirectional
+# control character, so the rendered source could disagree with what the
+# interpreter executes — the exact Trojan Source primitive this module defends
+# against. The set is unchanged; only its spelling is now reviewable.
+_INVISIBLE_CODEPOINTS: tuple[int, ...] = (
+    0x200B,  # ZERO WIDTH SPACE
+    0x200C,  # ZERO WIDTH NON-JOINER
+    0x200D,  # ZERO WIDTH JOINER
+    0x200E,  # LEFT-TO-RIGHT MARK          (bidi)
+    0x200F,  # RIGHT-TO-LEFT MARK          (bidi)
+    0xFEFF,  # ZERO WIDTH NO-BREAK SPACE / BOM
+    0x00AD,  # SOFT HYPHEN
+    0x2060,  # WORD JOINER
+)
+_ZERO_WIDTH = dict.fromkeys(_INVISIBLE_CODEPOINTS, None)
 _B64_BLOB = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 _HEX_BLOB = re.compile(r"(?:[0-9a-fA-F]{2}[\s:]?){12,}")
 
@@ -203,7 +221,8 @@ def _normalize(text: str) -> str:
     Folds common homoglyph/obfuscation tricks so patterns match the intent."""
     t = unicodedata.normalize("NFKC", text or "")
     t = t.translate(_ZERO_WIDTH)
-    t = re.sub(r"[ \t ]+", " ", t)
+    #   (NO-BREAK SPACE) is written as an escape, never as a literal char.
+    t = re.sub(r"[ \t\xa0]+", " ", t)
     return t
 
 

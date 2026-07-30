@@ -16,10 +16,22 @@ and it captures faster-whisper's language-ID output for LanguageContext.
 """
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from core.audio import HighPrioritySTTListener
+# V69 M61 RC1 — the docstring above says this module is CI-portable, and the
+# monkeypatched loader makes it so for faster-whisper. The IMPORT was not: it
+# reaches ``core.audio``, which imports ``sounddevice`` and ``numpy`` at module
+# scope, and both live in ``requirements/voice.txt``. The authoritative CI job
+# installs dev + soc, so an unguarded import here does not produce a failing
+# test — it produces a COLLECTION ERROR that makes the entire suite unrunnable.
+# Skipping on an absent OPTIONAL profile is the documented contract ("tests that
+# need a live service skip behind their marker"); the assertions are untouched.
+np = pytest.importorskip(
+    "numpy", reason="voice profile (requirements/voice.txt) not installed")
+pytest.importorskip(
+    "sounddevice", reason="voice profile (requirements/voice.txt) not installed")
+
+from core.audio import HighPrioritySTTListener  # noqa: E402
 
 
 class _FakeSegment:

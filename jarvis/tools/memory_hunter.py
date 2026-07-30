@@ -15,8 +15,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_DUMPS_DIR = Path("logs/memory_dumps")
-_DUMPS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _dumps_dir() -> Path:
+    """Managed process-dump directory (V69 M61 RC1), created on first dump.
+
+    Process dumps are the most sensitive artifact this codebase writes; they must
+    land in one installation-owned directory, not wherever the process started.
+    """
+    return logs_subdir("memory_dumps")
 
 # ── Windows API constants ─────────────────────────────────────────────────────
 PROCESS_ALL_ACCESS              = 0x1F0FFF
@@ -222,7 +230,7 @@ async def dump_process_memory(
 
         # Create output dump file
         ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dump_path = _DUMPS_DIR / f"dump_{process_name}_{pid}_{ts}.dmp"
+        dump_path = _dumps_dir() / f"dump_{process_name}_{pid}_{ts}.dmp"
 
         h_file = k32.CreateFileW(
             str(dump_path),

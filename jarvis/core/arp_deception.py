@@ -15,6 +15,7 @@ SAFETY BY CONSTRUCTION (this is deception of EMPTY space, not interception):
 from __future__ import annotations
 import asyncio, hashlib, ipaddress, logging, os, threading, time
 from collections import deque
+from core import net_binding
 
 logger = logging.getLogger("jarvis.arp_deception")
 
@@ -157,7 +158,7 @@ def _on_pkt(pkt):
             return
         arp = pkt[ARP]
         psrc, pdst, op = arp.psrc, arp.pdst, arp.op
-        if psrc and psrc != "0.0.0.0":
+        if psrc and psrc != net_binding.ALL_INTERFACES_V4:
             with _lock:
                 _live.add(psrc)
         if op != 1:

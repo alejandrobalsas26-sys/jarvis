@@ -105,8 +105,12 @@ async def deliver_briefing(
 
     # ── Sigma drafts pending ──────────────────────────────────────────────────
     try:
-        from pathlib import Path
-        drafts = list(Path("core/sigma_rules").glob("DRAFT_*.yaml"))
+        # The SAME accessor sigma_generator writes through. A private
+        # ``Path("core/sigma_rules")`` here reported "0 drafts awaiting approval"
+        # whenever the briefing ran from anywhere but the repository root — a
+        # detection backlog silently rendered as an empty one.
+        from core.managed_paths import sigma_rules_dir
+        drafts = list(sigma_rules_dir(create=False).glob("DRAFT_*.yaml"))
         if drafts:
             sections.append(
                 f"SIGMA: {len(drafts)} rule drafts awaiting approval"

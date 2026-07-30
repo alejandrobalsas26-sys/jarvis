@@ -16,7 +16,14 @@ from typing import Optional
 
 logger = logging.getLogger("jarvis.ir_reporter")
 
-_REPORT_DIR = Path("logs/ir_reports")
+from core.managed_paths import logs_subdir
+
+
+def _report_dir() -> Path:
+    """Managed incident-response report directory (V69 M61 RC1)."""
+    return logs_subdir("ir_reports")
+
+
 
 _ATTCK = {
     "T1003": "OS Credential Dumping",
@@ -150,7 +157,7 @@ async def generate_report(event: dict, correlator=None) -> Optional[str]:
     try:
         stamp = time.strftime("%Y%m%dT%H%M%S")
         safe_type = "".join(c if c.isalnum() else "_" for c in str(event.get("type", "incident")))
-        path = _REPORT_DIR / f"{stamp}_{safe_type}.md"
+        path = _report_dir() / f"{stamp}_{safe_type}.md"
         loop = asyncio.get_running_loop()
         md = _build_markdown(event)
         await loop.run_in_executor(None, _write, path, md)
@@ -165,7 +172,7 @@ async def start(correlator=None) -> None:
     """main.py startup hook. JARVIS Watchdog Pattern: dormant if the report
     directory cannot be created."""
     try:
-        _REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        _report_dir()
     except Exception as e:
         logger.warning("IR_REPORTER: cannot create report dir (%s) — dormant", e)
         await asyncio.Event().wait(); return
@@ -174,5 +181,6 @@ async def start(correlator=None) -> None:
             correlator.register_responder("ir_reporter", generate_report)
         except Exception:
             pass
-    logger.info("IR_REPORTER: armed — compliance reporting ready (%s)", _REPORT_DIR)
+    logger.info("IR_REPORTER: armed — compliance reporting ready (%s)",
+                _report_dir(create=False).name)
     await asyncio.Event().wait()

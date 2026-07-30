@@ -31,10 +31,22 @@ from pathlib import Path
 from loguru import logger
 
 _PROXY_PORT  = int(os.getenv("JARVIS_PROXY_PORT", "8888"))
-_TRAFFIC_DIR = Path("logs/proxy_traffic")
-_CERTS_DIR   = Path("logs/certs")
-_TRAFFIC_DIR.mkdir(parents=True, exist_ok=True)
-_CERTS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _traffic_dir() -> Path:
+    """Managed intercepted-traffic directory (V69 M61 RC1), created on first write."""
+    return logs_subdir("proxy_traffic")
+
+
+def _certs_dir() -> Path:
+    """Managed interception-CA directory (V69 M61 RC1), created on first write.
+
+    A CA keypair that follows the CWD is worse than untidy: each launch directory
+    grows its OWN root certificate, so the one the operator trusted on the target
+    host stops matching the one the proxy presents.
+    """
+    return logs_subdir("certs")
 
 # Cross-thread event queue — mitmproxy runs in its own thread
 _event_queue: asyncio.Queue | None = None
@@ -161,7 +173,7 @@ class _JarvisProxyAddon:
             f"{flow.request.method} {url} → {status}\n"
         )
         try:
-            log_path = _TRAFFIC_DIR / f"traffic_{datetime.now().strftime('%Y%m%d')}.log"
+            log_path = _traffic_dir() / f"traffic_{datetime.now().strftime('%Y%m%d')}.log"
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(entry)
         except Exception:

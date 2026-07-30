@@ -23,6 +23,8 @@ import pytest
 from tools.executor import (
     ToolExecutor,
     MCP_TOOL_ALLOWLIST,
+    MCP_FILENAME_REASONS,
+    _classify_mcp_filename,
     _validate_mcp_filename,
 )
 
@@ -54,6 +56,96 @@ def test_validate_mcp_filename_rejects_traversal(payload):
 
 def test_validate_mcp_filename_accepts_bare_name():
     assert _validate_mcp_filename("laboratorio_ia.pkt") is None
+
+
+# ── V69 M61 RC1: the verdict is a property of the STRING, not of the host ────
+# The previous guard was ``Path(value).name != value``. ``pathlib`` binds to the
+# HOST flavour, so on POSIX a backslash is an ordinary filename character and
+# ``..\\..\\Windows\\evil.dll`` compared equal to its own basename — accepted.
+# The MCP bridge is Windows-facing, so the payloads it will actually see were
+# precisely the ones a Linux CI host could not reject.
+_REJECTED: list[tuple[str, str]] = [
+    # POSIX traversal — must fail closed on every OS
+    ("../../etc/passwd",                       "separator"),
+    ("../x",                                   "separator"),
+    ("/etc/passwd",                            "separator"),
+    ("..",                                     "dot_segment"),
+    (".",                                      "dot_segment"),
+    # Windows traversal — must fail closed on every OS, including POSIX
+    ("..\\..\\Windows\\System32\\evil.dll",    "separator"),
+    ("..\\x",                                  "separator"),
+    ("C:\\Windows\\System32\\evil.dll",        "drive_letter"),
+    ("C:evil.dll",                             "drive_letter"),   # drive-RELATIVE
+    ("\\\\server\\share\\evil.dll",            "separator"),      # UNC
+    ("\\\\?\\C:\\evil.dll",                    "separator"),      # extended-length
+    # Mixed separators
+    ("..\\../etc/passwd",                      "separator"),
+    ("a/b\\c",                                 "separator"),
+    # Alternate data stream
+    ("lab.pkt:hidden",                         "colon"),
+    # Encoded traversal — nothing here decodes it, but a bridge downstream might
+    ("%2e%2e%2fpasswd",                        "encoded_separator"),
+    ("%2E%2E%5Cevil.dll",                      "encoded_separator"),
+    # Unicode that FOLDS to a separator under NFKC
+    ("..\uff0f..\uff0fpasswd",                 "separator"),
+    # Reserved device names, rejected on every platform
+    ("con",                                    "reserved_device"),
+    ("NUL.txt",                                "reserved_device"),
+    # Degenerate input
+    ("",                                       "empty"),
+    ("evil\x00.pkt",                           "nul_byte"),
+    ("evil\n.pkt",                             "control_char"),
+    ("x" * 256,                                "too_long"),
+]
+
+
+@pytest.mark.parametrize("payload,code", _REJECTED,
+                         ids=[repr(p)[:38] for p, _ in _REJECTED])
+def test_traversal_is_rejected_with_a_stable_code_on_every_os(payload, code):
+    """Asserts the machine CODE, never the Spanish sentence.
+
+    A security test that pins a translated string is asserting the locale: the
+    guard could be replaced by ``return "Nombre de archivo inválido."`` and the
+    assertion would still hold.
+    """
+    assert _classify_mcp_filename(payload) == code
+    assert _validate_mcp_filename(payload) is not None
+
+
+@pytest.mark.parametrize("payload", [
+    "laboratorio_ia.pkt",
+    "lab-01_final.pkt",
+    "topologia.v2.pkt",
+    "a.pkt",
+    "x" * 255,
+    "informe (final).pkt",
+    "cañería.pkt",          # non-ASCII is fine; it is not a separator
+    "console.pkt",          # 'console' is NOT the reserved device 'con'
+    "com10.pkt",            # only com1..com9 are reserved
+])
+def test_valid_in_scope_filenames_are_preserved(payload):
+    """The positive control. A guard that rejects everything is not a guard."""
+    assert _classify_mcp_filename(payload) is None
+    assert _validate_mcp_filename(payload) is None
+
+
+def test_every_rejection_code_is_renderable():
+    """Each code must have a message, or a block reports an empty reason."""
+    for _payload, code in _REJECTED:
+        assert code in MCP_FILENAME_REASONS
+    for code, message in MCP_FILENAME_REASONS.items():
+        assert message.strip(), f"code {code} renders an empty message"
+
+
+def test_the_rendered_error_carries_the_code():
+    """The operator-facing string must name the machine code for triage."""
+    err = _validate_mcp_filename("C:\\Windows\\evil.dll")
+    assert err is not None and err.startswith("[drive_letter]")
+
+
+def test_a_non_string_argument_fails_closed():
+    assert _classify_mcp_filename(None) == "not_a_string"
+    assert _validate_mcp_filename(None) is not None
 
 
 def test_unknown_mcp_tool_is_refused(monkeypatch):

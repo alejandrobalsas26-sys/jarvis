@@ -52,7 +52,30 @@ logger.add(
     level="INFO",
     format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
 )
-logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
+
+# V69 M61.4 — the file sink used to be `logger.add("jarvis.log", ...)`: a CWD-relative
+# path that produced one 2.7 MB log per directory JARVIS had ever been launched from,
+# and under a service/scheduler launch would land wherever the service manager chose.
+# It now resolves absolutely inside the application tree and redacts on the way to
+# disk. A failure here is REPORTED, not swallowed: running without a file log is
+# survivable, running without knowing it is not.
+_LOG_SINK_ERROR: str | None = None
+_CONSOLE_INSTALL_ERROR: str | None = None
+
+
+def _install_managed_file_sink() -> None:
+    global _LOG_SINK_ERROR
+    try:
+        from core.managed_logging import install_file_sink
+        install_file_sink(logger)
+        _LOG_SINK_ERROR = None
+    except Exception as exc:  # noqa: BLE001 — degrade honestly, never crash boot
+        _LOG_SINK_ERROR = type(exc).__name__
+        print(f"WARNING: managed file logging unavailable ({_LOG_SINK_ERROR}); "
+              f"console logging only", file=sys.stderr)
+
+
+_install_managed_file_sink()
 
 _V4X_TASKS = []   # strong refs; asyncio only holds weak refs to tasks
 
@@ -71,7 +94,10 @@ def _install_console_logging() -> None:
         install_console()
         logger.remove()
         logger.add(console_log_sink, level="INFO", format=_LOG_FORMAT)
-        logger.add("jarvis.log", level="DEBUG", rotation="10 MB", retention="7 days")
+        # V69 M61.4 — re-attach the SAME managed sink (logger.remove() dropped it).
+        # Same absolute path, same rotation/retention, same redaction filter; the
+        # policy lives in one module instead of two duplicated literals here.
+        _install_managed_file_sink()
         # V69 M55.1.2 — stdlib `logging` (db_manager & ~30 core modules) must also
         # go through the coordinator, or it writes straight to stderr and smears the
         # `Tú:` input line (the live PostgreSQL/asyncpg error).
@@ -81,10 +107,22 @@ def _install_console_logging() -> None:
         try:
             from core.lifecycle import lifecycle as _lc_console
             _lc_console.stamp("CONSOLE_READY")
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as exc:  # noqa: BLE001
+            # LOG_AND_CONTINUE: a missing phase stamp degrades boot telemetry only.
+            # The console itself is up, so this cannot corrupt the input line.
+            logger.warning(f"BOOT: CONSOLE_READY stamp failed ({type(exc).__name__}); "
+                           f"boot phase latencies will be incomplete")
+    except Exception as exc:  # noqa: BLE001
+        # HEALTH_DEGRADE (V69 M61.4): this was a bare `except: pass`. Losing the
+        # console coordinator is a CONSOLE OWNERSHIP failure — background logs go
+        # straight to stderr and smear the active input line, which is exactly the
+        # M54.1 fault this coordinator exists to prevent. Text mode still runs, so
+        # it must not be fatal, but it must never be invisible. Content-free: the
+        # exception TYPE only, never its message (which can quote a path).
+        global _CONSOLE_INSTALL_ERROR
+        _CONSOLE_INSTALL_ERROR = type(exc).__name__
+        print(f"WARNING: console coordinator unavailable ({_CONSOLE_INSTALL_ERROR}); "
+              f"background logs may interleave with the input line", file=sys.stderr)
 
 
 def _console_emit(text: str, channel=None) -> None:
@@ -1465,6 +1503,7 @@ async def _main_async() -> None:
     # v37.0 — Autonomous Intelligence & GitHub-Native Tool Ecosystem
     from core.github_explorer     import load_registry as load_github_registry
     from core.cve_intel           import start_cve_monitor
+    from core.code_intel          import inbox_dir as _inbox_dir
     from core.code_intel          import start_inbox_watcher
     from core.lab_manager         import list_vms as list_lab_vms
     # v38.0 — Visual Intelligence (vision/browser/diagrams/screen monitor)
@@ -2423,7 +2462,6 @@ async def _main_async() -> None:
                 logger.warning(f"Could not register cve-monitor: {e}")
 
             try:
-                from pathlib import Path as _P
                 watchdog.register(
                     "code-intel",
                     lambda: start_inbox_watcher(
@@ -2434,7 +2472,7 @@ async def _main_async() -> None:
                 )
                 logger.info(
                     f"CODE_INTEL: drop folder watcher registered — "
-                    f"{_P('analyze_inbox').absolute()}"
+                    f"{_inbox_dir()}"
                 )
             except Exception as e:
                 logger.warning(f"Could not register code-intel: {e}")

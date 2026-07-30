@@ -25,16 +25,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_EXTERNAL_TOOLS_DIR = Path("tools/external")
-_EXTERNAL_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import app_subdir, log_artifact_path
+
+
+def _external_tools_dir() -> Path:
+    """Where third-party clones land — under the INSTALLATION (V69 M61 RC1).
+
+    ``Path("tools/external")`` resolved against the CWD, so a clone performed from
+    the wrong directory installed code the wrapper loader would never find, and
+    importing this module created a ``tools/external`` folder wherever the importer
+    stood. Created on first clone, not on import.
+    """
+    return app_subdir("tools", "external")
 
 _GITHUB_TOKEN   = os.getenv("GITHUB_TOKEN", "")
 _GITHUB_API     = "https://api.github.com"
 
 # Tool registry: {tool_name: {repo, description, installed, wrapper_code}}
 _tool_registry: dict[str, dict] = {}
-_REGISTRY_PATH = Path("logs/github_tool_registry.json")
-_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _registry_path(*, create: bool = True) -> Path:
+    """The managed dynamic-tool registry (V69 M61 RC1). ``create=False`` on reads."""
+    return log_artifact_path("github_tool_registry.json", create=create)
 
 # Quality thresholds
 _MIN_STARS        = 50
@@ -178,7 +191,7 @@ async def download_and_install(
     Returns True on success.
     """
     repo_name  = repo["name"].replace("/", "__")
-    target_dir = _EXTERNAL_TOOLS_DIR / repo_name
+    target_dir = _external_tools_dir() / repo_name
 
     await broadcast_fn({
         "type":      "github_downloading",
@@ -332,7 +345,7 @@ async def autodiscover_and_integrate(
 
     # 3. Download and install
     repo_name  = chosen["name"].replace("/", "__")
-    target_dir = _EXTERNAL_TOOLS_DIR / repo_name
+    target_dir = _external_tools_dir() / repo_name
     success    = await download_and_install(chosen, broadcast_fn)
     if not success:
         return {"error": f"Failed to clone {chosen['name']}"}
@@ -343,7 +356,7 @@ async def autodiscover_and_integrate(
     )
 
     # 5. Save wrapper
-    wrapper_path = _EXTERNAL_TOOLS_DIR / f"{repo_name}_wrapper.py"
+    wrapper_path = _external_tools_dir() / f"{repo_name}_wrapper.py"
     if wrapper_code:
         wrapper_path.write_text(wrapper_code, encoding="utf-8")
 
@@ -363,7 +376,7 @@ async def autodiscover_and_integrate(
     _tool_registry[repo_name] = tool_entry
 
     # Persist registry
-    _REGISTRY_PATH.write_text(
+    _registry_path().write_text(
         json.dumps(_tool_registry, indent=2), encoding="utf-8"
     )
 
@@ -392,11 +405,12 @@ def list_integrated_tools() -> list[dict]:
 
 def load_registry() -> None:
     """Load persisted tool registry at startup."""
-    if _REGISTRY_PATH.exists():
+    path = _registry_path(create=False)
+    if path.exists():
         try:
             global _tool_registry
             _tool_registry = json.loads(
-                _REGISTRY_PATH.read_text(encoding="utf-8")
+                path.read_text(encoding="utf-8")
             )
             logger.info(
                 f"GITHUB_EXPLORER: loaded {len(_tool_registry)} "

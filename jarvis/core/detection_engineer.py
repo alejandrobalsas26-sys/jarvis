@@ -18,8 +18,7 @@ from pathlib import Path
 
 from loguru import logger
 
-_SIGMA_DIR = Path("core/sigma_rules")
-_SIGMA_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import sigma_rules_dir as _sigma_dir
 
 _in_progress: set[str] = set()
 
@@ -168,7 +167,7 @@ async def draft_rule_for_gap(
         )
 
         draft_path = (
-            _SIGMA_DIR /
+            _sigma_dir() /
             f"DRAFT_{technique_id.replace('.', '_')}.yaml"
         )
         draft_path.write_text(rule_text, encoding="utf-8")
@@ -213,7 +212,7 @@ async def deploy_approved_rule(
         return False
 
     final_name = draft.name.replace("DRAFT_", "")
-    final_path = _SIGMA_DIR / final_name
+    final_path = _sigma_dir() / final_name
     draft.rename(final_path)
 
     logger.info(f"DETECTION_ENG: rule deployed → {final_name}")

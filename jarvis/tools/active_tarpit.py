@@ -23,6 +23,18 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from core.telemetry_auth import make_signed_broadcaster
+from core import net_binding
+
+# V69 M61.7 (Bandit B104): the active tarpit bound "0.0.0.0" unconditionally.
+# Loopback-first with an explicit exposure opt-in, matching core/canary.py.
+_EXPOSE_ENV = "JARVIS_TARPIT_EXPOSE"
+_BIND_ENV = "JARVIS_TARPIT_BIND"
+
+
+def _bind_host() -> str:
+    return net_binding.resolve_bind_host(
+        "ACTIVE_TARPIT", expose_env=_EXPOSE_ENV, bind_env=_BIND_ENV)
+
 
 # Realistic opening banners per port — scanners parse these
 _BANNERS = {
@@ -114,7 +126,7 @@ async def start_tarpit(broadcast_fn) -> None:
         try:
             srv = await asyncio.start_server(
                 _make_handler(port, signed_bcast),
-                host  = "0.0.0.0",
+                host  = _bind_host(),
                 port  = port,
                 limit = 1024,      # small read buffer — we never read from traps
             )

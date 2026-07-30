@@ -111,16 +111,28 @@ def _extract(path: str) -> dict:
 
 
 def _ollama_up() -> bool:
-    import urllib.request
+    # V69 M61.7 (Bandit B310): JARVIS_OLLAMA_URL is configuration, and `urlopen`'s
+    # default opener also serves file:/ftp:/data:. A stale or hostile value could make
+    # this probe read a local file and report "the service is up". core.url_policy
+    # pins the scheme to http/https, refuses embedded credentials, re-validates every
+    # redirect hop, and — since Ollama is a local inference server by definition —
+    # requires the destination to resolve to loopback or a private network.
+    from core.url_policy import UrlPolicyError, open_url
     try:
-        with urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=4) as r:
+        with open_url(f"{_OLLAMA_URL}/api/tags", timeout=4,
+                      require_local=True, label="ollama") as r:
             return getattr(r, "status", 200) == 200
+    except UrlPolicyError as e:
+        logger.warning("ai_reverser: Ollama endpoint refused by URL policy: %s", e)
+        return False
     except Exception:
         return False
 
 
 def _ollama_chat(system: str, user: str, timeout: int = 150) -> str:
     import urllib.request
+
+    from core.url_policy import open_url
     payload = {"model": _RE_MODEL, "stream": False, "format": "json",
                "options": {"temperature": 0.1, "num_ctx": 4096},
                "messages": [{"role": "system", "content": system},
@@ -128,7 +140,10 @@ def _ollama_chat(system: str, user: str, timeout: int = 150) -> str:
     req = urllib.request.Request(f"{_OLLAMA_URL}/api/chat",
                                  data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    # The Request's own URL is validated too — wrapping a URL in a Request is not a
+    # way around the policy. A UrlPolicyError propagates: a misconfigured endpoint
+    # must not be reported as a model answer.
+    with open_url(req, timeout=timeout, require_local=True, label="ollama") as r:
         data = json.loads(r.read().decode())
     return data.get("message", {}).get("content", "") or ""
 

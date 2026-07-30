@@ -1,6 +1,8 @@
 # JARVIS V69 M55 — Native Ollama Fast Path & Non-Reasoning Interactive Inference
 
-**Status:** COMPLETE on branch `jarvis-v69-m55-native-fast-path` (NOT merged).
+**Status:** COMPLETE and **merged to `master`** as `d101a83` (merge status corrected in V69 M61.1 — this
+line was stale). Developed on branch
+`jarvis-v69-m55-native-fast-path`.
 **Baseline:** master `f9d96e7` (V69 M54.1) — 2009 passed / 18 skipped / 0 failures.
 **After M55:** 2068 passed / 18 skipped / 0 failures (+59 M55 tests). ruff + compileall clean.
 **Host:** Windows 11, AMD Ryzen 5 7430U (6c/12t, 15 W), 64 GB DDR4, CPU-only Ollama 0.32.0.

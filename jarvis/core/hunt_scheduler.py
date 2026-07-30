@@ -30,8 +30,12 @@ from core.lifecycle import is_stopping as _lifecycle_stopping
 _HUNT_INTERVAL_H = 4
 _HUNT_INTERVAL_S = _HUNT_INTERVAL_H * 3600
 _WARMUP_S        = 1800  # 30-minute warmup before the first sweep
-_HUNT_LOG_DIR    = Path("logs/hunt_results")
-_HUNT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import logs_subdir
+
+
+def _hunt_log_dir() -> Path:
+    """The managed hunt-result directory (V69 M61 RC1), created on first write."""
+    return logs_subdir("hunt_results")
 
 _HYPOTHESES = [
     {
@@ -251,7 +255,7 @@ async def run_single_hunt(
     ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
     fname = f"hunt_{hyp['id']}_{ts}.json"
     import json
-    (_HUNT_LOG_DIR / fname).write_text(
+    (_hunt_log_dir() / fname).write_text(
         json.dumps(result, indent=2), encoding="utf-8"
     )
 

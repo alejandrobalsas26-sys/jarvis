@@ -18,8 +18,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from loguru import logger
 
-_LOG_PATH        = Path("logs/punisher_actions.jsonl")
-_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+from core.managed_paths import log_artifact_path
+
+
+def _log_path() -> Path:
+    """The managed, installation-owned action audit trail (V69 M61 RC1).
+
+    Resolved lazily at write time. Pre-RC1 this was ``Path("logs/…")`` evaluated
+    at import, so the record of every executed defensive action followed the
+    process' launch directory — one partial trail per directory JARVIS had been
+    started from — and importing the module created a folder wherever the
+    importer happened to be standing.
+    """
+    return log_artifact_path("punisher_actions.jsonl")
 
 _PUNISHER_ENABLED = True   # set False to disable globally
 _AUTO_THRESHOLD   = 9.0    # severity >= this triggers auto-execute
@@ -46,7 +57,7 @@ def _log_action(action: str, target: str, success: bool,
         "success":   success,
         "detail":    detail,
     }
-    with open(_LOG_PATH, "a", encoding="utf-8") as f:
+    with open(_log_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     logger.info(f"PUNISHER: {action} → {target} — "
                 f"{'OK' if success else 'FAIL'} {detail}")

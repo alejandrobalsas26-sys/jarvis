@@ -1,9 +1,20 @@
 # JARVIS
 
-A **local-first, secure-by-default AI workstation** for an authorized homelab:
-a voice/text assistant, SOC/DFIR automation, and a guarded tool executor — all
-running against a local [Ollama](https://ollama.com) backend by default. Cloud
-is opt-in.
+A **local-first, operator-controlled AI workstation and authorized Purple
+Team/SOC homelab platform**: a voice/text assistant, SOC/DFIR automation, and a
+guarded tool executor — all running against a local
+[Ollama](https://ollama.com) backend by default. Cloud is opt-in.
+
+**Current release: V69 M61** — Production Stabilization, CI & Release
+Engineering. The canonical version lives in
+[`jarvis/core/version.py`](jarvis/core/version.py); package metadata,
+diagnostics, release qualification and this README all derive from or are
+verified against it (`core.release_check.audit()`, a mandatory CI gate).
+
+Nothing JARVIS does is autonomous. Every high-risk OS/network action requires
+human approval (HITL or NATO OTP challenge), the tool executor runs
+`shell=False` against an allowlist, and the verifier pass is advisory — it flags
+findings, it never acts on them.
 
 > Authorized, defensive use only. JARVIS ships offensive-capable, **lab-only**
 > modules (MITM proxy, C2 bridges, Metasploit RPC, RF tooling). They are not
@@ -29,18 +40,25 @@ is opt-in.
 - **Voice + text modes** — faster-whisper STT and pyttsx3 TTS (offline), or pure
   text mode for development.
 
+- **Crash-safe session continuity (V69 M60)** — a versioned session/turn/run
+  journal on the durable operational store. After an unclean exit the runtime
+  reconciles interrupted turns; reconciliation has **no execution path**, so a
+  recovered session never replays an effectful action.
+
 ## Repository layout
 
 ```
 jarvis_v2/
+├── .github/workflows/   # ci.yml — deterministic quality gates (V69 M61)
 ├── jarvis/              # application package (flat layout)
 │   ├── core/            # config, model_router, llm, memory, verification, SOC modules
+│   │   └── version.py   # THE canonical version — everything else derives from it
 │   ├── tools/           # executor + tool handlers (lab-gated where offensive-capable)
-│   ├── scripts/         # doctor.py, model_doctor.py, install.ps1/.sh
-│   ├── requirements/    # base, voice, docs, soc, lab, dev, all
+│   ├── scripts/         # doctor.py, model_doctor.py, install.ps1/.sh, qualify_release_m61.py
+│   ├── requirements/    # base, voice, docs, soc, lab, dev, all + constraints-ci
 │   ├── tests/           # app test suite
-│   ├── main.py          # async orchestrator  (python -m jarvis)
-│   └── pyproject.toml   # metadata, ruff + pytest config
+│   ├── main.py          # async orchestrator  (python -m jarvis from this directory's parent)
+│   └── pyproject.toml   # metadata (version is dynamic), ruff + pytest config
 ├── tests/               # repo-level security/integration tests
 ├── docs/                # INSTALLATION, TROUBLESHOOTING, THREAT_MODEL
 ├── SECURITY.md  CHANGELOG.md
@@ -70,6 +88,15 @@ Full matrix and per-OS steps: [docs/INSTALLATION.md](docs/INSTALLATION.md).
 (**offensive-capable, isolated lab only**) · `dev` · `all`. Base is intentionally
 lean so text mode runs without audio/OCR/ML/lab dependencies.
 
+`requirements/<profile>.txt` is the **single dependency authority** (V69 M61).
+`pyproject.toml` extras mirror it and are verified by
+`core.dependency_authority.audit()` as a mandatory CI gate, so
+`pip install jarvis[soc]` and `pip install -r requirements/soc.txt` cannot drift
+apart. The legacy monolithic `jarvis/requirements.txt` is deprecated to a pointer
+at `requirements/all.txt`. CI resolves against `requirements/constraints-ci.txt`,
+which bounds only the test/lint toolchain — runtime packages needing
+platform-specific resolution are deliberately left unpinned.
+
 ## Recommended hardware tiers
 
 | Tier | VRAM | Example role models |
@@ -94,7 +121,19 @@ detail in [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODE
 cd jarvis
 pip install -r requirements/dev.txt
 ruff check .          # E9 + full pyflakes gate (CI fails on violations)
-python -m pytest -q   # app suite;  (cd .. && python -m pytest tests/) for repo suite
+python -m pytest -q   # both suites: jarvis/tests + the repo-level tests/
+```
+
+`pytest` from `jarvis/` collects **both** trees (`testpaths = ["tests", "../tests"]`).
+CI runs the same command; see [.github/workflows/ci.yml](.github/workflows/ci.yml).
+It needs no Ollama, no models, no microphone, no Docker daemon, no Redis/Postgres
+and no API keys — anything that does is skipped behind a marker.
+
+Release qualification (read-only; mutates no git, host or Ollama state):
+
+```bash
+python jarvis/scripts/qualify_release_m61.py --quick
+python jarvis/scripts/qualify_release_m61.py --full --output release.json
 ```
 
 ## Known limitations

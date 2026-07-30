@@ -34,6 +34,40 @@ _LOLBINS = {"mshta.exe", "certutil.exe", "rundll32.exe", "regsvr32.exe", "bitsad
             "wmic.exe", "installutil.exe", "msbuild.exe", "cscript.exe", "wscript.exe",
             "cmstp.exe", "mavinject.exe", "forfiles.exe", "scrcons.exe"}
 
+#: Splits on BOTH separators. ETW image paths are always Windows-format, but
+#: ``os.path.basename`` binds to the HOST flavour: on POSIX a backslash is an
+#: ordinary character, so ``os.path.basename(r"C:\Windows\System32\mshta.exe")``
+#: returns the WHOLE STRING and no LOLBin ever matches the set below. That is a
+#: silent detection loss wherever this analyzer runs on a non-Windows host — a
+#: Linux SOC box ingesting forwarded Windows telemetry, and CI.
+_PATH_SEP = re.compile(r"[\\/]")
+
+
+def _image_basename(image_path: str) -> str:
+    """Lowercased basename of a Windows-format image path, on any host OS."""
+    if not image_path:
+        return ""
+    return _PATH_SEP.split(image_path.strip())[-1].strip().lower()
+
+
+def _dedupe(reasons: list[str]) -> list[str]:
+    """Drop repeats while preserving first-seen order.
+
+    Every independent signal must survive — an event that is both a LOLBin AND
+    runs from a user-writable path is more suspicious than either alone, so the
+    reasons are accumulated rather than short-circuited at the first match. What
+    must NOT survive is the same reason twice, and the order must be stable so a
+    correlator can compare two findings for equality.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for reason in reasons:
+        if reason not in seen:
+            seen.add(reason)
+            out.append(reason)
+    return out
+
+
 _correlator = None
 _loop = None
 _stop = threading.Event()
@@ -108,12 +142,13 @@ def _analyze(record):
         pid = props.get("processid", "?")
         ppid = props.get("parentprocessid", "?")
         pname = _proc_name(ppid)
-        base = os.path.basename(img).lower()
+        base = _image_basename(img)
         reasons = []
         if base in _LOLBINS:
             reasons.append(f"LOLBin process: {base}")
         if img and _SUSP_DIRS.search(img):
             reasons.append(f"process from user-writable path: {img}")
+        reasons = _dedupe(reasons)
         if reasons:
             _emit("kernel_process_create", 8.5, ["T1059", "T1218"],
                   {"image": img, "cmdline": cmd[:400], "pid": pid,
@@ -126,11 +161,18 @@ def _analyze(record):
         reasons = []
         if _SUSP_DIRS.search(img):
             reasons.append(f"DLL loaded from suspicious path: {img}")
-        try:
-            if not os.path.exists(img):
-                reasons.append(f"image path not on disk — reflective load indicator: {img}")
-        except Exception:
-            pass
+        # The on-disk check is EVIDENCE ONLY on the host the telemetry describes.
+        # Off Windows it answered "absent" for every Windows path, so each image
+        # load acquired a fabricated reflective-load indicator — a finding with no
+        # observation behind it. Absence of evidence is not evidence here.
+        if _IS_WINDOWS:
+            try:
+                if not os.path.exists(img):
+                    reasons.append(
+                        f"image path not on disk — reflective load indicator: {img}")
+            except OSError:
+                pass
+        reasons = _dedupe(reasons)
         if reasons:
             pname = _proc_name(pid)
             _emit("kernel_image_load", 9.0, ["T1055", "T1574"],
