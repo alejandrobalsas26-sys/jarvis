@@ -80,7 +80,7 @@ RELEASE_CLOSURE_BRANCH = "jarvis-v69-m61-release-closure"
 """Where M61.8 is developed. Never merged or tagged by any code in this repository."""
 
 # ── Deterministic validation — the numbers current docs must agree with ──────
-DETERMINISTIC_TESTS_PASSED = 4127
+DETERMINISTIC_TESTS_PASSED = 4128
 DETERMINISTIC_TESTS_SKIPPED = 33
 DETERMINISTIC_TESTS_FAILED = 0
 
