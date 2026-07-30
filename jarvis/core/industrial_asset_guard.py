@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio, json, logging, os, re, threading, time
 from collections import defaultdict
 from pathlib import Path
+from core import net_binding
 
 logger = logging.getLogger("jarvis.industrial_asset_guard")
 
@@ -122,7 +123,8 @@ def _on_pkt(pkt):
                 mac = (pkt.src or "").lower()
             except Exception:
                 mac = None
-        if not mac or not ip or ip in ("0.0.0.0", "255.255.255.255"):
+        if not mac or not ip or ip in (net_binding.ALL_INTERFACES_V4,
+                                       net_binding.BROADCAST_V4):
             return
         now = time.time()
         was_new = False

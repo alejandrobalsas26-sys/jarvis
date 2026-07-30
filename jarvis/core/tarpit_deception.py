@@ -34,6 +34,7 @@ _MAX_CONNS = 500
 _ALERT_TTL = 600
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
 from core.managed_paths import log_artifact_path
+from core import net_binding
 
 
 def _log_path() -> Path:
@@ -47,8 +48,20 @@ _alerted: dict = {}             # ip -> ts
 _servers: list = []
 
 
+# V69 M61.7 (Bandit B104): the tarpit listeners bound "0.0.0.0" unconditionally.
+# Loopback-first with an explicit exposure opt-in, matching core/canary.py.
+_EXPOSE_ENV = "JARVIS_TARPIT_EXPOSE"
+_BIND_ENV = "JARVIS_TARPIT_BIND"
+
+
+def _bind_host() -> str:
+    return net_binding.resolve_bind_host(
+        "TARPIT_DECEPTION", expose_env=_EXPOSE_ENV, bind_env=_BIND_ENV)
+
+
 def _local_ips() -> set:
-    ips = {"127.0.0.1", "::1", "0.0.0.0"}
+    ips = {net_binding.LOOPBACK_V4, net_binding.LOOPBACK_V6,
+           net_binding.ALL_INTERFACES_V4}
     if _PSUTIL_OK:
         try:
             for addrs in psutil.net_if_addrs().values():
@@ -163,7 +176,7 @@ async def start(correlator=None) -> None:
     for port in _PORTS:
         try:
             srv = await asyncio.start_server(_make_handler(port, correlator),
-                                             host="0.0.0.0", port=port)
+                                             host=_bind_host(), port=port)
             _servers.append(srv)
             bound.append(port)
         except OSError as e:

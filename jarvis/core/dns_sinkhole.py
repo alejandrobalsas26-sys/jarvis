@@ -11,10 +11,20 @@ from __future__ import annotations
 import asyncio, logging, math, os, struct, time
 from collections import Counter
 from pathlib import Path
+from core import net_binding
 
 logger = logging.getLogger("jarvis.dns_sinkhole")
 
-_HOST = os.environ.get("JARVIS_DNS_BIND", "0.0.0.0")
+# V69 M61.7 (Bandit B104): this was `os.environ.get("JARVIS_DNS_BIND", "0.0.0.0")` —
+# an unconditional all-interfaces DNS server. Starting JARVIS anywhere published a
+# resolver to that network. Now loopback-first with an explicit exposure opt-in.
+_EXPOSE_ENV = "JARVIS_DNS_EXPOSE"
+_BIND_ENV = "JARVIS_DNS_BIND"
+
+
+def _bind_host() -> str:
+    return net_binding.resolve_bind_host(
+        "DNS_SINKHOLE", expose_env=_EXPOSE_ENV, bind_env=_BIND_ENV)
 _PORT = 53
 _SINKHOLE_IP = os.environ.get("JARVIS_SINKHOLE_IP", "127.0.0.1")
 _UPSTREAM = os.environ.get("JARVIS_DNS_UPSTREAM", "1.1.1.1")
@@ -230,16 +240,21 @@ async def start(correlator=None):
         logger.warning("DNS_SINKHOLE: not elevated — dormant")
         await asyncio.Event().wait(); return
     _load_blocklist()
+    # Resolved ONCE: _bind_host() emits the exposure warning, so calling it again in
+    # the error path would double-log it.
+    host = _bind_host()
     try:
-        transport, _ = await _loop.create_datagram_endpoint(_DNSProto, local_addr=(_HOST, _PORT))
+        transport, _ = await _loop.create_datagram_endpoint(
+            _DNSProto, local_addr=(host, _PORT))
     except OSError as e:
-        logger.warning("DNS_SINKHOLE: bind %s:%d failed (%s — in use?) — dormant", _HOST, _PORT, e)
+        logger.warning("DNS_SINKHOLE: bind %s:%d failed (%s — in use?) — dormant",
+                       host, _PORT, e)
         await asyncio.Event().wait(); return
     except Exception as e:
         logger.warning("DNS_SINKHOLE: start failed (%s) — dormant", e)
         await asyncio.Event().wait(); return
     logger.info("DNS_SINKHOLE: live on %s:%d — %d blocklisted domains, upstream %s",
-                _HOST, _PORT, len(_blocklist), _UPSTREAM)
+                host, _PORT, len(_blocklist), _UPSTREAM)
     try:
         await asyncio.Event().wait()
     finally:

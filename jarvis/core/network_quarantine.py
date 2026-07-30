@@ -38,6 +38,7 @@ _AUTO_THRESHOLD = 9.0
 _MAX_ACTIVE = 16
 _RULE_PREFIX = "JARVIS-QUARANTINE"
 from core.managed_paths import log_artifact_path
+from core import net_binding
 
 
 def _log_path() -> Path:
@@ -90,7 +91,10 @@ def _gateways() -> set:
 
 
 def _is_protected(ip: str) -> bool:
-    if ip in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+    # SAFETY INTERLOCK: never quarantine JARVIS's own host. Bandit flagged the
+    # "0.0.0.0" literal here (B104); nothing binds. The set is unchanged — altering
+    # it to satisfy a scanner could let JARVIS isolate itself off the network.
+    if ip in net_binding.OWN_HOST_ADDRESSES:
         return True
     if ip in _local_ips() or ip in _gateways():
         return True
@@ -136,13 +140,31 @@ async def _nac_isolate(ip: str, reason: str) -> bool:
     loop = asyncio.get_running_loop()
 
     def _post():
+        # V69 M61.7 (Bandit B310): JARVIS_NAC_WEBHOOK is operator configuration that
+        # reaches `urlopen`, whose default opener also serves file:/ftp:/data:. A
+        # `file://` value would make this "isolation" silently succeed against a local
+        # file while the host stayed on the network — a containment action reported as
+        # done and never performed.
+        #
+        # Unlike the Ollama probes this is NOT pinned to a local destination: a NAC
+        # appliance or SaaS controller is legitimately remote. Everything else applies
+        # — http/https only, no embedded credentials, no fragment, valid port, and
+        # every redirect hop re-validated. The destination class is logged so an
+        # operator can see whether containment left their network.
         import urllib.request
+
+        from core.url_policy import UrlPolicyError, describe, open_url
         body = json.dumps({"action": "quarantine", "ip": ip, "reason": reason}).encode()
-        req = urllib.request.Request(_NAC_WEBHOOK, data=body,
-                                     headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
+            req = urllib.request.Request(_NAC_WEBHOOK, data=body,
+                                         headers={"Content-Type": "application/json"})
+            with open_url(req, timeout=10, label="nac_webhook") as r:
+                logger.info("network_quarantine: NAC webhook target=%s",
+                            describe(_NAC_WEBHOOK))
                 return 200 <= getattr(r, "status", 200) < 300
+        except UrlPolicyError as e:
+            logger.error("network_quarantine: NAC webhook URL refused by policy: %s", e)
+            return False
         except Exception as e:
             logger.error("network_quarantine: NAC webhook failed: %s", e)
             return False

@@ -19,6 +19,7 @@ except Exception:
 
 _LAB_SUBNET = os.environ.get("JARVIS_LAB_SUBNET", "192.168.1.0/24")
 from core.managed_paths import log_artifact_path
+from core import net_binding
 
 
 def _log_path() -> Path:
@@ -45,9 +46,22 @@ _PORTS = [int(p) for p in os.environ.get("JARVIS_DECOY_PORTS",
           ",".join(str(p) for p in _SERVICES)).split(",") if p.strip().isdigit()]
 _servers = []
 
+# V69 M61.7 (Bandit B104): these decoy SSH/SMB/RDP/MSSQL listeners bound "0.0.0.0"
+# unconditionally, so starting JARVIS on a laptop published them to whatever network
+# the laptop was on. Loopback-first now, with the same explicit opt-in core/canary.py
+# has had since M50.
+_EXPOSE_ENV = "JARVIS_DECOY_EXPOSE"
+_BIND_ENV = "JARVIS_DECOY_BIND"
+
+
+def _bind_host() -> str:
+    return net_binding.resolve_bind_host(
+        "DECOY_SERVICE", expose_env=_EXPOSE_ENV, bind_env=_BIND_ENV)
+
 
 def _local_ips():
-    ips = {"127.0.0.1", "::1", "0.0.0.0"}
+    ips = {net_binding.LOOPBACK_V4, net_binding.LOOPBACK_V6,
+           net_binding.ALL_INTERFACES_V4}
     if _PSUTIL_OK:
         try:
             for addrs in psutil.net_if_addrs().values():
@@ -146,7 +160,8 @@ async def start(correlator=None):
         label, banner = _SERVICES.get(port, ("tcp", b""))
         try:
             srv = await asyncio.start_server(
-                _make_handler(port, label, banner, correlator), host="0.0.0.0", port=port)
+                _make_handler(port, label, banner, correlator),
+                host=_bind_host(), port=port)
             _servers.append(srv); bound.append(port)
         except OSError as e:
             logger.info("decoy_service: port %d unavailable (%s) — skipped", port, e)

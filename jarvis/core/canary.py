@@ -7,12 +7,12 @@ Port selection avoids kernel-locked Windows services:
 """
 
 import asyncio
-import os
 import socket
 
 from loguru import logger
 
 from core.events import make_event
+from core import net_binding
 
 _CANARY_PORTS: dict[int, str] = {
     21:   "FTP",
@@ -33,17 +33,16 @@ _DEFAULT_LOCAL_HOST = "127.0.0.1"
 
 def _canary_bind_host() -> str:
     """Resolve the canary bind address. Localhost unless the operator explicitly
-    enables authorized lab exposure. Any exposure is deliberate and auditable."""
-    expose = os.environ.get(_EXPOSE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
-    if not expose:
-        return _DEFAULT_LOCAL_HOST
-    # Explicit exposure: honor an operator-specified bind address, else all-ifaces.
-    host = os.environ.get(_BIND_ENV, "").strip() or "0.0.0.0"
-    logger.warning(
-        f"CANARY: authorized lab exposure ENABLED via {_EXPOSE_ENV} — binding {host} "
-        "(decoy services reachable off-host). Ensure this is an authorized lab network."
+    enables authorized lab exposure. Any exposure is deliberate and auditable.
+
+    V69 M61.7 — behaviour is UNCHANGED (this M50 gate was already correct); it now
+    delegates to core.net_binding so the all-interfaces literal is declared once and
+    the four services that had NO gate share this proven pattern.
+    """
+    return net_binding.resolve_bind_host(
+        "CANARY", expose_env=_EXPOSE_ENV, bind_env=_BIND_ENV,
+        default_host=_DEFAULT_LOCAL_HOST,
     )
-    return host
 
 
 def _port_available(port: int, host: str | None = None) -> bool:
