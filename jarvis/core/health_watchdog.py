@@ -85,11 +85,19 @@ def _check_yara():
 
 
 def _check_ollama():
-    import urllib.request
+    # V69 M61.7 (Bandit B310): a health probe that can be pointed at file:/// would
+    # report a successfully-read local file as "ollama responsive". Validated through
+    # core.url_policy: http/https only, no embedded credentials, redirects re-checked,
+    # and the destination pinned to loopback/private because Ollama is a local server.
+    from core.url_policy import UrlPolicyError, open_url
     url = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434") + "/api/tags"
     try:
-        with urllib.request.urlopen(url, timeout=4) as r:
+        with open_url(url, timeout=4, require_local=True, label="ollama") as r:
             return ("ollama", getattr(r, "status", 200) == 200, "responsive")
+    except UrlPolicyError as e:
+        # Distinguished from an outage: a refused URL is a misconfiguration, and
+        # reporting it as "unreachable" would send an operator debugging the wrong thing.
+        return ("ollama", False, f"refused by URL policy: {str(e)[:80]}")
     except Exception as e:
         return ("ollama", False, str(e)[:60])
 

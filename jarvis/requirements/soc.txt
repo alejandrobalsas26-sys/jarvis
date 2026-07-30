@@ -2,6 +2,7 @@
 #   pip install -r requirements/base.txt -r requirements/soc.txt
 -r base.txt
 
+defusedxml>=0.7.1          # hardened XML for untrusted Sysmon telemetry (M61.7)
 yara-python>=4.5.0         # Layer 0 command scanner + file monitor
 scapy>=2.5.0               # packet manipulation / sniffing (needs privileges)
 paramiko>=3.4.0            # SSH automation
