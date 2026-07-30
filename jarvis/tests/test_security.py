@@ -3,7 +3,8 @@ tests/test_security.py — JARVIS V55.0 OMNI-REDUNDANCY security tests.
 
 Covers the three V55.0 subsystems and their correlator wiring:
   - core.self_integrity : interpreter .text hash, module hashes, canary, exec-page walk.
-  - core.plugin_loader  : SHA-256 manifest gate, restricted sandbox, severity routing.
+  - core.plugin_loader  : manifest integrity inventory, refusal to execute plugin
+                          source (V69 M61.7), severity routing.
   - core.kernel_telemetry: ETW process-create / image-load heuristics.
 
 These are pure unit/integration tests — no ETW session, Ollama, or audio required.
@@ -67,22 +68,28 @@ def test_exec_pages_returns_set():
 
 
 # ───────────────────────────── plugin_loader ───────────────────────────────
-def test_sandbox_blocks_open():
-    fn = pl._compile_one("evil_open", "def analyze(e):\n    return open('x')")
-    assert callable(fn)
-    with pytest.raises(Exception):
-        fn({"severity": 9})
+# V69 M61.7 — these three tests previously asserted that a "restricted sandbox"
+# blocked `open` and `__import__`. They passed, and they were false confidence: the
+# naive spellings they tried did fail, while `json.dumps.__globals__['__builtins__']`
+# reached the real builtins and imported `os`, read files and spawned subprocesses
+# from inside the same sandbox. Rather than assert a boundary that does not exist,
+# they now assert the boundary that does: nothing is executed at all. The full
+# escape corpus and the structural guarantees live in
+# tests/test_plugin_exec_v69_m617.py.
+def test_plugin_source_is_never_executed():
+    """The old `open('x')` payload is now inert because it is never compiled."""
+    assert pl._compile_one("evil_open", "def analyze(e):\n    return open('x')") is None
 
 
-def test_sandbox_blocks_dynamic_import():
-    fn = pl._compile_one("evil_import", "def analyze(e):\n    return __import__('os')")
-    assert callable(fn)
-    with pytest.raises(Exception):
-        fn({})
+def test_dynamic_import_payload_is_never_executed():
+    assert pl._compile_one("evil_import", "def analyze(e):\n    return __import__('os')") is None
 
 
-def test_compile_rejects_missing_analyze():
+def test_compile_refuses_every_plugin_including_wellformed_ones():
+    """Refusal is unconditional — not a validation failure that a fix could pass."""
     assert pl._compile_one("no_entry", "x = 1") is None
+    assert pl._compile_one("well_formed", "def analyze(e):\n    return {'ok': 1}") is None
+    assert pl.DYNAMIC_EXEC_SUPPORTED is False
 
 
 @pytest.fixture
@@ -103,12 +110,22 @@ def _write_manifest(sha: str):
     }], indent=2), encoding="utf-8")
 
 
-def test_loads_sha_verified_plugin(restore_manifest):
+def test_a_sha_verified_plugin_is_still_not_executed(restore_manifest):
+    """A MATCHING hash is not an execution ticket.
+
+    This test previously asserted the opposite (that a hash match loaded the plugin).
+    The manifest sits in the same directory as the plugin, so whoever can write the
+    plugin can write its expected hash: the digest proves the file was not corrupted
+    in transit, never that it is trustworthy.
+    """
     digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
     _write_manifest(digest)
     pl.LOADED_PLUGINS.clear()
     pl.load_all()
-    assert "threat_escalator" in pl.LOADED_PLUGINS
+    assert "threat_escalator" not in pl.LOADED_PLUGINS
+    # ...but it IS reported, with its integrity state, rather than silently ignored.
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["integrity"] == "match"
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["reason"]
 
 
 def test_refuses_sha_mismatch(restore_manifest):
@@ -116,6 +133,7 @@ def test_refuses_sha_mismatch(restore_manifest):
     pl.LOADED_PLUGINS.clear()
     pl.load_all()
     assert "threat_escalator" not in pl.LOADED_PLUGINS
+    assert pl.REFUSED_PLUGINS["threat_escalator"]["integrity"] == "mismatch"
 
 
 class _FakeCorrelator:
@@ -126,55 +144,74 @@ class _FakeCorrelator:
         self.ingested.append(ev)
 
 
-def test_route_event_escalates(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
+# The severity gate, the loop guard and the correlator re-ingest path are real
+# routing logic and still deserve coverage. V69 M61.7 exercises them with an
+# in-process callable injected straight into LOADED_PLUGINS instead of a plugin
+# compiled from source: the router is what is under test, and driving it no longer
+# requires exec'ing a file from an operator-writable directory.
+def _escalator(event):
+    """Behavioural stand-in for plugins/threat_escalator.example.py."""
+    sev = float(event.get("severity", 0) or 0)
+    attck = [str(t).upper() for t in (event.get("attck") or [])]
+    injection = any(t.startswith("T1055") for t in attck)
+    exfil = any(t in ("T1048", "T1041") for t in attck)
+    if sev >= 9.0 and injection and exfil:
+        enriched = dict(event)
+        enriched["severity"] = 10.0
+        enriched["plugin_note"] = "threat_escalator: concurrent injection+exfil"
+        return enriched
+    return None
+
+
+@pytest.fixture
+def routed_plugin():
+    """Install the stand-in as a loaded plugin for the duration of one test."""
+    saved = dict(pl.LOADED_PLUGINS)
     pl.LOADED_PLUGINS.clear()
-    pl.load_all()
+    pl.LOADED_PLUGINS["threat_escalator"] = {
+        "fn": _escalator, "sha256": "0" * 64, "version": "0.1",
+        "load_time": 0.0, "calls": 0, "errors": 0,
+    }
+    yield
+    pl.LOADED_PLUGINS.clear()
+    pl.LOADED_PLUGINS.update(saved)
+
+
+def _drive(event):
     fc = _FakeCorrelator()
     pl._correlator = fc
 
-    async def drive():
-        await pl.route_event({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
+    async def run():
+        await pl.route_event(event)
         await asyncio.sleep(0.1)
 
-    asyncio.run(drive())
+    asyncio.run(run())
+    return fc
+
+
+def test_route_event_escalates(routed_plugin):
+    fc = _drive({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
     assert fc.ingested, "eligible event should be re-ingested"
     assert fc.ingested[0]["severity"] == 10.0
     assert fc.ingested[0]["_plugin_enriched"] is True
 
 
-def test_route_event_skips_low_severity(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
-    pl.LOADED_PLUGINS.clear()
-    pl.load_all()
-    fc = _FakeCorrelator()
-    pl._correlator = fc
-
-    async def drive():
-        await pl.route_event({"severity": 3.0, "attck": ["T1055", "T1041"]})
-        await asyncio.sleep(0.1)
-
-    asyncio.run(drive())
-    assert not fc.ingested
+def test_route_event_skips_low_severity(routed_plugin):
+    assert not _drive({"severity": 3.0, "attck": ["T1055", "T1041"]}).ingested
 
 
-def test_route_event_loop_guard(restore_manifest):
-    digest = hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest()
-    _write_manifest(digest)
-    pl.LOADED_PLUGINS.clear()
-    pl.load_all()
-    fc = _FakeCorrelator()
-    pl._correlator = fc
-
-    async def drive():
-        await pl.route_event({"severity": 10.0, "attck": ["T1055", "T1041"],
-                              "_plugin_enriched": True})
-        await asyncio.sleep(0.1)
-
-    asyncio.run(drive())
+def test_route_event_loop_guard(routed_plugin):
+    fc = _drive({"severity": 10.0, "attck": ["T1055", "T1041"], "_plugin_enriched": True})
     assert not fc.ingested, "already-enriched events must not re-route"
+
+
+def test_route_event_is_inert_after_a_real_manifest_load(restore_manifest):
+    """The end-to-end consequence: a manifest-listed plugin routes nothing."""
+    _write_manifest(hashlib.sha256(_EXAMPLE.read_bytes()).hexdigest())
+    pl.LOADED_PLUGINS.clear()
+    pl.load_all()
+    fc = _drive({"severity": 9.0, "attck": ["T1055", "T1041"], "type": "x"})
+    assert not fc.ingested
 
 
 # ──────────────────────────── kernel_telemetry ─────────────────────────────

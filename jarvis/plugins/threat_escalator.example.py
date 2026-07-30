@@ -5,7 +5,12 @@
 #    "sha256":"<hash>","version":"0.1","enabled":true}
 #
 # analyze(event:dict) -> dict or None
-# Sandbox: re, json, time, hashlib available; no file/network/os/subprocess.
+#
+# V69 M61.7 — THIS PLUGIN IS NOT EXECUTED. Dynamic source-code plugin execution
+# is disabled: the previous 'sandbox' (an exec globals dict with trimmed
+# __builtins__) was not a privilege boundary, and the manifest SHA-256 is not a
+# signature. The file is kept as a worked example of the analyze() contract.
+# See core/plugin_loader.py for the migration path.
 
 def analyze(event):
     sev = float(event.get("severity", 0) or 0)
