@@ -80,8 +80,8 @@ RELEASE_CLOSURE_BRANCH = "jarvis-v69-m61-release-closure"
 """Where M61.8 is developed. Never merged or tagged by any code in this repository."""
 
 # ── Deterministic validation — the numbers current docs must agree with ──────
-DETERMINISTIC_TESTS_PASSED = 3783
-DETERMINISTIC_TESTS_SKIPPED = 32
+DETERMINISTIC_TESTS_PASSED = 4127
+DETERMINISTIC_TESTS_SKIPPED = 33
 DETERMINISTIC_TESTS_FAILED = 0
 
 MEASUREMENT_ENVIRONMENT = "python3.12 / windows-amd64 / dev+soc+lab profiles installed"
@@ -133,7 +133,7 @@ line in ``core/`` and ``tools/`` containing the marker, and a *description* of a
 suppression must not be counted as one.
 """
 
-BANDIT_SCANNED_LINES = 73_834
+BANDIT_SCANNED_LINES = 75_519
 """Non-vacuity evidence: a clean scan over an empty tree is not a clean scan."""
 
 # ── Lint / grammar ──────────────────────────────────────────────────────────
