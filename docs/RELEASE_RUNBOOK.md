@@ -297,7 +297,9 @@ git show v69.61.0 --stat | head -20      # confirm the commit and the message
 Annotated (`-a`), not lightweight: a release tag carries an author, a date and a message.
 
 Signing (`-s`) is not required today because no signing key is established for this
-project; see [`BRANCH_PROTECTION.md`](BRANCH_PROTECTION.md) §6.
+project; see [`BRANCH_PROTECTION.md`](BRANCH_PROTECTION.md) §2, which recommends enabling
+signed commits only once signing works on every machine you push from — turning it on
+first locks you out of your own repository.
 
 ## 19. Push the tag — **IRREVERSIBLE**
 
