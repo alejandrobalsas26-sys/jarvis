@@ -99,12 +99,22 @@ platform-specific resolution are deliberately left unpinned.
 
 ## Recommended hardware tiers
 
-| Tier | VRAM | Example role models |
-|---|---|---|
-| LOW | CPU / <12 GB | `qwen2.5-coder:7b`, `moondream` |
-| MID | 12–16 GB | `qwen2.5-coder:14b`, `deepseek-r1:14b` |
-| HIGH | 24–32 GB | `qwen2.5-coder:32b`, `deepseek-r1:32b` |
-| EXTREME | 48 GB+ | `deepseek-r1:70b` |
+Advisory only — `JARVIS_MODEL_*` always wins. The table below is the one
+`core/hardware_model_profile.py` actually recommends; nothing else is suggested by any
+tier, and a doc naming a model outside the authoritative set is a CI failure
+(`core.release_check.check_models()`).
+
+| Tier | Dedicated VRAM | FAST | CODER | DEEP | VISION | VERIFIER |
+|---|---|---|---|---|---|---|
+| LOW | CPU / < 12 GB | `qwen3:8b` | `qwen2.5-coder:latest` | `qwen3:8b` | `gemma3:4b` | `qwen3:8b` |
+| MID | 12–24 GB | `qwen3:8b` | `qwen2.5-coder:latest` | `qwen3:14b` | `gemma3:4b` | `qwen3:8b` |
+| HIGH | 24–48 GB | `qwen3:8b` | `qwen2.5-coder:32b` | `qwen3:32b` | `llama3.2-vision:11b` | `qwen3:14b` |
+| EXTREME | 48 GB+ | `qwen3:14b` | `qwen2.5-coder:32b` | `qwen3:32b` | `llama3.2-vision:11b` | `qwen3:32b` |
+
+EMBEDDING is `nomic-embed-text:latest` at every tier. With **no dedicated GPU of at
+least 4 GB** the recommendation comes from system RAM instead of VRAM, because RAM is
+the capacity ceiling for CPU inference: ≥ 48 GB gets DEEP `qwen3:14b`, everything else
+gets `qwen3:8b`.
 
 `python scripts/model_doctor.py` detects your tier and prints the exact pulls.
 

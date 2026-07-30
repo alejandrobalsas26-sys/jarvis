@@ -48,8 +48,45 @@ or removes an unrequested side effect.
   nothing) and `scripts/soak_stabilization_m61.py` (40 cycles: 0 thread/task growth,
   0 journal failures, 0 temp residue, `actions_replayed` structurally 0).
 
-Full suite **3481 passed / 18 skipped / 0 failed** (from 3286/18/0, +195 tests);
-ruff and compileall clean.
+Full suite: **0 failed** in both supported layouts; ruff and compileall clean. The
+pass/skip totals are declared once in `jarvis/core/release_facts.py` and quoted with
+their measurement context in [`docs/releases/v69.61.0.md`](docs/releases/v69.61.0.md) —
+restating them here is what let the RC1 figure survive into a merged tree.
+
+### M61.8 — release closure & verifiable evidence
+
+Closure stage of the same release (`69.61.0`; M61.8 is **not** a version).
+
+- **Documentation truth, widened.** `core.release_check` gained four check families:
+  `counts` (no two current release documents may state different validated results),
+  `security` (the Bandit result quoted is the current one, Low baseline included),
+  `posture` (no document advertises dynamic plugin execution, unconditional
+  all-interface binding or automatic dependency installation as active) and a
+  release-state check that refuses a merged milestone documented as unmerged — or a tag
+  and GitHub Release claimed before they exist. `models` now validates every model tag
+  in operator documentation against `core/model_router.py` and
+  `core/hardware_model_profile.py`, which caught a README tier table still recommending
+  `deepseek-r1:70b` and `moondream`, retired in V66.1.
+- **Verifiable release evidence.** `scripts/build_release_evidence_m61.py` emits a
+  sanitized, schema-validated `release-evidence.json`: gate statuses, digests, counts
+  and enum states, with no absolute path, username, hostname, environment value or
+  credential. A missing mandatory result becomes `INSUFFICIENT_EVIDENCE`, never a PASS,
+  and the write is atomic — a rejected bundle leaves nothing behind.
+- **Checksums and SBOM.** `SHA256SUMS` over the wheel and sdist, verified immediately
+  and refusing path separators, traversal, duplicates, symlinks and weak digests;
+  deterministic CycloneDX 1.5 SBOMs per dependency profile
+  (`scripts/build_sbom.py`), declared-authority scoped and honest about it.
+- **Dependency and vulnerability policy.** `docs/DEPENDENCY_SECURITY_POLICY.md`. The
+  blocking gate `bandit -r core tools -ll -q` reports **0 Medium and 0 High**; the 488
+  Low findings it also reports are recorded as an explicit, enforced baseline — a
+  decrease passes, an increase fails until reviewed. They are bounded, not called
+  harmless.
+- **Release engineering.** `docs/releases/v69.61.0.md` (also the GitHub Release body),
+  `docs/RELEASE_RUNBOOK.md`, `docs/BRANCH_PROTECTION.md`, and
+  `scripts/check_release_tag_guard.py`, which refuses to tag a dirty tree, a feature
+  branch, a commit that is not `origin/master`, a duplicate tag, or a release whose
+  checksums do not verify. **No tag was created, no package published and no GitHub
+  Release made.**
 
 ## V63.0 — General-purpose agent runtime (in progress)
 

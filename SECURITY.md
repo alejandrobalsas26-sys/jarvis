@@ -40,6 +40,39 @@ order:
    Downloads, Documents, and the project directory.
 8. **Audit logging + PII detection** on every tool result.
 
+## Declared postures (V69 M61)
+
+Four capabilities were removed or gated in M61.7. They are declared here rather than
+merely absent from the code, because "we quietly stopped doing it" is not a posture an
+operator can rely on. `core.release_check.check_security_posture()` fails the build if
+any current-facing document advertises one of them as active, and if this section stops
+declaring them.
+
+- **Dynamic source plugins:** *refused, fail-closed.* `core/plugin_loader.py` no longer
+  executes plugin source. There is **no plugin sandbox** — the previous one was an
+  `exec` namespace, which restricts names and not privileges, and was demonstrably
+  escapable. There is deliberately **no environment variable to re-enable execution**:
+  an opt-in flag would be the same vulnerability behind a different default. Manifest
+  parsing, integrity verification and reporting still work; refusals stay visible via
+  `REFUSED_PLUGINS` and `status()["dynamic_exec_supported"]`, so a dashboard cannot show
+  "0 plugins" and leave you believing the directory was empty.
+- **SSH host keys:** *verified, unknown keys refused.* `core/ssh_policy.py` uses
+  `RejectPolicy`, never `AutoAddPolicy`. Enrollment is an explicit two-step operator
+  action; there is no trust-on-first-use. Automated remote sensor deployment is **off by
+  default** and returns an action plan instead; the opt-in stages a file to a unique,
+  private, home-relative path and never installs or starts anything remotely.
+- **Service network exposure:** *loopback-first, explicit opt-in.* The decoy, tarpit,
+  active-tarpit, DNS-sinkhole and canary services bind loopback unless the operator sets
+  the service's `JARVIS_<SERVICE>_EXPOSE` variable, and every exposure logs a WARNING
+  naming the service and the proven bind address. An operator-named single address is
+  honoured as the narrower option. The safe default logs nothing, so the warning means
+  something.
+- **Dependency installation:** *report-only by default.* The boot-time dependency
+  guardian reports what is missing and installs nothing unless the operator sets
+  `JARVIS_AUTO_INSTALL_DEPS=true`. `--break-system-packages` is not passed at all: it
+  exists to override the guard protecting an externally-managed interpreter, and if that
+  guard fires, refusing is the correct outcome.
+
 ## Trusted-lab mode
 
 `JARVIS_TRUSTED_LAB=true` relaxes (4-tier) controls for an **isolated, authorized

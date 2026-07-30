@@ -25,13 +25,14 @@ Start the server: `ollama serve`. If it runs on another host/port, set
 `OLLAMA_HOST=http://<host>:11434`.
 
 **A role model is "not pulled"**
-`model_doctor.py` prints the exact commands, e.g. `ollama pull qwen2.5-coder:7b`.
+`model_doctor.py` prints the exact commands, e.g. `ollama pull qwen3:8b`.
 Pull at least the FAST and (if used) VERIFIER models.
 
 **Model too slow / OOM on a laptop**
 You're likely on the LOW tier. Override roles with smaller tags in `.env`
-(`JARVIS_MODEL_DEEP=qwen2.5:7b-instruct`) and let the hardware profiler shrink the
-context window. `python scripts/model_doctor.py` shows the recommended set.
+(`JARVIS_MODEL_DEEP=qwen3:8b` instead of the MID-tier `qwen3:14b`) and let the hardware
+profiler shrink the context window. `python scripts/model_doctor.py` shows the
+recommended set; the README's tier table is the same one the profiler uses.
 
 **Docker container can't reach Ollama**
 The base image defaults to `OLLAMA_HOST=http://host.docker.internal:11434`. On

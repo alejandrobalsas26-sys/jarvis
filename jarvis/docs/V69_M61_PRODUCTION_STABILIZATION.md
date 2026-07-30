@@ -1,9 +1,14 @@
 # JARVIS V69 M61 — Production Stabilization, CI & Release Engineering
 
-**Branch:** `jarvis-v69-m61-production-stabilization`
+**Branch:** `jarvis-v69-m61-production-stabilization` (merged, then deleted remotely)
 **Base:** `df35289d` (V69 M60, merged to `master`) — verified ancestor
-**Status:** complete, pushed, awaiting review. Not merged automatically.
+**Status:** merged to `master` as `0bb1a6b` — *merge: JARVIS V69 M61 production
+stabilization and release engineering* (PR #2). No tag, no GitHub Release.
 **Canonical version:** `69.61.0` (`core/version.py`)
+**Closure stage:** M61.8 — see
+[`V69_M61_8_RELEASE_CLOSURE.md`](V69_M61_8_RELEASE_CLOSURE.md). The validated numbers
+in §9 are re-measured there and declared once in `core/release_facts.py`; this document
+quotes them rather than owning them.
 
 ---
 
@@ -67,8 +72,16 @@ it reads, never writes, and never executes what it reads. Five check families:
 | `version` | `pyproject.toml` not deriving from `core/version.py` |
 | `models` | a current-facing doc naming the superseded `qwen2.5` family (`qwen2.5-coder` is still the live CODER role and is correctly **not** matched) |
 | `claims` | "complete autonomous", "fully autonomous", "attacks autonomously" |
-| `status` | a release doc saying "NOT merged" for a milestone at or below the canonical one |
+| `status` | a release doc denying the merge of a milestone at or below the canonical one |
 | `install` | a README install command pointing at a file that does not exist |
+
+M61.8 added four more (`counts`, `security`, `posture`, and the release-state /
+tag-not-claimed pair folded into `status`) — see
+[`V69_M61_8_RELEASE_CLOSURE.md`](V69_M61_8_RELEASE_CLOSURE.md) §2. Note that the
+`status` row above had to be *reworded* to describe the check without spelling out the
+phrase it looks for: the scanner correctly flagged its own documentation, and adding an
+escape hatch to the checker would have been the wrong repair — the same reasoning as the
+note at the end of this section.
 
 **Scope discipline:** only current-facing documents are scanned — the root README,
 `jarvis/README.md` and the *header* of `JARVIS.md`. The per-version sections of
@@ -90,9 +103,11 @@ What was corrected:
 - Both READMEs state the current release, the dependency authority, the CI
   invocation and the qualification command.
 
-A note on the corrections themselves: the first attempt quoted the stale phrase
-("previously said *NOT merged*") and the scanner correctly flagged its own fix. The
-notes were reworded rather than adding an escape hatch to the checker.
+A note on the corrections themselves: the first attempt quoted the stale phrase verbatim
+— a note saying the document had previously denied its own merge — and the scanner
+correctly flagged its own fix. The notes were reworded rather than adding an escape hatch
+to the checker. M61.8 hit the identical wall twice more, in the §3 family table above and
+in this paragraph, and resolved it the same way each time.
 
 ---
 
@@ -362,7 +377,7 @@ never a false PASS and never a false FAIL (a service-free host is supported).
 
 | Gate | Result |
 |---|---|
-| Full suite, `python -m pytest -q` from the git root | **3481 passed, 18 skipped, 0 failed** (baseline `df35289d`: 3286/18/0 → **+195 tests**) |
+| Full suite, `python -m pytest -q` from the git root | **0 failed.** The pass/skip totals are re-measured at closure and declared once in `core/release_facts.py`; see [`V69_M61_8_RELEASE_CLOSURE.md`](V69_M61_8_RELEASE_CLOSURE.md) §4 and `docs/releases/v69.61.0.md`. The RC that produced this document measured a lower total, and quoting it here is exactly the drift M61.8 removed — the count is not restated in prose. Baseline `df35289d` was 3286/18/0 |
 | Ruff (`core tools scripts aura main.py tests`) | clean |
 | `compileall` (`core tools scripts aura main.py __main__.py`) | clean |
 | Wheel + sdist | built, version `69.61.0` |
