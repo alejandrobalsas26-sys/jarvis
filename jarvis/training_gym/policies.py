@@ -87,8 +87,13 @@ DEFAULT_ENV_ALLOWLIST: tuple[str, ...] = (
 #: ``TMPDIR`` are pinned rather than inherited: the operator's home path contains the
 #: operator's username, which must never reach a container or a recorded environment.
 DETERMINISTIC_ENV: dict[str, str] = {
+    # These two are CONTAINER-INTERNAL absolute paths handed to an isolated episode,
+    # not paths this process ever opens. Pinning them is the security control: the
+    # alternative is inheriting the operator's real HOME, whose value contains the
+    # operator's username. Asserted by
+    # test_deterministic_env_paths_are_container_internal.
     "HOME": "/home/gym",
-    "TMPDIR": "/tmp",
+    "TMPDIR": "/tmp",  # nosec B108
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "TZ": "UTC",

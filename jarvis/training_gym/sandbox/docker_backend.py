@@ -29,7 +29,8 @@ mean "the tests never ran".
 from __future__ import annotations
 
 import shutil
-import subprocess  # nosec B404 — argv lists only; see the shell=False note below
+# subprocess is used exclusively with argv LISTS and shell=False; see _run() below.
+import subprocess  # nosec B404
 import time
 import uuid
 from collections.abc import Sequence
@@ -65,7 +66,10 @@ def _run(argv: Sequence[str], *, timeout: int) -> subprocess.CompletedProcess:
     command comes from :func:`~training_gym.sandbox.security.build_run_command`, which
     audits its own output before returning it.
     """
-    return subprocess.run(  # nosec B603 — argv list, shell=False, no interpolation
+    # argv is always a list, shell=False is explicit, and no element is built by
+    # string interpolation: the container command comes from build_run_command(),
+    # which audits its own output. Asserted by the sandbox argv negative controls.
+    return subprocess.run(  # nosec B603
         list(argv), capture_output=True, text=True, timeout=timeout,
         shell=False, check=False, encoding="utf-8", errors="replace")
 

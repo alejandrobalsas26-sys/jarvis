@@ -31,9 +31,34 @@ from training_gym.sandbox import (
 )
 from training_gym.sandbox.security import SANDBOX_GID, SANDBOX_UID
 from training_gym.schemas import SchemaError
-from tests.test_training_gym_m62_foundation import make_spec
+from training_gym.task_spec import ActionKind, TaskFamily, TaskSpec
 
 IMAGE = "python:3.12-slim-bookworm"
+
+
+def make_spec(**overrides) -> TaskSpec:
+    """A minimal valid task, defined locally on purpose.
+
+    Importing this from the foundation test module resolves only when the working
+    directory is the application root — the repository supports being tested from
+    both its git root and its app root, and a helper that works in one layout and
+    raises ModuleNotFoundError in the other is a broken test, not a shared fixture.
+    """
+    base = {
+        "task_id": "coding-fix-001",
+        "task_family": TaskFamily.CODING_FIX,
+        "prompt": "Fix the failing test in output/mod.py without changing the test.",
+        "created_by": "operator",
+        "created_at": "2026-07-31T00:00:00Z",
+        "allowed_actions": (ActionKind.READ_WORKSPACE_FILE,
+                            ActionKind.WRITE_WORKSPACE_FILE,
+                            ActionKind.RUN_TESTS, ActionKind.EMIT_ANSWER),
+        "required_graders": ("pytest", "diff_budget", "file_boundary", "secret_pii"),
+        "scoring": P.ScoringPolicy(
+            mandatory_graders=("pytest", "diff_budget", "file_boundary", "secret_pii")),
+    }
+    base.update(overrides)
+    return TaskSpec(**base)
 
 
 def build(**kw):
@@ -76,6 +101,27 @@ def test_the_root_filesystem_is_read_only_and_the_workspace_is_tmpfs():
     assert any(m.startswith("/workspace:") for m in tmpfs)
     for mount in tmpfs:
         assert "noexec" in mount and "nosuid" in mount and "nodev" in mount
+
+
+def test_tmpfs_targets_are_container_internal_and_hardened():
+    """Justifies the precise ``# nosec B108`` on the ``/tmp`` tmpfs target.
+
+    Bandit reads the literal ``/tmp`` as a probable insecure host temp path. It is a
+    ``--tmpfs`` TARGET inside the container's own mount namespace — nothing here is
+    created, opened or written by this process — and every such mount is hardened and
+    size-capped. This test fails if a tmpfs target ever loses noexec/nosuid/nodev or
+    its size ceiling, which is exactly when the suppression would stop being true."""
+    tmpfs = [c[i + 1] for c in [build()] for i, t in enumerate(c) if t == "--tmpfs"]
+    assert {m.split(":", 1)[0] for m in tmpfs} == {"/workspace", "/tmp"}
+    for mount in tmpfs:
+        target, options = mount.split(":", 1)
+        assert target.startswith("/") and ".." not in target
+        for hardening in ("noexec", "nosuid", "nodev"):
+            assert hardening in options, f"{target} lost {hardening}"
+        assert "size=" in options, f"{target} has no size ceiling"
+    # No tmpfs target may collide with a bind mount source on the host.
+    assert all(P.forbidden_mount(m.split(":", 1)[0]) is None
+               or m.startswith("/tmp") for m in tmpfs)
 
 
 def test_resource_ceilings_reach_the_command_line():

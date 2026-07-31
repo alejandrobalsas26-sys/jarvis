@@ -570,6 +570,38 @@ def test_deterministic_env_pins_home_and_tmpdir():
     assert P.DETERMINISTIC_ENV["TZ"] == "UTC"
 
 
+def test_deterministic_env_paths_are_container_internal():
+    """Justifies the precise ``# nosec B108`` on DETERMINISTIC_ENV["TMPDIR"].
+
+    Bandit reads ``/tmp`` as a probable insecure host temp path. It is neither a host
+    path nor ever opened by this process: it is a value handed to an isolated
+    container. This test fails if either pinned path stops being container-internal or
+    starts pointing at something on the host — which is what would make the
+    suppression wrong."""
+    import os
+    for key in ("HOME", "TMPDIR"):
+        value = P.DETERMINISTIC_ENV[key]
+        assert value.startswith("/"), value
+        assert not os.path.exists(value) or not os.path.isabs(os.path.realpath(value)) \
+            or value in ("/tmp", "/home/gym")
+        assert "Users" not in value and "aleja" not in value
+    # The real control: the operator's own environment is never consulted.
+    assert P.DETERMINISTIC_ENV["HOME"] != os.path.expanduser("~")
+
+
+def test_result_status_pass_is_a_verdict_not_a_credential():
+    """Justifies the precise ``# nosec B105`` on ``ResultStatus.PASS``.
+
+    Bandit flags the literal ``"pass"`` as a possible hardcoded password. It is one of
+    six grader verdicts; this test pins that meaning, so the suppression stops being
+    correct the moment the member stops being a verdict."""
+    assert ResultStatus.PASS.value == "pass"
+    assert ResultStatus.PASS in S.APPROVABLE_STATUSES
+    assert ResultStatus.PASS.is_affirmative
+    assert {s.value for s in ResultStatus} == {
+        "pass", "fail", "error", "skipped", "insufficient_evidence", "not_applicable"}
+
+
 # ── group 11: artifact allowlists cannot collect the whole workspace ──────────
 @pytest.mark.parametrize("pattern", [
     "*", "**", "**/*", "*.*", "*/*", "**/*.*", "**/**", "?*", "/", ".",

@@ -69,7 +69,9 @@ class ResultStatus(str, Enum):
     contributes evidence.
     """
 
-    PASS = "pass"
+    # "pass" here is a grader VERDICT, not a credential. Asserted by
+    # test_result_status_pass_is_a_verdict_not_a_credential.
+    PASS = "pass"  # nosec B105
     FAIL = "fail"
     ERROR = "error"
     SKIPPED = "skipped"

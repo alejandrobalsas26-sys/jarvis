@@ -265,8 +265,13 @@ def build_run_command(
         cmd += ["--read-only"]
     if policy.tmpfs_workspace:
         size = max(1, min(int(workspace_size_mb), 512))
+        # Both are Docker --tmpfs TARGETS inside the container's own mount namespace,
+        # not host paths: nothing here is created, opened or written by this process.
+        # noexec,nosuid,nodev is what makes them safe, and the ceiling is explicit.
+        # Asserted by test_tmpfs_targets_are_container_internal_and_hardened.
         cmd += ["--tmpfs", f"{CONTAINER_WORKSPACE}:rw,noexec,nosuid,nodev,size={size}m",
-                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"]
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,nodev,size=16m"]  # nosec B108
 
     for mount in mounts:
         if not isinstance(mount, MountSpec):
