@@ -38,13 +38,11 @@ Generated artifacts live under a gitignored directory. Nothing here is ever comm
 """
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..atomicio import AtomicIOError, append_jsonl, atomic_write_text, read_jsonl
 from ..schemas import (
     SCHEMA_KEY,
     SCHEMA_VERSION,
@@ -77,77 +75,27 @@ class StoreError(TeacherError):
     """A store operation was refused. Never a partial write, never a warning."""
 
 
+# The atomic-write and append-only-ledger primitives live in
+# :mod:`training_gym.atomicio`, because the dataset layer needs exactly the same three
+# guarantees and a second copy of them would be the one that drifts. These thin wrappers
+# keep this module's error type — a caller catching :class:`StoreError` must not have to
+# also know about the layer underneath.
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Write *text* so a reader sees either the old file or the whole new one.
-
-    The temp file is created in the DESTINATION directory: ``os.replace`` is atomic only
-    within a filesystem, and a system temp directory is frequently on another one — a
-    cross-device replace fails on POSIX and, worse, some code "helpfully" falls back to a
-    copy, which is not atomic at all.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-",
-                                        suffix=".part")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    atomic_write_text(path, text)
 
 
 def _append_line(path: Path, payload: Mapping[str, object], *, max_lines: int) -> None:
-    """Append one JSON line, flushed and fsynced.
-
-    Appending rather than rewriting is the property the ledger's correctness rests on:
-    an interrupted append leaves a partial final line, which a reader can discard,
-    whereas an interrupted rewrite can lose every prior entry.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and _count_lines(path) >= max_lines:
-        raise StoreError(f"{path.name}: {max_lines}-line ceiling reached; refusing to "
-                         f"grow an unbounded record")
-    line = canonical_json(payload)
-    if "\n" in line:  # pragma: no cover — canonical_json never emits a newline
-        raise StoreError(f"{path.name}: refusing to append a multi-line record")
-    with path.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write(line + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-
-
-def _count_lines(path: Path) -> int:
-    with path.open("r", encoding="utf-8") as fh:
-        return sum(1 for _ in fh)
+    try:
+        append_jsonl(path, payload, max_lines=max_lines)
+    except AtomicIOError as exc:
+        raise StoreError(str(exc)) from None
 
 
 def _read_lines(path: Path) -> list[dict]:
-    """Every complete JSON line, skipping a torn final one.
-
-    A partial last line is the expected result of a crash mid-append; discarding it is
-    correct. A partial line ANYWHERE ELSE is corruption, and is reported.
-    """
-    if not path.is_file():
-        return []
-    entries: list[dict] = []
-    raw_lines = path.read_text(encoding="utf-8").splitlines()
-    for index, line in enumerate(raw_lines):
-        text = line.strip()
-        if not text:
-            continue
-        try:
-            payload = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            if index == len(raw_lines) - 1:
-                break
-            raise StoreError(f"{path.name}: corrupt entry on line {index + 1}") from None
-        if isinstance(payload, dict):
-            entries.append(payload)
-    return entries
+    try:
+        return read_jsonl(path)
+    except AtomicIOError as exc:
+        raise StoreError(str(exc)) from None
 
 
 # ── the replay ledger ─────────────────────────────────────────────────────────

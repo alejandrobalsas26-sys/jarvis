@@ -77,3 +77,11 @@ jarvis/logs/grc_reports/
 jarvis/logs/training_gym/
 training_gym_artifacts/
 teacher_packets/
+
+# v69 M62 S2d TRAINING GYM DATASETS — candidates, transition and revocation ledgers,
+# split manifests, versioned datasets and SFT/preference exports. Every one of these
+# quotes task material and the exact bytes a human approved for training; they are
+# reviewed locally and NEVER committed or packaged.
+dataset_candidates/
+training_gym_datasets/
+jarvis/logs/training_gym_datasets/
