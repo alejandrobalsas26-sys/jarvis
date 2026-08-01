@@ -70,3 +70,10 @@ jarvis/logs/*.jsonl
 jarvis/logs/task_memory.jsonl
 jarvis/logs/forensics/
 jarvis/logs/grc_reports/
+
+# v69 M62 TRAINING GYM — teacher packets, imported reviews, replay ledger and
+# provider audit trail. Generated artifacts that quote task material and model
+# output; they are reviewed locally and NEVER committed.
+jarvis/logs/training_gym/
+training_gym_artifacts/
+teacher_packets/
