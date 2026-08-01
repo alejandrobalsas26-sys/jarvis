@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 
 from ..schemas import (
     ResultStatus,
+    SchemaError,
     canonical_json,
     require_float,
     require_str_tuple,
@@ -199,6 +200,35 @@ def _require_dimension_scores(data: Mapping[str, object]) -> dict[str, float]:
     return {str(k): _require_score(raw, str(k)) for k in raw}
 
 
+def _build_review(data: Mapping[str, object], provider: str, model: str,
+                  created_at_utc: str) -> TeacherReview:
+    """Fill the frozen review record from a validated response body.
+
+    Every value goes through one of the helpers above rather than through ``str()`` or
+    ``float()``, so the frozen record never has to be the first thing that notices a
+    bad field — by then the error type belongs to a different layer.
+    """
+    return TeacherReview(
+        provider=provider,
+        model=model,
+        task_hash=str(data.get("task_hash", "")).strip().lower(),
+        attempt_hash=str(data.get("attempt_hash", "")).strip().lower(),
+        rubric_version=str(data.get("rubric_version", "")).strip(),
+        overall_score=_require_score(data, "overall_score"),
+        recommendation=_require_recommendation(data),
+        timestamp=created_at_utc,
+        dimension_scores=_require_dimension_scores(data),
+        factual_errors=_require_strings(data, "factual_errors"),
+        unsupported_claims=_require_strings(data, "unsupported_claims"),
+        missing_evidence=_require_strings(data, "missing_evidence"),
+        unsafe_behavior=_require_strings(data, "unsafe_behavior"),
+        style_issues=_require_strings(data, "style_issues"),
+        corrected_answer=str(data.get("corrected_answer", "") or ""),
+        confidence=(_require_score(data, "confidence") if "confidence" in data
+                    else 0.0),
+    )
+
+
 def _require_recommendation(data: Mapping[str, object]) -> Recommendation:
     value = data.get("recommendation")
     if not isinstance(value, str):
@@ -264,24 +294,18 @@ def parse_review_json(text: object, *, packet: "ManualReviewPacket",
 
     declared_provider = str(data.get("provider", "")).strip()
     declared_model = str(data.get("model", "")).strip()
-    review = TeacherReview(
-        provider=declared_provider,
-        model=declared_model,
-        task_hash=str(data.get("task_hash", "")).strip().lower(),
-        attempt_hash=str(data.get("attempt_hash", "")).strip().lower(),
-        rubric_version=str(data.get("rubric_version", "")).strip(),
-        overall_score=_require_score(data, "overall_score"),
-        recommendation=_require_recommendation(data),
-        timestamp=created_at_utc,
-        dimension_scores=_require_dimension_scores(data),
-        factual_errors=_require_strings(data, "factual_errors"),
-        unsupported_claims=_require_strings(data, "unsupported_claims"),
-        missing_evidence=_require_strings(data, "missing_evidence"),
-        unsafe_behavior=_require_strings(data, "unsafe_behavior"),
-        style_issues=_require_strings(data, "style_issues"),
-        corrected_answer=corrected,
-        confidence=_require_score(data, "confidence") if "confidence" in data else 0.0,
-    )
+    try:
+        review = _build_review(data, declared_provider, declared_model,
+                               created_at_utc)
+    except ReviewImportError:
+        raise
+    except SchemaError as exc:
+        # The frozen record's own validators raise SchemaError, which is BROADER than
+        # this layer's error type. Left unnormalised, a caller catching
+        # ReviewImportError would miss a malformed provider or an empty model and see
+        # the exception escape as something it never expected from an importer.
+        raise ReviewImportError(str(exc)) from None
+
     try:
         record = TeacherReviewRecord(
             provider=declared_provider or provider_id,

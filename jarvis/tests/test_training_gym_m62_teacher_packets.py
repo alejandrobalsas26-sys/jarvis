@@ -487,6 +487,16 @@ def test_provider_label_cannot_be_chosen_by_the_response():
                         provider_id="anthropic_cloud")
 
 
+@pytest.mark.parametrize("field_name,value", [("provider", ""), ("model", ""),
+                                              ("task_hash", "short")])
+def test_a_malformed_frozen_field_is_reported_as_an_import_error(field_name, value):
+    """The frozen record's validators raise the broader SchemaError; the importer must
+    normalise it, or a caller catching ReviewImportError misses the failure."""
+    packet = make_packet()
+    with pytest.raises(ReviewImportError):
+        import_response(packet, good_response(packet, **{field_name: value}))
+
+
 @pytest.mark.parametrize("score", [1.5, -0.1, 2, "0.9", True, None])
 def test_out_of_range_or_non_numeric_score_is_refused(score):
     packet = make_packet()

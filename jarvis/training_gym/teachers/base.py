@@ -697,25 +697,34 @@ class TeacherProvider(ABC):
         return TeacherOutcome(
             provider=self.provider_id, model=self.model, status=ResultStatus.PASS,
             record=record, response_sha256=_digest(response.text),
-            cost=response.cost, audit=dict(response.audit))
+            cost=response.cost,
+            # Whether single-use was actually enforced is recorded, not assumed. A
+            # caller may legitimately import without consuming the packet, but a record
+            # that does not say which happened invites a reader to assume the safer one.
+            audit={**dict(response.audit), "replay_ledger": ledger is not None})
 
     # -- helpers ---------------------------------------------------------------
     def _refused(self, status: ResultStatus, reason: str, *,
                  response: ProviderResponse | None = None,
                  packet: object | None = None) -> TeacherOutcome:
         """A non-answer, with a bounded sanitized trace and no raw response stored."""
+        from .sanitization import sanitize_text
         excerpt = ""
         if response is not None and response.text:
-            from .sanitization import sanitize_text
             excerpt, _report = sanitize_text(response.text,
                                              limit=MAX_RESPONSE_EXCERPT_CHARS)
+        # The reason is sanitized too. Most reasons are this module's own text, but a
+        # validation failure quotes the offending FIELD NAME back — and a field name is
+        # attacker-chosen, so it is a place a token can ride out of an untrusted
+        # response into a stored outcome.
+        clean_reason, _reason_report = sanitize_text(reason, limit=2_000)
         cost = response.cost if response is not None else None
         audit = dict(response.audit) if response is not None else {}
         if packet is not None:
             audit.setdefault("packet_id", getattr(packet, "packet_id", ""))
         return TeacherOutcome(
             provider=self.provider_id, model=self.model, status=status,
-            reason=reason,
+            reason=clean_reason or reason,
             response_sha256=_digest(response.text) if response is not None else "",
             response_excerpt=excerpt, cost=cost, audit=audit)
 

@@ -264,6 +264,30 @@ def test_a_provider_refuses_an_unsupported_review_mode():
     assert "does not support review mode" in outcome.reason
 
 
+def test_an_outcome_records_whether_replay_protection_was_in_effect():
+    """Importing without a ledger is legitimate; leaving it ambiguous is not."""
+    packet = make_packet()
+    without = MockTeacherProvider(MockMode.APPROVE).review(packet, created_at_utc=NOW)
+    assert without.audit["replay_ledger"] is False
+    fresh = make_packet(nonce="n-2")
+    with_ledger = MockTeacherProvider(MockMode.APPROVE).review(
+        fresh, created_at_utc=NOW, ledger=InMemoryPacketLedger())
+    assert with_ledger.audit["replay_ledger"] is True
+
+
+def test_a_refusal_reason_never_carries_a_token_the_response_chose():
+    """A validation message quotes the offending FIELD NAME, and a field name is
+    attacker-chosen — so the reason is sanitized before it reaches an outcome."""
+    packet = make_packet()
+    leaking_field = "ghp_" + "d" * 36
+    outcome = MockTeacherProvider(
+        MockMode.APPROVE, overrides={leaking_field: 1}).review(packet,
+                                                               created_at_utc=NOW)
+    assert outcome.status is ResultStatus.ERROR
+    assert leaking_field not in outcome.reason
+    assert leaking_field not in json.dumps(outcome.to_dict())
+
+
 def test_the_provider_path_consumes_a_packet_exactly_once():
     packet = make_packet()
     ledger = InMemoryPacketLedger()
