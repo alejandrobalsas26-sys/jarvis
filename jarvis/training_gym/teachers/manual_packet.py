@@ -89,6 +89,17 @@ MAX_PACKET_TOOL_CALLS = 8
 MAX_PACKET_CONSTRAINTS = 16
 
 
+#: Every key an exported packet may carry. Enforced on the way back IN, so a file with
+#: an extra field is refused rather than partially read.
+_PACKET_FIELDS: tuple[str, ...] = (
+    "schema_version", "packet_version", "protocol_version", "packet_id", "nonce",
+    "created_at_utc", "requested_provider", "requested_model", "task_hash",
+    "attempt_hash", "deterministic_report_hash", "rubric_version", "rubric",
+    "instructions", "response_schema", "task", "attempt", "deterministic_summary",
+    "packet_hash", "sanitization",
+)
+
+
 class PacketError(TeacherError):
     """A packet could not be built or is not exportable. Never a warning."""
 
@@ -582,8 +593,13 @@ def packet_from_dict(payload: object) -> ManualReviewPacket:
     EXPORTED rather than against one rebuilt from a trajectory that may since have
     changed.
     """
-    from ..schemas import require_mapping
+    from ..schemas import check_schema_version, reject_unknown_fields, require_mapping
     data = require_mapping(payload, "packet")
+    check_schema_version(data, label="packet")
+    # An unknown key is refused, not ignored. A packet file carrying an extra field —
+    # an "override", a "hint", a restored expected answer — was edited by something,
+    # and a reviewer answered the edited file rather than the exported one.
+    reject_unknown_fields(data, _PACKET_FIELDS, label="packet")
     packet = ManualReviewPacket(
         packet_id=str(data.get("packet_id", "")),
         nonce=str(data.get("nonce", "")),
