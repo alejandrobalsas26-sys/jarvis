@@ -43,6 +43,11 @@ performs no I/O.
 """
 from __future__ import annotations
 
+from .anthropic_teacher import (
+    ANTHROPIC_CREDENTIAL_ENV,
+    ANTHROPIC_ENDPOINT,
+    OptionalAnthropicTeacherProvider,
+)
 from .base import (
     DEFAULT_TEACHER_TIMEOUT_S,
     MAX_TEACHER_PROMPT_BYTES,
@@ -64,6 +69,30 @@ from .base import (
     TeacherReviewRecord,
     TeacherUnavailable,
 )
+from .cloud import (
+    ALLOWED_CLOUD_HOSTS,
+    PRICE_TABLE_VERSION,
+    AuthorizationDecision,
+    CloudRequest,
+    CloudResponse,
+    CloudTeacherConfig,
+    CloudTransport,
+    CloudTransportError,
+    audit_event,
+    authorize_cloud_call,
+    environment_credential,
+    estimate_cost,
+)
+from .consensus import (
+    CONSENSUS_VERSION,
+    ConsensusOutcome,
+    ConsensusPolicy,
+    ConsensusReport,
+    Disagreement,
+    decide,
+    teacher_adjusted_total,
+    teacher_penalty,
+)
 from .manual_packet import (
     PACKET_INSTRUCTIONS,
     PACKET_VERSION,
@@ -75,6 +104,19 @@ from .manual_packet import (
     build_packet,
     export_blockers,
     packet_from_dict,
+)
+from .mock_teacher import MockMode, MockTeacherProvider, mock_review_text
+from .openai_teacher import (
+    OPENAI_CREDENTIAL_ENV,
+    OPENAI_ENDPOINT,
+    OptionalOpenAITeacherProvider,
+)
+from .registry import (
+    TEACHER_PROVIDER_IDS,
+    ProviderEntry,
+    RegistryError,
+    TeacherRegistry,
+    default_registry,
 )
 from .review_import import (
     REQUIRED_RESPONSE_FIELDS,
@@ -104,21 +146,38 @@ from .store import (
     StoreError,
     TeacherArtifactStore,
 )
+from .verifier_teacher import (
+    DEFAULT_VERIFIER_TIMEOUT_S,
+    VerifierTeacherProvider,
+    VerifyFn,
+    verifier_from_seam,
+)
 
 __all__ = [
-    "DEFAULT_TEACHER_TIMEOUT_S", "HIDDEN_KEY_TOKENS", "MAX_TEACHER_PROMPT_BYTES",
-    "MAX_TEACHER_RESPONSE_BYTES", "MAX_TEACHER_TIMEOUT_S", "PACKET_INSTRUCTIONS",
-    "PACKET_VERSION", "REQUIRED_RESPONSE_FIELDS", "RESPONSE_SCHEMA", "RUBRIC",
-    "RUBRIC_DIMENSIONS", "RUBRIC_VERSION", "TEACHER_PROTOCOL_VERSION",
-    "TEACHER_RESPONSE_FIELDS", "ConsumedPacket", "CostEstimate",
-    "InMemoryPacketLedger", "ManualReviewPacket", "PacketError",
-    "PacketExportBlocked", "PacketLedger", "ProviderResponse", "ReplayRejected",
-    "ReviewImportError", "ReviewMode", "SanitizationError", "SanitizationReport",
-    "StoreError", "TeacherArtifactStore", "TeacherAvailability", "TeacherCapability",
-    "TeacherError", "TeacherKind", "TeacherNotAuthorized", "TeacherOutcome",
-    "TeacherProvider", "TeacherReviewRecord", "TeacherUnavailable", "assert_clean",
-    "build_packet", "export_blockers", "hidden_key", "packet_from_dict",
-    "parse_review_json", "parse_teacher_response", "register_review",
-    "sanitize_for_export", "sanitize_structure", "sanitize_text",
-    "scan_export_payload", "strict_json_object",
+    "ALLOWED_CLOUD_HOSTS", "ANTHROPIC_CREDENTIAL_ENV", "ANTHROPIC_ENDPOINT",
+    "CONSENSUS_VERSION", "DEFAULT_TEACHER_TIMEOUT_S", "DEFAULT_VERIFIER_TIMEOUT_S",
+    "HIDDEN_KEY_TOKENS", "MAX_TEACHER_PROMPT_BYTES", "MAX_TEACHER_RESPONSE_BYTES",
+    "MAX_TEACHER_TIMEOUT_S", "OPENAI_CREDENTIAL_ENV", "OPENAI_ENDPOINT",
+    "PACKET_INSTRUCTIONS", "PACKET_VERSION", "PRICE_TABLE_VERSION",
+    "REQUIRED_RESPONSE_FIELDS", "RESPONSE_SCHEMA", "RUBRIC", "RUBRIC_DIMENSIONS",
+    "RUBRIC_VERSION", "TEACHER_PROTOCOL_VERSION", "TEACHER_PROVIDER_IDS",
+    "TEACHER_RESPONSE_FIELDS", "AuthorizationDecision", "CloudRequest",
+    "CloudResponse", "CloudTeacherConfig", "CloudTransport", "CloudTransportError",
+    "ConsensusOutcome", "ConsensusPolicy", "ConsensusReport", "ConsumedPacket",
+    "CostEstimate", "Disagreement", "InMemoryPacketLedger", "ManualReviewPacket",
+    "MockMode", "MockTeacherProvider", "OptionalAnthropicTeacherProvider",
+    "OptionalOpenAITeacherProvider", "PacketError", "PacketExportBlocked",
+    "PacketLedger", "ProviderEntry", "ProviderResponse", "RegistryError",
+    "ReplayRejected", "ReviewImportError", "ReviewMode", "SanitizationError",
+    "SanitizationReport", "StoreError", "TeacherArtifactStore",
+    "TeacherAvailability", "TeacherCapability", "TeacherError", "TeacherKind",
+    "TeacherNotAuthorized", "TeacherOutcome", "TeacherProvider", "TeacherRegistry",
+    "TeacherReviewRecord", "TeacherUnavailable", "VerifierTeacherProvider",
+    "VerifyFn", "assert_clean", "audit_event", "authorize_cloud_call",
+    "build_packet", "decide", "default_registry", "environment_credential",
+    "estimate_cost", "export_blockers", "hidden_key", "mock_review_text",
+    "packet_from_dict", "parse_review_json", "parse_teacher_response",
+    "register_review", "sanitize_for_export", "sanitize_structure", "sanitize_text",
+    "scan_export_payload", "strict_json_object", "teacher_adjusted_total",
+    "teacher_penalty", "verifier_from_seam",
 ]
