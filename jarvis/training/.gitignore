@@ -6,6 +6,10 @@ configs/*.json
 datasets/
 manifests/*.json
 
-# Keep the directory structure and docs tracked.
+# Keep the directory structure, the docs and the reviewed sample configs tracked.
+# A generated run config carries a specific dataset digest and belongs to one operator's
+# run; a template carries only REQUIRED_* placeholders and is reviewed like any source
+# file, so it is the one JSON here that is committed.
 !README.md
 !.gitignore
+!configs/qwen3-0.6b-lora-smoke.json

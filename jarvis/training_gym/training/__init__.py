@@ -54,6 +54,52 @@ from .config import (
     require_model_id,
     require_revision,
 )
+from .environment import (
+    HARDWARE_REPORT_VERSION,
+    AcceleratorProbe,
+    Availability,
+    DeviceSelection,
+    HardwareCapabilityReport,
+    PrecisionSelection,
+    SizeCategory,
+    categorize_gb,
+    no_accelerator_probe,
+    select_device,
+    select_precision,
+)
+from .feasibility import (
+    DISK_FORMULA_VERSION,
+    FEASIBILITY_VERSION,
+    MEMORY_FORMULA_VERSION,
+    DiskEstimate,
+    MemoryEstimate,
+    RuntimeCategory,
+    TrainingFeasibilityReport,
+    Verdict,
+    build_feasibility_report,
+    classify_runtime,
+    estimate_disk,
+    estimate_memory,
+)
+from .plan import (
+    CONFIRMATION_PREFIX,
+    EXPECTED_ADAPTER_FILES,
+    PLAN_SCHEMA_VERSION,
+    TRAINING_LEDGER_FILE,
+    ConfirmationRejected,
+    ExecutionNotImplemented,
+    TrainingPlan,
+    TrainingPlanError,
+    check_output_root,
+    check_training_confirmation,
+    download_authorization_note,
+    download_required,
+    output_root_id,
+    plan_state_sequence,
+    refuse_execution,
+    training_run_directory,
+)
+from .planner import PlanningResult, plan_training
 from .dependencies import (
     DEPENDENCY_REPORT_VERSION,
     MINIMUM_VERSIONS,
@@ -90,6 +136,18 @@ from .model_identity import (
 )
 
 __all__ = [
+    "CONFIRMATION_PREFIX", "DISK_FORMULA_VERSION", "EXPECTED_ADAPTER_FILES",
+    "FEASIBILITY_VERSION", "HARDWARE_REPORT_VERSION", "MEMORY_FORMULA_VERSION",
+    "PLAN_SCHEMA_VERSION", "TRAINING_LEDGER_FILE", "AcceleratorProbe",
+    "Availability", "ConfirmationRejected", "DeviceSelection", "DiskEstimate",
+    "ExecutionNotImplemented", "HardwareCapabilityReport", "MemoryEstimate",
+    "PlanningResult", "PrecisionSelection", "RuntimeCategory", "SizeCategory",
+    "TrainingFeasibilityReport", "TrainingPlan", "TrainingPlanError", "Verdict",
+    "build_feasibility_report", "categorize_gb", "check_output_root",
+    "check_training_confirmation", "classify_runtime", "download_authorization_note",
+    "download_required", "estimate_disk", "estimate_memory", "no_accelerator_probe",
+    "output_root_id", "plan_state_sequence", "plan_training", "refuse_execution",
+    "select_device", "select_precision", "training_run_directory",
     "DEPENDENCY_REPORT_VERSION", "MINIMUM_VERSIONS", "PROFILE_PACKAGES",
     "DependencyReport", "DependencyState", "PackageAvailability",
     "build_dependency_report", "probe_package",
