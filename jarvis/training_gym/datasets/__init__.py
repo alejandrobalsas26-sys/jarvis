@@ -140,6 +140,7 @@ from .promotion_plan import (
     CONFIRMATION_PREFIX,
     PLAN_SCHEMA_VERSION,
     PROMOTION_LEDGER_FILE,
+    SPLIT_LEDGER_FILE,
     ConfirmationRejected,
     PlanAlreadyConsumed,
     PromotionError,
@@ -152,6 +153,7 @@ from .promotion_plan import (
     plan_promotion,
     promote,
     promotion_entries,
+    split_ledger_path,
 )
 from .export import (
     EXPORT_DIR,
@@ -189,8 +191,21 @@ from .preference import (
     pair_similarity,
     verify_preference_export,
 )
+from .bridge import (
+    BRIDGE_SOURCE_SPLIT,
+    BRIDGE_VERSION,
+    BridgeError,
+    BridgeReport,
+    bridge_blockers,
+    bridge_dataset_version,
+    to_training_example,
+    verify_bridged,
+)
 
 __all__ = [
+    "BRIDGE_SOURCE_SPLIT", "BRIDGE_VERSION", "BridgeError", "BridgeReport",
+    "bridge_blockers", "bridge_dataset_version", "to_training_example",
+    "verify_bridged",
     "EXPORT_DIR", "EXPORT_VERSION", "SFT_FILENAME", "SFT_MANIFEST_FILENAME",
     "SFT_SOURCE_SPLIT", "ExportError", "ExportVerification", "SFTExport",
     "SFTExportManifest", "export_dir", "export_sft", "row_hash", "sft_row",
@@ -202,9 +217,10 @@ __all__ = [
     "build_preference_pair", "export_preference", "pair_blockers", "pair_similarity",
     "verify_preference_export",
     "CONFIRMATION_PREFIX", "PLAN_SCHEMA_VERSION", "PROMOTION_LEDGER_FILE",
-    "ConfirmationRejected", "PlanAlreadyConsumed", "PromotionError", "PromotionPlan",
-    "PromotionRequest", "PromotionResult", "check_confirmation", "describe_plan",
-    "is_plan_consumed", "plan_promotion", "promote", "promotion_entries",
+    "SPLIT_LEDGER_FILE", "ConfirmationRejected", "PlanAlreadyConsumed",
+    "PromotionError", "PromotionPlan", "PromotionRequest", "PromotionResult",
+    "check_confirmation", "describe_plan", "is_plan_consumed", "plan_promotion",
+    "promote", "promotion_entries", "split_ledger_path",
     "DATASET_MANIFEST_VERSION", "DATASET_ROOT_DIR", "GENESIS_PARENT",
     "MANIFEST_FILENAME", "SHARD_SPLITS", "DatasetVersionManifest",
     "ManifestCandidateRow", "ManifestError", "RevocationSnapshot", "ShardManifest",

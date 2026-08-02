@@ -39,6 +39,16 @@ prune .venv
 prune .chroma_db
 prune brain
 prune training
+
+# ── V69 M62 S2d generated training-gym datasets ─────────────────────────────
+# Candidates, versioned dataset shards and SFT/preference exports quote task
+# material and the exact bytes a human approved for training. The root .gitignore
+# already refuses to commit them; these rules refuse to package them.
+prune dataset_candidates
+prune training_gym_datasets
+prune training_gym_exports
+prune teacher_packets
+prune training_gym_artifacts
 global-exclude *.log
 global-exclude *.db
 global-exclude *.db-wal

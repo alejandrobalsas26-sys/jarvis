@@ -55,6 +55,11 @@ FORBIDDEN_DIRS = (
     "/data/", "/logs/", "/.venv/", "/.chroma_db/", "/brain/", "/.github/",
     "/.idea/", "/.claude/", "/__pycache__/", "/.pytest_cache/", "/.ruff_cache/",
     "/tests/", "/evals/", "/training/",
+    # V69 M62 S2d — generated training-gym datasets and exports. Each of these quotes
+    # task material and the exact bytes a human approved for training; none of them is
+    # source, and a distribution carrying one would be shipping the operator's corpus.
+    "/dataset_candidates/", "/training_gym_datasets/", "/training_gym_exports/",
+    "/teacher_packets/", "/training_gym_artifacts/",
 )
 
 #: Members that MUST be present for the distribution to be usable.

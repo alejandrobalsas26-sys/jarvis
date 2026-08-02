@@ -4,3 +4,13 @@ data/operational_state.db
 data/operational_state.db-wal
 data/operational_state.db-shm
 data/
+
+# V69 M62 S2d TRAINING GYM DATASETS — candidate records, transition/revocation
+# ledgers, versioned dataset shards, split manifests and SFT/preference exports.
+# Every one of these quotes task material and the exact bytes a human approved for
+# training. They are reviewed locally and NEVER committed or packaged.
+dataset_candidates/
+training_gym_datasets/
+training_gym_exports/
+teacher_packets/
+training_gym_artifacts/

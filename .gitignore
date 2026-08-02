@@ -84,4 +84,5 @@ teacher_packets/
 # reviewed locally and NEVER committed or packaged.
 dataset_candidates/
 training_gym_datasets/
+training_gym_exports/
 jarvis/logs/training_gym_datasets/

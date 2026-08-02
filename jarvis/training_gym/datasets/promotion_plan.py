@@ -86,7 +86,14 @@ from .manifests import (
     write_dataset_version,
 )
 from .promotion import PROMOTION_POLICY_VERSION
-from .split import SplitPlan
+from .split import (
+    _HELD_OUT,
+    _TRAIN_SIDE,
+    SplitAssignmentLedger,
+    SplitPlan,
+    StickyConflict,
+    commit_plan,
+)
 
 #: Bump when the plan SHAPE changes. Part of the digest, so a shape change invalidates
 #: every outstanding confirmation — which is correct: they authorised a different object.
@@ -98,6 +105,11 @@ CONFIRMATION_PREFIX = "PROMOTE:"
 #: The append-only record of every promotion this store has performed.
 PROMOTION_LEDGER_FILE = "promotions.jsonl"
 MAX_PROMOTION_LEDGER_LINES = 100_000
+
+#: The sticky split ledger. Consulted at plan time and written after a version exists —
+#: recording an assignment for a version that was never created would hold a group
+#: hostage to a promotion that did not happen.
+SPLIT_LEDGER_FILE = "split_assignments.jsonl"
 
 
 class PromotionError(SchemaError):
@@ -212,7 +224,8 @@ class PromotionPlan:
                 {"candidate_id": e["candidate_id"],
                  "from": CandidateState.READY_FOR_PROMOTION.value,
                  "to": CandidateState.PROMOTED.value} for e in self.entries],
-            "appends_ledgers": sorted([PROMOTION_LEDGER_FILE, "transitions.jsonl"]),
+            "appends_ledgers": sorted([PROMOTION_LEDGER_FILE, SPLIT_LEDGER_FILE,
+                                       "transitions.jsonl"]),
             "excluded_candidates": [dict(e) for e in self.excluded],
             "trains_a_model": False,
             "downloads_anything": False,
@@ -286,6 +299,11 @@ def plan_promotion(request: PromotionRequest) -> PromotionPlan:
             f"not permit finalization ({list(report.notes) or 'see findings'}); "
             f"insufficient evidence is refused exactly as hard as detected leakage, "
             f"because a check that could not run proved nothing")
+
+    # The sticky ledger is consulted BEFORE anything is planned. A group that has already
+    # been measured against may not be trained on, whatever seed produces that answer, and
+    # discovering it after the version exists would be discovering it too late.
+    _check_sticky(root, request.split_plan)
 
     assignments = dict(request.split_plan.assignments)
     entries: list[dict] = []
@@ -372,6 +390,34 @@ def plan_promotion(request: PromotionRequest) -> PromotionPlan:
         expected_shard_filenames=tuple(shard_filename(s) for s in SHARD_SPLITS
                                        if counts.get(s.value, 0)),
         allow_empty_splits=request.allow_empty_splits)
+
+
+def split_ledger_path(root: str | Path) -> Path:
+    return Path(root) / SPLIT_LEDGER_FILE
+
+
+def _check_sticky(root: str | Path, plan: SplitPlan) -> None:
+    """Refuse a plan that moves a group out of a split it has already been held out in.
+
+    Read-only: this consults the ledger and writes nothing, so a dry run stays a dry run.
+    The same rule is applied again by :func:`~training_gym.datasets.split.commit_plan`
+    after the version exists — there it is a last check, here it is the one that gives an
+    operator a usable answer.
+    """
+    ledger = SplitAssignmentLedger(split_ledger_path(root))
+    known = ledger.assignments()
+    if not known:
+        return
+    for group_key, name in sorted(plan.group_splits.items()):
+        previous = known.get(group_key)
+        if previous is None or previous == name:
+            continue
+        was, now = DatasetSplit(previous), DatasetSplit(name)
+        if was in _HELD_OUT and now in _TRAIN_SIDE:
+            raise StickyConflict(
+                f"promotion: group {short(group_key)} was assigned to {was.value} and "
+                f"this plan places it in {now.value}; a group that has been measured "
+                f"against cannot later be trained on")
 
 
 # ── the confirmation ──────────────────────────────────────────────────────────
@@ -534,6 +580,15 @@ def promote(request: PromotionRequest, *, confirmation: object,
     promoted: list[DatasetCandidate] = []
     transitions: list[dict] = []
     inconsistencies: list[str] = []
+    try:
+        commit_plan(request.split_plan, SplitAssignmentLedger(split_ledger_path(root)),
+                    dataset_version=plan.proposed_dataset_version,
+                    at=request.created_at_utc)
+    except (SchemaError, OSError) as exc:
+        inconsistencies.append(
+            f"the split assignment ledger was not updated ({exc}); the version is "
+            f"immutable and correct, but a later build could reassign one of its groups "
+            f"until this is repaired")
     for source, moved in zip(sources, members, strict=True):
         try:
             store.write_candidate(moved)
@@ -600,9 +655,10 @@ def candidate_assignments(plan: SplitPlan,
 
 __all__ = [
     "CONFIRMATION_PREFIX", "GENESIS_PARENT", "MAX_PROMOTION_LEDGER_LINES",
-    "PLAN_SCHEMA_VERSION", "PROMOTION_LEDGER_FILE", "ConfirmationRejected",
-    "ManifestError", "PlanAlreadyConsumed", "PromotionError", "PromotionPlan",
-    "PromotionRequest", "PromotionResult", "candidate_assignments",
-    "check_confirmation", "describe_plan", "is_plan_consumed", "plan_promotion",
-    "promote", "promotion_entries", "promotion_ledger_path",
+    "PLAN_SCHEMA_VERSION", "PROMOTION_LEDGER_FILE", "SPLIT_LEDGER_FILE",
+    "ConfirmationRejected", "ManifestError", "PlanAlreadyConsumed", "PromotionError",
+    "PromotionPlan", "PromotionRequest", "PromotionResult", "StickyConflict",
+    "candidate_assignments", "check_confirmation", "describe_plan", "is_plan_consumed",
+    "plan_promotion", "promote", "promotion_entries", "promotion_ledger_path",
+    "split_ledger_path",
 ]
