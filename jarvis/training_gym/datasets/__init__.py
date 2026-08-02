@@ -136,8 +136,29 @@ from .manifests import (
     version_dir,
     write_dataset_version,
 )
+from .promotion_plan import (
+    CONFIRMATION_PREFIX,
+    PLAN_SCHEMA_VERSION,
+    PROMOTION_LEDGER_FILE,
+    ConfirmationRejected,
+    PlanAlreadyConsumed,
+    PromotionError,
+    PromotionPlan,
+    PromotionRequest,
+    PromotionResult,
+    check_confirmation,
+    describe_plan,
+    is_plan_consumed,
+    plan_promotion,
+    promote,
+    promotion_entries,
+)
 
 __all__ = [
+    "CONFIRMATION_PREFIX", "PLAN_SCHEMA_VERSION", "PROMOTION_LEDGER_FILE",
+    "ConfirmationRejected", "PlanAlreadyConsumed", "PromotionError", "PromotionPlan",
+    "PromotionRequest", "PromotionResult", "check_confirmation", "describe_plan",
+    "is_plan_consumed", "plan_promotion", "promote", "promotion_entries",
     "DATASET_MANIFEST_VERSION", "DATASET_ROOT_DIR", "GENESIS_PARENT",
     "MANIFEST_FILENAME", "SHARD_SPLITS", "DatasetVersionManifest",
     "ManifestCandidateRow", "ManifestError", "RevocationSnapshot", "ShardManifest",
