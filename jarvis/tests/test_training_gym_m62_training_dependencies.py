@@ -208,7 +208,13 @@ def _code_identifiers(path: Path) -> set[str]:
         if isinstance(node, ast.Name):
             found.add(node.id)
         elif isinstance(node, ast.Attribute):
-            found.add(node.attr)
+            # The dotted form as well as the bare attribute: `platform.system` is not
+            # `os.system`, and a check that cannot tell them apart is a check that has
+            # to be weakened until it stops meaning anything.
+            if isinstance(node.value, ast.Name):
+                found.add(f"{node.value.id}.{node.attr}")
+            else:
+                found.add(node.attr)
         elif isinstance(node, ast.alias):
             found.add(node.name.split(".")[0])
         elif isinstance(node, ast.keyword) and node.arg:
@@ -220,9 +226,10 @@ def _code_identifiers(path: Path) -> set[str]:
 
 
 @pytest.mark.parametrize("forbidden", [
-    "subprocess", "system", "popen", "Popen", "check_call", "check_output",
-    "run_command", "shell", "pip", "uv", "poetry", "conda", "winget", "apt",
-    "sudo",
+    "subprocess", "os.system", "os.popen", "os.spawnv", "os.execv", "popen",
+    "Popen", "check_call", "check_output", "run_command", "shell", "pip", "uv",
+    "poetry", "conda", "winget", "apt", "sudo", "urllib", "requests", "httpx",
+    "socket", "urlopen",
 ])
 def test_no_s3a_module_can_invoke_a_package_manager(forbidden):
     """Not "does not today" — the identifiers are absent from the compiled code."""
