@@ -220,7 +220,7 @@ CI_AUTHORITATIVE_PYTHON = "3.11"
 # ── Dependency authority ────────────────────────────────────────────────────
 DEPENDENCY_AUTHORITY = "jarvis/requirements/<profile>.txt"
 SBOM_MANDATORY_PROFILES = ("base", "dev", "soc")
-SBOM_OPTIONAL_PROFILES = ("voice", "docs", "lab")
+SBOM_OPTIONAL_PROFILES = ("voice", "docs", "lab", "training", "training-cuda")
 
 # ── Security posture claims that must stay true in the documentation ────────
 #: Each entry is a posture the current-facing documentation must not contradict. The

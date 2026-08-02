@@ -30,6 +30,8 @@ The legacy monolithic `jarvis/requirements.txt` is a deprecated pointer at
 | `voice` | STT/TTS | normal |
 | `docs` | file parsing and OCR | normal |
 | `lab` | **offensive-capable, isolated lab only** | normal, never in `base` |
+| `training` | LoRA fine-tuning stack (torch, transformers, peft, trl) | normal, never in `base`, **not in `all`** |
+| `training-cuda` | `training` plus `bitsandbytes` for 4-bit QLoRA | normal, CUDA hosts only |
 | `all` | the union plus AURA/RAG/rendering extras | derived |
 
 **Base-profile priority.** A vulnerability reachable from a `base` install affects every
@@ -38,6 +40,18 @@ first and held to the strictest standard in this document. `core.dependency_auth
 additionally asserts that no GUI-automation, MITM, C2 or exploitation package is
 reachable from `base`, and that those packages are still present in `lab` — absent from
 `base` is only correct if it is still installable where intended.
+
+**Training profiles are outside `all` on purpose.** Every other optional profile is
+composed into `all`; `training` and `training-cuda` are not. `pip install jarvis[all]`
+is the full workstation for someone who wants every *capability*, and it must not turn
+into a multi-gigabyte torch download for someone who never asked to fine-tune anything.
+They are installed only by an operator who has decided to train. JARVIS never installs
+them itself: the M62 S3A planner reports which packages are present and refuses to plan
+an executable run without them, but it does not call pip, and no configuration field or
+CLI flag makes it do so. `training-cuda` is split out because `bitsandbytes` is CUDA-only
+and would make the generic profile uninstallable on a CPU host — and installing it is
+still not sufficient for QLoRA, which additionally requires measured CUDA runtime
+evidence.
 
 **Optional-profile handling.** A finding confined to `voice`, `docs`, `lab` or the `all`
 extras does not block a release, because the affected code is not installed for the

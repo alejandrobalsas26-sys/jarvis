@@ -72,6 +72,8 @@ OPTIONAL_PACKAGES = (
     "yara", "scapy", "paramiko", "capstone", "asyncpg", "redis",
     # lab / offensive / GUI
     "mitmproxy", "pymetasploit3", "sliver", "pyautogui", "keyboard", "docker",
+    # training / training-cuda (V69 M62 S3A) — a base install must never reach these
+    "torch", "transformers", "peft", "trl", "accelerate", "bitsandbytes",
 )
 
 

@@ -1,0 +1,16 @@
+# requirements/training-cuda.txt — V69 M62 S3A: the CUDA-only addition to `training`.
+#   pip install -r requirements/base.txt -r requirements/training-cuda.txt
+#
+# WHY THIS IS A SEPARATE PROFILE.
+# `bitsandbytes` is the 4-bit quantization backend QLoRA is defined by, and outside a
+# CUDA environment it either fails to install or installs and then fails at import.
+# Putting it in the generic `training` profile would make that profile uninstallable on
+# the CPU-only host this repository is developed on, so the split is not tidiness — it
+# is the difference between a profile that works and one that does not.
+#
+# Installing this does NOT make QLoRA available. The planner requires measured CUDA
+# runtime evidence as well; package presence is not proof of a working accelerator, and
+# S3A refuses to plan a QLoRA run on that basis alone.
+-r training.txt
+
+bitsandbytes>=0.43.0      # 4-bit base weights for QLoRA; CUDA-only, by design

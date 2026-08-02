@@ -1,0 +1,25 @@
+# requirements/training.txt — V69 M62 S3A: LoRA fine-tuning, opt-in and never automatic.
+#   pip install -r requirements/base.txt -r requirements/training.txt
+#
+# DELIBERATELY NOT PART OF THE BASE INSTALL, AND NOT PART OF `all`.
+# `pip install jarvis` and `pip install jarvis[all]` must never pull a multi-gigabyte
+# CUDA-capable torch build onto a workstation that only wanted a chat prompt. This
+# profile is installed by an operator who has decided to train, on a host they chose.
+#
+# JARVIS NEVER INSTALLS THIS FOR YOU. The M62 planner reports which of these packages
+# are present and refuses to plan an executable run without them; it does not call pip,
+# and there is no configuration field or CLI flag that makes it do so.
+#
+# Lower bounds only, and they are floors rather than pins: they are the versions whose
+# APIs this milestone's contracts were written against. No upper bound is asserted
+# because none was verified offline — see docs/V69_M62_S3A_TRAINING_PLANNER.md.
+-r base.txt
+
+torch>=2.3.0              # CPU build by default; a CUDA build is an operator choice
+transformers>=4.44.0      # model + tokenizer loading (never invoked during planning)
+datasets>=2.20.0          # JSONL ingestion for the verified SFT export
+accelerate>=0.33.0        # device placement and the training loop's launcher
+peft>=0.12.0              # the LoRA adapters this milestone exists to produce
+trl>=0.9.6                # SFTTrainer / DPOTrainer
+safetensors>=0.4.3        # adapter serialization; never pickle
+sentencepiece>=0.2.0      # required by several tokenizer families, Qwen among them

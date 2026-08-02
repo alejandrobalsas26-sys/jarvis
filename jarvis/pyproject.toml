@@ -54,6 +54,12 @@ soc = ["defusedxml>=0.7.1", "yara-python>=4.5.0","scapy>=2.5.0", "paramiko>=3.4.
 # Sliver, global-hotkey `keyboard` or GUI automation onto a workstation.
 lab = ["docker>=7.0.0", "opencv-python>=4.9.0", "mitmproxy>=10.3.0", "pymetasploit3>=1.0.3", "grpcio>=1.62.0", "grpcio-tools>=1.62.0", "sliver-py>=0.0.19", "playwright>=1.40.0", "shodan>=1.31.0", "gitpython>=3.1.40", "nvdlib>=0.7.5", "qrcode>=7.4.2", "mss>=9.0.1", "pyautogui>=0.9.54", "pygetwindow>=0.0.9", "keyboard>=0.13.5", "pyperclip>=1.8.2", "python-telegram-bot>=20.7"]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.4.0", "bandit>=1.7.0", "pip-audit>=2.7.0"]
+# V69 M62 S3A — LoRA fine-tuning. Deliberately absent from `all`: a chat workstation
+# must not acquire a multi-gigabyte torch build, and JARVIS never installs these itself.
+# `training-cuda` is separate because bitsandbytes is CUDA-only and would make the
+# generic profile uninstallable on a CPU host.
+training = ["torch>=2.3.0", "transformers>=4.44.0", "datasets>=2.20.0", "accelerate>=0.33.0", "peft>=0.12.0", "trl>=0.9.6", "safetensors>=0.4.3", "sentencepiece>=0.2.0"]
+"training-cuda" = ["bitsandbytes>=0.43.0"]
 # The full workstation. Mirrors requirements/all.txt: the union of every profile
 # plus the AURA UI, the RAG stack and the rendering/telemetry extras.
 all = [

@@ -54,6 +54,16 @@ from .config import (
     require_model_id,
     require_revision,
 )
+from .dependencies import (
+    DEPENDENCY_REPORT_VERSION,
+    MINIMUM_VERSIONS,
+    PROFILE_PACKAGES,
+    DependencyReport,
+    DependencyState,
+    PackageAvailability,
+    build_dependency_report,
+    probe_package,
+)
 from .dataset_reference import (
     DATASET_REFERENCE_VERSION,
     PLACEHOLDER_PREFIX,
@@ -80,6 +90,9 @@ from .model_identity import (
 )
 
 __all__ = [
+    "DEPENDENCY_REPORT_VERSION", "MINIMUM_VERSIONS", "PROFILE_PACKAGES",
+    "DependencyReport", "DependencyState", "PackageAvailability",
+    "build_dependency_report", "probe_package",
     "ALLOWED_TRAINING_TRANSITIONS", "DATASET_REFERENCE_VERSION", "MAX_CONFIG_BYTES",
     "MODEL_IDENTITY_VERSION", "PLACEHOLDER_PREFIX", "PLANNER_VERSION",
     "REQUIRED_REVISION_PLACEHOLDER", "RESOURCE_POLICY_VERSION",

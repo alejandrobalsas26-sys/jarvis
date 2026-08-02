@@ -46,7 +46,8 @@ _PYPROJECT = _APP_ROOT / "pyproject.toml"
 _LEGACY = _APP_ROOT / "requirements.txt"
 
 #: The closed set of installable profiles. ``base`` is the text-mode floor.
-PROFILES = ("base", "voice", "docs", "soc", "lab", "dev", "all")
+PROFILES = ("base", "voice", "docs", "soc", "lab", "dev", "all",
+            "training", "training-cuda")
 
 #: Packages that must NEVER be reachable from a base (text-mode) install: global
 #: hotkey capture, GUI automation, MITM interception, C2 and exploitation clients.
@@ -54,12 +55,24 @@ FORBIDDEN_IN_BASE = frozenset({
     "keyboard", "pyautogui", "pygetwindow", "mss", "mitmproxy",
     "pymetasploit3", "sliver-py", "shodan", "docker", "playwright",
     "opencv-python", "python-telegram-bot", "grpcio", "grpcio-tools",
+    # V69 M62 S3A — the ML training stack. Multi-gigabyte, and none of it is needed to
+    # run JARVIS: it exists only to fine-tune, which is an explicit operator decision.
+    # `pip install jarvis` must not download a torch build.
+    "torch", "transformers", "datasets", "accelerate", "peft", "trl",
+    "bitsandbytes",
 })
 
 #: pyproject extras that mirror a requirements profile 1:1. ``all`` is excluded: it
 #: is expressed with self-referential extras (``jarvis[voice,docs,...]``), which is
 #: a different but equivalent encoding, checked separately by :func:`_audit_all`.
 _MIRRORED = ("voice", "docs", "soc", "lab", "dev")
+
+#: Profiles that mirror a requirements file 1:1 exactly like :data:`_MIRRORED`, but which
+#: ``all`` deliberately does NOT compose. Kept separate so the two rules stay honest: the
+#: mirror check applies to them, the "``all`` references every sibling" check does not.
+#: ``jarvis[all]`` is the full workstation, not the full *training* workstation — nobody
+#: installing a chat UI has consented to a multi-gigabyte torch download.
+_STANDALONE_MIRRORED = ("training", "training-cuda")
 
 _REQ_LINE_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*(.*)$")
 
@@ -183,7 +196,7 @@ def _audit_mirrors() -> list[str]:
     base_meta = _specs(project.get("dependencies"))
     problems += _diff("dependencies", base_meta, base_profile, "requirements/base.txt")
 
-    for extra in _MIRRORED:
+    for extra in _MIRRORED + _STANDALONE_MIRRORED:
         declared = _specs(extras.get(extra))
         profile = {n: s for n, s in _read_profile(extra)}
         problems += _diff(f"extra[{extra}]", declared, profile,
