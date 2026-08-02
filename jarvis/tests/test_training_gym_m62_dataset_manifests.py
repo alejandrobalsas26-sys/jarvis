@@ -336,6 +336,34 @@ def test_evaluation_only_material_is_refused_in_a_train_side_split():
         candidate, DatasetSplit.HIDDEN_EVALUATION).evaluation_only
 
 
+def test_dataset_ineligible_material_is_refused_in_a_train_side_split():
+    """``evaluation_only`` is not the only way to be untrainable, and the manifest
+    must refuse the other one independently of whoever assembled the split plan."""
+    candidate = make_candidate("c-1", dataset_eligible=False)
+    for split in (DatasetSplit.TRAIN, DatasetSplit.VALIDATION):
+        with pytest.raises(ManifestError, match="dataset-ineligible"):
+            ManifestCandidateRow.from_candidate(candidate, split)
+    assert not ManifestCandidateRow.from_candidate(
+        candidate, DatasetSplit.ADVERSARIAL).dataset_eligible
+
+
+def test_restricted_material_is_refused_from_every_split():
+    from training_gym.schemas import SensitivityClass
+
+    candidate = make_candidate("c-1", sensitivity=SensitivityClass.RESTRICTED,
+                               dataset_eligible=False)
+    for split in SHARD_SPLITS:
+        with pytest.raises(ManifestError, match="never stored in a dataset version"):
+            ManifestCandidateRow.from_candidate(candidate, split)
+
+
+def test_dataset_ineligible_material_is_refused_by_the_version_writer(tmp_path):
+    with pytest.raises(ManifestError, match="dataset-ineligible"):
+        write_version(tmp_path, candidates=[make_candidate("c-1", dataset_eligible=False)],
+                      assignments={"c-1": DatasetSplit.TRAIN.value})
+    assert not version_dir(tmp_path, "corpus", "v1").exists()
+
+
 @pytest.mark.parametrize("state", [
     CandidateState.CREATED, CandidateState.VALIDATED, CandidateState.LEAKAGE_CHECKED,
     CandidateState.READY_FOR_PROMOTION, CandidateState.REJECTED,

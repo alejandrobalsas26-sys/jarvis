@@ -250,6 +250,16 @@ def test_an_export_is_never_overwritten(tmp_path):
     assert (export_dir(tmp_path, "corpus", "v1") / SFT_FILENAME).read_bytes() == before
 
 
+def test_a_surviving_export_manifest_alone_still_blocks_a_re_export(tmp_path):
+    """Deleting only the data file must not let a new one land under an old manifest."""
+    build_version(tmp_path)
+    run_export(tmp_path)
+    (export_dir(tmp_path, "corpus", "v1") / SFT_FILENAME).unlink()
+    with pytest.raises(ExportError, match="already exists"):
+        run_export(tmp_path)
+    assert not (export_dir(tmp_path, "corpus", "v1") / SFT_FILENAME).exists()
+
+
 # ── 67..71: what a row may and may not carry ──────────────────────────────────
 def test_a_row_carries_the_prompt_the_target_and_its_provenance(tmp_path):
     candidate = make_candidate("c-1")

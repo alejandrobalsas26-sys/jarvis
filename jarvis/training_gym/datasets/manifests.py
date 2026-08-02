@@ -281,7 +281,7 @@ class ShardManifest:
 _ROW_FIELDS: tuple[str, ...] = (
     "candidate_id", "candidate_hash", "split", "task_hash", "attempt_hash",
     "human_reviewer_safe_id", "task_family", "target_source", "sensitivity",
-    "source_model_id", "state", "evaluation_only")
+    "source_model_id", "state", "evaluation_only", "dataset_eligible")
 
 
 @dataclass(frozen=True)
@@ -307,6 +307,7 @@ class ManifestCandidateRow:
     source_model_id: str
     state: CandidateState = CandidateState.PROMOTED
     evaluation_only: bool = False
+    dataset_eligible: bool = True
 
     def __post_init__(self) -> None:
         setattr_ = object.__setattr__
@@ -323,6 +324,8 @@ class ManifestCandidateRow:
         setattr_(self, "state", require_enum(self.state, CandidateState, "row.state"))
         setattr_(self, "evaluation_only", require_bool(self.evaluation_only,
                                                        "row.evaluation_only"))
+        setattr_(self, "dataset_eligible", require_bool(self.dataset_eligible,
+                                                        "row.dataset_eligible"))
         if not str(self.source_model_id or "").strip():
             raise ManifestError("row.source_model_id: required; a record nobody can "
                                 "attribute to a model is not reproducible")
@@ -338,10 +341,17 @@ class ManifestCandidateRow:
             raise ManifestError(
                 f"row {self.candidate_id}: state is {self.state.value}; a finalized "
                 f"dataset version contains promoted records only")
-        if self.evaluation_only and self.split in TRAIN_SIDE_SPLITS:
+        if not self.sensitivity.dataset_eligible:
             raise ManifestError(
-                f"row {self.candidate_id}: evaluation_only material may never be placed "
-                f"in {self.split.value}; that is held-out data a model would be fitted on")
+                f"row {self.candidate_id}: sensitivity {self.sensitivity.value} is never "
+                f"stored in a dataset version, in any split; restricted material is not "
+                f"held-out data, it is data that does not belong in the artefact at all")
+        if (self.evaluation_only or not self.dataset_eligible) \
+                and self.split in TRAIN_SIDE_SPLITS:
+            raise ManifestError(
+                f"row {self.candidate_id}: evaluation_only or dataset-ineligible "
+                f"material may never be placed in {self.split.value}; that is held-out "
+                f"data a model would be fitted on")
 
     @classmethod
     def from_candidate(cls, candidate: DatasetCandidate,
@@ -356,7 +366,8 @@ class ManifestCandidateRow:
                    sensitivity=candidate.sensitivity,
                    source_model_id=candidate.student_model_id,
                    state=candidate.state,
-                   evaluation_only=candidate.evaluation_only)
+                   evaluation_only=candidate.evaluation_only,
+                   dataset_eligible=candidate.dataset_eligible)
 
     def to_dict(self) -> dict:
         return {"candidate_id": self.candidate_id, "candidate_hash": self.candidate_hash,
@@ -367,7 +378,8 @@ class ManifestCandidateRow:
                 "target_source": self.target_source.value,
                 "sensitivity": self.sensitivity.value,
                 "source_model_id": self.source_model_id, "state": self.state.value,
-                "evaluation_only": self.evaluation_only}
+                "evaluation_only": self.evaluation_only,
+                "dataset_eligible": self.dataset_eligible}
 
     @classmethod
     def from_dict(cls, payload: object) -> "ManifestCandidateRow":
@@ -389,7 +401,8 @@ class ManifestCandidateRow:
             source_model_id=str(data.get("source_model_id", "")),
             state=require_enum(data.get("state", CandidateState.PROMOTED.value),
                                CandidateState, "row.state"),
-            evaluation_only=data.get("evaluation_only", False))
+            evaluation_only=data.get("evaluation_only", False),
+            dataset_eligible=data.get("dataset_eligible", True))
 
 
 # ── the version manifest ──────────────────────────────────────────────────────

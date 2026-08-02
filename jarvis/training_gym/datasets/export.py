@@ -354,10 +354,16 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
     destination = export_dir(out_root if out_root is not None else root, dataset_id,
                              dataset_version)
     path = destination / SFT_FILENAME
-    if path.exists() or path.is_symlink():
-        raise ExportError(
-            f"export: {SFT_FILENAME} already exists for {dataset_id}/{dataset_version}; "
-            f"an export is as immutable as the version it came from")
+    manifest_path = destination / SFT_MANIFEST_FILENAME
+    # BOTH names are checked. Removing only the data file and re-exporting would
+    # otherwise overwrite a manifest that still describes the previous bytes, and the
+    # replacement would verify against it exactly once — while it happened to match.
+    for existing in (path, manifest_path):
+        if existing.exists() or existing.is_symlink():
+            raise ExportError(
+                f"export: {existing.name} already exists for "
+                f"{dataset_id}/{dataset_version}; an export is as immutable as the "
+                f"version it came from")
     atomic_write_text(path, text)
 
     export_manifest = SFTExportManifest(
@@ -372,7 +378,6 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
         source_model_distribution=_distribution([c.student_model_id for c in kept]),
         excluded_counts=_distribution(excluded),
         row_hashes_hash=sha256_obj([row_hash(r) for r in rows]))
-    manifest_path = destination / SFT_MANIFEST_FILENAME
     atomic_write_text(manifest_path, canonical_json(export_manifest.to_record()))
 
     verified = verify_sft_export(out_root=out_root if out_root is not None else root,
