@@ -750,3 +750,115 @@ def test_a_missing_weights_error_is_not_reported_as_a_full_disk():
         OSError("... is not the path to a directory containing a file named "
                 "config.json. local_files_only=True"))
     assert not module._looks_like_missing_weights(OSError("No space left on device"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Package purity — the non-recursive scan the backends live one level below
+# ══════════════════════════════════════════════════════════════════════════════
+def _code_identifiers(path: Path) -> set[str]:
+    """Every name, dotted attribute, import and non-docstring literal in a module.
+
+    Over the AST rather than the raw text: these modules' docstrings explain at length
+    why they never open a socket or import a framework, and that explanation must not
+    itself trip the test. The dotted form is kept alongside the bare attribute because
+    ``platform.system`` is not ``os.system``, and a check that cannot tell them apart is
+    one that has to be weakened until it stops meaning anything.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef))
+        and node.body and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name):
+                found.add(f"{node.value.id}.{node.attr}")
+            else:
+                found.add(node.attr)
+        elif isinstance(node, ast.alias):
+            found.add(node.name.split(".")[0])
+        elif isinstance(node, ast.keyword) and node.arg:
+            found.add(node.arg)
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+              and id(node) not in docstrings):
+            found.add(node.value)
+    return found
+
+
+def _evaluation_modules() -> list[Path]:
+    """The evaluation package's own modules. Deliberately NON-recursive: the production
+    backend must eventually import torch, which is exactly why it lives one level
+    deeper, in ``backends/``."""
+    import training_gym.evaluation as package
+    return sorted(Path(package.__file__).parent.glob("*.py"))
+
+
+@pytest.mark.parametrize("forbidden", [
+    "subprocess", "os.system", "os.popen", "os.spawnv", "os.execv", "Popen",
+    "check_call", "check_output", "shell", "pip", "uv", "poetry", "conda", "winget",
+    "apt", "sudo", "urllib", "requests", "httpx", "socket", "urlopen", "eval", "exec",
+    "torch", "transformers", "peft", "trl", "datasets", "accelerate", "bitsandbytes",
+    "huggingface_hub", "ollama", "gguf",
+])
+def test_no_evaluation_module_can_reach_a_framework_or_a_package_manager(forbidden):
+    """The DENYLIST is not a capability.
+
+    ``config.FORBIDDEN_CONFIG_FIELDS`` names the fields a config may not carry —
+    ``shell``, ``pip``, ``env`` and so on — so those words appear in the source as string
+    literals precisely because the code refuses them. Subtracting exactly those keys keeps
+    the scan strict everywhere else, and it is derived from the module rather than hard
+    coded, so adding a refusal cannot silently widen the exemption to anything else.
+    """
+    from training_gym.evaluation.config import FORBIDDEN_CONFIG_FIELDS
+    denylist = set(FORBIDDEN_CONFIG_FIELDS)
+    offenders = []
+    for path in _evaluation_modules():
+        identifiers = _code_identifiers(path)
+        if path.name == "config.py":
+            identifiers -= denylist
+        if forbidden in identifiers:
+            offenders.append(path.name)
+    assert offenders == [], f"{forbidden!r} appears in {offenders}"
+
+
+def test_the_config_denylist_exemption_covers_only_refused_field_names():
+    """The exemption above must not be a hole. Every word it excuses is a key whose
+    value is the REASON that field is refused, so each one is a rule rather than a use."""
+    from training_gym.evaluation.config import FORBIDDEN_CONFIG_FIELDS
+    assert "shell" in FORBIDDEN_CONFIG_FIELDS
+    assert all(isinstance(reason, str) and reason
+               for reason in FORBIDDEN_CONFIG_FIELDS.values())
+    # And the exempted words really are absent as executable constructs.
+    source = Path(
+        __import__("training_gym.evaluation.config", fromlist=["x"]).__file__
+    ).read_text(encoding="utf-8")
+    for construct in ("shell=True", "subprocess.", "os.system(", "import pip"):
+        assert construct not in source, construct
+
+
+def test_the_evaluation_package_scan_is_non_vacuous():
+    """A scan over zero modules passes every check and proves nothing."""
+    modules = _evaluation_modules()
+    assert len(modules) >= 15, [p.name for p in modules]
+    assert "runner.py" in {p.name for p in modules}
+    assert "transformers_peft.py" not in {p.name for p in modules}
+
+
+def test_importing_the_whole_evaluation_package_loads_no_framework():
+    import importlib
+    before = set(sys.modules)
+    for name in ("config", "plan", "references", "task_pack", "generation", "policy",
+                 "backend", "runner", "scoring", "metrics", "statistics", "comparison",
+                 "gates", "reports", "artifacts", "store", "human_review",
+                 "registry_bridge"):
+        importlib.import_module(f"training_gym.evaluation.{name}")
+    assert sorted(set(_BANNED) & (set(sys.modules) - before)) == []
+    assert _ml_modules() == []
