@@ -1053,19 +1053,25 @@ def test_the_all_linear_policy_is_unwrapped_to_the_string_peft_expects():
 
 
 def test_a_missing_framework_is_a_named_refusal_and_never_an_install():
-    from training_gym.training.backends.transformers_peft import (
-        RUNTIME_PACKAGES,
-        RuntimeUnavailable,
-        _runtime,
-    )
+    """Asserted structurally, because CALLING ``_runtime()`` would import the frameworks.
 
-    assert set(RUNTIME_PACKAGES) == {"torch", "transformers", "peft"}
-    try:
-        _runtime()
-    except RuntimeUnavailable as exc:
-        assert "Install the optional profile yourself" in str(exc)
-    else:  # pragma: no cover — only on a host that has the packages
-        pytest.skip("the optional training profile is installed on this host")
+    An earlier version of this test invoked it and skipped when the packages turned out
+    to be absent. That was wrong in the one way that matters: this host has torch and
+    transformers installed, so the call really imported them — and left them in
+    ``sys.modules`` for every later test, which broke
+    ``test_importing_the_launcher_loads_no_training_framework`` in the CLI module. A test
+    for the no-import discipline must not be the thing that violates it.
+    """
+    import training_gym.training.backends.transformers_peft as production
+
+    before = _ml_modules()
+    assert set(production.RUNTIME_PACKAGES) == {"torch", "transformers", "peft"}
+    assert issubclass(production.RuntimeUnavailable, RuntimeError)
+    code = _backend_code()
+    assert "Install the optional profile yourself and re-plan" in code
+    # The refusal names what is absent and stops. There is no branch that obtains it.
+    assert "raise RuntimeUnavailable" in code
+    assert _ml_modules() == before
 
 
 def test_the_masking_self_test_cannot_pass_by_having_nothing_to_check():
