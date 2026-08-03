@@ -187,9 +187,11 @@ class TrainingPlan:
             "would_create_files_on_execution": list(self.expected_files),
             "would_append_ledger": TRAINING_LEDGER_FILE,
             "would_require_model_download": self.model_download_required,
-            "adapter_digest_algorithm": "sha256_tree (symlinks are skipped, so a link "
-                                        "inside an adapter directory is invisible to "
-                                        "the digest)",
+            "adapter_digest_algorithm": "sha256 over the validated (name, digest, "
+                                        "size) list; a link inside an adapter "
+                                        "directory is a refusal rather than an "
+                                        "omission, and the manifest is excluded "
+                                        "because a digest cannot cover itself",
             "execution_stage": "s3b_not_implemented",
         }
 

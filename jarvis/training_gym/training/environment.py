@@ -226,8 +226,30 @@ class HardwareCapabilityReport:
             "report_version": self.report_version,
         }
 
+    #: Measurements that change second to second on a working machine. They are reported
+    #: in full, and they are excluded from the identity below.
+    VOLATILE_FIELDS = ("available_ram_gb", "output_disk_free_gb")
+
+    def identity(self) -> dict:
+        """The report, minus the two numbers that drift while nobody is looking.
+
+        ``available_ram_gb`` and ``output_disk_free_gb`` are raw gigabyte counts, and a
+        background build or a browser moves either of them across an integer boundary in
+        seconds. This digest ends up inside the training plan hash, which is what an
+        operator's ``TRAIN:`` token authorises — so if the raw numbers were included, a
+        token would expire spontaneously between being printed and being typed.
+
+        That is not a safe failure. An operator whose token randomly stops working learns
+        to re-plan and paste the new one without reading it, and a confirmation nobody
+        reads is exactly the control this token exists to be. The CATEGORIES stay in the
+        digest, because they are what :mod:`training_gym.training.feasibility` actually
+        decides on: crossing from ``AT_LEAST_16GB`` to ``UNDER_8GB`` is a real change and
+        does invalidate the plan.
+        """
+        return {k: v for k, v in self.to_dict().items() if k not in self.VOLATILE_FIELDS}
+
     def report_hash(self) -> str:
-        return sha256_obj(self.to_dict())
+        return sha256_obj(self.identity())
 
     @classmethod
     def detect(cls, *, output_root: str | Path | None = None,

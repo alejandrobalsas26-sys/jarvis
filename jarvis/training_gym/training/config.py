@@ -213,9 +213,13 @@ class TrainingRunState(str, Enum):
     HARDWARE_VERIFIED = "hardware_verified"
     PLANNED = "planned"
     AWAITING_CONFIRMATION = "awaiting_confirmation"
+    PREFLIGHT_VERIFIED = "preflight_verified"
+    STARTING = "starting"
     RUNNING = "running"
+    INTERRUPTING = "interrupting"
     INTERRUPTED = "interrupted"
     FAILED = "failed"
+    ARTIFACT_VALIDATION = "artifact_validation"
     COMPLETED = "completed"
     EVALUATED = "evaluated"
     CANDIDATE = "candidate"
@@ -254,12 +258,34 @@ ALLOWED_TRAINING_TRANSITIONS: dict[TrainingRunState, frozenset[TrainingRunState]
     TrainingRunState.PLANNED: frozenset({
         TrainingRunState.AWAITING_CONFIRMATION, TrainingRunState.REJECTED,
         TrainingRunState.FAILED}),
+    # A confirmed plan is not a started run. Everything the plan asserted about the
+    # world is re-derived in PREFLIGHT_VERIFIED, because the config, the dataset bytes,
+    # the model revision, the installed packages and the measured hardware are all free
+    # to have changed between the operator reading the plan and typing the token.
     TrainingRunState.AWAITING_CONFIRMATION: frozenset({
-        TrainingRunState.RUNNING, TrainingRunState.REJECTED,
+        TrainingRunState.PREFLIGHT_VERIFIED, TrainingRunState.REJECTED,
         TrainingRunState.FAILED}),
+    # STARTING is where the plan is spent and the frameworks are imported. It is a
+    # separate state because those are the first irreversible acts, and a run that dies
+    # between them must not be indistinguishable from one that never began.
+    TrainingRunState.PREFLIGHT_VERIFIED: frozenset({
+        TrainingRunState.STARTING, TrainingRunState.REJECTED,
+        TrainingRunState.FAILED}),
+    TrainingRunState.STARTING: frozenset({
+        TrainingRunState.RUNNING, TrainingRunState.INTERRUPTED,
+        TrainingRunState.FAILED}),
+    # RUNNING has no edge to COMPLETED. A backend reporting success is a claim; the
+    # adapter on disk is the evidence, and ARTIFACT_VALIDATION is where the claim is
+    # checked against it. Removing this edge is what makes "the trainer said it worked"
+    # insufficient to produce a completed run.
     TrainingRunState.RUNNING: frozenset({
-        TrainingRunState.COMPLETED, TrainingRunState.INTERRUPTED,
+        TrainingRunState.ARTIFACT_VALIDATION, TrainingRunState.INTERRUPTING,
         TrainingRunState.FAILED}),
+    TrainingRunState.INTERRUPTING: frozenset({
+        TrainingRunState.INTERRUPTED, TrainingRunState.FAILED}),
+    TrainingRunState.ARTIFACT_VALIDATION: frozenset({
+        TrainingRunState.COMPLETED, TrainingRunState.FAILED,
+        TrainingRunState.QUARANTINED}),
     TrainingRunState.INTERRUPTED: frozenset({
         TrainingRunState.FAILED, TrainingRunState.QUARANTINED}),
     TrainingRunState.COMPLETED: frozenset({

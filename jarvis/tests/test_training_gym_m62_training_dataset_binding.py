@@ -107,8 +107,9 @@ ACTOR = "operator-1"
 DATASET_ID = "gym-corpus"
 VERSION = "v1"
 
-#: A 64-character lowercase digest, which is what an immutable model revision looks like.
-PINNED_REVISION = sha256_text("Qwen/Qwen3-0.6B@a-pinned-commit")
+#: An immutable Hugging Face revision is a full 40-character commit sha. A tag is not
+#: one, and neither is a 64-character digest -- the config refuses both.
+PINNED_REVISION = sha256_text("Qwen/Qwen3-0.6B@a-pinned-commit")[:40]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

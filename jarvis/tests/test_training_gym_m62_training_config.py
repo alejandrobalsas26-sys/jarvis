@@ -32,6 +32,7 @@ from training_gym.training.config import (
     TrainingMethod,
     TrainingResourcePolicy,
     TrainingRunState,
+    TrainingTransitionError,
     check_training_transition,
     is_immutable_revision,
     legacy_method,
@@ -720,12 +721,40 @@ def test_an_illegal_transition_is_refused(current, target):
 
 
 def test_only_an_explicitly_confirmed_run_may_start():
-    """``AWAITING_CONFIRMATION`` is the single edge into ``RUNNING``."""
-    entrances = [state for state, targets in
-                 __import__("training_gym.training.config", fromlist=["x"])
-                 .ALLOWED_TRAINING_TRANSITIONS.items()
+    """There is exactly one edge into ``RUNNING``, and one corridor that reaches it.
+
+    S3B inserted ``PREFLIGHT_VERIFIED`` and ``STARTING`` between the operator's
+    confirmation and the training loop, so the single entrance is now ``STARTING``
+    rather than ``AWAITING_CONFIRMATION``. That is a strictly stronger claim, not a
+    weaker one: the corridor is still one lane wide, and it is now two gates longer —
+    the plan is re-derived from the current state of the world in ``PREFLIGHT_VERIFIED``
+    and spent in ``STARTING``, and neither is reachable except from the confirmation.
+    """
+    transitions = (__import__("training_gym.training.config", fromlist=["x"])
+                   .ALLOWED_TRAINING_TRANSITIONS)
+    entrances = [state for state, targets in transitions.items()
                  if TrainingRunState.RUNNING in targets]
-    assert entrances == [TrainingRunState.AWAITING_CONFIRMATION]
+    assert entrances == [TrainingRunState.STARTING]
+    assert [s for s, t in transitions.items() if TrainingRunState.STARTING in t] == [
+        TrainingRunState.PREFLIGHT_VERIFIED]
+    assert [s for s, t in transitions.items()
+            if TrainingRunState.PREFLIGHT_VERIFIED in t] == [
+        TrainingRunState.AWAITING_CONFIRMATION]
+
+
+def test_a_backend_reporting_success_cannot_by_itself_complete_a_run():
+    """``RUNNING`` has no edge to ``COMPLETED``; the adapter on disk is the evidence."""
+    transitions = (__import__("training_gym.training.config", fromlist=["x"])
+                   .ALLOWED_TRAINING_TRANSITIONS)
+    assert TrainingRunState.COMPLETED not in transitions[TrainingRunState.RUNNING]
+    assert [s for s, t in transitions.items() if TrainingRunState.COMPLETED in t] == [
+        TrainingRunState.ARTIFACT_VALIDATION]
+    with pytest.raises(TrainingTransitionError):
+        check_training_transition(TrainingRunState.RUNNING, TrainingRunState.COMPLETED)
+    for terminal in (TrainingRunState.INTERRUPTED, TrainingRunState.FAILED,
+                     TrainingRunState.QUARANTINED):
+        with pytest.raises(TrainingTransitionError):
+            check_training_transition(terminal, TrainingRunState.COMPLETED)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
