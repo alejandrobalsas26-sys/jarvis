@@ -37,7 +37,12 @@ repository. There is no claim of Ollama compatibility and no claim of production
 readiness.
 
 `--execute` does not fail — it **refuses**, because there is no branch in this stage
-that leads to a training loop. The execution backend ships in **S3B**.
+that leads to a training loop. The execution backend ships in **S3B** and is now
+implemented — see [`V69_M62_S3B_TRAINING_EXECUTION.md`](V69_M62_S3B_TRAINING_EXECUTION.md).
+This document describes the planning stage, which is unchanged: it still writes
+nothing, downloads nothing and imports no training framework. What changed is that
+the `TRAIN:<plan-hash>` token it prints is now spendable, exactly once, by
+`--execute`. No live smoke run has been performed.
 
 ---
 

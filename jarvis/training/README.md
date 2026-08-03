@@ -58,3 +58,35 @@ training/
 
 Generated `runs/`, `adapters/`, and `logs/` content is git-ignored (see
 `.gitignore`); the directory structure and this README are tracked.
+
+---
+
+## V69 M62 S3B — the training gym's own execution path
+
+`core/training_pipeline.py` (above) remains the M16/M17 authority and is unchanged. The
+M62 training gym has its own, stricter path under `training_gym/training/`, and this
+directory is where it writes.
+
+| Directory / file | Written by | Tracked? |
+|---|---|---|
+| `runs/<run_id>/` | a completed M62 run | no |
+| `quarantine/<run_id>-<nonce>/` | a failed or interrupted M62 run | no |
+| `training_runs.jsonl` | the plan-consumption ledger | no |
+| `configs/qwen3-0.6b-lora-smoke.json` | reviewed template, `REQUIRED_*` placeholders only | **yes** |
+
+`.gitignore` here is an **allowlist of names**, so every new generated artifact must be
+added deliberately. A run ledger records exactly which dataset digests a model was fitted
+on; it is reviewed locally and never committed.
+
+**A run directory without `adapter-manifest.json` is residue, not a run.** The manifest is
+written last, after every other file has been re-hashed from disk, so no partial
+`adapter_model.safetensors` is ever readable as a finished adapter.
+
+- Contract and threat model: [`docs/V69_M62_S3B_TRAINING_EXECUTION.md`](../docs/V69_M62_S3B_TRAINING_EXECUTION.md)
+- Planner: [`docs/V69_M62_S3A_TRAINING_PLANNER.md`](../docs/V69_M62_S3A_TRAINING_PLANNER.md)
+- Step-by-step first run: [`docs/LORA_SMOKE_RUNBOOK.md`](../docs/LORA_SMOKE_RUNBOOK.md)
+
+**No live smoke run has been performed.** No model has been downloaded and no adapter
+exists in this repository. `SFT_QLORA` is planned but not executed; `DPO_LORA` is refused
+by the executor. Adapter evaluation and Model Registry promotion are S3C and are not
+started.
