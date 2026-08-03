@@ -90,11 +90,19 @@ def test_the_parser_builds_without_side_effects(tmp_path):
     assert sorted(tmp_path.iterdir()) == []
 
 
-def test_the_help_text_states_that_execution_is_refused():
+def test_the_help_text_states_what_execution_requires():
     text = cli.build_parser().format_help()
-    assert "never trains" in text
-    assert "S3B" in text
+    assert "never installs" in text
+    assert "TRAIN:<plan-hash>" in text
     assert "--dry-run" in text and "--execute" in text and "--confirm" in text
+
+
+def test_no_flag_names_a_backend_module_class_or_executable():
+    """A configurable backend is arbitrary code execution wearing a settings file."""
+    text = cli.build_parser().format_help()
+    for forbidden in ("--backend", "--trainer", "--executor", "--entrypoint",
+                      "--fake-backend", "--backend-module"):
+        assert forbidden not in text
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,48 +178,64 @@ def test_no_invocation_imports_a_training_framework(config_path, tmp_path, capsy
 # ══════════════════════════════════════════════════════════════════════════════
 #  Execution is refused
 # ══════════════════════════════════════════════════════════════════════════════
-def test_execute_exits_nonzero_and_explains(config_path, tmp_path, capsys):
+def test_execute_without_a_confirmation_is_refused_above_every_effect(
+        config_path, tmp_path, capsys):
+    """Refused before the backend registry is consulted, so nothing is loaded."""
     assert run(config_path, tmp_path, "--execute", "--json") == cli.EXIT_REFUSED
     body = payload(capsys)
     assert body["ok"] is False
-    assert body["execution_backend"] == "not_implemented_until_s3b"
     assert body["trained_anything"] is False
-    assert body["created_adapter"] is False
-    assert body["downloaded_anything"] is False
-    assert "S3B" in body["error"]
+    assert "TRAIN:<plan-hash>" in body["error"]
+    assert "nothing was started" in body["error"]
+    assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "training_runs.jsonl").exists()
 
 
-def test_execute_with_a_valid_confirmation_still_refuses_and_does_not_consume_it(
+def test_a_valid_confirmation_still_refuses_when_the_packages_are_absent(
         config_path, tmp_path, capsys):
+    """The plan is NOT spent by a gate that fires before anything irreversible.
+
+    This host does not have the optional training profile installed, which makes it the
+    natural place to assert the ordering the milestone depends on: a refusal that costs
+    the operator their one-shot approval would be a refusal that punishes them for a
+    missing package.
+    """
     from training_gym.training.config import load_training_config
     from training_gym.training.planner import plan_training
 
     config = load_training_config(config_path)
     token = plan_training(config, dataset_root=tmp_path,
                           output_root=tmp_path).plan.confirmation_token()
-    assert run(config_path, tmp_path, "--execute", "--confirm", token,
-               "--json") == cli.EXIT_REFUSED
+    code = run(config_path, tmp_path, "--execute", "--confirm", token, "--json")
+    assert code != cli.EXIT_OK
     body = payload(capsys)
-    assert body["confirmation_consumed"] is False
-    assert "NOT consumed" in body["confirmation"]
+    assert body["ok"] is False
+    assert body["plan_consumed"] is False
     assert body["trained_anything"] is False
+    assert body["created_adapter"] is False
+    assert body["downloaded_anything"] is False
+    assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "training_runs.jsonl").exists()
 
 
 @pytest.mark.parametrize("token", ["yes", "true", "TRAIN:" + "a" * 12, "@/tmp/tok",
                                    "TRAIN:" + "b" * 64])
-def test_execute_with_a_bad_confirmation_reports_the_rejection_and_still_refuses(
+def test_execute_with_a_bad_confirmation_refuses_and_spends_nothing(
         config_path, tmp_path, capsys, token):
-    assert run(config_path, tmp_path, "--execute", "--confirm", token,
-               "--json") == cli.EXIT_REFUSED
+    code = run(config_path, tmp_path, "--execute", "--confirm", token, "--json")
+    assert code != cli.EXIT_OK
     body = payload(capsys)
-    assert "rejected" in body["confirmation"]
-    assert body["confirmation_consumed"] is False
+    assert body["ok"] is False
+    assert body["plan_consumed"] is False
+    assert body["trained_anything"] is False
+    assert not (tmp_path / "runs").exists()
+    assert not (tmp_path / "training_runs.jsonl").exists()
 
 
 def test_a_confirmation_without_execute_is_refused(config_path, tmp_path, capsys):
     assert run(config_path, tmp_path, "--confirm", "TRAIN:" + "a" * 64,
                "--json") == cli.EXIT_REFUSED
-    assert "has none to authorise" in payload(capsys)["error"]
+    assert "--execute" in payload(capsys)["error"]
 
 
 def test_dry_run_and_confirm_are_contradictory(config_path, tmp_path, capsys):

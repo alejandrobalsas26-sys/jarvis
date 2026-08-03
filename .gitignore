@@ -86,3 +86,14 @@ dataset_candidates/
 training_gym_datasets/
 training_gym_exports/
 jarvis/logs/training_gym_datasets/
+
+# v69 M62 S3B TRAINING GYM EXECUTION — run directories, adapters, checkpoints, the
+# quarantine tree and the plan-consumption ledger. These name the exact dataset digests
+# a model was fitted on and hold real adapter weights; they are reviewed locally and
+# NEVER committed or packaged.
+training_runs/
+training_adapters/
+training_checkpoints/
+training_quarantine/
+training_runs.jsonl
+jarvis/logs/training_runs/

@@ -1,10 +1,22 @@
 # Generated training artifacts — never commit run outputs, adapters, or logs.
+#
+# This list is an allowlist of names, so every NEW generated artifact has to be added
+# here deliberately. M62 S3B adds three: the plan-consumption ledger, the quarantine
+# tree a failed or interrupted run is moved into, and any checkpoint tree a future
+# bounded policy enables. The bare *.jsonl rule is the backstop for the next one
+# nobody remembers to list -- a run ledger records which dataset digests an operator
+# trained on, and it is reviewed locally rather than published.
 runs/
 adapters/
 logs/
 configs/*.json
 datasets/
 manifests/*.json
+quarantine/
+checkpoints/
+training_runs.jsonl
+*.jsonl
+*.safetensors
 
 # Keep the directory structure, the docs and the reviewed sample configs tracked.
 # A generated run config carries a specific dataset digest and belongs to one operator's

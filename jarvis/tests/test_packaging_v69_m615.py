@@ -91,7 +91,9 @@ def test_manifest_excludes_every_secret(secret):
     assert f"exclude {secret}" in _manifest()
 
 
-@pytest.mark.parametrize("tree", ["data", "logs", ".venv", "brain", "tests", ".github"])
+@pytest.mark.parametrize("tree", ["data", "logs", ".venv", "brain", "tests", ".github",
+                                 "training", "training_gym_datasets",
+                                 "training_gym_exports"])
 def test_manifest_prunes_state_and_dev_trees(tree):
     assert f"prune {tree}" in _manifest()
 

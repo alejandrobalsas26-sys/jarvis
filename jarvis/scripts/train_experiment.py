@@ -9,17 +9,22 @@ verifies the dataset it names, reports which packages and which hardware are act
 present, produces a deterministic plan and prints the token that would authorise that
 plan and no other.
 
-It does NOT train. There is no trainer, no optimizer, no adapter writer and no
-checkpoint writer in this stage; the execution backend ships in S3B. `--execute` does
-not "fail" — it refuses, explains, and exits nonzero, because there is no branch here
-that leads to a training loop.
+Since M62 S3B it can also EXECUTE one bounded SFT-LoRA run — but only when the optional
+training packages are installed, the dataset re-verifies byte for byte, the model
+revision is immutable, the weights are already cached (or an explicit download
+authorisation is supplied) and the operator passes the exact ``TRAIN:<plan-hash>`` token
+that this config's plan prints. The default remains a dry run, and no live smoke has ever
+been performed against a real model.
 
 SAFETY PROPERTIES, ASSERTED BY TESTS
 ------------------------------------
   * importing this module performs no I/O and contacts no network; every effect is
     inside ``main``;
   * the default is a dry run. There is no flag that makes execution the default, and
-    ``--execute`` is refused whether or not a valid ``--confirm`` accompanies it;
+    ``--execute`` without ``--confirm`` is refused ABOVE every effect — before the
+    backend registry is consulted, so nothing that could import a framework is loaded;
+  * there is no flag naming a backend module, class or executable. A configurable
+    backend is an arbitrary-code-execution primitive wearing a settings file;
   * ``--allow-model-download`` changes only what the report says a *future* execution
     would require. Nothing here downloads anything under any combination of flags;
   * ``--confirm`` takes the literal ``TRAIN:<plan-hash>`` token on the command line. It
@@ -33,7 +38,9 @@ SAFETY PROPERTIES, ASSERTED BY TESTS
     bitsandbytes, huggingface_hub or tokenizers, invokes pip, spawns a subprocess or
     opens a socket.
 
-Exit codes: ``0`` success, ``1`` refused or verification failed, ``2`` bad invocation.
+Exit codes: ``0`` success, ``1`` refused or verification failed, ``2`` bad invocation,
+and a distinct code per failure category (see ``_exit_codes``) so a wrapper can tell "your
+dataset moved" from "your GPU is missing" without parsing prose.
 """
 from __future__ import annotations
 
@@ -49,6 +56,20 @@ if _ROOT not in sys.path:  # pragma: no cover — layout shim, exercised by both
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_USAGE = 2
+#: Distinct codes so a wrapper can tell "your dataset moved" from "your GPU is missing"
+#: without parsing prose. Every one of them means nothing was completed.
+EXIT_CONFIG = 10
+EXIT_DATASET = 11
+EXIT_DEPENDENCY = 12
+EXIT_HARDWARE = 13
+EXIT_CONFIRMATION = 14
+EXIT_REPLAY = 15
+EXIT_UNSUPPORTED = 16
+EXIT_MODEL_ACCESS = 17
+EXIT_BACKEND = 18
+EXIT_INTERRUPTED = 19
+EXIT_ARTIFACT = 20
+EXIT_INTERNAL = 21
 
 #: Defaults chosen by application policy, never by the config file. A config names an
 #: output ROOT ID; the root itself is an operator/deployment decision.
@@ -91,6 +112,23 @@ def _fail(message: str, *, as_json: bool) -> int:
     _emit({"ok": False, "error": _scrub(message), "trained_anything": False,
            "wrote_anything": False}, as_json=as_json)
     return EXIT_REFUSED
+
+
+def _exit_codes() -> dict:
+    """Map an error category onto its exit code. Imported lazily, like everything else."""
+    from training_gym.training.run_store import ErrorCategory as _C
+
+    return {
+        _C.CONFIGURATION: EXIT_CONFIG, _C.DATASET: EXIT_DATASET,
+        _C.DEPENDENCY: EXIT_DEPENDENCY, _C.HARDWARE: EXIT_HARDWARE,
+        _C.STALE_PLAN: EXIT_CONFIRMATION, _C.CONFIRMATION: EXIT_CONFIRMATION,
+        _C.REPLAY: EXIT_REPLAY, _C.UNSUPPORTED_METHOD: EXIT_UNSUPPORTED,
+        _C.MODEL_ACCESS: EXIT_MODEL_ACCESS, _C.TOKENIZER: EXIT_BACKEND,
+        _C.BACKEND: EXIT_BACKEND, _C.OUT_OF_MEMORY: EXIT_BACKEND,
+        _C.DISK_FULL: EXIT_BACKEND, _C.INTERRUPTED: EXIT_INTERRUPTED,
+        _C.INVALID_METRICS: EXIT_ARTIFACT, _C.ARTIFACT: EXIT_ARTIFACT,
+        _C.INTERNAL: EXIT_INTERNAL, _C.NONE: EXIT_REFUSED,
+    }
 
 
 def _load(args):
@@ -190,48 +228,95 @@ def _check_hardware(args) -> int:
 
 
 def _execute(args) -> int:
-    """Refuse, and explain. This is the only execution path that exists.
+    """The real execution path. Refuses before anything is spent, or runs one job.
 
-    The plan is still computed, so the operator sees exactly what *would* run and why it
-    did not — a bare "not implemented" would leave them unable to tell a missing backend
-    from a rejected config. The confirmation is never consumed: there is nothing to
-    consume it against.
+    ``--execute`` without ``--confirm`` is refused HERE, before the backend registry is
+    consulted and therefore before any module that could import a framework is loaded.
+    That ordering is the reason ``--execute --json`` still creates nothing and loads
+    nothing: the refusal happens above every effect, not inside one.
     """
-    from training_gym.training.plan import (
-        ExecutionNotImplemented,
-        check_training_confirmation,
-        refuse_execution,
-    )
+    if not args.confirm:
+        return _fail(
+            "--execute requires the exact TRAIN:<plan-hash> token this config's plan "
+            "prints. Run without --execute to see the plan, read it, then pass the "
+            "token it names; nothing was started, created or downloaded",
+            as_json=args.json)
 
-    _config, result = _plan(args)
-    confirmation_syntax = "not supplied"
-    if args.confirm:
-        try:
-            check_training_confirmation(args.confirm, result.plan)
-            confirmation_syntax = "valid for this plan, and NOT consumed"
-        except Exception as exc:  # noqa: BLE001 — reported, never raised past here
-            confirmation_syntax = _scrub(f"rejected: {exc}")
-    try:
-        refuse_execution(result.plan)
-    except ExecutionNotImplemented as exc:
-        _emit({"ok": False, "error": _scrub(exc), "stage": "m62.s3a",
-               "execution_backend": "not_implemented_until_s3b",
-               "plan_hash": result.plan.plan_hash(),
-               "confirmation": confirmation_syntax,
-               "confirmation_consumed": False,
-               "trained_anything": False, "wrote_anything": False,
-               "downloaded_anything": False, "created_adapter": False},
-              as_json=args.json)
-    return EXIT_REFUSED
+    from training_gym.training.execution import execute_training
+
+    config = _load(args)
+    backend = _backend_for(args)
+    outcome = execute_training(
+        config, dataset_root=args.dataset_root, output_root=args.output_root,
+        confirmation=args.confirm, backend=backend,
+        train_file=_train_file(args, config), actor=_safe_actor(),
+        at=_utc_now(), nonce=_nonce(),
+        export_root=args.export_root or args.dataset_root,
+        model_cache_root=args.model_cache_root or None,
+        allow_model_download=bool(args.allow_model_download))
+    payload = outcome.to_dict()
+    payload["ok"] = outcome.ok
+    payload["problems"] = [_scrub(p) for p in outcome.problems]
+    payload["trained_anything"] = outcome.ok
+    payload["downloaded_anything"] = False
+    payload["created_adapter"] = outcome.ok
+    _emit(payload, as_json=args.json)
+    return EXIT_OK if outcome.ok else _exit_codes().get(outcome.error_category,
+                                                        EXIT_REFUSED)
+
+
+def _backend_for(args):
+    """Resolve the production backend. There is no flag that names a different one.
+
+    A configurable backend is an arbitrary-code-execution primitive wearing a settings
+    file: whoever can write the config chooses what runs inside the process that just
+    loaded a verified dataset and holds the operator's approval. Tests inject their
+    double by calling ``execute_training`` directly.
+    """
+    del args
+    from training_gym.training.backends import get_backend
+
+    return get_backend("transformers_peft")
+
+
+def _train_file(args, config) -> str:
+    """Where the verified SFT export for this config's dataset version lives."""
+    from training_gym.datasets.export import SFT_FILENAME, export_dir
+
+    reference = config.dataset_reference
+    root = args.export_root or args.dataset_root
+    return str(export_dir(root, reference.dataset_id, reference.dataset_version)
+               / SFT_FILENAME)
+
+
+def _safe_actor() -> str:
+    """A constant, never the OS username. The ledger records that a local operator ran
+    this; who they are belongs to the shell's own audit trail, not to a file that gets
+    pasted into tickets."""
+    return "local-operator"
+
+
+def _nonce() -> str:
+    """A short, safe, unique suffix for a quarantine directory name."""
+    import secrets
+
+    return secrets.token_hex(4)
+
+
+def _utc_now() -> str:
+    import datetime
+
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_experiment",
-        description="V69 M62 S3A — plan a LoRA fine-tuning experiment. Validates, "
-                    "verifies and reports; never trains, downloads or installs.",
-        epilog="The default is a dry run. --execute is refused in this stage: the "
-               "training backend ships in M62 S3B.")
+        description="V69 M62 — plan and run a LoRA fine-tuning experiment. Validates, "
+                    "verifies and reports; never installs and never downloads without "
+                    "explicit authorisation.",
+        epilog="The default is a dry run. --execute requires the exact "
+               "TRAIN:<plan-hash> token the plan prints, and spends it exactly once.")
     parser.add_argument("--config", required=True,
                         help="path to a training configuration JSON document")
     parser.add_argument("--json", action="store_true",
@@ -262,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--check-hardware", action="store_true",
                       help="report measured host capability; runs no accelerator probe")
     mode.add_argument("--execute", action="store_true",
-                      help="REFUSED in this stage — the training backend ships in S3B")
+                      help="run the experiment; requires --confirm TRAIN:<plan-hash>")
 
     parser.add_argument("--allow-model-download", action="store_true",
                         help="report what a FUTURE execution would need in order to "
@@ -286,8 +371,8 @@ def main(argv: list[str] | None = None) -> int:
     as_json = bool(args.json)
 
     if args.confirm and not args.execute:
-        return _fail("--confirm authorises an execution, and this stage has none to "
-                     "authorise; run without it to see the plan and its token",
+        return _fail("--confirm authorises an execution; pass --execute alongside it, "
+                     "or run without either to see the plan and its token",
                      as_json=as_json)
     if args.dry_run and args.confirm:
         return _fail("--dry-run and --confirm are contradictory; pass one",

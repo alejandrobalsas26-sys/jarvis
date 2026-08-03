@@ -932,3 +932,154 @@ def test_the_outcome_document_is_screened_and_bounded(world):
                        backend=FakeTrainingBackend(mode=FakeMode.EXCEPTION))
     assert json.dumps(failed.to_dict())
     assert failed.to_dict()["completed"] is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  71..80 — the production backend, verified structurally
+# ══════════════════════════════════════════════════════════════════════════════
+#  It has never been run against a model, so "it trains" is not asserted here — that is
+#  a claim only a live run can support. What IS asserted is every property that must hold
+#  whether or not it works: that it cannot reach a hub, cannot enable remote code, cannot
+#  fall back to a pickle, and cannot execute DPO or QLoRA. These are read off the source,
+#  because importing the module's dependencies is exactly what this milestone will not do.
+def _backend_source() -> str:
+    import training_gym.training.backends.transformers_peft as production
+
+    return Path(production.__file__).read_text(encoding="utf-8")
+
+
+def _backend_code() -> str:
+    """The module's executable code, with every docstring and comment removed.
+
+    Reconstructed from the AST rather than read as text. The same exemption the
+    repository's own purity scanner makes, and for the same reason: this module explains
+    at length why ``report_to="all"``, ``DataCollatorForCompletionOnlyLM`` and a pickle
+    fallback are avoided, and a scan that could not tell prose from code would forbid
+    documenting the decision — which is the opposite of what it is for.
+    """
+    import ast
+
+    tree = ast.parse(_backend_source())
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and body:
+            first = body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
+def test_the_production_backend_imports_no_framework_at_module_level():
+    before = _ml_modules()
+    import training_gym.training.backends.transformers_peft as production
+
+    assert _ml_modules() == before
+    assert production.build_backend().backend_id == "transformers_peft"
+    assert _ml_modules() == before
+
+
+def test_the_production_backend_satisfies_the_protocol_without_a_framework():
+    backend = require_backend(get_backend("transformers_peft"))
+    assert backend.supports(TrainingMethod.SFT_LORA)
+    assert not backend.supports(TrainingMethod.SFT_QLORA)
+    assert not backend.supports(TrainingMethod.DPO_LORA)
+    assert backend.version()
+
+
+def test_the_production_backend_refuses_qlora_and_dpo_before_importing_anything(world):
+    backend = get_backend("transformers_peft")
+    before = _ml_modules()
+    for method in (TrainingMethod.SFT_QLORA, TrainingMethod.DPO_LORA):
+        request = _bare_request(world, method)
+        problems = backend.readiness(request)
+        assert problems, method
+    assert _ml_modules() == before
+
+
+def _bare_request(world: World, method: TrainingMethod):
+    from training_gym.training.backend import ExecutionRequest
+
+    config = world.config(method=method)
+    planning = world.planning(config)
+    return ExecutionRequest(
+        config=config, plan=planning.plan, run_directory=world.output_root,
+        train_file=world.train_file, validation_file=None, device="cpu",
+        precision="fp32")
+
+
+@pytest.mark.parametrize("forbidden", [
+    "push_to_hub=True", "wandb", "mlflow", "tensorboard", "comet_ml", "neptune",
+    "report_to=\"all\"", "trust_remote_code=True", "safe_serialization=False",
+    "subprocess", "shell=True", "os.system", "pip install", "urlopen", "requests.get",
+    "DPOTrainer", "DataCollatorForCompletionOnlyLM", "torch.load", "pickle",
+])
+def test_the_production_backend_contains_no_forbidden_construct(forbidden):
+    assert forbidden not in _backend_code(), forbidden
+
+
+@pytest.mark.parametrize("required", [
+    "trust_remote_code=TRUST_REMOTE_CODE", "local_files_only=local_only",
+    "safe_serialization=True", "report_to=[]", "push_to_hub=False",
+    "revision=config.base_model_revision", "revision=config.tokenizer_revision",
+    "output_dir=str(request.run_directory)",
+])
+def test_the_production_backend_pins_every_safety_critical_argument(required):
+    assert required in _backend_code(), required
+
+
+def test_remote_code_is_a_module_constant_and_is_false():
+    import training_gym.training.backends.transformers_peft as production
+
+    assert production.TRUST_REMOTE_CODE is False
+
+
+def test_local_files_only_is_the_default_and_only_a_flag_widens_it():
+    source = _backend_code()
+    assert "local_only = not request.allow_model_download" in source
+    # Both loaders must consult it; one that did not would fetch silently.
+    assert source.count("local_files_only=local_only") == 2
+
+
+def test_the_all_linear_policy_is_unwrapped_to_the_string_peft_expects():
+    """``("all-linear",)`` makes PEFT look for a module literally named ``all-linear``."""
+    from training_gym.training.backends.transformers_peft import _target_modules
+    from training_gym.training.config import LoRATargetPolicy
+
+    assert _target_modules(LoRATargetPolicy.ALL_LINEAR) == "all-linear"
+    assert _target_modules(LoRATargetPolicy.ATTENTION_ONLY) == [
+        "q_proj", "k_proj", "v_proj", "o_proj"]
+
+
+def test_a_missing_framework_is_a_named_refusal_and_never_an_install():
+    from training_gym.training.backends.transformers_peft import (
+        RUNTIME_PACKAGES,
+        RuntimeUnavailable,
+        _runtime,
+    )
+
+    assert set(RUNTIME_PACKAGES) == {"torch", "transformers", "peft"}
+    try:
+        _runtime()
+    except RuntimeUnavailable as exc:
+        assert "Install the optional profile yourself" in str(exc)
+    else:  # pragma: no cover — only on a host that has the packages
+        pytest.skip("the optional training profile is installed on this host")
+
+
+def test_the_masking_self_test_cannot_pass_by_having_nothing_to_check():
+    from training_gym.training.backends.transformers_peft import TransformersPeftBackend
+
+    backend = TransformersPeftBackend()
+    assert not backend._masking_self_test([]).verified
+    unmasked = [{"labels": [1, 2, 3, 4], "prompt_length": 2}]
+    assert not backend._masking_self_test(unmasked).verified
+    nothing_supervised = [{"labels": [LOSS_IGNORE_INDEX] * 4, "prompt_length": 2}]
+    assert not backend._masking_self_test(nothing_supervised).verified
+    good = [{"labels": [LOSS_IGNORE_INDEX, LOSS_IGNORE_INDEX, 7, 8],
+             "prompt_length": 2}]
+    evidence = backend._masking_self_test(good)
+    assert evidence.verified
+    assert evidence.probe_prompt_tokens == 2
+    assert evidence.probe_completion_tokens == 2
