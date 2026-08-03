@@ -14,3 +14,13 @@ training_gym_datasets/
 training_gym_exports/
 teacher_packets/
 training_gym_artifacts/
+
+# V69 M62 S3C ADAPTER EVALUATION — generations, reports, proposals and the ledger.
+# They quote held-out task material and both models' responses; reviewed locally and
+# NEVER committed or packaged.
+evaluation_runs/
+evaluation_artifacts/
+evaluation_reports/
+evaluation_quarantine/
+model_candidate_proposals/
+evaluation_runs.jsonl

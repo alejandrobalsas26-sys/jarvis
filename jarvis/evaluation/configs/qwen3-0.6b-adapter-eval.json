@@ -1,0 +1,53 @@
+{
+  "schema_version": "m62.1",
+  "evaluation_schema_version": "m62.evaluation.1",
+  "evaluation_id": "qwen3-0-6b-adapter-eval",
+  "evaluation_generation": 1,
+  "baseline_model": {
+    "provider": "huggingface",
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "REQUIRED_IMMUTABLE_REVISION",
+    "parameters_b": 0.6,
+    "family": "qwen3",
+    "tokenizer_id": "Qwen/Qwen3-0.6B",
+    "tokenizer_revision": "REQUIRED_IMMUTABLE_REVISION",
+    "license_reference": "see the model card on the hub"
+  },
+  "candidate_adapter": {
+    "run_id": "REPLACE-ME",
+    "expected_manifest_hash": "",
+    "expected_plan_hash": ""
+  },
+  "dataset": {
+    "dataset_id": "REPLACE-ME",
+    "dataset_version": "REPLACE-ME"
+  },
+  "splits": {
+    "splits": ["hidden_evaluation", "security_regression"],
+    "diagnostic_splits": []
+  },
+  "generation": {
+    "mode": "greedy_deterministic",
+    "max_new_tokens": 512,
+    "max_input_tokens": 4096,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "stop_sequences": [],
+    "seed": 11,
+    "timeout_s": 120,
+    "batch_size": 1,
+    "truncation_side": "refuse",
+    "device_policy": "auto_safe",
+    "precision_policy": "auto_safe"
+  },
+  "seed": 11,
+  "created_at_utc": "2026-08-03T00:00:00Z",
+  "limitations": [
+    "every gate threshold in this configuration is an initial policy value and has not been calibrated against a measured distribution",
+    "no adapter has been evaluated on this repository, so nothing here has been validated against a real comparison"
+  ],
+  "notes": "Template. Replace every REQUIRED_ and REPLACE-ME value before use. The base model revision must be a full 40-character commit sha: a mutable tag names a different model tomorrow, and a comparison against it is not reproducible."
+}

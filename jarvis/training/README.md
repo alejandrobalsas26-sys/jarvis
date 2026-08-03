@@ -90,3 +90,17 @@ written last, after every other file has been re-hashed from disk, so no partial
 exists in this repository. `SFT_QLORA` is planned but not executed; `DPO_LORA` is refused
 by the executor. Adapter evaluation and Model Registry promotion are S3C and are not
 started.
+
+## V69 M62 S3C — adapter evaluation
+
+`python -m scripts.evaluate_adapter` compares a pinned base model against the same base
+model plus a verified adapter. It is dry-run by default and creates nothing; `--execute`
+refuses on every host today and names which precondition is missing.
+
+An adapter produced by a run under `runs/` is the *input* to that comparison. Its outputs
+live under `evaluation/`, not here. See `docs/V69_M62_S3C_ADAPTER_EVALUATION.md` and
+`docs/ADAPTER_EVALUATION_RUNBOOK.md`.
+
+**No adapter has been evaluated.** The production evaluation backend has never been run
+against a model, and every report this build can produce carries
+`empirical_status: synthetic_only`.

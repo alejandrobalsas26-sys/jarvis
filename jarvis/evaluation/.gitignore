@@ -1,0 +1,26 @@
+# Generated adapter-evaluation artifacts — never commit evaluation outputs.
+#
+# This list is an allowlist of names, so every NEW generated artifact has to be added
+# here deliberately. An evaluation generation holds the exact held-out prompts a model
+# was asked, both models' responses, and the plan-consumption ledger that records which
+# dataset digests were evaluated against. All of it is reviewed locally.
+#
+# The bare *.jsonl rule is the backstop for the next one nobody remembers to list: the
+# task pack, both arms' results and the paired comparisons are all JSONL.
+evaluations/
+reports/
+proposals/
+quarantine/
+evaluation_quarantine/
+configs/*.json
+*.jsonl
+evaluation_runs.jsonl
+
+# Keep the directory structure, the docs and the reviewed sample config tracked.
+# A generated evaluation config names a specific adapter run and a specific dataset
+# digest and belongs to one operator's evaluation; the template carries only REQUIRED_
+# and REPLACE-ME placeholders and is reviewed like any source file, so it is the one
+# JSON here that is committed.
+!README.md
+!.gitignore
+!configs/qwen3-0.6b-adapter-eval.json

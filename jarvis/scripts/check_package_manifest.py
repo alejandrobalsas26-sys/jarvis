@@ -60,6 +60,13 @@ FORBIDDEN_DIRS = (
     # source, and a distribution carrying one would be shipping the operator's corpus.
     "/dataset_candidates/", "/training_gym_datasets/", "/training_gym_exports/",
     "/teacher_packets/", "/training_gym_artifacts/",
+    # V69 M62 S3C — generated adapter evaluations quote held-out task material and both
+    # models' responses. `/evaluation/` is the generated OUTPUT root; the reviewed
+    # `evaluation/configs/` template is a tracked source file and is not matched here
+    # because the fragment requires the directory to be an interior path component.
+    "/evaluation/evaluations/", "/evaluation/reports/", "/evaluation/proposals/",
+    "/evaluation_runs/", "/evaluation_artifacts/", "/evaluation_reports/",
+    "/evaluation_quarantine/", "/model_candidate_proposals/",
 )
 
 #: Members that MUST be present for the distribution to be usable.

@@ -279,6 +279,15 @@ paths.
 
 ## What comes next
 
-S3C — adapter evaluation against the held-out and security-regression splits, then Model
-Registry promotion. Neither is started. No adapter has been registered, evaluated,
-promoted or activated, and no model-role assignment has changed.
+S3C — adapter evaluation against the held-out and security-regression splits — has now
+shipped: see [`V69_M62_S3C_ADAPTER_EVALUATION.md`](V69_M62_S3C_ADAPTER_EVALUATION.md).
+It builds the machinery that decides whether an adapter is better and still safe, and it
+consumes a completed run from this stage as its input.
+
+It changes nothing about the statements above. **No adapter has been registered,
+evaluated, promoted or activated, and no model-role assignment has changed.** S3C has
+never been run against a model either: its production backend is proved structurally, and
+every report it can currently produce carries `empirical_status: synthetic_only`.
+
+Model Registry promotion remains unstarted. S3C's registry bridge produces a proposal
+document and writes no registry.

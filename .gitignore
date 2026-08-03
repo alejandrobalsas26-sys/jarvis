@@ -97,3 +97,20 @@ training_checkpoints/
 training_quarantine/
 training_runs.jsonl
 jarvis/logs/training_runs/
+
+# v69 M62 S3C ADAPTER EVALUATION — evaluation generations, held-out task packs, both
+# arms' responses, paired comparisons, reports, the plan-consumption ledger, the
+# quarantine tree and Model Registry proposal documents. Every one of these quotes
+# held-out task material and model output; they are reviewed locally and NEVER committed
+# or packaged.
+evaluation_runs/
+evaluation_artifacts/
+evaluation_reports/
+evaluation_quarantine/
+model_candidate_proposals/
+evaluation_runs.jsonl
+jarvis/logs/evaluation_runs/
+jarvis/evaluation/evaluations/
+jarvis/evaluation/reports/
+jarvis/evaluation/proposals/
+jarvis/evaluation/quarantine/
