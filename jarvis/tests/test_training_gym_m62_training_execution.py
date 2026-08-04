@@ -1105,6 +1105,58 @@ def test_the_all_linear_policy_is_unwrapped_to_the_string_peft_expects():
         "q_proj", "k_proj", "v_proj", "o_proj"]
 
 
+def test_chat_template_output_is_read_as_token_ids_on_every_transformers_shape():
+    """Regression, V69 M62 S3D — the first live smoke died here.
+
+    ``apply_chat_template(tokenize=True)`` returned ``list[int]`` on the
+    ``transformers>=4.44`` floor and returns a ``BatchEncoding`` on ``transformers>=5``.
+    The backend did ``list(prompt_ids)``, which on the newer shape yields the KEYS
+    ``["input_ids", "attention_mask"]`` — so prompt and full sequence both had "length 2",
+    ``build_labels`` saw no completion to supervise, and every row was refused with a
+    dataset error. No upper bound is pinned, so both shapes must be readable.
+    """
+    from training_gym.training.backends.transformers_peft import _token_ids
+
+    # transformers 4.x: a bare list of ids.
+    assert _token_ids([1, 2, 3], label="x") == [1, 2, 3]
+    # transformers 5.x: a mapping keyed by input_ids. The KEYS must never be the answer.
+    assert _token_ids({"input_ids": [1, 2, 3], "attention_mask": [1, 1, 1]},
+                      label="x") == [1, 2, 3]
+    # An unrequested batch dimension of exactly one.
+    assert _token_ids({"input_ids": [[1, 2, 3]]}, label="x") == [1, 2, 3]
+
+    class _Tensorish:
+        def tolist(self):
+            return [4, 5, 6]
+
+    assert _token_ids({"input_ids": _Tensorish()}, label="x") == [4, 5, 6]
+
+
+def test_an_unreadable_tokenizer_shape_is_refused_rather_than_guessed():
+    """Fail closed: a shape this cannot read must not become a masked sequence."""
+    from training_gym.training.backends.transformers_peft import _token_ids
+
+    for rendered in ({"attention_mask": [1, 1]}, [], "abc", None, 7,
+                     {"input_ids": []}, {"input_ids": ["a", "b"]},
+                     {"input_ids": [True, False]}):
+        with pytest.raises(DatasetConversionError):
+            _token_ids(rendered, label="row 0 prompt")
+
+
+def test_the_masking_check_still_rejects_a_prompt_that_is_the_whole_sequence():
+    """The normaliser must not have defeated the check it was blocking.
+
+    ``_token_ids`` fixed how the ids are READ. If a prompt really does consume the entire
+    sequence there is nothing to supervise, and that must still be a refusal — otherwise
+    this fix would have converted a loud failure into training on the question.
+    """
+    with pytest.raises(DatasetConversionError):
+        build_labels([1, 2, 3], [1, 2, 3])
+    with pytest.raises(DatasetConversionError):
+        build_labels([1, 2, 3], [1, 2])
+    assert build_labels([1, 2], [1, 2, 9]) == [-100, -100, 9]
+
+
 def test_a_missing_framework_is_a_named_refusal_and_never_an_install():
     """Asserted structurally, because CALLING ``_runtime()`` would import the frameworks.
 

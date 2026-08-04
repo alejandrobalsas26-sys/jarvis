@@ -120,6 +120,41 @@ def _target_modules(policy: LoRATargetPolicy):
     return list(modules)
 
 
+def _token_ids(rendered: object, *, label: str) -> list[int]:
+    """The flat token id list, whatever shape the installed ``transformers`` returned.
+
+    ``apply_chat_template(tokenize=True)`` returned a bare ``list[int]`` across the
+    ``transformers>=4.44`` floor this repository declares, and returns a ``BatchEncoding``
+    on ``transformers>=5``. ``list()`` of the latter yields its KEYS — ``["input_ids",
+    "attention_mask"]`` — so the prompt and the full sequence both "tokenized" to length
+    two, the assistant-only-loss check concluded there was no completion to supervise, and
+    every real row was refused. That is the failure mode the masking self-test exists to
+    catch, reached for the wrong reason.
+
+    ``requirements/training.txt`` asserts no upper bound, so the shape is normalised here
+    rather than assumed, and an unrecognised one is a refusal: a tokenizer whose output
+    this cannot read is not a tokenizer to guess about.
+    """
+    ids = rendered
+    if hasattr(ids, "keys") and "input_ids" in ids:  # BatchEncoding / dict, transformers 5
+        ids = ids["input_ids"]
+    if hasattr(ids, "tolist"):  # a tensor, if a future default ever returns one
+        ids = ids.tolist()
+    if isinstance(ids, (list, tuple)) and len(ids) == 1 and isinstance(
+            ids[0], (list, tuple)):
+        ids = ids[0]  # an unrequested batch dimension of exactly one
+    if not isinstance(ids, (list, tuple)) or not ids:
+        raise DatasetConversionError(
+            f"{label}: the tokenizer returned {type(rendered).__name__}, which this "
+            f"build cannot read as a token id sequence; refusing rather than training on "
+            f"whatever it happens to iterate as")
+    if not all(isinstance(token, int) and not isinstance(token, bool) for token in ids):
+        raise DatasetConversionError(
+            f"{label}: the tokenizer returned a sequence that is not token ids; refusing "
+            f"rather than masking a sequence whose elements are not tokens")
+    return list(ids)
+
+
 def _dtype(runtime: _Runtime, precision: str):
     """Map the selected precision onto a torch dtype. Unknown means fp32, never a guess."""
     table = {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32",
@@ -315,11 +350,16 @@ class TransformersPeftBackend:
         rows: list[dict] = []
         truncated = 0
         for record in dataset.records:
-            prompt_ids = tokenizer.apply_chat_template(
-                list(record.prompt_messages), tokenize=True,
-                add_generation_prompt=True)
-            full_ids = tokenizer.apply_chat_template(
-                list(record.messages), tokenize=True, add_generation_prompt=False)
+            prompt_ids = _token_ids(
+                tokenizer.apply_chat_template(
+                    list(record.prompt_messages), tokenize=True,
+                    add_generation_prompt=True),
+                label=f"row {record.row_index} prompt")
+            full_ids = _token_ids(
+                tokenizer.apply_chat_template(
+                    list(record.messages), tokenize=True,
+                    add_generation_prompt=False),
+                label=f"row {record.row_index} full sequence")
             labels = build_labels(list(prompt_ids), list(full_ids))
             if len(full_ids) > max_length:
                 truncated += 1
