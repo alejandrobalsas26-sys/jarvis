@@ -426,7 +426,18 @@ def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig
         return _failed(record=record, directory=directory, output_root=output_root,
                        plan=plan, actor=actor, at=at, nonce=nonce, config=config,
                        category=ErrorCategory.INVALID_METRICS, problems=(str(exc),))
-    except (SchemaError, OSError, RuntimeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — see below; every ending must be a run state
+        # Deliberately every remaining exception type, not an enumerated few. This block
+        # used to name (SchemaError, OSError, RuntimeError, ValueError), which omitted
+        # exactly the classes a framework API change raises: the first live smoke hit
+        # `TypeError: TrainingArguments.__init__() got an unexpected keyword argument`,
+        # the exception escaped this function, and the run was left in RUNNING with no
+        # terminal state, no quarantine and no terminal ledger line -- residue under
+        # `runs/` that the milestone promises can never exist. The plan is already spent
+        # by the time control reaches here, so there is no ending that may leave the run
+        # record un-terminated. `InterruptionRequested` and `KeyboardInterrupt` are
+        # handled above and `KeyboardInterrupt` is a `BaseException`, so neither is
+        # swallowed here.
         return _failed(record=record, directory=directory, output_root=output_root,
                        plan=plan, actor=actor, at=at, nonce=nonce, config=config,
                        category=ErrorCategory.BACKEND,

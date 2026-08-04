@@ -1105,6 +1105,93 @@ def test_the_all_linear_policy_is_unwrapped_to_the_string_peft_expects():
         "q_proj", "k_proj", "v_proj", "o_proj"]
 
 
+def test_an_unexpected_backend_exception_still_ends_as_a_quarantined_failure(world):
+    """Regression, V69 M62 S3D — the second live smoke left residue under ``runs/``.
+
+    ``_run`` enumerated ``(SchemaError, OSError, RuntimeError, ValueError)``, which omits
+    exactly the classes a framework API change raises. The live smoke hit
+    ``TypeError: TrainingArguments.__init__() got an unexpected keyword argument
+    'save_safetensors'``; the exception escaped ``execute_training`` entirely, so the run
+    stayed in RUNNING with no terminal state, no quarantine and no terminal ledger line --
+    residue the milestone promises cannot exist, and which `_escaped_files` would then
+    fail every later run against.
+
+    The plan is already spent by the time a backend runs, so there is no ending that may
+    leave the run un-terminated.
+    """
+    class ExplodingBackend(FakeTrainingBackend):
+        def execute(self, request, *, cancellation):
+            raise TypeError("got an unexpected keyword argument 'save_safetensors'")
+
+    outcome = world.run(backend=ExplodingBackend())
+
+    assert not outcome.ok
+    assert outcome.state is TrainingRunState.FAILED
+    assert outcome.error_category is ErrorCategory.BACKEND
+    assert any("TypeError" in p for p in outcome.problems)
+    assert outcome.plan_consumed
+    assert outcome.quarantined_as
+    # The run directory must not remain under runs/ -- that is what breaks later runs.
+    assert not world.run_directory.exists()
+    events = [e["event"] for e in training_entries(world.output_root)]
+    assert events == ["started", "failed"]
+
+
+@pytest.mark.parametrize("exception", [
+    TypeError("unexpected keyword argument"), AttributeError("moved in 5.0"),
+    KeyError("input_ids"), ImportError("cannot import name"), ZeroDivisionError(),
+])
+def test_every_backend_exception_class_becomes_a_run_state(world, exception):
+    """Not just TypeError. Any exception class must end as a run, never as residue."""
+    class ExplodingBackend(FakeTrainingBackend):
+        def execute(self, request, *, cancellation):
+            raise exception
+
+    outcome = world.run(backend=ExplodingBackend())
+    assert outcome.state is TrainingRunState.FAILED
+    assert not world.run_directory.exists()
+
+
+def test_save_safetensors_is_passed_only_when_the_installed_build_takes_it():
+    """Regression, V69 M62 S3D — the keyword transformers 5 removed.
+
+    It governed intermediate checkpoints only. The adapter itself is written by
+    ``save_pretrained(..., safe_serialization=True)``, which is unconditional, and the
+    artifact policy refuses every pickle-shaped suffix regardless -- so omitting the
+    keyword on a build that no longer defines it drops nothing that was enforcing
+    anything.
+    """
+    from training_gym.training.backends.transformers_peft import (
+        _accepts,
+        _serialization_options,
+    )
+
+    class OldTrainingArguments:  # transformers 4.x
+        def __init__(self, output_dir, save_safetensors=True):
+            pass
+
+    class NewTrainingArguments:  # transformers 5.x
+        def __init__(self, output_dir):
+            pass
+
+    old = type("M", (), {"TrainingArguments": OldTrainingArguments})
+    new = type("M", (), {"TrainingArguments": NewTrainingArguments})
+
+    assert _serialization_options(old) == {"save_safetensors": True}
+    assert _serialization_options(new) == {}
+    assert _accepts(OldTrainingArguments, "save_safetensors") is True
+    assert _accepts(NewTrainingArguments, "save_safetensors") is False
+
+
+def test_the_adapter_write_itself_is_unconditionally_safetensors():
+    """The conditional keyword must not have reached the adapter's own serialization."""
+    source = _backend_code()
+    assert "safe_serialization=True" in source
+    assert "safe_serialization=False" not in source
+    # The conditional applies to the trainer's checkpoints, never to save_pretrained.
+    assert "save_pretrained" in source
+
+
 def test_chat_template_output_is_read_as_token_ids_on_every_transformers_shape():
     """Regression, V69 M62 S3D — the first live smoke died here.
 

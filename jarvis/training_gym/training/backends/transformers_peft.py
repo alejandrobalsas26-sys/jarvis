@@ -120,6 +120,46 @@ def _target_modules(policy: LoRATargetPolicy):
     return list(modules)
 
 
+def _accepts(target: object, parameter: str) -> bool:
+    """Whether the installed ``TrainingArguments`` still takes this keyword.
+
+    Used for exactly one keyword — see :func:`_training_arguments`. Every other keyword is
+    passed unconditionally, so a future removal is a loud failure rather than a silently
+    dropped setting.
+    """
+    import inspect
+
+    try:
+        return parameter in inspect.signature(target).parameters
+    except (TypeError, ValueError):  # pragma: no cover — an unintrospectable callable
+        return False
+
+
+def _serialization_options(transformers: object) -> dict:
+    """``save_safetensors=True``, when the installed ``TrainingArguments`` still takes it.
+
+    ``transformers>=5`` removed the parameter: it dropped torch-pickle checkpoint
+    serialization entirely, so safetensors became the only format the trainer can write
+    and the flag no longer exists to be set. Passing it unconditionally raised
+    ``TypeError: TrainingArguments.__init__() got an unexpected keyword argument`` and
+    killed the first live smoke. No upper bound is pinned on transformers, so both builds
+    have to work.
+
+    Omitting it is safe only because it was never the thing enforcing the guarantee.
+    :mod:`training_gym.training.artifacts` refuses ``.bin``, ``.pt``, ``.pkl`` and every
+    other pickle-shaped suffix from a run directory and requires
+    ``adapter_model.safetensors`` by name, and the adapter itself is written by
+    ``save_pretrained(..., safe_serialization=True)`` below, which is unconditional. This
+    keyword only ever governed intermediate checkpoints, which this milestone does not
+    write by default.
+
+    Only this one keyword is conditional. Every other argument is passed unconditionally
+    so that a future removal is a loud failure rather than a silently dropped setting.
+    """
+    return ({"save_safetensors": True}
+            if _accepts(transformers.TrainingArguments, "save_safetensors") else {})
+
+
 def _token_ids(rendered: object, *, label: str) -> list[int]:
     """The flat token id list, whatever shape the installed ``transformers`` returned.
 
@@ -297,11 +337,12 @@ class TransformersPeftBackend:
             dataloader_num_workers=config.dataloader_workers,
             logging_steps=config.logging_interval_steps,
             save_strategy=config.checkpoint_strategy.value,
-            save_total_limit=config.max_checkpoints, save_safetensors=True,
+            save_total_limit=config.max_checkpoints,
             # Every remote integration, off. transformers defaults report_to="all",
             # which activates any tracker that merely happens to be importable and
             # reintroduces the exfiltration endpoint the config vocabulary removed.
-            report_to=[], push_to_hub=False, disable_tqdm=True)
+            report_to=[], push_to_hub=False, disable_tqdm=True,
+            **_serialization_options(transformers))
         trainer = transformers.Trainer(
             model=model, args=arguments, train_dataset=rows,
             data_collator=transformers.DataCollatorForSeq2Seq(
