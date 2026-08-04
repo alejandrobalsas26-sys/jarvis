@@ -10,6 +10,11 @@
 .venv/
 venv/
 env/
+# V69 M62 S3D — the isolated environment the optional training profile is installed
+# into. `.venv/` above matches only that exact name, so the multi-gigabyte torch tree a
+# LoRA smoke needs would otherwise be an untracked file the next `git add -A` commits.
+.venv-training-smoke/
+.venv-training*/
 
 # Python cache
 __pycache__/
