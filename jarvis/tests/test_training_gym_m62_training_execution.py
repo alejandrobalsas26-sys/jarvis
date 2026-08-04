@@ -334,6 +334,59 @@ def test_qlora_without_measured_cuda_never_reaches_a_backend(world):
     assert not world.run_directory.exists()
 
 
+def test_preflight_asks_the_backend_about_the_real_corpus(world):
+    """The readiness request must carry the corpus, not the directory it trains into.
+
+    Regression, V69 M62 S3D. The preflight request was built with
+    ``train_file=run_directory``, so a backend that checks whether its corpus is readable
+    — which the production backend does, and which is the entire reason readiness is
+    consulted before the plan is spent — was handed a directory and refused every real
+    run with ``ErrorCategory.DEPENDENCY``. The fake backend never reads ``train_file``,
+    so no structural test could see it; the first live smoke did, immediately.
+    """
+    seen: list[Path] = []
+
+    class CorpusReadingBackend(FakeTrainingBackend):
+        def readiness(self, request):
+            seen.append(Path(request.train_file))
+            if not Path(request.train_file).is_file():
+                return ("the training corpus is not a readable file",)
+            return super().readiness(request)
+
+    preflight = run_preflight(world.config(), dataset_root=world.corpus.root,
+                              output_root=world.output_root,
+                              confirmation=world.token(),
+                              export_root=world.corpus.export_root,
+                              model_cache_root=world.model_cache_root,
+                              backend=CorpusReadingBackend(),
+                              train_file=world.train_file)
+    assert seen == [world.train_file]
+    assert seen[0].is_file()
+    assert preflight.ok, preflight.problems
+    assert preflight.category is ErrorCategory.NONE
+
+
+def test_execute_training_hands_the_corpus_to_the_readiness_check(world):
+    """End to end: the corpus reaches readiness through ``execute_training`` itself.
+
+    The previous test pins ``run_preflight``. This one pins the wiring, because the
+    launcher is what a live run actually calls and the parameter it must forward is the
+    one it already had.
+    """
+    seen: list[Path] = []
+
+    class CorpusReadingBackend(FakeTrainingBackend):
+        def readiness(self, request):
+            seen.append(Path(request.train_file))
+            if not Path(request.train_file).is_file():
+                return ("the training corpus is not a readable file",)
+            return super().readiness(request)
+
+    outcome = world.run(backend=CorpusReadingBackend())
+    assert seen and seen[0] == world.train_file
+    assert outcome.ok, outcome.problems
+
+
 def test_an_existing_run_directory_refuses_before_the_plan_is_spent(world):
     world.run_directory.mkdir(parents=True)
     outcome = world.run()

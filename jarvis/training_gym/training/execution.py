@@ -162,7 +162,8 @@ def run_preflight(config: TrainingConfig, *, dataset_root: str | Path,
                   allow_model_download: bool = False,
                   revoked_candidate_ids: frozenset[str] = frozenset(),
                   accelerator_probe=None,
-                  backend: TrainingBackend | None = None) -> Preflight:
+                  backend: TrainingBackend | None = None,
+                  train_file: str | Path | None = None) -> Preflight:
     """Re-derive the plan and check the token against it. Creates nothing, spends nothing.
 
     Every refusal here is free. That is the whole point of doing all of it before the
@@ -243,7 +244,7 @@ def run_preflight(config: TrainingConfig, *, dataset_root: str | Path,
     if backend is not None:
         unready = tuple(require_backend(backend).readiness(_request(
             config, planning, Path(output_root), allow_model_download,
-            model_cache_root)))
+            model_cache_root, train_file)))
         if unready:
             return Preflight(planning=planning, category=ErrorCategory.DEPENDENCY,
                              problems=unready)
@@ -281,10 +282,21 @@ def _blocker_category(blockers: tuple[str, ...]) -> ErrorCategory:
 
 
 def _request(config: TrainingConfig, planning, run_directory: Path,
-             allow_model_download: bool, model_cache_root) -> ExecutionRequest:
+             allow_model_download: bool, model_cache_root,
+             train_file: str | Path | None = None) -> ExecutionRequest:
+    """The request a backend's readiness check is asked about, before anything is spent.
+
+    ``train_file`` is the corpus the run would actually read. It has to be the real one:
+    a backend that checks whether its corpus is readable — which the production backend
+    does, and which is the whole point of asking before the plan is spent — is answering
+    about whatever it is handed. Passing the run directory here made that check compare a
+    directory against ``is_file()`` and refuse every real run, while the fake backend used
+    by the structural tests never looks at the field and so never noticed.
+    """
     return ExecutionRequest(
         config=config, plan=planning.plan, run_directory=run_directory,
-        train_file=run_directory, validation_file=None,
+        train_file=Path(train_file) if train_file is not None else run_directory,
+        validation_file=None,
         device=planning.device.selected, precision=planning.precision.selected,
         allow_model_download=allow_model_download,
         model_cache_root=Path(model_cache_root) if model_cache_root else None)
@@ -314,7 +326,8 @@ def execute_training(config: TrainingConfig, *, dataset_root: str | Path,
         model_cache_root=model_cache_root,
         allow_model_download=allow_model_download,
         revoked_candidate_ids=revoked_candidate_ids,
-        accelerator_probe=accelerator_probe, backend=backend)
+        accelerator_probe=accelerator_probe, backend=backend,
+        train_file=train_file)
     if not preflight.ok:
         return ExecutionOutcome(
             run_id=config.run_id, state=TrainingRunState.FAILED,
