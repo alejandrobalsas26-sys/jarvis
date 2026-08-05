@@ -67,9 +67,20 @@ ADAPTER_WEIGHTS_FILE = "adapter_model.safetensors"
 REQUIRED_ADAPTER_FILES: frozenset[str] = frozenset({
     ADAPTER_CONFIG_FILE, ADAPTER_WEIGHTS_FILE, ADAPTER_MANIFEST_FILE})
 
+#: ``README.md`` is not optional in the sense of being a choice: PEFT's
+#: ``save_pretrained`` calls ``create_or_update_model_card`` unconditionally, so every
+#: adapter this backend can write has one. It is the stock model-card template -- the
+#: base model id, the library name and placeholder prose -- and the manifest hashes it
+#: like any other file, so admitting it by name is narrower than the alternative of
+#: deleting a file the library insists on writing.
 OPTIONAL_ADAPTER_FILES: frozenset[str] = frozenset({
     "training_args.json", "run.json", "training_log.jsonl", "backend_result.json",
-    "tokenizer_config.json", "special_tokens_map.json"})
+    "tokenizer_config.json", "special_tokens_map.json", "README.md"})
+
+#: The LoRA target sentinel. PEFT resolves it against the loaded model and records the
+#: concrete module names it actually adapted, so the saved config never echoes the word
+#: back. Approving the sentinel approves whatever it resolved to -- but not nothing.
+ALL_LINEAR_SENTINEL = "all-linear"
 
 ALLOWED_ADAPTER_FILES: frozenset[str] = REQUIRED_ADAPTER_FILES | OPTIONAL_ADAPTER_FILES
 
@@ -338,7 +349,14 @@ def _config_problems(path: Path, *, lora: dict, base_model_id: str) -> list[str]
             expected_modules, str) else [expected_modules]
         got = sorted(actual_modules) if not isinstance(
             actual_modules, str) else [actual_modules]
-        if wanted != got:
+        if wanted == [ALL_LINEAR_SENTINEL]:
+            # Resolved, not echoed. An empty set is still refused: it would describe an
+            # adapter that adapted nothing while the run reported that it had trained.
+            if not got:
+                problems.append(
+                    f"{ADAPTER_CONFIG_FILE}: target_modules are empty; the plan approved "
+                    f"{wanted}, which has to resolve to at least one real module")
+        elif wanted != got:
             problems.append(
                 f"{ADAPTER_CONFIG_FILE}: target_modules are {got}, the plan approved "
                 f"{wanted}")

@@ -856,6 +856,92 @@ def test_stale_residue_does_not_survive_into_a_failed_runs_quarantine(world):
     assert quarantined[0].startswith("binding-001-")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  What a real PEFT save actually leaves behind
+#
+#  The third live smoke trained all four steps and then failed artifact validation
+#  on two things the fake backend never produced: the model card PEFT writes on
+#  every `save_pretrained`, and a `target_modules` list PEFT had already resolved
+#  from the `all-linear` sentinel into the concrete modules it adapted.
+# ══════════════════════════════════════════════════════════════════════════════
+class _Embellisher:
+    """Writes what the fake backend writes, then what a real PEFT save adds to it."""
+
+    def __init__(self, embellish) -> None:
+        self._inner = FakeTrainingBackend()
+        self._embellish = embellish
+        self.backend_id = self._inner.backend_id
+
+    def version(self) -> str:
+        return self._inner.version()
+
+    def supports(self, method) -> bool:
+        return self._inner.supports(method)
+
+    def readiness(self, request) -> tuple[str, ...]:
+        return self._inner.readiness(request)
+
+    def execute(self, request, *, cancellation):
+        result = self._inner.execute(request, cancellation=cancellation)
+        self._embellish(Path(request.run_directory))
+        return result
+
+
+def _retarget(directory: Path, modules) -> None:
+    path = directory / "adapter_config.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["target_modules"] = modules
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def test_the_model_card_peft_always_writes_is_an_allowed_artifact(world):
+    """`save_pretrained` calls `create_or_update_model_card` unconditionally."""
+    outcome = world.run(backend=_Embellisher(
+        lambda directory: (directory / "README.md").write_text(
+            "---\nbase_model: Qwen/Qwen3-0.6B\nlibrary_name: peft\n---\n",
+            encoding="utf-8")))
+
+    assert outcome.ok, outcome.problems
+    assert "README.md" in outcome.adapter_files
+
+
+def test_target_modules_resolved_from_the_all_linear_sentinel_are_accepted(world):
+    """PEFT records what it adapted, never the sentinel it was handed."""
+    resolved = ["down_proj", "gate_proj", "k_proj", "o_proj", "q_proj", "up_proj",
+                "v_proj"]
+    config = world.config()
+    assert list(config.lora.target_modules) == ["all-linear"], config.lora.target_modules
+
+    outcome = world.run(config=config,
+                        backend=_Embellisher(lambda d: _retarget(d, resolved)))
+    assert outcome.ok, outcome.problems
+
+
+def test_an_adapter_that_resolved_to_no_module_is_still_refused(world):
+    """The sentinel approves whatever it resolved to -- but not nothing."""
+    outcome = world.run(backend=_Embellisher(lambda d: _retarget(d, [])))
+
+    assert outcome.state is TrainingRunState.FAILED
+    assert any("at least one real module" in p for p in outcome.problems)
+
+
+def test_an_explicit_target_module_list_must_still_match_exactly(world):
+    """Only the sentinel is elastic; a named list is a promise about named modules."""
+    import dataclasses
+
+    from training_gym.training.config import LoRATargetPolicy
+
+    default = world.config()
+    config = world.config(lora=dataclasses.replace(
+        default.lora, target_policy=LoRATargetPolicy.ATTENTION_ONLY))
+    assert list(config.lora.target_modules) != ["all-linear"]
+    outcome = world.run(config=config,
+                        backend=_Embellisher(lambda d: _retarget(d, ["mlp_only"])))
+
+    assert outcome.state is TrainingRunState.FAILED
+    assert any("target_modules are" in p for p in outcome.problems)
+
+
 def test_a_manifest_may_not_claim_completion_with_zero_steps():
     from training_gym.training.artifacts import AdapterArtifactError
 
