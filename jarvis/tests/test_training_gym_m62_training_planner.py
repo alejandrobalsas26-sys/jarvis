@@ -181,6 +181,17 @@ def test_the_plan_declares_that_it_did_nothing(tmp_path):
     assert effects["creates_files"] == []
 
 
+def test_the_execution_stage_does_not_still_say_s3b_is_unimplemented(tmp_path):
+    """S3B executes -- a real adapter has been trained from a plan of this shape.
+
+    The key is operator-facing prose, deliberately outside ``to_dict`` and therefore
+    outside the plan hash, so correcting it cannot invalidate an already-recorded run.
+    """
+    stage = plan(tmp_path).plan.expected_effects()["execution_stage"]
+    assert "not_implemented" not in stage
+    assert stage.startswith("s3b_implemented")
+
+
 def test_a_plan_cannot_claim_it_trained(tmp_path):
     result = plan(tmp_path)
     from dataclasses import replace

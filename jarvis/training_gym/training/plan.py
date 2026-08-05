@@ -192,7 +192,10 @@ class TrainingPlan:
                                         "directory is a refusal rather than an "
                                         "omission, and the manifest is excluded "
                                         "because a digest cannot cover itself",
-            "execution_stage": "s3b_not_implemented",
+            # S3B executes: a real adapter has been trained from a plan like this one.
+            # The claim this key still has to make is about authority, not absence --
+            # nothing here runs until an operator spends the matching TRAIN token.
+            "execution_stage": "s3b_implemented_requires_confirmation",
         }
 
     def to_dict(self) -> dict:

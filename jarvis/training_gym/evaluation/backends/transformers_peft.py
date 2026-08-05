@@ -322,9 +322,15 @@ class TransformersPeftEvaluationBackend:
         if request.task.system_prompt:
             messages.append({"role": "system", "content": request.task.system_prompt})
         messages.append({"role": "user", "content": request.task.user_prompt})
+        # return_dict is pinned rather than left to the library. transformers 5 flipped
+        # its default to True, which returns a BatchEncoding: it has no ``.shape``, so
+        # the input-token count below raises AttributeError, and passing it positionally
+        # to ``generate`` hands a mapping to a parameter typed as a tensor. Both fail
+        # loudly here, but the value that decides it is the library's, not ours, and it
+        # has already changed once.
         encoded = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
-            return_tensors="pt", truncation=True,
+            return_tensors="pt", truncation=True, return_dict=False,
             max_length=policy.max_input_tokens)
         input_tokens = int(encoded.shape[-1])
         truncated = input_tokens >= policy.max_input_tokens

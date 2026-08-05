@@ -614,9 +614,27 @@ def test_every_framework_import_lives_in_exactly_one_function():
     "local_files_only=LOCAL_FILES_ONLY",
     "revision=baseline.base_model_revision",
     "revision=baseline.tokenizer_revision",
+    "return_dict=False",
 ])
 def test_the_production_backend_pins_every_safety_critical_argument(fragment):
     assert fragment in _backend_code()
+
+
+def test_the_chat_template_is_read_as_a_tensor_not_a_batch_encoding():
+    """transformers 5 defaults ``apply_chat_template`` to ``return_dict=True``.
+
+    The surrounding code reads ``encoded.shape[-1]`` and passes ``encoded`` positionally
+    to ``generate``. A BatchEncoding satisfies neither, so the default must be pinned
+    rather than inherited -- measured against transformers 5.14.1, where the unpinned
+    call returns a BatchEncoding and the token count raises AttributeError.
+    """
+    code = _backend_code()
+    assert "apply_chat_template(" in code
+    call = code[code.index("apply_chat_template("):]
+    call = call[:call.index(")") + 1]
+    assert "return_dict=False" in call, (
+        "apply_chat_template must pin return_dict=False; the library default is True "
+        "and returns a BatchEncoding this code cannot consume")
 
 
 @pytest.mark.parametrize("forbidden", [
