@@ -158,9 +158,26 @@ class DependencyProfile(str, Enum):
 
 
 class CheckpointStrategy(str, Enum):
+    """Whether the trainer writes intermediate checkpoints. Only ``NO`` is supported.
+
+    ``EPOCH`` and ``STEPS`` remain named so the refusal can say what was asked for
+    rather than "not a valid strategy". They are refused because of what the trainer
+    writes when they are on: a nested ``checkpoint-<step>/`` directory holding
+    ``optimizer.pt``, ``scheduler.pt``, ``rng_state.pth`` and ``training_args.bin`` --
+    pickle-shaped runtime state that :mod:`training_gym.training.artifacts` correctly
+    refuses, both by suffix and by absence from the adapter allowlist. Accepting the
+    value would therefore buy a run that trains to completion and is then rejected at
+    artifact verification. The refusal belongs here, before anything is spent.
+    """
+
     NO = "no"
     EPOCH = "epoch"
     STEPS = "steps"
+
+
+#: The only checkpoint strategy the adapter artifact contract can accept.
+SUPPORTED_CHECKPOINT_STRATEGIES: frozenset[CheckpointStrategy] = frozenset(
+    {CheckpointStrategy.NO})
 
 
 class LoggingTarget(str, Enum):
@@ -655,7 +672,7 @@ class TrainingConfig:
     device_policy: DevicePolicy = DevicePolicy.AUTO_SAFE
     lora: LoRAConfig = LoRAConfig()
     dataloader_workers: int = 0
-    checkpoint_strategy: CheckpointStrategy = CheckpointStrategy.EPOCH
+    checkpoint_strategy: CheckpointStrategy = CheckpointStrategy.NO
     checkpoint_interval_steps: int = 0
     max_checkpoints: int = 1
     logging_target: LoggingTarget = LoggingTarget.LOCAL_JSONL
@@ -835,11 +852,15 @@ class TrainingConfig:
         setattr_(self, "dependency_profile",
                  require_enum(self.dependency_profile, DependencyProfile,
                               "dependency_profile"))
-        if (self.checkpoint_strategy is CheckpointStrategy.STEPS
-                and self.checkpoint_interval_steps < 1):
+        if self.checkpoint_strategy not in SUPPORTED_CHECKPOINT_STRATEGIES:
             raise TrainingConfigError(
-                "checkpoint_interval_steps: must be >= 1 when checkpoint_strategy is "
-                "'steps'")
+                f"checkpoint_strategy: {self.checkpoint_strategy.value!r} is "
+                f"unsupported. Intermediate trainer checkpoints write a nested "
+                f"checkpoint directory containing pickle-shaped optimizer and runtime "
+                f"state (optimizer.pt, scheduler.pt, rng_state.pth, training_args.bin) "
+                f"that cannot enter the adapter artifact allowlist, so the run would "
+                f"train to completion and then be refused at artifact verification. "
+                f"Use 'no'.")
         if not isinstance(self.lora, LoRAConfig):
             raise TrainingConfigError("lora: expected a LoRAConfig")
         if (self.method.needs_quantization
@@ -1098,7 +1119,8 @@ __all__ = [
     "ALLOWED_TRAINING_TRANSITIONS", "MAX_CONFIG_BYTES", "MAX_LORA_ALPHA",
     "MAX_LORA_RANK", "MAX_NOTES_CHARS", "PLACEHOLDER_PREFIX", "PLANNER_VERSION",
     "REQUIRED_REVISION_PLACEHOLDER", "RESOURCE_POLICY_VERSION",
-    "S3A_REACHABLE_STATES", "TRAINING_SCHEMA_VERSION", "CheckpointStrategy",
+    "S3A_REACHABLE_STATES", "SUPPORTED_CHECKPOINT_STRATEGIES",
+    "TRAINING_SCHEMA_VERSION", "CheckpointStrategy",
     "DependencyProfile", "DevicePolicy", "LoRABias", "LoRAConfig",
     "LoRATargetPolicy", "LoggingTarget", "ModelDownloadPolicy", "PrecisionPolicy",
     "TrainingConfig", "TrainingConfigError", "TrainingMethod",

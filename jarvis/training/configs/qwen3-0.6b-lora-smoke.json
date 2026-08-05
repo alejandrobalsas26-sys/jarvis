@@ -5,7 +5,7 @@
   "base_model_revision": "REQUIRED_IMMUTABLE_REVISION",
   "batch_size": 1,
   "checkpoint_interval_steps": 0,
-  "checkpoint_strategy": "epoch",
+  "checkpoint_strategy": "no",
   "created_at_utc": "2026-08-02T00:00:00Z",
   "dataloader_workers": 0,
   "dataset_reference": {

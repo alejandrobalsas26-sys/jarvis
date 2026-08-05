@@ -28,6 +28,7 @@ from training_gym.training.config import (
     ModelDownloadPolicy,
     PrecisionPolicy,
     S3A_REACHABLE_STATES,
+    SUPPORTED_CHECKPOINT_STRATEGIES,
     TrainingConfig,
     TrainingMethod,
     TrainingResourcePolicy,
@@ -436,10 +437,103 @@ def test_qlora_with_auto_precision_is_accepted_at_the_config_layer():
         TrainingMethod.SFT_QLORA
 
 
-def test_steps_checkpointing_requires_an_interval():
-    with pytest.raises(SchemaError, match="checkpoint_interval_steps"):
+# ══════════════════════════════════════════════════════════════════════════════
+#  Checkpoint policy
+# ══════════════════════════════════════════════════════════════════════════════
+# Intermediate trainer checkpoints are not merely discouraged. transformers writes them
+# as a nested ``checkpoint-<step>/`` directory holding ``optimizer.pt``,
+# ``scheduler.pt``, ``rng_state.pth`` and ``training_args.bin`` -- every one of which the
+# adapter artifact policy refuses, by suffix and by absence from the allowlist. A config
+# that asks for them therefore describes a run that trains to completion and is then
+# thrown away. The refusal has to land at validation, before anything is spent.
+def test_the_only_supported_checkpoint_strategy_is_no():
+    assert SUPPORTED_CHECKPOINT_STRATEGIES == frozenset({CheckpointStrategy.NO})
+
+
+def test_declining_to_checkpoint_is_accepted():
+    assert make_config(checkpoint_strategy=CheckpointStrategy.NO).checkpoint_strategy \
+        is CheckpointStrategy.NO
+
+
+def test_declining_to_checkpoint_is_the_default():
+    """The default must be the only value that can survive artifact verification."""
+    assert make_config().checkpoint_strategy is CheckpointStrategy.NO
+
+
+@pytest.mark.parametrize("strategy", ["epoch", "steps"])
+def test_an_intermediate_checkpoint_strategy_is_refused(strategy):
+    with pytest.raises(SchemaError, match="checkpoint_strategy"):
+        make_config(checkpoint_strategy=strategy)
+
+
+@pytest.mark.parametrize("strategy", ["epoch", "steps"])
+def test_the_refusal_names_what_the_trainer_would_have_written(strategy):
+    """A reviewer must learn why from the message, not from the artifact policy."""
+    with pytest.raises(SchemaError) as raised:
+        make_config(checkpoint_strategy=strategy)
+    message = str(raised.value)
+    assert strategy in message
+    for pickled in ("optimizer.pt", "scheduler.pt", "rng_state.pth",
+                    "training_args.bin"):
+        assert pickled in message
+    assert "allowlist" in message
+
+
+@pytest.mark.parametrize("strategy", ["epoch", "steps"])
+@pytest.mark.parametrize("budget", [0, 1, 5])
+def test_a_checkpoint_budget_cannot_buy_back_an_unsupported_strategy(strategy, budget):
+    """``max_checkpoints`` bounds a permitted strategy; it never authorises one."""
+    with pytest.raises(SchemaError, match="checkpoint_strategy"):
+        make_config(checkpoint_strategy=strategy, max_checkpoints=budget,
+                    checkpoint_interval_steps=10)
+
+
+def test_a_step_interval_does_not_rescue_step_checkpointing():
+    """The interval used to be the only complaint. It was the wrong complaint."""
+    with pytest.raises(SchemaError, match="checkpoint_strategy"):
         make_config(checkpoint_strategy=CheckpointStrategy.STEPS,
-                    checkpoint_interval_steps=0)
+                    checkpoint_interval_steps=1)
+
+
+@pytest.mark.parametrize("strategy", ["epoch", "steps"])
+def test_a_refused_checkpoint_config_spends_nothing(tmp_path, monkeypatch, strategy):
+    """The refusal precedes the plan, the run directory, the model and the network."""
+    import socket
+    import sys
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a refused config reached the network")
+
+    monkeypatch.setattr(socket, "socket", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    heavy = ("torch", "transformers", "peft", "accelerate", "datasets", "bitsandbytes")
+    already_imported = {name for name in heavy if name in sys.modules}
+
+    document = make_config().to_dict()
+    document["checkpoint_strategy"] = strategy
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(SchemaError, match="checkpoint_strategy"):
+        load_training_config(config_path)
+
+    # No plan, no run directory, no adapter: the only file here is the one we wrote.
+    assert [p.name for p in tmp_path.iterdir()] == ["config.json"]
+    assert {name for name in heavy if name in sys.modules} == already_imported
+
+
+def test_the_smoke_config_template_declines_to_checkpoint():
+    """The shipped template is the one a human copies. It must not be a wasted run."""
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "training" / "configs" / "qwen3-0.6b-lora-smoke.json"
+        if candidate.is_file():
+            document = json.loads(candidate.read_text(encoding="utf-8"))
+            assert document["checkpoint_strategy"] == CheckpointStrategy.NO.value
+            return
+    pytest.skip("smoke config template not present in this layout")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
