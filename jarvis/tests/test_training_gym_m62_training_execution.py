@@ -723,6 +723,139 @@ def test_a_backend_writing_outside_its_run_directory_is_refused(world):
     assert any("outside its run directory" in p for p in outcome.problems)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Escape detection is scoped to the interval the backend held control
+#
+#  The first live smoke left a run directory under `runs/` that no later run wrote.
+#  A detector that scans the tree reads that -- and every completed run, which also
+#  stays under `runs/` -- as an escape, so a run failed because an earlier run had
+#  existed. Every test below that asserts `ok` fails against that behaviour, and
+#  every test that asserts a refusal proves the interval still catches a real one.
+# ══════════════════════════════════════════════════════════════════════════════
+class _Trespasser:
+    """Trains exactly like the fake backend, and also touches the trusted root."""
+
+    def __init__(self, trespass) -> None:
+        self._inner = FakeTrainingBackend()
+        self._trespass = trespass
+        self.backend_id = self._inner.backend_id
+
+    def version(self) -> str:
+        return self._inner.version()
+
+    def supports(self, method) -> bool:
+        return self._inner.supports(method)
+
+    def readiness(self, request) -> tuple[str, ...]:
+        return self._inner.readiness(request)
+
+    def execute(self, request, *, cancellation):
+        self._trespass(Path(request.run_directory).parent.parent)
+        return self._inner.execute(request, cancellation=cancellation)
+
+
+def _refused(world: World, trespass) -> None:
+    outcome = world.run(backend=_Trespasser(trespass))
+    assert outcome.state is TrainingRunState.FAILED
+    assert any("outside its run directory" in p for p in outcome.problems)
+
+
+def _stale_run(world: World, run_id: str = "qwen3-06b-lora-smoke-live-002") -> Path:
+    """Residue shaped like the run the first live smoke abandoned in RUNNING."""
+    directory = world.output_root / "runs" / run_id
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text(
+        json.dumps({"run_id": run_id, "state": "running", "completed": False}),
+        encoding="utf-8")
+    return directory
+
+
+def test_an_earlier_completed_run_does_not_fail_the_next_one(world):
+    """Two runs share one output root, and the first one's directory stays there."""
+    first = _completed(world, config=world.config(run_id="binding-001"))
+    second = world.run(config=world.config(run_id="binding-002"))
+
+    assert second.ok, second.problems
+    assert second.state is TrainingRunState.COMPLETED
+    assert (world.output_root / "runs" / "binding-001").is_dir()
+    assert first.plan_hash != second.plan_hash
+
+
+def test_stale_residue_from_an_abandoned_run_does_not_fail_a_new_run(world):
+    stale = _stale_run(world)
+    outcome = world.run()
+
+    assert outcome.ok, outcome.problems
+    # Untouched: the evidence of the earlier failure is not the new run's business.
+    assert json.loads((stale / "run.json").read_text(encoding="utf-8"))["state"] == \
+        "running"
+
+
+def test_a_backend_creating_a_sibling_file_is_refused(world):
+    _stale_run(world)
+    _refused(world, lambda root: (root / "runs" / "planted.json").write_text(
+        "{}", encoding="utf-8"))
+
+
+def test_a_backend_modifying_an_earlier_run_is_refused(world):
+    """The sibling existed before the backend ran; its bytes did not."""
+    stale = _stale_run(world)
+    _refused(world, lambda root: (stale / "run.json").write_text(
+        json.dumps({"state": "completed", "completed": True, "padding": "x" * 64}),
+        encoding="utf-8"))
+
+
+def test_a_backend_deleting_an_earlier_run_is_refused(world):
+    stale = _stale_run(world)
+    _refused(world, lambda root: (stale / "run.json").unlink())
+
+
+def test_a_backend_creating_a_sibling_directory_is_refused(world):
+    _refused(world, lambda root: (root / "runs" / "planted").mkdir())
+
+
+def test_a_backend_writing_above_the_runs_tree_is_refused(world):
+    _refused(world, lambda root: (root / "planted.json").write_text(
+        "{}", encoding="utf-8"))
+
+
+def test_a_backend_planting_a_symlink_in_the_trusted_root_is_refused(world, tmp_path):
+    target = tmp_path / "somewhere-else"
+    target.mkdir()
+
+    def plant(root: Path) -> None:
+        try:
+            (root / "runs" / "planted").symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:  # unprivileged Windows host
+            pytest.skip(f"this host cannot create a symlink: {exc}")
+
+    _refused(world, plant)
+
+
+def test_the_ledger_this_authority_appends_is_not_a_backend_escape(world):
+    """Both ledger writes fall outside the interval, so neither needs an exemption."""
+    outcome = _completed(world)
+
+    ledger = training_ledger_path(world.output_root)
+    assert ledger.parent == world.output_root
+    assert [e["event"] for e in training_entries(world.output_root)] == [
+        "started", "completed"]
+    assert outcome.state is TrainingRunState.COMPLETED
+
+
+def test_stale_residue_does_not_survive_into_a_failed_runs_quarantine(world):
+    """Quarantine still moves only the failing run, and leaves the residue alone."""
+    stale = _stale_run(world)
+    outcome = world.run(backend=FakeTrainingBackend(mode=FakeMode.EXCEPTION))
+
+    assert outcome.state is TrainingRunState.FAILED
+    assert not world.run_directory.exists()
+    assert stale.is_dir()
+    quarantined = sorted(p.name for p in (world.output_root / "quarantine").iterdir())
+    assert len(quarantined) == 1
+    assert quarantined[0].startswith("binding-001-")
+
+
 def test_a_manifest_may_not_claim_completion_with_zero_steps():
     from training_gym.training.artifacts import AdapterArtifactError
 
@@ -1076,10 +1209,34 @@ def test_the_production_backend_contains_no_forbidden_construct(forbidden):
     "trust_remote_code=TRUST_REMOTE_CODE", "local_files_only=local_only",
     "safe_serialization=True", "report_to=[]", "push_to_hub=False",
     "revision=config.base_model_revision", "revision=config.tokenizer_revision",
-    "output_dir=str(request.run_directory)",
+    "output_dir=str(request.run_directory)", "cache_dir=cache_dir",
 ])
 def test_the_production_backend_pins_every_safety_critical_argument(required):
     assert required in _backend_code(), required
+
+
+def test_every_weight_load_reads_the_cache_the_plan_verified():
+    """A plan that reports "cache ready" has to bind the load, not merely describe one.
+
+    Without ``cache_dir`` these calls resolve against the default hub cache, which is a
+    different directory from the one ``model_cache_root`` was verified in -- so the
+    authority's verdict and the bytes actually loaded could come from two places, and
+    with downloads allowed the second one could be fetched rather than inspected.
+    """
+    import ast
+
+    loads = [node for node in ast.walk(ast.parse(_backend_code()))
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "from_pretrained"]
+
+    assert loads, "the production backend loads no weights at all"
+    for call in loads:
+        passed = {keyword.arg for keyword in call.keywords}
+        assert "cache_dir" in passed, ast.unparse(call.func)
+        assert "local_files_only" in passed, ast.unparse(call.func)
+    assert "str(request.model_cache_root) if request.model_cache_root else None" \
+        in _backend_code()
 
 
 def test_remote_code_is_a_module_constant_and_is_false():

@@ -269,12 +269,19 @@ class TransformersPeftBackend:
         config = request.config
         transformers, peft = runtime.transformers, runtime.peft
         local_only = not request.allow_model_download
+        # The plan verified the weights are present in THIS cache, so the load has to
+        # read the same one. Left unset, `from_pretrained` resolves against the default
+        # hub cache instead: an authority that reported "cache ready" would be followed
+        # by a load that finds nothing there, and the plan's verdict would bind nothing.
+        # `None` is the library's own default, so naming no cache root changes nothing.
+        cache_dir = str(request.model_cache_root) if request.model_cache_root else None
 
         transformers.set_seed(config.seed)
 
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             config.tokenizer_id, revision=config.tokenizer_revision,
-            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=local_only)
+            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=local_only,
+            cache_dir=cache_dir)
         template = getattr(tokenizer, "chat_template", None)
         if not template:
             # No generic fallback is invented. A template decides what the model
@@ -302,7 +309,7 @@ class TransformersPeftBackend:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             config.base_model_id, revision=config.base_model_revision,
             trust_remote_code=TRUST_REMOTE_CODE, local_files_only=local_only,
-            torch_dtype=_dtype(runtime, request.precision))
+            cache_dir=cache_dir, torch_dtype=_dtype(runtime, request.precision))
         if config.gradient_checkpointing:
             model.gradient_checkpointing_enable()
             model.config.use_cache = False

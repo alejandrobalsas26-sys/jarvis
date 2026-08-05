@@ -392,6 +392,10 @@ def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig
     plan = planning.plan
     cancellation = CancellationToken()
     result: BackendResult | None = None
+    # An empty fingerprint fails towards suspicion, not away from it: if control ever
+    # reached the escape check without this being taken, every entry in the root reads
+    # as new and the run is refused rather than quietly passed.
+    escape_before: dict[str, tuple] = {}
 
     try:
         dataset = convert_sft_export(
@@ -411,6 +415,11 @@ def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig
             precision=planning.precision.selected,
             allow_model_download=allow_model_download,
             model_cache_root=Path(model_cache_root) if model_cache_root else None)
+        # Taken here and nowhere earlier: everything this authority writes outside the
+        # run directory -- the consumed-plan line above, the terminal line below -- falls
+        # outside the interval, so an append-only ledger write is never read as a backend
+        # escape and never has to be special-cased into an exemption.
+        escape_before, _ = _escape_snapshot(output_root, exclude=directory)
         result = backend.execute(request, cancellation=cancellation)
     except (InterruptionRequested, KeyboardInterrupt) as exc:
         return _interrupted(record=record, directory=directory, output_root=output_root,
@@ -471,7 +480,7 @@ def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig
     record.emit(RunEventKind.ARTIFACT_VALIDATION_STARTED, at=at)
     validation = validate_adapter_directory(
         directory, lora=config.lora.to_dict(), base_model_id=config.base_model_id)
-    escaped = _escaped_files(directory, output_root)
+    escaped = _escaped_files(directory, output_root, escape_before)
     if escaped:
         return _failed(record=record, directory=directory, output_root=output_root,
                        plan=plan, actor=actor, at=at, nonce=nonce, config=config,
@@ -534,16 +543,85 @@ def _result_category(result: BackendResult) -> ErrorCategory:
         return ErrorCategory.BACKEND
 
 
-def _escaped_files(directory: Path, output_root: Path) -> tuple[str, ...]:
-    """Anything the backend wrote into the runs tree outside its own directory."""
-    runs_root = directory.parent
-    strays = sorted(p.name for p in runs_root.iterdir()
-                    if p.resolve() != directory.resolve())
+# The escape check fingerprints the trusted output root twice -- once immediately before
+# the backend is handed control, once when it returns -- and reports only what moved in
+# between. Scanning the tree without that interval was the S3D defect: every sibling run
+# read as something THIS backend had written, so a run failed because an earlier run
+# existed at all. That is not only stale residue: a completed run's directory also stays
+# under `runs/`, so the second run under any output root would have failed. The bound
+# matches the resource policy's generated-file ceiling; a trusted root larger than that
+# is itself the finding rather than something to scan past in silence.
+_ESCAPE_SCAN_MAX_ENTRIES = 4096
+
+
+def _escape_snapshot(scan_root: Path, *,
+                     exclude: Path) -> tuple[dict[str, tuple], bool]:
+    """A bounded fingerprint of everything under `scan_root` but the run's own tree.
+
+    Symlinks are recorded by their own identity and never followed, so a link planted in
+    the root cannot walk this scan out of it, and neither a socket nor a device node is
+    ever opened. Directories carry no timestamp on purpose: a file written into one
+    appears as its own new entry, which is the evidence that matters, while directory
+    mtimes are the one signal that moves for reasons nobody wrote.
+    """
+    try:
+        excluded = exclude.relative_to(scan_root).as_posix()
+    except ValueError:
+        excluded = None
+
+    fingerprints: dict[str, tuple] = {}
+    pending = [scan_root]
+    while pending:
+        try:
+            entries = sorted(pending.pop().iterdir(), key=lambda p: p.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if len(fingerprints) >= _ESCAPE_SCAN_MAX_ENTRIES:
+                return fingerprints, True
+            relative = entry.relative_to(scan_root).as_posix()
+            if relative == excluded:
+                continue
+            if entry.is_symlink():
+                fingerprints[relative] = ("symlink",)
+            elif entry.is_dir():
+                fingerprints[relative] = ("dir",)
+                pending.append(entry)
+            elif entry.is_file():
+                try:
+                    status = entry.stat()
+                except OSError:
+                    fingerprints[relative] = ("unreadable",)
+                    continue
+                fingerprints[relative] = ("file", status.st_size, status.st_mtime_ns)
+            else:
+                fingerprints[relative] = ("other",)
+    return fingerprints, False
+
+
+def _escaped_files(directory: Path, output_root: Path,
+                   before: dict[str, tuple]) -> tuple[str, ...]:
+    """What the backend changed in the trusted root outside its own run directory.
+
+    Only the interval counts. `before` was taken immediately before the backend was
+    handed control, so a sibling that already existed -- a completed run, or the stale
+    residue of a failed one -- fingerprints identically in both passes and is not a
+    finding. Anything created, modified or removed while the backend held control is.
+    """
+    after, truncated = _escape_snapshot(output_root, exclude=directory)
+    strays = sorted({name for name, mark in after.items() if before.get(name) != mark}
+                    | {name for name in before if name not in after})
+    problems: list[str] = []
     if strays:
-        return (f"the backend wrote {len(strays)} entr(y/ies) outside its run directory "
-                f"({strays[:3]}); a trainer that escapes its workspace has written "
-                f"somewhere nobody is auditing",)
-    return ()
+        problems.append(
+            f"the backend wrote {len(strays)} entr(y/ies) outside its run directory "
+            f"({strays[:3]}); a trainer that escapes its workspace has written "
+            f"somewhere nobody is auditing")
+    if truncated:
+        problems.append(
+            f"the training root holds more than {_ESCAPE_SCAN_MAX_ENTRIES} entries, so "
+            f"what the backend wrote outside its run directory cannot be established")
+    return tuple(problems)
 
 
 def _build_manifest(*, config: TrainingConfig, planning, record: RunRecord,
