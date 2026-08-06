@@ -28,6 +28,8 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -167,6 +169,23 @@ def _check_references(args) -> int:
 #: The backend every path in this command plans against. Named once so the dependency
 #: question, the plan record and the execution all ask about the same thing.
 BACKEND_ID = "transformers_peft"
+
+
+def _utc_now() -> str:
+    """A second-resolution UTC stamp, in the shape every record in this milestone uses."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _backend_version() -> str:
+    """The installed versions the comparison actually ran against, read from metadata."""
+    import importlib.metadata as meta
+    parts = []
+    for package in ("transformers", "peft", "torch"):
+        try:
+            parts.append(f"{package}={meta.version(package)}")
+        except Exception:  # noqa: BLE001 — an unreadable version is not a failure here
+            parts.append(f"{package}=unknown")
+    return " ".join(parts)
 
 
 def _dependency_report(backend_id: str = BACKEND_ID):
@@ -409,14 +428,33 @@ def _execute(args) -> int:
             as_json=args.json, code=EXIT_MODEL_ACCESS)
 
     # Reached only when a real cached model, a verified adapter, the installed
-    # dependencies and a valid unspent token are all genuinely present. No such host
-    # exists in this milestone, and this stage does not pretend otherwise.
+    # dependencies and a valid unspent token are all genuinely present. From here the
+    # plan is spent and a model is loaded, so nothing below may be a rehearsal.
+    from training_gym.evaluation.execution import (
+        ExecutionRequest,
+        execute_evaluation,
+        production_backend_factory,
+    )
+
+    outcome = execute_evaluation(ExecutionRequest(
+        config=config, baseline=baseline, adapter=adapter, plan=plan,
+        output_root=Path(args.output_root), dataset_root=Path(args.dataset_root),
+        backend_factory=production_backend_factory(BACKEND_ID),
+        adapter_directory=Path(args.training_root) / "runs" / adapter.run_id,
+        model_cache_root=Path(args.model_cache_root) if args.model_cache_root else None,
+        actor=args.actor, at=_utc_now(),
+        backend_version=_backend_version(),
+        limitations=list(config.limitations)))
+
+    payload = {"status": outcome.state.value, **outcome.to_dict(),
+               "note": ("the artefacts are on disk and were re-verified after writing; "
+                        "no registry was written and no model was promoted")}
+    if outcome.ok:
+        _emit(payload, as_json=args.json)
+        return EXIT_OK
     return _fail(
-        f"the live evaluation path for plan {plan.plan_hash()[:12]} is not enabled in "
-        f"this build. Every precondition this command can check has passed; running a "
-        f"real base-versus-adapter comparison is the next milestone's boundary and has "
-        f"never been performed on this repository. Nothing was loaded and nothing was "
-        f"written",
+        f"the evaluation ended in {outcome.state.value}: "
+        + "; ".join((outcome.problems or outcome.blockers or ("no reason recorded",))[:5]),
         as_json=args.json, code=EXIT_BACKEND)
 
 
@@ -491,6 +529,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="root that would hold evaluation generations")
     parser.add_argument("--model-cache-root", default="",
                         help="a reviewed local model cache; never guessed, never fetched")
+    parser.add_argument("--actor", default="local-operator",
+                        help="who is answerable for the run, recorded in the ledger")
 
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true",
