@@ -38,6 +38,11 @@ from .dataset_reference import is_placeholder
 #: Bumped when the identity record's shape changes. Part of the plan hash.
 MODEL_IDENTITY_VERSION = "m62.model_identity.1"
 
+#: Versioned separately from :data:`MODEL_IDENTITY_VERSION` so the two digests can never
+#: be confused for one another, and so this one can be corrected without invalidating a
+#: single already-recorded manifest. See :func:`canonical_identity_fields`.
+CANONICAL_MODEL_IDENTITY_VERSION = "m62.model_identity.canonical.1"
+
 
 class ModelIdentityError(SchemaError):
     """A model or tokenizer reference that will not be used as written."""
@@ -76,6 +81,68 @@ def cache_directory_name(model_id: str) -> str:
     """The directory name a hub cache would use for this model. A name, not a path."""
     org, name = require_model_id(model_id, "model_id").split("/", 1)
     return f"models--{org}--{name}"
+
+
+def canonical_identity_fields(*, model_id: str, revision: str,
+                              tokenizer_id: str = "", tokenizer_revision: str = "",
+                              requires_remote_code: bool = False) -> dict:
+    """The durable identity: which bytes load, and nothing else.
+
+    WHY THIS EXISTS SEPARATELY FROM :meth:`ModelIdentity.identity_hash`
+    ------------------------------------------------------------------
+    ``identity_hash`` covers the whole record, including ``cache_status``,
+    ``cache_evidence`` and ``license_reference``. None of those three change which
+    weights load. Two of them are *host state* and one is *documentation*, so the same
+    model bytes hash differently depending on where the operator keeps their cache and
+    what sentence they wrote about the licence — and a pairing check built on that
+    refuses a legitimate comparison while proving nothing about the weights.
+
+    This record binds only what an execution would actually resolve: the repository, the
+    immutable commit behind it, the tokenizer half, and the remote-code policy. The
+    commit sha *is* the architecture identity — it pins ``config.json`` — so a declared
+    ``parameters_b`` or ``family`` adds an operator's description of the model, not a
+    fact about it, and is deliberately excluded for the same reason as the licence text.
+    """
+    mid = require_model_id(model_id, "canonical_identity.model_id")
+    rev = require_revision(revision, "canonical_identity.revision")
+    tid = require_model_id(tokenizer_id or mid, "canonical_identity.tokenizer_id")
+    trev = require_revision(tokenizer_revision or rev,
+                            "canonical_identity.tokenizer_revision")
+    if tid != mid:
+        raise ModelIdentityError(
+            f"canonical_identity.tokenizer_id: {tid!r} is not the model {mid!r}; a "
+            f"substituted tokenizer changes what every token id means")
+    if trev != rev:
+        raise ModelIdentityError(
+            "canonical_identity.tokenizer_revision: must equal the model revision")
+    if requires_remote_code:
+        raise ModelIdentityError(
+            "canonical_identity.requires_remote_code: a model that executes Python from "
+            "its own repository has no reviewed path in this milestone")
+    return {
+        "canonical_version": CANONICAL_MODEL_IDENTITY_VERSION,
+        "model_id": mid,
+        "revision": rev,
+        "revision_kind": classify_revision(rev).value,
+        "tokenizer_id": tid,
+        "tokenizer_revision": trev,
+        "requires_remote_code": False,
+    }
+
+
+def canonical_identity_hash(*, model_id: str, revision: str, tokenizer_id: str = "",
+                            tokenizer_revision: str = "",
+                            requires_remote_code: bool = False) -> str:
+    """Digest of :func:`canonical_identity_fields`.
+
+    This is the compatibility bridge: an adapter manifest recorded before this authority
+    existed still names its base model, revision and tokenizer, so its durable identity
+    can be re-derived from what it already wrote down. Nothing is rewritten.
+    """
+    return sha256_obj(canonical_identity_fields(
+        model_id=model_id, revision=revision, tokenizer_id=tokenizer_id,
+        tokenizer_revision=tokenizer_revision,
+        requires_remote_code=requires_remote_code))
 
 
 @dataclass(frozen=True)
@@ -172,7 +239,25 @@ class ModelIdentity:
         }
 
     def identity_hash(self) -> str:
+        """The legacy whole-record digest. Unchanged, and deliberately so.
+
+        Every adapter manifest already on disk recorded this value. Changing what it
+        covers would silently invalidate them all, so the correction is additive:
+        :meth:`canonical_identity_hash` is the digest new pairing checks use.
+        """
         return sha256_obj(self.to_dict())
+
+    def canonical_identity(self) -> dict:
+        """The durable byte identity. Annotations and host state are excluded."""
+        return canonical_identity_fields(
+            model_id=self.model_id, revision=self.revision,
+            tokenizer_id=self.tokenizer_id,
+            tokenizer_revision=self.tokenizer_revision,
+            requires_remote_code=self.requires_remote_code)
+
+    def canonical_identity_hash(self) -> str:
+        """Stable across a cache probe and across any licence wording."""
+        return sha256_obj(self.canonical_identity())
 
     def tokenizer_identity_hash(self) -> str:
         """A separate digest for the tokenizer half, so a plan can bind both."""
@@ -228,7 +313,8 @@ def identity_from_config(config: TrainingConfig, *,
 
 
 __all__ = [
-    "MODEL_IDENTITY_VERSION", "CacheStatus", "ModelIdentity", "ModelIdentityError",
-    "RevisionKind", "cache_directory_name", "classify_revision",
+    "CANONICAL_MODEL_IDENTITY_VERSION", "MODEL_IDENTITY_VERSION", "CacheStatus",
+    "ModelIdentity", "ModelIdentityError", "RevisionKind", "cache_directory_name",
+    "canonical_identity_fields", "canonical_identity_hash", "classify_revision",
     "identity_from_config", "probe_cache",
 ]

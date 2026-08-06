@@ -52,7 +52,12 @@ from ..training.artifacts import (
     verify_completed_run,
 )
 from ..training.config import TrainingMethod, TrainingRunState
-from ..training.model_identity import CacheStatus, ModelIdentity, RevisionKind
+from ..training.model_identity import (
+    CacheStatus,
+    ModelIdentity,
+    RevisionKind,
+    canonical_identity_hash,
+)
 
 #: Bumped when either reference's shape changes.
 REFERENCE_SCHEMA_VERSION = "m62.evaluation_reference.1"
@@ -85,6 +90,10 @@ class BaseModelEvaluationReference:
     tokenizer_id: str
     tokenizer_revision: str
     tokenizer_identity_hash: str
+    #: The durable byte identity. Empty only on a reference restored from a record
+    #: written before this field existed; :func:`pairing_blockers` says so out loud
+    #: rather than treating an absent digest as a match.
+    base_model_canonical_identity_hash: str = ""
     architecture_family: str = ""
     parameter_class: str = ""
     trust_remote_code: bool = False
@@ -108,6 +117,10 @@ class BaseModelEvaluationReference:
         for name in ("base_model_identity_hash", "tokenizer_identity_hash"):
             set_(self, name, require_digest(getattr(self, name),
                                             f"base reference.{name}"))
+        if self.base_model_canonical_identity_hash:
+            set_(self, "base_model_canonical_identity_hash",
+                 require_digest(self.base_model_canonical_identity_hash,
+                                "base reference.base_model_canonical_identity_hash"))
         if self.trust_remote_code:
             raise EvaluationReferenceError(
                 "base reference: trust_remote_code is refused. Evaluating a model that "
@@ -146,6 +159,8 @@ class BaseModelEvaluationReference:
             "base_model_id": self.base_model_id,
             "base_model_revision": self.base_model_revision,
             "base_model_identity_hash": self.base_model_identity_hash,
+            "base_model_canonical_identity_hash":
+                self.base_model_canonical_identity_hash,
             "tokenizer_id": self.tokenizer_id,
             "tokenizer_revision": self.tokenizer_revision,
             "tokenizer_identity_hash": self.tokenizer_identity_hash,
@@ -183,6 +198,7 @@ def base_reference_from_identity(identity: ModelIdentity) -> BaseModelEvaluation
         base_model_id=identity.model_id,
         base_model_revision=identity.revision,
         base_model_identity_hash=identity.identity_hash(),
+        base_model_canonical_identity_hash=identity.canonical_identity_hash(),
         tokenizer_id=identity.tokenizer_id or identity.model_id,
         tokenizer_revision=identity.tokenizer_revision or identity.revision,
         tokenizer_identity_hash=identity.tokenizer_identity_hash(),
@@ -231,6 +247,10 @@ class AdapterEvaluationReference:
     method: TrainingMethod
     lora: dict
     run_state: str
+    #: Re-derived from the manifest's own recorded model/tokenizer fields, not read
+    #: back from a stored digest. A manifest written before the canonical authority
+    #: existed still names everything this needs.
+    base_model_canonical_identity_hash: str = ""
     interrupted: bool = False
     completed: bool = True
     artifact_verified: bool = False
@@ -255,6 +275,10 @@ class AdapterEvaluationReference:
                      "security_regression_hash"):
             set_(self, name, require_digest(getattr(self, name),
                                             f"adapter reference.{name}"))
+        if self.base_model_canonical_identity_hash:
+            set_(self, "base_model_canonical_identity_hash",
+                 require_digest(self.base_model_canonical_identity_hash,
+                                "adapter reference.base_model_canonical_identity_hash"))
         set_(self, "known_limitations",
              require_str_tuple(self.known_limitations,
                                "adapter reference.known_limitations", max_items=64))
@@ -298,6 +322,8 @@ class AdapterEvaluationReference:
             "plan_hash": self.plan_hash,
             "training_config_hash": self.training_config_hash,
             "base_model_identity_hash": self.base_model_identity_hash,
+            "base_model_canonical_identity_hash":
+                self.base_model_canonical_identity_hash,
             "tokenizer_identity_hash": self.tokenizer_identity_hash,
             "tokenizer_chat_template_hash": self.tokenizer_chat_template_hash,
             "dataset_reference_hash": self.dataset_reference_hash,
@@ -353,13 +379,31 @@ def build_adapter_reference(run_directory: str | Path, *, lora: dict,
 
 def reference_from_manifest(manifest: AdapterManifest, *,
                             artifact_verified: bool) -> AdapterEvaluationReference:
-    """Project a verified manifest onto the reference. Carries no path, only digests."""
+    """Project a verified manifest onto the reference. Carries no path, only digests.
+
+    The canonical identity is *re-derived* from the manifest's own ``base_model_id``,
+    ``base_model_revision`` and tokenizer fields rather than read from a stored digest.
+    That is the whole compatibility bridge: a manifest written before the canonical
+    authority existed is upgraded by recomputation, never by rewriting the file. Its
+    legacy ``base_model_identity_hash`` is carried through untouched alongside it.
+    """
     if not isinstance(manifest, AdapterManifest):
         raise EvaluationReferenceError(
             f"adapter reference: expected an AdapterManifest, got "
             f"{type(manifest).__name__}; a reference may not be built from a bare path "
             f"or a raw dictionary")
+    try:
+        canonical = canonical_identity_hash(
+            model_id=manifest.base_model_id, revision=manifest.base_model_revision,
+            tokenizer_id=manifest.tokenizer_id,
+            tokenizer_revision=manifest.tokenizer_revision)
+    except SchemaError as exc:
+        raise EvaluationReferenceError(
+            f"adapter reference: run {manifest.run_id!r} records a base model this "
+            f"repository will not evaluate ({exc}); the durable identity could not be "
+            f"re-derived, and an unverifiable identity is not a matching one") from None
     return AdapterEvaluationReference(
+        base_model_canonical_identity_hash=canonical,
         run_id=manifest.run_id,
         adapter_manifest_hash=manifest.manifest_hash(),
         adapter_artifact_tree_hash=manifest.tree_hash,
@@ -397,7 +441,21 @@ def pairing_blockers(base: BaseModelEvaluationReference,
     the mismatch, not the training.
     """
     problems: list[str] = []
-    if base.base_model_identity_hash != adapter.base_model_identity_hash:
+    base_canonical = base.base_model_canonical_identity_hash
+    adapter_canonical = adapter.base_model_canonical_identity_hash
+    if base_canonical and adapter_canonical:
+        # The durable comparison. Both sides describe which weights load, so a licence
+        # sentence or a cache probe on a different host cannot break a real pairing —
+        # and no wording can make two different models look like one.
+        if base_canonical != adapter_canonical:
+            problems.append(
+                f"the baseline is model {short(base_canonical)} but the adapter was "
+                f"trained on {short(adapter_canonical)}; attaching it to a different "
+                f"base measures the mismatch")
+    elif base.base_model_identity_hash != adapter.base_model_identity_hash:
+        # One side predates the canonical authority and cannot be upgraded. Fall back to
+        # the legacy whole-record digest, which is stricter than necessary rather than
+        # weaker: it refuses some legitimate pairs, and accepts no illegitimate one.
         problems.append(
             f"the baseline is model {short(base.base_model_identity_hash)} but the "
             f"adapter was trained on {short(adapter.base_model_identity_hash)}; "
