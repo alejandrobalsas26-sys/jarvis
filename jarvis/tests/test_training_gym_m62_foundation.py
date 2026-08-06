@@ -363,7 +363,8 @@ def test_the_full_legal_path_reaches_approval():
     assert ep.outcome().dataset_eligible
 
 
-def test_an_evaluation_only_task_can_never_be_approved_into_a_dataset():
+def approved_evaluation_only_episode() -> Episode:
+    """An evaluation-only episode walked all the way to APPROVED."""
     spec = make_spec(evaluation_only=True, dataset_eligible=False)
     ep = Episode(episode_id="ep-001", spec=spec)
     traj = make_trajectory(spec)
@@ -371,7 +372,38 @@ def test_an_evaluation_only_task_can_never_be_approved_into_a_dataset():
     traj.set_human_review(HumanReview(
         reviewer="operator", decision=HumanDecision.APPROVED, timestamp=NOW,
         attempt_hash=traj.attempt_hash()))
-    assert any("evaluation_only" in b for b in ep.approval_blockers())
+    for state in (EpisodeState.VALIDATED, EpisodeState.SANDBOX_PREPARED,
+                  EpisodeState.RUNNING, EpisodeState.GRADING,
+                  EpisodeState.TEACHER_REVIEW, EpisodeState.NEEDS_HUMAN_REVIEW):
+        ep.transition(state, actor="operator", at=NOW)
+    return ep
+
+
+def test_an_evaluation_only_episode_may_be_approved_as_evidence():
+    """Approval says the run is sound. It does not say a model may be fitted on it.
+
+    Held-out evaluation material has to reach APPROVED to become a candidate at all —
+    an evaluation corpus is built from approved episodes exactly like a training set is.
+    The two claims are separated rather than merged, and the one that matters is below.
+    """
+    ep = approved_evaluation_only_episode()
+    assert ep.approval_blockers() == ()
+    ep.approve(actor="operator", at=NOW)
+    assert ep.state is EpisodeState.APPROVED
+
+
+def test_an_evaluation_only_task_can_never_be_approved_into_a_dataset():
+    """The invariant itself: approved or not, this material is never trainable."""
+    ep = approved_evaluation_only_episode()
+    ep.approve(actor="operator", at=NOW)
+    assert not ep.outcome().dataset_eligible, (
+        "an approved evaluation-only episode must still be refused as training material")
+
+
+def test_an_episode_that_is_both_evaluation_only_and_eligible_cannot_exist():
+    """The contradictory combination is refused by the task authority itself."""
+    with pytest.raises(SchemaError):
+        make_spec(evaluation_only=True, dataset_eligible=True)
 
 
 def test_a_trajectory_for_a_different_task_is_refused():

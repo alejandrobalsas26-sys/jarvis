@@ -175,7 +175,8 @@ def candidate_blockers(*, episode: Episode, spec: TaskSpec, trajectory: Trajecto
                        review: DatasetHumanReview | None,
                        target_text: str,
                        target_source: TargetSource,
-                       aggregation: AggregationReport | None = None) -> tuple[str, ...]:
+                       aggregation: AggregationReport | None = None,
+                       evaluation_only: bool = False) -> tuple[str, ...]:
     """Every reason this material may not become a candidate. Empty tuple = eligible.
 
     Re-derived from the evidence at call time. Nothing here trusts that an earlier stage
@@ -243,12 +244,27 @@ def candidate_blockers(*, episode: Episode, spec: TaskSpec, trajectory: Trajecto
             problems.append(f"the approved target is not these bytes: {exc}")
 
     # -- task-level eligibility, asserted independently --------------------------
-    if spec.evaluation_only:
-        problems.append("task is evaluation_only and may never be trained on")
-    if not spec.dataset_eligible:
-        problems.append("task is marked not dataset eligible")
-    if not spec.sensitivity.dataset_eligible:
-        problems.append(f"task sensitivity {spec.sensitivity.value} is never trainable")
+    # The two intents are mutually exclusive and each refuses the other's material.
+    # Held-out evidence must be unusable for fitting, and training material must not
+    # quietly become the yardstick it is measured against.
+    if evaluation_only:
+        if not spec.evaluation_only:
+            problems.append(
+                "task is not marked evaluation_only but is being built as held-out "
+                "evaluation evidence; the task authority, not the caller, decides "
+                "whether material may be trained on")
+        if spec.dataset_eligible:
+            problems.append(
+                "task is dataset_eligible and may not become evaluation-only evidence; "
+                "a record that is both is a training example scoring itself")
+    else:
+        if spec.evaluation_only:
+            problems.append("task is evaluation_only and may never be trained on")
+        if not spec.dataset_eligible:
+            problems.append("task is marked not dataset eligible")
+        if not spec.sensitivity.dataset_eligible:
+            problems.append(
+                f"task sensitivity {spec.sensitivity.value} is never trainable")
 
     # -- the material itself -----------------------------------------------------
     problems.extend(_unstaged_fixtures(spec, trajectory))
@@ -282,7 +298,8 @@ def build_candidate(*, episode: Episode, spec: TaskSpec, trajectory: Trajectory,
                     parent_task_hash: str = "", editor_id: str = "",
                     student_output_changed: bool = False,
                     aggregation: AggregationReport | None = None,
-                    ledger: object | None = None) -> DatasetCandidate:
+                    ledger: object | None = None,
+                    evaluation_only: bool = False) -> DatasetCandidate:
     """Build a candidate in ``CREATED`` state, or raise with every blocker.
 
     *target_text* must already be the output of :func:`prepare_target_text` — the exact
@@ -293,6 +310,13 @@ def build_candidate(*, episode: Episode, spec: TaskSpec, trajectory: Trajectory,
     When *ledger* is supplied its ``consume`` is called, so the review is spent. A ledger
     is not optional in production; it is optional in this signature only so a dry run can
     validate without consuming an approval it is not going to use.
+
+    *evaluation_only* builds held-out evidence instead of a training example. It requires
+    the same episode, the same deterministic aggregation, the same teacher consensus and
+    the same human approval — the evidence chain is not the thing that differs. What
+    differs is where the record may go afterwards: ``dataset_eligible`` is false, so the
+    split authority may only place it in a held-out split, and the leakage analyser's
+    evaluation-only contamination check refuses it anywhere a model is fitted or steered.
     """
     report = aggregation if aggregation is not None else aggregate(spec, trajectory)
     clean_target = prepare_target_text(target_text)
@@ -305,7 +329,7 @@ def build_candidate(*, episode: Episode, spec: TaskSpec, trajectory: Trajectory,
     blockers = candidate_blockers(
         episode=episode, spec=spec, trajectory=trajectory, consensus=consensus,
         review=review, target_text=clean_target, target_source=target_source,
-        aggregation=report)
+        aggregation=report, evaluation_only=evaluation_only)
     if blockers:
         raise CandidateError(
             f"candidate {candidate_id}: refusing to create — " + "; ".join(blockers))
@@ -348,9 +372,9 @@ def build_candidate(*, episode: Episode, spec: TaskSpec, trajectory: Trajectory,
         lineage_group=lineage_group,
         parent_task_hash=parent_task_hash,
         state=CandidateState.CREATED,
-        dataset_eligible=True,
+        dataset_eligible=not evaluation_only,
         preference_eligible=False,
-        evaluation_only=False,
+        evaluation_only=evaluation_only,
         editor_id=editor_id or review.editor_id,
         student_output_changed=student_output_changed,
     )

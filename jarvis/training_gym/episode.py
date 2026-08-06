@@ -287,14 +287,22 @@ class Episode:
             if not human.approves:
                 problems.append(f"human decision is {human.decision.value}")
 
-        # Task-level eligibility.
+        # Task-level eligibility. Approving an episode states that the run is sound and
+        # a human accepted it — not that a model may be fitted on the result. Those are
+        # different claims, and `outcome()` already derives the second one independently
+        # and refuses evaluation-only material there. Conflating them meant held-out
+        # evidence could not be approved at all, so no evaluation corpus could be built
+        # through this chain.
         if self.spec.evaluation_only:
-            problems.append("task is evaluation_only and may never be trained on")
-        if not self.spec.dataset_eligible:
-            problems.append("task is marked not dataset eligible")
-        if not self.spec.sensitivity.dataset_eligible:
-            problems.append(f"task sensitivity {self.spec.sensitivity.value} is never "
-                            f"trainable")
+            if self.spec.dataset_eligible:
+                problems.append("task is evaluation_only and dataset_eligible; a record "
+                                "that is both is a training example scoring itself")
+        else:
+            if not self.spec.dataset_eligible:
+                problems.append("task is marked not dataset eligible")
+            if not self.spec.sensitivity.dataset_eligible:
+                problems.append(f"task sensitivity {self.spec.sensitivity.value} is "
+                                f"never trainable")
         return tuple(problems)
 
     def approve(self, *, actor: str, at: str = "", reason: str = "") -> EpisodeState:

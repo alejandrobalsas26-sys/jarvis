@@ -379,6 +379,14 @@ def plan_splits(candidates: Iterable[DatasetCandidate], *, policy: SplitPolicy,
     if not targets:
         raise SplitError("split: the policy assigns a nonzero share to no split")
 
+    for name, split in sorted((forced or {}).items()):
+        target = DatasetSplit(split)
+        if target in _TRAIN_SIDE:
+            raise SplitError(
+                f"split: refusing to force group {short(name)} into {target.value}. An "
+                f"override may isolate a record; it may never place one into training, "
+                f"because that is a hole through every other control here")
+
     records = list(candidates)
     quarantined: list[str] = []
     excluded: list[str] = []
@@ -388,17 +396,17 @@ def plan_splits(candidates: Iterable[DatasetCandidate], *, policy: SplitPolicy,
                                CandidateState.FAILED, CandidateState.REVOKED):
             quarantined.append(candidate.candidate_id)
         elif candidate.evaluation_only or not candidate.dataset_eligible:
-            excluded.append(candidate.candidate_id)
+            # Held-out-only material is never *assigned* a split by the hash: the hash
+            # can land on TRAIN, and this record may never go there. It participates
+            # only when an operator has explicitly named a destination for its group,
+            # and the loop above has already refused every train-side destination. With
+            # no such entry it stays excluded, exactly as before.
+            if (forced or {}).get(leakage_group_key(candidate)):
+                eligible.append(candidate)
+            else:
+                excluded.append(candidate.candidate_id)
         else:
             eligible.append(candidate)
-
-    for name, split in sorted((forced or {}).items()):
-        target = DatasetSplit(split)
-        if target in _TRAIN_SIDE:
-            raise SplitError(
-                f"split: refusing to force group {short(name)} into {target.value}. An "
-                f"override may isolate a record; it may never place one into training, "
-                f"because that is a hole through every other control here")
 
     groups = group_candidates(eligible)
     known = dict(getattr(ledger, "assignments", dict)()) if ledger is not None else {}
@@ -413,6 +421,19 @@ def plan_splits(candidates: Iterable[DatasetCandidate], *, policy: SplitPolicy,
             split = DatasetSplit(known[group_key])
         else:
             split = _assign_group(group_key, policy, targets)
+        # A backstop, not a second opinion. Groups merge transitively through shared
+        # fixtures, so a group's final key is not always the one an override named --
+        # and a merged group falls through to the hash, which can land on TRAIN. Rather
+        # than reason about when that can happen, refuse the outcome itself.
+        if split in _TRAIN_SIDE:
+            trapped = [m.candidate_id for m in members
+                       if m.evaluation_only or not m.dataset_eligible]
+            if trapped:
+                raise SplitError(
+                    f"split: group {short(group_key)} would place evaluation-only "
+                    f"records {sorted(trapped)[:3]} into {split.value}. Held-out "
+                    f"evidence a model was fitted or steered on measures nothing; give "
+                    f"the group its own lineage and no shared fixture, or leave it out")
         group_splits[group_key] = split.value
         for member in members:
             if split is DatasetSplit.QUARANTINE:
