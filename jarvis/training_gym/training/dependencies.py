@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -179,13 +180,25 @@ class DependencyReport:
 
     @property
     def ready(self) -> bool:
-        """True only when every package the method needs is installed and in range."""
+        """True only when every package the execution needs is installed and in range.
+
+        An empty requirement is not a satisfied one. A report that was never told what
+        the run needs knows nothing about this host, and answering "ready" to that
+        question is how a dependency gate becomes decorative — which is exactly what
+        happened to the evaluation CLI, whose three call sites all omitted the argument.
+        """
+        if not self.method_packages:
+            return False
         return all(self.state_of(p) is DependencyState.INSTALLED
                    for p in self.method_packages)
 
     def blockers(self) -> tuple[str, ...]:
         """Why a future execution could not start today. Empty means it could."""
         problems: list[str] = []
+        if not self.method_packages:
+            return ("no execution requirement was declared, so this report proves "
+                    "nothing about this host; a dependency gate asked no question "
+                    "cannot be passed",)
         for package in self.method_packages:
             state = self.state_of(package)
             if state is DependencyState.MISSING:
@@ -225,16 +238,28 @@ class DependencyReport:
                 f"-r requirements/{self.profile.value}.txt")
 
 
-def build_dependency_report(*, profile: DependencyProfile,
-                            method: TrainingMethod | None = None) -> DependencyReport:
+def build_dependency_report(
+        *, profile: DependencyProfile, method: TrainingMethod | None = None,
+        required_packages: Sequence[str] = ()) -> DependencyReport:
     """Probe every package the profile declares. Imports nothing, installs nothing.
 
     The method's requirements are probed too, even when the chosen profile does not
     declare them: a QLoRA run planned against the CPU ``training`` profile needs
     ``bitsandbytes``, and reporting that as "not asked about" rather than "not installed"
     would hide the exact reason the run cannot happen.
+
+    *required_packages* states the same thing for a caller that has no ``TrainingMethod``
+    to hand. Evaluation is that caller: it selects a *backend*, not a training method, so
+    before this existed every evaluation call site passed neither and received a report
+    that was ready by construction. See
+    :func:`training_gym.evaluation.backends.backend_required_packages`.
     """
-    required = tuple(method.required_packages) if method is not None else ()
+    ordered: list[str] = list(method.required_packages) if method is not None else []
+    for package in required_packages:
+        name = str(package).strip()
+        if name and name not in ordered:
+            ordered.append(name)
+    required = tuple(ordered)
     names = list(PROFILE_PACKAGES[profile])
     names += [p for p in required if p not in names]
     packages = tuple(probe_package(p) for p in names)

@@ -33,6 +33,33 @@ _NEVER_SELECTABLE: frozenset[str] = frozenset({
 })
 
 
+#: What each production backend must find installed before it could run. Declared here,
+#: one level below ``training_gym/evaluation/``, for the same reason the backend itself
+#: is: the purity scan over that directory must keep holding.
+#:
+#: These are the packages the *evaluation* path resolves, which is not the training set.
+#: ``datasets``, ``trl`` and ``accelerate`` fit a model; generating from one and
+#: attaching a LoRA needs torch, transformers, peft and the safetensors reader.
+BACKEND_REQUIRED_PACKAGES: dict[str, tuple[str, ...]] = {
+    "transformers_peft": ("torch", "transformers", "peft", "safetensors"),
+}
+
+
+def backend_required_packages(backend_id: object) -> tuple[str, ...]:
+    """What a live evaluation on this backend needs. Imports nothing, probes nothing.
+
+    Refuses an unknown name rather than returning ``()``. An empty requirement makes a
+    dependency report ready by construction, so "I do not know this backend" must not be
+    expressible as "this backend needs nothing".
+    """
+    name = str(backend_id or "").strip()
+    if name not in BACKEND_REQUIRED_PACKAGES:
+        raise EvaluationBackendError(
+            f"evaluation backend {name!r} declares no dependency requirement; a backend "
+            f"this repository cannot describe is one it cannot check a host against")
+    return BACKEND_REQUIRED_PACKAGES[name]
+
+
 def available_backends() -> tuple[str, ...]:
     """The backend ids a production evaluation may name."""
     return PRODUCTION_BACKEND_IDS
@@ -63,4 +90,5 @@ def get_backend(backend_id: object):
         f"evaluation backend {name!r} is listed but not constructible")
 
 
-__all__ = ["PRODUCTION_BACKEND_IDS", "available_backends", "get_backend"]
+__all__ = ["BACKEND_REQUIRED_PACKAGES", "PRODUCTION_BACKEND_IDS", "available_backends",
+           "backend_required_packages", "get_backend"]

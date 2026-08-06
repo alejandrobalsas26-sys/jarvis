@@ -164,11 +164,30 @@ def _check_references(args) -> int:
     return EXIT_OK if pair.ok else EXIT_REFERENCES
 
 
-def _check_dependencies(args) -> int:
-    from training_gym.training.dependencies import build_dependency_report
+#: The backend every path in this command plans against. Named once so the dependency
+#: question, the plan record and the execution all ask about the same thing.
+BACKEND_ID = "transformers_peft"
+
+
+def _dependency_report(backend_id: str = BACKEND_ID):
+    """Probe what THIS backend needs. Never called without a backend.
+
+    Every call site in this file used to omit the requirement, which left
+    ``DependencyReport.ready`` true by construction and the ``--execute`` gate unable to
+    block on a host with nothing installed.
+    """
+    from training_gym.evaluation.backends import backend_required_packages
     from training_gym.training.config import DependencyProfile
-    report = build_dependency_report(profile=DependencyProfile.TRAINING)
-    _emit({"status": "checked", "profile": "training", "ready": report.ready,
+    from training_gym.training.dependencies import build_dependency_report
+    return build_dependency_report(
+        profile=DependencyProfile.TRAINING,
+        required_packages=backend_required_packages(backend_id))
+
+
+def _check_dependencies(args) -> int:
+    report = _dependency_report()
+    _emit({"status": "checked", "profile": "training", "backend_id": BACKEND_ID,
+           "required_packages": list(report.method_packages), "ready": report.ready,
            "blockers": list(report.blockers()),
            "dependency_report_hash": report.report_hash(),
            "note": "reported by probing metadata; nothing was imported and nothing "
@@ -227,13 +246,11 @@ def _plan(args):
         plan_state_sequence,
     )
     from training_gym.evaluation.runner import ORDER_POLICY_BALANCED
-    from training_gym.training.config import DependencyProfile
-    from training_gym.training.dependencies import build_dependency_report
     from training_gym.training.environment import HardwareCapabilityReport
 
     config = _load(args)
     baseline, adapter, pair = _references(config, args)
-    dependencies = build_dependency_report(profile=DependencyProfile.TRAINING)
+    dependencies = _dependency_report()
     hardware = HardwareCapabilityReport.detect(output_root=args.output_root)
 
     from training_gym.datasets.manifests import load_manifest
@@ -250,8 +267,11 @@ def _plan(args):
                                       config.evaluation_generation))
     if not task_count:
         blockers.append("the selected splits contribute no task")
+    # A missing runtime package is a blocker, not a warning. `--execute` cannot load a
+    # model without one, so a plan that reports itself executable on a host that lacks
+    # it is describing a run that would refuse a moment later.
+    blockers.extend(dependencies.blockers())
     warnings = list(pair.warnings)
-    warnings.extend(dependencies.blockers())
 
     def shard(split_name: str) -> str:
         entry = next((s for s in config.splits.splits if s.value == split_name), None)
@@ -296,7 +316,7 @@ def _plan(args):
         expected_grader_executions=max(1, task_count) * 6,
         expected_files=EXPECTED_EVALUATION_FILES,
         expected_state_transitions=plan_state_sequence(awaiting_confirmation=True),
-        backend_id="transformers_peft", created_at_utc=config.created_at_utc,
+        backend_id=BACKEND_ID, created_at_utc=config.created_at_utc,
         warnings=tuple(dict.fromkeys(warnings)), blockers=tuple(dict.fromkeys(blockers)))
     return config, baseline, adapter, plan
 
@@ -372,12 +392,10 @@ def _execute(args) -> int:
     except Exception as exc:  # noqa: BLE001
         return _fail(str(exc), as_json=args.json, code=EXIT_REPLAY)
 
-    from training_gym.training.config import DependencyProfile
-    from training_gym.training.dependencies import build_dependency_report
-    dependencies = build_dependency_report(profile=DependencyProfile.TRAINING)
+    dependencies = _dependency_report()
     if not dependencies.ready:
         return _fail(
-            "the training profile is not installed in this environment: "
+            "the packages this backend needs are not installed in this environment: "
             + "; ".join(dependencies.blockers()[:5])
             + ". Install it yourself in a dedicated environment; this command never "
               "installs anything",
