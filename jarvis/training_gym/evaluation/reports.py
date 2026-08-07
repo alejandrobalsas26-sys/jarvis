@@ -122,6 +122,30 @@ class EligibilityDecision:
         return sha256_obj(self.to_dict())
 
 
+#: States a report may legitimately carry at the moment it is serialised.
+#:
+#: A report cannot be written in ``COMPLETED``. ``EvaluationManifest`` binds
+#: ``report_hash``, so the report must be final BEFORE the manifest is sealed, and the
+#: manifest must be sealed and re-verified BEFORE ``ARTIFACT_VALIDATION`` may move to
+#: ``COMPLETED``. Asking the report to already say "completed" is a circular demand: the
+#: only way to satisfy it is to rewrite the report after the manifest that binds it, or
+#: to assert a terminal state the run has not reached.
+#:
+#: So ``run_state`` on a report answers "where was this serialised", not "how did this
+#: end", and the two must not be conflated. Treating the serialisation state as an
+#: outcome put ``"the evaluation ended in comparing, not completed"`` on the blocker list
+#: of every live run — observed in V69 M62 S3E.2, where it was spurious and changed
+#: nothing only because two independent security blockers already decided the outcome.
+#:
+#: A TERMINAL state that is not ``COMPLETED`` is still a real blocker, and a non-terminal
+#: state outside this set is still an anomaly worth blocking on: a report serialised in
+#: ``RUNNING_BASELINE`` describes a run that never scored anything.
+REPORT_SERIALISATION_STATES: frozenset[EvaluationRunState] = frozenset({
+    EvaluationRunState.COMPARING,
+    EvaluationRunState.ARTIFACT_VALIDATION,
+})
+
+
 def decide_eligibility(*, gates: GateReport, empirical: EmpiricalStatus,
                        summary: ComparisonSummary,
                        run_state: EvaluationRunState) -> EligibilityDecision:
@@ -142,8 +166,13 @@ def decide_eligibility(*, gates: GateReport, empirical: EmpiricalStatus,
             warnings=tuple(warnings),
             rationale="the evaluation was quarantined; a quarantined run is never "
                       "eligible, whatever its numbers say")
-    if not run_state.is_successful:
-        blockers.insert(0, f"the evaluation ended in {run_state.value}, not completed")
+    if run_state.is_terminal:
+        if not run_state.is_successful:
+            blockers.insert(0,
+                            f"the evaluation ended in {run_state.value}, not completed")
+    elif run_state not in REPORT_SERIALISATION_STATES:
+        blockers.insert(0, f"the report was serialised in {run_state.value}, which is "
+                           f"not a state a run reaches on the way to completion")
 
     if gates.security_blockers:
         return EligibilityDecision(
@@ -409,7 +438,8 @@ def verify_report_payload(payload: object, *, expected_hash: str = "") -> dict:
 
 
 __all__ = [
-    "REPORT_SCHEMA_VERSION", "SYNTHETIC_BACKEND_IDS", "CandidateEligibility",
+    "REPORT_SCHEMA_VERSION", "REPORT_SERIALISATION_STATES", "SYNTHETIC_BACKEND_IDS",
+    "CandidateEligibility",
     "EligibilityDecision", "EmpiricalStatus", "EvaluationReport", "ReportError",
     "build_report", "classify_empirical_status", "decide_eligibility",
     "verify_report_payload",
