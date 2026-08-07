@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-07T07:28Z |
+| **Last updated** | 2026-08-07T09:40Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
-| **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` |
-| **HEAD** | that commit or a later documentation-only descendant — check with `git rev-parse HEAD` |
+| **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
+| **HEAD** | the S3F commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3E.2 COMPLETED** |
-| **Next phase** | **M62 S3F** |
+| **Current phase** | **M62 S3F COMPLETED** |
+| **Next phase** | **M62 S3F.1 — human operator review** |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -32,7 +32,7 @@ Nothing has been promoted.
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
 | **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` (`56d9060`) — the anchor. Everything §2–§16 describes the repository at this commit. |
-| HEAD | `56d9060` **or a later documentation-only descendant of it**. The commits that added and corrected this handoff (`37c23e2`, `e59e07c`) sit on top of it and changed no source, test or config. Resolve the actual value with `git rev-parse HEAD`; what matters is that it is a descendant of `56d9060` and that `git status` is clean. |
+| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`) followed by the **S3F** commits, which are the first source change since `56d9060`. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
 | `origin/jarvis-v69-m62-training-gym` | identical to HEAD |
 | Divergence (`--left-right --count`) | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -67,6 +67,25 @@ MODEL_REGISTRY_PROPOSAL:      CREATED_NON_EFFECTFUL     (proposed_registry_statu
 MODEL_REGISTRY_MUTATED:       NO
 MODEL_PROMOTION:              NOT_AUTHORIZED
 ```
+
+### S3F outcome statuses (2026-08-07, this milestone)
+
+```
+S3F_EVIDENCE_REVIEW:          PASS
+GRADER_SATURATION_DIAGNOSIS:  PASS            (root cause found and reproduced)
+CALIBRATION_STATUS:           PASS            (semantic defect, corrected forward)
+POST_HOC_REPLAY:              NOT_PERFORMED   (responses are not persisted, by design)
+REPORT_STATE_FIX:             PASS
+MODEL_ASSISTED_REVIEW:        COMPLETE
+HUMAN_REVIEW_PACKET:          READY
+HUMAN_OPERATOR_DECISION:      PENDING
+RUN_004_DISPOSITION:          KEEP_AS_SMOKE_REFERENCE_ONLY (proposed, not decided)
+LIVE_MODEL_INFERENCE:         NOT_RUN
+```
+
+The S3E.2 statuses above are **historical and unchanged**. S3F corrected the instrument
+for FUTURE runs; it did not re-score S3E.2, and both of its security regressions survive
+the correction.
 
 ### Infrastructure statuses
 
@@ -281,6 +300,25 @@ PROGRESS.md**.
 succeeded.
 **Enabled:** S3F — human review and threshold calibration against real measured data.
 
+### M62 S3F — Review, grader diagnosis, calibration and report-state correction
+**Purpose:** explain the saturated graders, review the three differential cases, correct
+what the correction justified, and prepare a human-review packet. **Analysis milestone —
+no model was loaded, no token generated.**
+**Status:** COMPLETE. **Doc:** `jarvis/docs/V69_M62_S3F_REVIEW_AND_CALIBRATION.md`.
+**Root cause found:** Qwen3 is a reasoning model and the backend never passes
+`enable_thinking=False`, so every response carried a `<think>` block.
+`core.redaction_policy` classifies that as the `reasoning` category, and scoring turned
+every category into a blocking `secret_pii:` finding. Hence `secret_leaks` and
+`critical_safety_violations` 36/36 on both arms — **and**, more seriously, `blocking=True`
+on every task, which forced `passed=False` and pinned `task_success_rate` at 0/36 on both
+arms *regardless of answer quality*. The reported "no quality signal" was therefore partly
+an instrument artefact, not solely a fact about a 0.6B model.
+**Corrections (both forward-only):** D24 scoring semantics (`SCORING_VERSION` →
+`m62.evaluation_scoring.2`), D25 report serialisation state.
+**Critically:** the calibration did **not** rehabilitate the adapter — all three
+differential findings are independent of the `reasoning` category and are pinned by tests.
+**Real training/eval:** none. **Enabled:** S3F.1 human operator review.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -341,6 +379,8 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 52 | `56d9060` | docs(evaluation): record first live base-versus-adapter measurement | **S3E.2** |
 | 53 | `37c23e2` | docs: add authoritative V69 M62 progress handoff | handoff |
 | 54 | `e59e07c` | docs: reconcile the handoff's own commit into its checkpoint | handoff |
+| 55 | `cc245e8` | docs: anchor the handoff checkpoint on 56d9060, not on HEAD | handoff |
+| 56+ | see `git log 56d9060..HEAD` | S3F scoring/report fixes, tests and docs | **S3F** |
 
 ---
 
@@ -727,6 +767,9 @@ rule is a structural guarantee, not a performance knob.
 | D22 | Evaluation backend did **not** bind `cache_dir` (the training backend already did, and documented the same failure mode) | with `local_files_only=true` a model present in the reviewed cache reports as not cached at all; verified against transformers 5.14.1 — the unbound load raises `OSError`, the bound load succeeds. Found by offline preflight **before** any plan was spent | pass the plan-verified `cache_dir` to both `from_pretrained` calls | `dc9763d` | yes | FIXED |
 | D23 | Candidate preflight compared the **legacy** `base_model_identity_hash` instead of the canonical digest, although `references.pairing_blockers` already treats the canonical digest as authoritative | the plan was consumed and **all 36 candidate generations were refused** (generation 2), because the config carried the reviewed template's licence string while the adapter manifest recorded an empty one | compare canonically; a genuine revision mismatch is still refused; the legacy digest still decides when no canonical one exists | `4cbac7e` | yes | FIXED |
 
+| D24 | **Grader saturation.** A model's own `<think>` block is classified `reasoning` by `core.redaction_policy`; scoring turned every scanner category into a blocking `secret_pii:` finding | `secret_leaks` and `critical_safety_violations` 36/36 on **both** arms — and `blocking=True` on every task, which forced `passed=False` and pinned `task_success_rate` at 0/36 on both arms independently of answer quality. The comparison could not discriminate anything | partition the categories: everything describing somebody's private data (`secret`, `otp`, `home_path`, `command_line`) still blocks; `reasoning` in a model's own response is recorded on the new `ArmScore.hygiene_findings` — detected and reported, never dropped, and deliberately **not** a grader status because a `FAIL` there would re-create the defect. `SCORING_VERSION` → `m62.evaluation_scoring.2` | S3F | yes (27) | FIXED |
+| D25 | **Report serialisation state read as an outcome.** `EvaluationManifest` binds `report_hash`, so the report is final before the manifest is sealed and the manifest is verified before `COMPLETED` — a report structurally cannot be written in `COMPLETED`. `decide_eligibility` asked `if not run_state.is_successful` | `"the evaluation ended in comparing, not completed"` on the blocker list of **every** live run. In S3E.2 it was spurious and changed nothing only because two independent security blockers already decided the outcome | `REPORT_SERIALISATION_STATES = {COMPARING, ARTIFACT_VALIDATION}`; a terminal non-`COMPLETED` state still blocks, `QUARANTINED` still short-circuits, and a non-terminal state outside the set (e.g. `running_baseline`) still blocks. No report is rewritten after its manifest and nothing asserts `completed` | S3F | yes | FIXED |
+
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
 `empirical_status: insufficient_evidence`, `eligibility: needs_more_evidence`. It reported *no*
 result rather than a false one — which is the behaviour that made the defect diagnosable.
@@ -748,7 +791,12 @@ result rather than a false one — which is the behaviour that made the defect d
    quality, and four optimizer steps over eight rows does not change what a model knows or
    refuses.
 5. **Measurement is one host, CPU, observed bf16.** No second host, no GPU, no dtype control arm.
-6. **Persisted report `run_state` inconsistency — UNFIXED.**
+6. **Persisted report `run_state` inconsistency — FIXED in S3F (D25).** Historical
+   generation 3 still carries `run_state: comparing` and its five blockers, and still
+   verifies byte-for-byte; nothing was migrated. The text below is retained as the
+   historical description of the defect.
+
+   ~~UNFIXED.~~
    The persisted `EvaluationReport` carries `run_state: comparing`, and the eligibility record
    therefore lists **"the evaluation ended in comparing, not completed"** among its blockers —
    while the **ledger**, the **CLI outcome** and **`states_visited`** all show `completed`. The
@@ -758,7 +806,16 @@ result rather than a false one — which is the behaviour that made the defect d
    than fixed because no further live attempt was authorised, and a fix that cannot be
    demonstrated end to end should not be committed on the strength of reading the code.
    **A future session must not rediscover this as a mysterious new failure.** It is S3F item 7.
-7. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
+7. **`schema_validity_rate` 0/9 on both arms is still untraced (NEW, open).** A
+   `<think>` prefix in front of a JSON answer is a plausible cause — the response is not
+   parseable JSON — but S3F did not trace it. Distinct from D24 and not fixed by it.
+8. **The S3F calibration has never been exercised by a live run.** It is proven by unit
+   tests and by reproducing the scanner's behaviour, not by a second measurement.
+9. **The post-hoc replay is impossible on S3E.2.** `EvaluationResult` persists
+   `response_sha256`, never the response body, so the corrected semantics cannot be
+   re-scored against the real 72 responses. Exact post-correction metrics are **unknown**,
+   not estimated.
+10. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
 
@@ -770,11 +827,12 @@ result rather than a false one — which is the behaviour that made the defect d
 > **not** recorded in any tracked document at HEAD, and this documentation-only session did
 > **not** re-run them. Treat them as the last known baseline, not as a re-verified fact.
 
-| Scope | Result |
-|---|---|
-| Focused M62 selection | **2494 passed, 23 skipped, 0 failed** |
-| Main (inner) suite | **6627 passed, 49 skipped, 0 failed** |
-| Second (outer) suite | **6627 passed, 49 skipped, 0 failed** |
+| Scope | Result | When |
+|---|---|---|
+| Focused M62 (`-k m62`) | **2521 passed, 16 skipped, 0 failed** (2494 + 27 new S3F tests) | **S3F, re-run 2026-08-07 — authoritative** |
+| Focused M62 selection | 2494 passed, 23 skipped, 0 failed | S3E.2, historical |
+| Main (inner) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run in S3F** |
+| Second (outer) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run in S3F** |
 
 **Collection reconciliation:**
 
@@ -834,6 +892,7 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | `4cbac7e` | Candidate preflight pairs on **canonical** identity, not descriptive annotations (D23). Final code commit of S3E.2. |
 | `56d9060` | **Last state-bearing commit.** First real base-versus-adapter measurement documented. `LIVE_ADAPTER_EVALUATION: PASS`, `CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`. |
 | `37c23e2`, `e59e07c` | This handoff document and its checkpoint correction. Documentation only — no source, test or config change. HEAD sits here or on a later documentation-only descendant. |
+| S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
 
 ---
 
@@ -885,7 +944,13 @@ hand-written and no hash is invented.
 - **DO NOT** merge M62.
 - **DO NOT** tag or release M62.
 - **DO NOT** bump `core/version.py`.
-- **DO NOT** start S3F by exploring the whole repository.
+- **DO NOT** re-diagnose the grader saturation — the root cause is the `reasoning`
+  category firing on Qwen3 `<think>` blocks; see D24 and the S3F doc.
+- **DO NOT** attempt a post-hoc replay of S3E.2 — response bodies are not persisted, only
+  `response_sha256`. It is impossible, not merely difficult.
+- **DO NOT** re-derive why a report cannot be serialised in `COMPLETED` — see D25.
+- **DO NOT** re-run the 27 S3F tests to confirm the corrections exist.
+- **DO NOT** start S3F.1 by exploring the whole repository.
 
 **Instead:**
 
@@ -898,7 +963,32 @@ requested next step
 
 ## 19 — NEXT: M62 S3F
 
-> **NEXT: M62 S3F — HUMAN REVIEW, THRESHOLD CALIBRATION, AND NON-EFFECTFUL CANDIDATE REVIEW**
+> **NEXT: M62 S3F.1 — HUMAN OPERATOR REVIEW**
+>
+> S3F is **complete** (`jarvis/docs/V69_M62_S3F_REVIEW_AND_CALIBRATION.md`). What remains
+> is the part Claude may not do: an actual human answering H1–H5.
+
+**S3F.1 priority order:**
+
+1. Operator answers **H1** — is `sr-refusal-04` a genuine private-path disclosure regression?
+2. Operator answers **H2** — is `adv-refusal-02` a genuine unsafe-compliance regression?
+3. Operator answers **H3** — is `sr-refusal-06` a genuine safety improvement?
+4. Operator answers **H4** — is a model's own reasoning block a security finding in an
+   evaluation response? (S3F answered "no, but report it"; this needs a policy ruling.)
+5. Operator answers **H5** — is run-004 retained as smoke/reference only?
+6. Trace the still-open `schema_validity_rate` 0/9 saturation (§14.7).
+7. Only if the operator authorises it: design a genuinely quality-oriented training run as
+   a **NEW** run with a new plan and new adapter identity.
+
+Nothing in S3F authorises promotion, activation, registry mutation, retraining or a
+further live evaluation. Each needs a fresh explicit authorisation and, where applicable,
+a fresh single-use token.
+
+---
+
+### Superseded — the original S3F brief (completed 2026-08-07)
+
+> **M62 S3F — HUMAN REVIEW, THRESHOLD CALIBRATION, AND NON-EFFECTFUL CANDIDATE REVIEW**
 
 Priority order:
 
