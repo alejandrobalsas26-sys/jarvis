@@ -10,7 +10,8 @@
 | **Last updated** | 2026-08-07T07:28Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
-| **HEAD** | `56d9060d6cf8c103155420a429e342392a7062fb` |
+| **HEAD** | `37c23e2f4ea48668fc982a39cb67d83c9dbe7757` (this document) |
+| **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
 | **Current phase** | **M62 S3E.2 COMPLETED** |
 | **Next phase** | **M62 S3F** |
@@ -30,8 +31,9 @@ Nothing has been promoted.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| HEAD (full) | `56d9060d6cf8c103155420a429e342392a7062fb` |
-| HEAD (short) | `56d9060` |
+| HEAD (full) | `37c23e2f4ea48668fc982a39cb67d83c9dbe7757` — the commit that added this document |
+| HEAD (short) | `37c23e2` |
+| Last state-bearing commit | `56d9060d6cf8c103155420a429e342392a7062fb` (`56d9060`) — everything §2–§16 describes. `37c23e2` is documentation only and changed no source, test or config. |
 | `origin/jarvis-v69-m62-training-gym` | identical to HEAD |
 | Divergence (`--left-right --count`) | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -40,7 +42,7 @@ Nothing has been promoted.
 | Merge status | **not merged** into `master` |
 | Tag status | **no M62 tag**. Newest tags are `v60-opus-cooked`, `v61-brain-ironman-foundation` |
 | Release status | **no release** |
-| Commits ahead of master base | 52 (`3705114..HEAD`) |
+| Commits ahead of master base | 53 (`3705114..HEAD`) — 52 state-bearing + this document |
 
 **DO NOT RESET TO AN EARLIER M62 CHECKPOINT.**
 Every hash listed elsewhere in this document is a *historical* milestone marker, not a restart
@@ -337,7 +339,8 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 49 | `57f7a58` | docs(evaluation): document live-ready S3E.1 infrastructure | **S3E.1** |
 | 50 | `dc9763d` | fix(evaluation): read the reviewed model cache the plan verified | S3E.2 |
 | 51 | `4cbac7e` | fix(evaluation): pair arms on canonical identity, not annotations | S3E.2 |
-| 52 | `56d9060` | docs(evaluation): record first live base-versus-adapter measurement | **S3E.2 / HEAD** |
+| 52 | `56d9060` | docs(evaluation): record first live base-versus-adapter measurement | **S3E.2** |
+| 53 | `37c23e2` | docs: add authoritative V69 M62 progress handoff | **handoff / HEAD** |
 
 ---
 
@@ -829,7 +832,8 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | `57f7a58` | **S3E.1 live-ready infrastructure documented.** `LIVE_EVALUATION_INFRASTRUCTURE_READY = YES`, `LIVE_ADAPTER_EVALUATION = NOT_RUN`. Plan `0826ec14…` built, **token not consumed**. That plan hash is superseded by `f966ad69…`. |
 | `dc9763d` | Evaluation backend binds the reviewed `cache_dir` the plan verified (D22). |
 | `4cbac7e` | Candidate preflight pairs on **canonical** identity, not descriptive annotations (D23). Final code commit of S3E.2. |
-| `56d9060` | **CURRENT HEAD.** First real base-versus-adapter measurement documented. `LIVE_ADAPTER_EVALUATION: PASS`, `CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`. |
+| `56d9060` | **Last state-bearing commit.** First real base-versus-adapter measurement documented. `LIVE_ADAPTER_EVALUATION: PASS`, `CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`. |
+| `37c23e2` | **CURRENT HEAD.** This handoff document. Documentation only — no source, test or config change. |
 
 ---
 
@@ -964,7 +968,7 @@ git rev-parse origin/master
 
 ```
 branch      = jarvis-v69-m62-training-gym
-HEAD        = <current HEAD after the PROGRESS.md commit>
+HEAD        = 37c23e2… or a later descendant
 divergence  = 0  0
 worktree    = clean
 master      = 3705114228edef2f665be349c5c4429b7b16777a   (unchanged)
