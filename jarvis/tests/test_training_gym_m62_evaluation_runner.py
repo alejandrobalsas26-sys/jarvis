@@ -747,6 +747,63 @@ def test_a_mutable_base_revision_is_refused_at_preflight(tmp_path):
     assert any("immutable commit" in p for p in problems)
 
 
+def _identity_problems(baseline, *, tmp_path):
+    """The identity verdict `readiness` reaches for a candidate arm.
+
+    Other artefact problems are expected here (the directory is empty); this isolates
+    the one message under test.
+    """
+    backend = _backend_module().TransformersPeftEvaluationBackend()
+    problems = backend.readiness(_request(
+        EvaluationRole.CANDIDATE, baseline=baseline, model_cache_root=tmp_path,
+        adapter_directory=tmp_path))
+    return [p for p in problems if "different base model identity" in p]
+
+
+def test_a_descriptive_annotation_is_not_a_different_base_model(tmp_path):
+    """The licence string and the cache status must not decide model identity.
+
+    Regression: the legacy ``base_model_identity_hash`` digests the whole record,
+    including ``license_reference`` and ``cache_status``. Comparing it here refused every
+    candidate generation of a real run whose adapter and baseline were the same
+    Qwen/Qwen3-0.6B at the same immutable revision -- after the plan had been consumed,
+    and after ``verify_reference_pair`` had already reported ``pair_ok``. The canonical
+    digest is what "a different base model" means.
+    """
+    annotated = base_reference_from_identity(ModelIdentity(
+        provider="huggingface", model_id="Qwen/Qwen3-0.6B", revision=_REV,
+        parameters_b=0.6, tokenizer_id="Qwen/Qwen3-0.6B", tokenizer_revision=_REV,
+        cache_status=CacheStatus.PRESENT, cache_evidence="c" * 64,
+        license_reference="see the model card on the hub"))
+
+    # The annotation really does move the legacy digest, so the test is not vacuous.
+    assert annotated.base_model_identity_hash != _adapter().base_model_identity_hash
+    assert annotated.base_model_canonical_identity_hash == \
+        _adapter().base_model_canonical_identity_hash
+
+    assert _identity_problems(annotated, tmp_path=tmp_path) == []
+
+
+def test_a_genuinely_different_base_model_is_still_refused(tmp_path):
+    """The canonical digest still has to reject a real mismatch."""
+    other = base_reference_from_identity(ModelIdentity(
+        provider="huggingface", model_id="Qwen/Qwen3-0.6B", revision="b" * 40,
+        parameters_b=0.6, tokenizer_id="Qwen/Qwen3-0.6B", tokenizer_revision="b" * 40,
+        cache_status=CacheStatus.PRESENT, cache_evidence="c" * 64))
+    assert other.base_model_canonical_identity_hash != \
+        _adapter().base_model_canonical_identity_hash
+    assert _identity_problems(other, tmp_path=tmp_path) != []
+
+
+def test_the_legacy_digest_still_decides_when_no_canonical_one_exists(tmp_path):
+    """A record written before the canonical authority cannot be upgraded, so the legacy
+    digest is the only evidence left and refusing is the safe direction."""
+    legacy_only = dataclasses.replace(
+        _baseline(), base_model_canonical_identity_hash="",
+        base_model_identity_hash="d" * 64)
+    assert _identity_problems(legacy_only, tmp_path=tmp_path) != []
+
+
 def test_a_missing_adapter_directory_is_refused_at_preflight(tmp_path):
     backend = _backend_module().TransformersPeftEvaluationBackend()
     problems = backend.readiness(_request(

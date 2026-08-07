@@ -228,7 +228,26 @@ class TransformersPeftEvaluationBackend:
             problems.append(f"adapter artefact: {ADAPTER_CONFIG_FILE} is missing")
         if not (path / ADAPTER_WEIGHTS_FILE).is_file():
             problems.append(f"adapter artefact: {ADAPTER_WEIGHTS_FILE} is missing")
-        if adapter.base_model_identity_hash != request.baseline.base_model_identity_hash:
+        # Canonical first, exactly as `references.pairing_blockers` decides it. The legacy
+        # `base_model_identity_hash` digests the whole record, including `cache_status`
+        # and `license_reference` -- descriptive annotations that say nothing about which
+        # weights load. Comparing those here contradicts the reference authority that
+        # already passed this pair at plan time: the plan is consumed, then every
+        # candidate generation is refused over a licence string. The canonical digest
+        # covers model id, revision, tokenizer and remote-code posture, which is what
+        # "a different base model" actually means.
+        base_canonical = request.baseline.base_model_canonical_identity_hash
+        adapter_canonical = adapter.base_model_canonical_identity_hash
+        if base_canonical and adapter_canonical:
+            if base_canonical != adapter_canonical:
+                problems.append(
+                    "the adapter was trained against a different base model identity "
+                    "than the baseline arm is loading")
+        elif adapter.base_model_identity_hash != \
+                request.baseline.base_model_identity_hash:
+            # One side predates the canonical authority and cannot be upgraded. The
+            # legacy digest is the only evidence left, so it decides -- refusing is the
+            # safe direction when the durable identity cannot be re-derived.
             problems.append(
                 "the adapter was trained against a different base model identity than "
                 "the baseline arm is loading")
