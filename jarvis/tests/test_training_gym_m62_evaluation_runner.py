@@ -620,6 +620,36 @@ def test_the_production_backend_pins_every_safety_critical_argument(fragment):
     assert fragment in _backend_code()
 
 
+def test_every_weight_load_binds_the_reviewed_model_cache_root():
+    """``readiness`` refuses a request naming no ``model_cache_root``; the loads must
+    then actually read THAT root.
+
+    Left unbound, ``from_pretrained`` resolves against the default hub cache. With
+    ``local_files_only=True`` a model cached in the reviewed root then reports as not
+    cached at all, so the run consumes its plan and fails every task -- measured against
+    transformers 5.14.1, where the unbound call raises OSError for a model that is
+    present in the reviewed cache. Checked by AST rather than by substring: the value
+    must reach the call, not merely appear in the file.
+    """
+    tree = ast.parse(Path(_backend_module().__file__).read_text(encoding="utf-8"))
+    loads = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "from_pretrained"
+             and ast.unparse(node.func).startswith("transformers.")]
+    assert len(loads) == 2, "expected exactly the tokenizer load and the model load"
+    for call in loads:
+        assert "cache_dir" in {kw.arg for kw in call.keywords}, (
+            f"{ast.unparse(call.func)} does not bind cache_dir, so it would read the "
+            f"default hub cache instead of the reviewed root")
+
+    bound = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == "cache_dir"
+                     for t in node.targets)]
+    assert bound, "cache_dir must be bound from the request"
+    assert "request.model_cache_root" in ast.unparse(bound[0].value), (
+        "cache_dir must derive from the reviewed root the plan verified")
+
+
 def test_the_chat_template_is_read_as_a_tensor_not_a_batch_encoding():
     """transformers 5 defaults ``apply_chat_template`` to ``return_dict=True``.
 

@@ -278,10 +278,19 @@ class TransformersPeftEvaluationBackend:
         policy = request.generation
         transformers, torch = runtime.transformers, runtime.torch
 
+        # The reviewed cache root `readiness` insists on must be the root the load
+        # actually reads. Left unset, `from_pretrained` resolves against the default hub
+        # cache instead: this backend would refuse a request that named no cache root,
+        # then quietly read a different cache than the one the plan verified — and with
+        # `local_files_only=True` a correctly-cached model reports as not cached at all.
+        # `None` is the library's own default, so naming no cache root changes nothing.
+        cache_dir = str(request.model_cache_root) if request.model_cache_root else None
+
         transformers.set_seed(policy.seed)
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             baseline.tokenizer_id, revision=baseline.tokenizer_revision,
-            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=LOCAL_FILES_ONLY)
+            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=LOCAL_FILES_ONLY,
+            cache_dir=cache_dir)
         template = getattr(tokenizer, "chat_template", None)
         if not template:
             return self._failed(request, BackendErrorCategory.CHAT_TEMPLATE,
@@ -299,7 +308,8 @@ class TransformersPeftEvaluationBackend:
 
         model = transformers.AutoModelForCausalLM.from_pretrained(
             baseline.base_model_id, revision=baseline.base_model_revision,
-            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=LOCAL_FILES_ONLY)
+            trust_remote_code=TRUST_REMOTE_CODE, local_files_only=LOCAL_FILES_ONLY,
+            cache_dir=cache_dir)
         model.eval()
         adapter_active = False
         if request.is_candidate:
