@@ -658,13 +658,29 @@ def test_the_chat_template_is_read_as_a_tensor_not_a_batch_encoding():
     rather than inherited -- measured against transformers 5.14.1, where the unpinned
     call returns a BatchEncoding and the token count raises AttributeError.
     """
-    code = _backend_code()
-    assert "apply_chat_template(" in code
-    call = code[code.index("apply_chat_template("):]
-    call = call[:call.index(")") + 1]
-    assert "return_dict=False" in call, (
-        "apply_chat_template must pin return_dict=False; the library default is True "
-        "and returns a BatchEncoding this code cannot consume")
+    tree = ast.parse(_backend_code())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and ast.unparse(node.func).endswith("apply_chat_template")]
+    assert calls, "the backend must render a chat template"
+    tokenizing = [c for c in calls
+                  if any(kw.arg == "tokenize" and getattr(kw.value, "value", None) is True
+                         for kw in c.keywords)]
+    assert tokenizing, "the backend must tokenize a chat template somewhere"
+    for call in tokenizing:
+        kwargs = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
+        assert kwargs.get("return_dict") == "False", (
+            "apply_chat_template must pin return_dict=False wherever it tokenizes; the "
+            "library default is True and returns a BatchEncoding this code cannot "
+            "consume")
+    # A render with tokenize=False returns a string and has no BatchEncoding to pin,
+    # so the rule is scoped to the calls whose result is actually consumed as a tensor.
+    for call in calls:
+        if call in tokenizing:
+            continue
+        kwargs = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
+        assert kwargs.get("tokenize") == "False", (
+            "every apply_chat_template call must state whether it tokenizes, so this "
+            "rule cannot be sidestepped by omitting the argument")
 
 
 @pytest.mark.parametrize("forbidden", [

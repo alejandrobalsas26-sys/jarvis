@@ -153,6 +153,26 @@ def generation_kwargs(policy) -> dict:
     return kwargs
 
 
+def _template_honours_thinking(tokenizer, messages: list) -> bool:
+    """Whether this chat template actually implements ``enable_thinking``.
+
+    Rendered both ways and compared, rather than assumed. ``apply_chat_template`` passes
+    an unknown keyword into the Jinja context and a template that never reads it renders
+    the same string either way — which is a silent no-op, and a silent no-op in a setting
+    the report records as applied is worse than a refusal.
+    """
+    try:
+        on = tokenizer.apply_chat_template(messages, tokenize=False,
+                                           add_generation_prompt=True,
+                                           enable_thinking=True)
+        off = tokenizer.apply_chat_template(messages, tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=False)
+    except Exception:  # noqa: BLE001 - a template that refuses the kwarg does not honour it
+        return False
+    return bool(on) and bool(off) and on != off
+
+
 class TransformersPeftEvaluationBackend:
     """Base-model and base-plus-adapter inference. Structure reviewed, never executed."""
 
@@ -357,10 +377,27 @@ class TransformersPeftEvaluationBackend:
         # to ``generate`` hands a mapping to a parameter typed as a tensor. Both fail
         # loudly here, but the value that decides it is the library's, not ours, and it
         # has already changed once.
+        # Whether the model thinks before answering is a setting that changes every
+        # output, so it is read from the plan-bound policy rather than left to whichever
+        # default the template ships. S3E.2 passed nothing and got a <think> block on all
+        # 72 responses; MODEL_DEFAULT preserves exactly that behaviour.
+        thinking = policy.reasoning_policy.template_kwarg
+        template_kwargs: dict = {}
+        if thinking is not None:
+            if not _template_honours_thinking(tokenizer, messages):
+                return self._failed(
+                    request, BackendErrorCategory.CHAT_TEMPLATE,
+                    f"the generation policy asks for "
+                    f"reasoning_policy={policy.reasoning_policy.value} and this chat "
+                    f"template renders identically with enable_thinking on and off, so "
+                    f"the request would have no effect. Measuring under settings the "
+                    f"report says were applied, but were not, is the failure this "
+                    f"refuses", started)
+            template_kwargs["enable_thinking"] = thinking
         encoded = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
             return_tensors="pt", truncation=True, return_dict=False,
-            max_length=policy.max_input_tokens)
+            max_length=policy.max_input_tokens, **template_kwargs)
         input_tokens = int(encoded.shape[-1])
         truncated = input_tokens >= policy.max_input_tokens
         if truncated and not policy.truncation_permitted:
@@ -395,7 +432,8 @@ class TransformersPeftEvaluationBackend:
             peak_memory_category="unmeasured", finish_reason=finish,
             cleanup_status=cleanup,
             warnings=(f"load_strategy={self.load_strategy}",
-                      f"adapter_active={adapter_active}"),
+                      f"adapter_active={adapter_active}",
+                      f"reasoning_policy={policy.reasoning_policy.value}"),
             request_parity_hash=request.parity_hash())
 
     # -- cleanup ----------------------------------------------------------------

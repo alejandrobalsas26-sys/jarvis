@@ -38,7 +38,7 @@ from ..schemas import (
 from ..training.config import DevicePolicy, PrecisionPolicy
 
 #: Bumped when the policy's shape changes, invalidating outstanding confirmations.
-GENERATION_POLICY_VERSION = "m62.generation_policy.1"
+GENERATION_POLICY_VERSION = "m62.generation_policy.2"
 
 #: Ceilings. Not tuned — bounded, so a malformed config cannot request an unbounded run.
 MAX_NEW_TOKENS_CEILING = 8_192
@@ -69,6 +69,32 @@ class GenerationMode(str, Enum):
     def eligibility_grade(self) -> bool:
         """Whether a result produced under this mode may decide eligibility."""
         return self is GenerationMode.GREEDY_DETERMINISTIC
+
+
+class ReasoningPolicy(str, Enum):
+    """Whether the chat template is asked to let the model think before answering.
+
+    S3E.2 passed nothing, so the template's own default decided — and for a reasoning
+    model that default is "think", which put a ``<think>`` block in front of every one
+    of the 72 responses. That is a setting that changes every output, and a setting that
+    changes every output belongs in the digest both arms are compared under, not in a
+    kwarg the backend happens to omit.
+    """
+
+    #: Pass nothing; the chat template decides. What S3E.2 actually did, and therefore
+    #: the default, so no existing configuration silently changes behaviour.
+    MODEL_DEFAULT = "model_default"
+    #: Ask the template for ``enable_thinking=False``.
+    DISABLED = "disabled"
+    #: Ask the template for ``enable_thinking=True``.
+    ENABLED = "enabled"
+
+    @property
+    def template_kwarg(self) -> bool | None:
+        """The value to pass, or ``None`` to pass nothing at all."""
+        if self is ReasoningPolicy.MODEL_DEFAULT:
+            return None
+        return self is ReasoningPolicy.ENABLED
 
 
 class TruncationSide(str, Enum):
@@ -112,6 +138,7 @@ class GenerationPolicy:
     timeout_s: int = 120
     batch_size: int = 1
     truncation_side: TruncationSide = TruncationSide.REFUSE
+    reasoning_policy: ReasoningPolicy = ReasoningPolicy.MODEL_DEFAULT
     device_policy: DevicePolicy = DevicePolicy.AUTO_SAFE
     precision_policy: PrecisionPolicy = PrecisionPolicy.AUTO_SAFE
     policy_version: str = GENERATION_POLICY_VERSION
@@ -121,6 +148,9 @@ class GenerationPolicy:
         set_(self, "mode", require_enum(self.mode, GenerationMode, "generation.mode"))
         set_(self, "truncation_side", require_enum(self.truncation_side, TruncationSide,
                                                    "generation.truncation_side"))
+        set_(self, "reasoning_policy", require_enum(self.reasoning_policy,
+                                                    ReasoningPolicy,
+                                                    "generation.reasoning_policy"))
         set_(self, "device_policy", require_enum(self.device_policy, DevicePolicy,
                                                  "generation.device_policy"))
         set_(self, "precision_policy", require_enum(self.precision_policy,
@@ -246,6 +276,7 @@ class GenerationPolicy:
             "timeout_s": self.timeout_s,
             "batch_size": self.batch_size,
             "truncation_side": self.truncation_side.value,
+            "reasoning_policy": self.reasoning_policy.value,
             "device_policy": self.device_policy.value,
             "precision_policy": self.precision_policy.value,
         }
@@ -289,6 +320,7 @@ def assert_identical_policies(baseline: GenerationPolicy,
 __all__ = [
     "DEFAULT_GENERATION_POLICY", "EVALUATION_DEVICE_POLICIES",
     "EVALUATION_PRECISION_POLICIES", "GENERATION_POLICY_VERSION",
+    "ReasoningPolicy",
     "MAX_BATCH_SIZE", "MAX_GENERATION_TIMEOUT_S", "MAX_INPUT_TOKENS_CEILING",
     "MAX_NEW_TOKENS_CEILING", "MAX_STOP_SEQUENCES", "GenerationMode",
     "GenerationPolicy", "GenerationPolicyError", "TruncationSide",
