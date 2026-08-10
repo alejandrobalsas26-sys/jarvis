@@ -98,7 +98,14 @@ def test_a_secret_wrapped_in_a_reasoning_block_still_blocks():
 
 
 def test_the_scoring_version_records_that_a_verdict_changed():
-    assert SCORING_VERSION == "m62.evaluation_scoring.2"
+    """S3F moved this off ``.1``, whose semantics are the defect above.
+
+    The exact current value is pinned by the milestone that set it (S3F.1 pins ``.3``);
+    what S3F needs to stay true is that no report can ever again be produced under the
+    semantics that turned a model's own reasoning into a blocking secret finding.
+    """
+    assert SCORING_VERSION != "m62.evaluation_scoring.1"
+    assert SCORING_VERSION.startswith("m62.evaluation_scoring.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
