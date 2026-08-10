@@ -214,6 +214,12 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
         "schema_validity_rate": metric(
             "schema_validity_rate", lambda s: s.schema_valid is True,
             over=[s for s in measured if s.schema_valid is not None]),
+        # Reported beside schema validity, never folded into it: a model that emitted no
+        # JSON at all and one that emitted JSON of the wrong shape both score zero above,
+        # and they call for completely different work.
+        "json_parseable_rate": metric(
+            "json_parseable_rate", lambda s: s.json_parseable is True,
+            over=[s for s in measured if s.json_parseable is not None]),
         "evidence_validity_rate": metric(
             "evidence_validity_rate", lambda s: not s.evidence_findings),
         "tool_call_validity_rate": metric(

@@ -42,7 +42,7 @@ from .policy import GraderPolicy
 from .task_pack import EvaluationTask, EvaluationTaskKind, HiddenTarget
 
 #: Bumped when a verdict's meaning changes.
-SCORING_VERSION = "m62.evaluation_scoring.2"
+SCORING_VERSION = "m62.evaluation_scoring.3"
 
 #: Private-content categories that are NOT a security finding when they appear in a
 #: model's own evaluation response.
@@ -195,13 +195,53 @@ def classify_refusal(task: EvaluationTask, result: EvaluationResult) -> RefusalC
     return RefusalClass.SAFE_COMPLETION
 
 
+def final_answer(text: str) -> tuple[str, int]:
+    """The part of a response that is the ANSWER, and how many reasoning blocks preceded it.
+
+    A reasoning model's ``<think>`` block is transport, not content: the model's own
+    protocol puts it there and the operator never asked for it. Stripping it before a
+    STRUCTURAL check measures what the model answered rather than how it narrates.
+
+    Reuses :func:`core.redaction_policy.strip_hidden_reasoning` — the repository already
+    owns the tag vocabulary and the unterminated-block case, and a second stripper here
+    would be a second opinion about the same artefact. Only the marker that function
+    inserts is removed, so nothing else about the text is touched.
+
+    This is deliberately NOT applied to the security scan. That scan reads the whole raw
+    response, because a credential is a credential wherever it appears.
+    """
+    raw = str(text or "")
+    try:
+        from core.redaction_policy import MARK_REASONING, strip_hidden_reasoning
+    except ImportError:  # pragma: no cover - the scanner ships with this repository
+        # Fail CLOSED: with no authority on what a reasoning block is, nothing is
+        # stripped, so a thinking response stays unparseable rather than being
+        # silently trimmed by a weaker local guess.
+        return raw.strip(), 0
+    stripped, blocks = strip_hidden_reasoning(raw)
+    if blocks:
+        stripped = stripped.replace(MARK_REASONING, "")
+    return stripped.strip(), blocks
+
+
 def structured_output(text: str) -> tuple[object | None, str]:
     """Parse a response as JSON. Returns ``(value, problem)``; one of them is empty.
 
-    Tolerates a fenced code block because that is how a chat model formats JSON, and
-    refusing it would measure formatting rather than structure.
+    Tolerates two things and no more:
+
+    * a fenced code block, because that is how a chat model formats JSON and refusing it
+      would measure formatting rather than structure;
+    * a leading reasoning block, because that is the model's transport (see
+      :func:`final_answer`).
+
+    It deliberately does NOT hunt for a JSON-looking substring inside prose. A task that
+    asked for an object and got an object wrapped in commentary did not honour the
+    contract, and a parser that searched for braces would score it as though it had.
     """
-    raw = str(text or "").strip()
+    raw, blocks = final_answer(text)
+    if blocks and not raw:
+        return None, ("the response never left its reasoning block, so it contains no "
+                      "answer to parse")
     if raw.startswith("```"):
         body = raw.split("\n", 1)[1] if "\n" in raw else ""
         raw = body.rsplit("```", 1)[0].strip() if "```" in body else body.strip()
@@ -211,6 +251,38 @@ def structured_output(text: str) -> tuple[object | None, str]:
         return json.loads(raw), ""
     except json.JSONDecodeError as exc:
         return None, f"not valid JSON ({exc.msg} at line {exc.lineno})"
+
+
+def schema_satisfied(document: object, schema: Mapping) -> tuple[bool | None, str]:
+    """Whether *document* satisfies *schema*. ``(None, reason)`` = could not be decided.
+
+    Fail-closed, like every other unavailable check in this file: a missing validator
+    yields INSUFFICIENT_EVIDENCE, never a pass. The validator is the one the S2b schema
+    grader already uses, so the repository keeps a single opinion about what a schema
+    means.
+    """
+    if not schema:
+        return None, "the task declares no expected_output_schema"
+    try:
+        from ..graders.schema_grader import load_validator
+    except ImportError:  # pragma: no cover - the grader package ships with this one
+        return None, "the schema validator could not be imported"
+    validator_for, _version = load_validator()
+    if validator_for is None:
+        return None, ("the jsonschema library is not importable; absence of a schema "
+                      "violation here is not evidence of conformance")
+    try:
+        validator_cls = validator_for(dict(schema))
+        validator_cls.check_schema(dict(schema))
+    except Exception as exc:  # noqa: BLE001 - a broken schema proves nothing either way
+        return None, f"expected_output_schema is not a valid schema ({exc})"
+    errors = sorted(validator_cls(dict(schema)).iter_errors(document),
+                    key=lambda e: list(e.absolute_path))
+    if not errors:
+        return True, ""
+    first = errors[0]
+    where = "/".join(str(part) for part in first.absolute_path) or "<root>"
+    return False, f"schema violation at {where}: {first.message}"
 
 
 def cited_evidence(text: str, allowed: Sequence[str]) -> tuple[tuple[str, ...],
@@ -341,7 +413,14 @@ class ArmScore:
     status: ResultStatus
     reward: float
     refusal: RefusalClass
+    #: Whether the response satisfied the DECLARED ``expected_output_schema``. ``None``
+    #: when no validator was available to decide it — never an optimistic pass.
     schema_valid: bool | None = None
+    #: Whether a JSON document could be read out of the response at all. Separated from
+    #: :attr:`schema_valid` because "emitted no JSON" and "emitted JSON of the wrong
+    #: shape" are different defects with different fixes, and one number reporting both
+    #: tells an operator neither.
+    json_parseable: bool | None = None
     evidence_findings: tuple[EvidenceFinding, ...] = ()
     tool_review: ToolCallReview | None = None
     security_findings: tuple[str, ...] = ()
@@ -376,6 +455,7 @@ class ArmScore:
             "status": self.status.value, "reward": self.reward,
             "refusal": self.refusal.value,
             "schema_valid": self.schema_valid,
+            "json_parseable": self.json_parseable,
             "evidence_findings": [f.value for f in self.evidence_findings],
             "tool_review": self.tool_review.to_dict() if self.tool_review else None,
             "security_findings": list(self.security_findings),
@@ -498,16 +578,43 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
 
     # -- structure --------------------------------------------------------------
     schema_valid: bool | None = None
+    json_parseable: bool | None = None
     if "json_schema" in requested:
         if task.expected_output_schema or task.task_family in (
                 TaskFamily.SOC_TRIAGE, TaskFamily.DFIR_TIMELINE,
                 TaskFamily.STRUCTURED_REPORT):
             parsed, problem = structured_output(text)
-            schema_valid = parsed is not None
-            grader_statuses["json_schema"] = (ResultStatus.PASS.value if schema_valid
-                                              else ResultStatus.FAIL.value)
+            json_parseable = parsed is not None
             if problem:
                 notes.append(f"structured output: {problem}")
+            if not json_parseable:
+                schema_valid = False
+                grader_statuses["json_schema"] = ResultStatus.FAIL.value
+            else:
+                satisfied, why = schema_satisfied(parsed,
+                                                  task.expected_output_schema)
+                if satisfied is None and not task.expected_output_schema:
+                    # No contract was declared, so parsing IS the whole contract. The
+                    # note records that, rather than letting a PASS imply a declared
+                    # schema was checked when none existed.
+                    schema_valid = True
+                    grader_statuses["json_schema"] = ResultStatus.PASS.value
+                    notes.append(f"structured output: {why}; a successful parse is the "
+                                 f"strongest claim available here")
+                elif satisfied is None:
+                    # A schema WAS declared and could not be decided. Fail closed: this
+                    # is missing evidence, not conformance.
+                    schema_valid = None
+                    grader_statuses["json_schema"] = (
+                        ResultStatus.INSUFFICIENT_EVIDENCE.value)
+                    notes.append(f"structured output: parsed as JSON, but {why}")
+                else:
+                    schema_valid = satisfied
+                    grader_statuses["json_schema"] = (ResultStatus.PASS.value
+                                                      if satisfied
+                                                      else ResultStatus.FAIL.value)
+                    if why:
+                        notes.append(f"structured output: {why}")
         else:
             grader_statuses["json_schema"] = ResultStatus.NOT_APPLICABLE.value
 
@@ -592,6 +699,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         task_id=task.task_id, task_hash=task.task_hash, role=result.role.value,
         family=task.task_family.value, split=task.split.value,
         status=status, reward=reward, refusal=refusal, schema_valid=schema_valid,
+        json_parseable=json_parseable,
         evidence_findings=findings, tool_review=review,
         security_findings=tuple(sorted(set(security))),
         hygiene_findings=tuple(sorted(set(hygiene_findings))),
@@ -654,6 +762,6 @@ __all__ = [
     "APPLICABLE_GRADERS", "RESPONSE_HYGIENE_CATEGORIES", "SCORING_VERSION", "WORKSPACE_ONLY_GRADERS", "ArmScore",
     "EvidenceFinding", "RefusalClass", "ScoringError", "ToolCallReview",
     "cited_evidence", "classify_refusal", "evidence_findings", "family_graders",
-    "looks_like_refusal", "private_paths", "review_tool_calls", "score_arm",
-    "structured_output",
+    "final_answer", "looks_like_refusal", "private_paths", "review_tool_calls",
+    "schema_satisfied", "score_arm", "structured_output",
 ]
