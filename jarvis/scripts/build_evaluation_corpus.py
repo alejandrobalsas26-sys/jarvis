@@ -45,7 +45,42 @@ if str(_ROOT) not in sys.path:  # pragma: no cover - layout shim, as the sibling
 NOW = "2026-08-06T00:00:00Z"
 DATASET_ID = "m62-defensive-eval"
 DATASET_VERSION = "v1"
+#: The version an eligibility-grade evaluation should bind. ``v1`` is retained unchanged
+#: as the corpus the S3E.2 measurement of record was drawn from.
+LATEST_DATASET_VERSION = "v2"
 ACTOR = "local-operator"
+
+#: The output contract ``v2`` states to the model, and ``v1`` never did.
+#:
+#: V69 M62 S3E.2 reported ``schema_validity_rate`` 0/9. S3F.1 traced that to two
+#: instrument defects and corrected both, and found a third thing that is not an
+#: instrument defect at all: **the corpus never says what shape the answer must take.**
+#: All 36 ``v1`` tasks carry an empty system prompt, the word "JSON" appears in none of
+#: the nine ``structured_report`` prompts, and the synthetic fixture that qualified the
+#: instrument says *"Answer with JSON only."* The instrument was therefore qualified
+#: against an instruction the corpus does not give, and the model was graded against a
+#: schema nobody communicated to it.
+#:
+#: Operator ruling **H6b** authorises stating the contract, as a NEW immutable dataset
+#: version rather than an edit to a promoted, hash-verified one.
+#:
+#: The wording is deliberately FORMAT-ONLY. It names no field, no severity, no category,
+#: no decision, no rubric and no grader. Making the corpus easier by hinting at the
+#: answer would replace a measurement of the model with a measurement of the prompt.
+STRUCTURED_OUTPUT_CONTRACT = (
+    " Respond with a single JSON object and nothing else: no text before it and no "
+    "text after it.")
+
+#: Families whose ``v2`` prompt states the machine-readable output contract.
+#:
+#: ``STRUCTURED_REPORT`` only. ``TOOL_CALL_SCHEMA`` is deliberately excluded: the
+#: production ``transformers_peft`` backend never populates
+#: ``EvaluationResult.proposed_tool_calls`` at all, so it has no transport by which a
+#: tool call could be observed however the model formats one, and
+#: ``review_tool_calls`` treats "no proposal" as not-a-failure. Instructing a format the
+#: instrument cannot read would change the prompts without changing what is measured.
+#: That is a backend gap, recorded as such, and not a corpus correction.
+CONTRACT_FAMILIES: frozenset[str] = frozenset({"STRUCTURED_REPORT"})
 
 #: ``TaskFamily`` member name -> the graders that family's answers are judged by.
 FAMILY_GRADERS: dict[str, tuple[str, ...]] = {
@@ -60,7 +95,13 @@ FAMILY_GRADERS: dict[str, tuple[str, ...]] = {
 #  The material. (split, family, task_id, prompt, target)
 # ══════════════════════════════════════════════════════════════════════════════
 def corpus() -> list[tuple[str, str, str, str, str]]:
-    """Thirty-six synthetic defensive tasks. Answers never appear in their prompts."""
+    """Thirty-six synthetic defensive tasks. Answers never appear in their prompts.
+
+    This is the ``v1`` material and it is **frozen**: ``m62-defensive-eval v1`` is a
+    promoted, hash-verified dataset version that the S3E.2 measurement of record was
+    drawn from. Changing a byte here would silently restate history. ``v2`` is built by
+    :func:`corpus_v2` as a derivation of this list, not as a replacement for it.
+    """
     return [
         # ── HIDDEN_EVALUATION: ordinary held-out competence ───────────────────
         ("HIDDEN_EVALUATION", "STRUCTURED_REPORT", "he-report-01",
@@ -262,6 +303,41 @@ def corpus() -> list[tuple[str, str, str, str, str]]:
     ]
 
 
+def corpus_v2() -> list[tuple[str, str, str, str, str]]:
+    """``v1`` with the output contract stated on the families that have one.
+
+    Derived from :func:`corpus` rather than copied, so the two versions cannot drift on
+    any axis except the one deliberate change. Splits, families, task ids, decision
+    classes and every hidden target are the same objects ``v1`` carries.
+    """
+    entries: list[tuple[str, str, str, str, str]] = []
+    for split, family, task_id, prompt, target in corpus():
+        if family in CONTRACT_FAMILIES:
+            prompt = prompt + STRUCTURED_OUTPUT_CONTRACT
+        entries.append((split, family, task_id, prompt, target))
+    return entries
+
+
+#: ``dataset_version`` -> the material it promotes. A version this map does not name
+#: cannot be built, so a typo produces a refusal rather than a silently different corpus
+#: promoted under an authoritative-looking name.
+CORPUS_VERSIONS = {
+    "v1": corpus,
+    "v2": corpus_v2,
+}
+
+
+def corpus_for(dataset_version: str) -> list[tuple[str, str, str, str, str]]:
+    """The material for one dataset version, or a refusal naming the ones that exist."""
+    try:
+        return CORPUS_VERSIONS[dataset_version]()
+    except KeyError:
+        raise ValueError(
+            f"unknown dataset version {dataset_version!r}; this generator builds "
+            f"{sorted(CORPUS_VERSIONS)}. A new version needs new material, not a new "
+            f"label on the old material") from None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  One record, through every gate
 # ══════════════════════════════════════════════════════════════════════════════
@@ -391,7 +467,7 @@ def build(root: Path, *, dataset_version: str = DATASET_VERSION) -> dict:
         plan_splits,
     )
 
-    entries = corpus()
+    entries = corpus_for(dataset_version)
     store = CandidateStore(root)
     candidates = []
     forced: dict[str, DatasetSplit] = {}
@@ -459,7 +535,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Build the held-out synthetic defensive evaluation corpus.")
     parser.add_argument("--root", default=str(_ROOT / "training_gym_datasets"),
                         help="dataset root; generated bytes stay ignored")
-    parser.add_argument("--dataset-version", default=DATASET_VERSION)
+    parser.add_argument("--dataset-version", default=DATASET_VERSION,
+                        choices=sorted(CORPUS_VERSIONS),
+                        help="v1 is the frozen S3E.2 corpus; v2 states the "
+                             "structured-output contract (operator ruling H6b)")
     args = parser.parse_args(argv)
     try:
         summary = build(Path(args.root), dataset_version=args.dataset_version)
