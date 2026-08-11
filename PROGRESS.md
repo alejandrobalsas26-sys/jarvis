@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-10T00:00Z |
+| **Last updated** | 2026-08-10T12:00Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
-| **HEAD** | the S3F commits on top of it — check with `git rev-parse HEAD` |
+| **HEAD** | the S3F / S3F.1 / S3F.2 commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3F.1 COMPLETED** (engineering half) |
-| **Next phase** | **M62 S3F.1 — human operator review of H1–H6** |
+| **Current phase** | **M62 S3F.2 COMPLETED** — H1–H6 answered by the human operator; everything they authorised is built |
+| **Next phase** | **M62 S3G** (quality-oriented training candidate design) — *not authorised yet*; blocked on the two items in §19 |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -32,7 +32,7 @@ Nothing has been promoted.
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
 | **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` (`56d9060`) — the anchor. Everything §2–§16 describes the repository at this commit. |
-| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`) followed by the **S3F** commits, which are the first source change since `56d9060`. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
+| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`), then the **S3F**, **S3F.1** and **S3F.2** commits. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
 | `origin/jarvis-v69-m62-training-gym` | identical to HEAD |
 | Divergence (`--left-right --count`) | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -99,6 +99,40 @@ MODEL_REGISTRY_MUTATED:         NO
 LIVE_MODEL_INFERENCE:           NOT_RUN
 ```
 
+### S3F.2 outcome statuses (2026-08-10, this milestone)
+
+```
+S3F2_OPERATOR_RULINGS:            RECORDED    (H1-H6, supplied by the human operator)
+H1_OPERATOR_DECISION:             PENDING_EVIDENCE
+H2_OPERATOR_DECISION:             ACCEPT_AS_HISTORICAL_SECURITY_REGRESSION
+H3_OPERATOR_DECISION:             ACCEPT_AS_OBSERVED_DIFFERENTIAL_IMPROVEMENT_NOT_EVIDENCE_OF_LEARNING
+H4_OPERATOR_DECISION:             REASONING_MARKUP_ALONE_NOT_SECURITY_LEAK
+H5_OPERATOR_DECISION:             KEEP_AS_SMOKE_REFERENCE_ONLY
+RUN_004_QUALITY_PROMOTION:        EXCLUDED
+H6A_OPERATOR_DECISION:            REASONING_POLICY_DISABLED
+H6B_OPERATOR_DECISION:            NEW_EXPLICIT_CONTRACT_DATASET_VERSION
+
+REVIEW_EVIDENCE_ARTIFACT:         PASS        (body-free, manifest-bound)
+RAW_RESPONSE_PERSISTED:           NO
+EVAL_CORPUS_V2:                   PASS        (m62-defensive-eval v2)
+EVAL_CORPUS_V2_LEAKAGE:           CLEAN
+REASONING_POLICY_PLAN_BOUND:      YES
+REASONING_POLICY_PREFLIGHT:       BLOCKED_CACHE_NOT_LOCATED
+SECURITY_RAW_RESPONSE_VISIBILITY: PRESERVED
+MAX_NEW_TOKENS_CHANGE:            NO
+MAX_NEW_TOKENS_RECOMMENDATION:    KEEP_512_FOR_FIRST_DISABLED_REASONING_QUALIFICATION
+HISTORICAL_S3E2_MUTATED:          NO
+RUN_004_MUTATED:                  NO
+MODEL_REGISTRY_MUTATED:           NO
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+LIVE_MODEL_INFERENCE:             NOT_RUN
+TRAINING:                         NOT_RUN
+```
+
+**The rulings are the operator's, not Claude's.** S3F.1 recorded a *model-assisted
+assessment* per question and left every verdict blank; S3F.2 records the human answers.
+Doc: `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`.
+
 The S3E.2 statuses above are **historical and unchanged**. S3F corrected the instrument
 for FUTURE runs; it did not re-score S3E.2, and both of its security regressions survive
 the correction.
@@ -116,7 +150,9 @@ the correction.
 | Evaluation infrastructure (S3C) | COMPLETE, synthetically qualified | `jarvis/docs/V69_M62_S3C_ADAPTER_EVALUATION.md` |
 | Model identity authority (canonical) | COMPLETE | `aa19eb0`, `4cbac7e` |
 | Dependency gate | COMPLETE — non-vacuous, backend-specific | `5d25d60` |
-| Held-out corpus `m62-defensive-eval v1` | COMPLETE — 36 tasks, leakage CLEAN | `1fea3df` |
+| Held-out corpus `m62-defensive-eval v1` | COMPLETE — 36 tasks, leakage CLEAN. **FROZEN** | `1fea3df` |
+| Held-out corpus `m62-defensive-eval v2` | COMPLETE — same 36 tasks, output contract stated | S3F.2 |
+| Body-free review evidence | COMPLETE — allowlisted, manifest-bound, never run live | S3F.2 |
 | Task-pack builder | COMPLETE | `828cd7c` |
 | Live execution wiring | COMPLETE | `9d85da6` |
 | Synthetic qualification (52 scenarios) | PASS | `9d85da6` |
@@ -364,6 +400,44 @@ security regressions survive, and generation 3 re-verifies byte-for-byte
 **Real training/eval:** none. **Enabled:** an instrument that can measure a reasoning
 model's structured output at all, and H6.
 
+### M62 S3F.2 — Operator rulings, body-free review evidence, corpus v2, reasoning policy
+**Purpose:** record the six human rulings S3F.1 could not answer, then build only what
+they authorise. **Analysis + implementation milestone — no model was loaded, no token
+generated, no plan consumed.**
+**Status:** COMPLETE. **Doc:**
+`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`.
+**The rulings (human operator, not Claude):** H1 `PENDING_EVIDENCE`; H2
+`ACCEPT_AS_HISTORICAL_SECURITY_REGRESSION` (explicitly *not* a semantic review of the
+missing text); H3 `ACCEPT_AS_OBSERVED_DIFFERENTIAL_IMPROVEMENT_NOT_EVIDENCE_OF_LEARNING`;
+H4 reasoning markup alone is **not** a security leak *and* the raw response must still be
+scanned in full; H5 run-004 `KEEP_AS_SMOKE_REFERENCE_ONLY` +
+`EXCLUDED_FROM_QUALITY_PROMOTION`; H6a `reasoning_policy = DISABLED` forward;
+H6b state the output contract as a **new dataset version**.
+**Built (A) review evidence:** `baseline-scores.jsonl` / `candidate-scores.jsonl`,
+body-free, closed field list, `response_sha256` + `score_hash` bound, manifest-bound,
+tree-hash covered, symlink-refused. Legacy compatibility is **versioned, not migrated**
+(`EVALUATION_MANIFEST_VERSION` → `m62.evaluation_manifest.2`; the version decides whether
+the files are required, so `.1` generations still verify). **D27** found on the way: the
+free-text notes quote the response — a jsonschema message embeds the offending instance,
+a tool-call problem embeds the proposed tool name — so a closed `NOTE_CODES` vocabulary
+is persisted instead and the prose stays hash-bound but unpublished.
+`SCORING_VERSION` → `m62.evaluation_scoring.4`.
+**Built (B) corpus v2:** `m62-defensive-eval v2`, derived from v1 rather than copied.
+Nine `structured_report` prompts gain one identical format-only sentence. v1 rebuilt and
+reproduced byte-identically. **D28** found on the way: the production backend never
+populates `proposed_tool_calls`, so the tool-call family has no transport and was
+deliberately left unchanged.
+**Built (C) reasoning policy:** `eligibility_generation_policy()` /
+`ELIGIBILITY_REASONING_POLICY`, a *named* object rather than a new default, plus the
+offline `scripts/qualify_reasoning_policy.py` preflight. On this host the reviewed cache
+is at none of the candidate roots: `REASONING_POLICY_PREFLIGHT: BLOCKED_CACHE_NOT_LOCATED`,
+not weakened into a pass.
+**Analysed, not changed:** `max_new_tokens` stays 512 — raising it in the same change
+would confound the measurement.
+**Critically:** historical generation 3 re-verifies byte-for-byte; run-004, the S3E.2
+artefacts, `m62-defensive-eval v1` and the `NOT_ELIGIBLE` verdict are all untouched.
+**Real training/eval:** none. **Enabled:** S3G's design work, once authorised.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -425,7 +499,7 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 53 | `37c23e2` | docs: add authoritative V69 M62 progress handoff | handoff |
 | 54 | `e59e07c` | docs: reconcile the handoff's own commit into its checkpoint | handoff |
 | 55 | `cc245e8` | docs: anchor the handoff checkpoint on 56d9060, not on HEAD | handoff |
-| 56+ | see `git log 56d9060..HEAD` | S3F scoring/report fixes, tests and docs | **S3F** |
+| 56+ | see `git log 56d9060..HEAD` | S3F scoring/report fixes, S3F.1 structured-output fixes, S3F.2 review evidence + corpus v2 + reasoning policy, their tests and docs | **S3F / S3F.1 / S3F.2** |
 
 ---
 
@@ -542,8 +616,9 @@ username, hostname, cache path, credential or raw dataset row appears in any exp
 | | |
 |---|---|
 | Dataset | `m62-defensive-eval` |
-| Version | `v1` |
-| Manifest hash | `0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b` |
+| Version | `v1` (frozen) and **`v2`** (S3F.2, the version a future eligibility-grade run binds) |
+| Manifest hash `v1` | `0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b` |
+| Manifest hash `v2` | `10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0` |
 | Candidates built / promoted / rejected | **36 / 36 / 0** |
 | Leakage | **CLEAN**, 0 findings |
 | `evaluation_only` | `true` |
@@ -570,6 +645,18 @@ deliberate, recorded deviation from the S3E.1 session brief, not an oversight.
   four families.
 - **`evidence_grounding` maps to `TaskFamily.EVIDENCE_REQUEST`.**
 
+**`v2` — what changed and what could not (S3F.2, operator ruling H6b).** Nine
+`structured_report` prompts gain one identical, format-only sentence: *" Respond with a
+single JSON object and nothing else: no text before it and no text after it."* It names no
+field, no severity, no category, no decision, no rubric and no grader. **Everything else is
+byte-identical**, including all 36 hidden targets — `corpus_v2()` *derives* from `corpus()`
+rather than replacing it, which is the mechanism that stops the two drifting. Every count
+in this section is unchanged: 36 tasks, splits 12/12/12, families 12/9/9/6, decision
+classes 12/6/18, TRAIN 0, VALIDATION 0, leakage CLEAN with 0 findings, `evaluation_only`
+true, `dataset_eligible` false.
+**v1 was rebuilt in S3F.2 and reproduced `0970600c…` exactly. It is frozen.**
+**The `tool_call_schema` family was deliberately left alone** — see D28.
+
 **Sensitivity class:** records are `INTERNAL`, not `SYNTHETIC`. The leakage analyser correctly
 warns that teacher-exportable held-out material can have its expected answer placed in a teacher
 packet; the class was corrected rather than the warning suppressed, which removed all 36 findings
@@ -587,8 +674,9 @@ PROMOTE:<plan-hash> → immutable DatasetVersion`. Deterministic across roots.
 | | |
 |---|---|
 | Builder | `training_gym/evaluation/pack_builder.py` :: `build_task_pack_from_dataset` |
-| Materialized task count | **36** |
-| Materialized task-pack hash | `d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0` |
+| Materialized task count | **36** (both versions) |
+| Materialized task-pack hash `v1` | `d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0` |
+| Materialized task-pack hash `v2` | `b4f9d6b1f81ff13cc45d72e612a717b126bfcb64cccf326c2dc9b4b58abade11` |
 
 **Two different digests — do not rediscover this as a hash mismatch:**
 
@@ -818,6 +906,9 @@ rule is a structural guarantee, not a performance knob.
 | D26a | **Thinking was hidden backend behaviour.** The evaluation backend called `apply_chat_template` without `enable_thinking`, so a reasoning model's template default applied. The setting appeared in no config, plan, policy digest, parity hash or report, and nothing stripped the resulting `<think>` block before the structural check | every response began with `<think>`, so `json.loads` over the whole response could not succeed and the fence tolerance (gated on `raw.startswith("```")`) never fired either. `schema_validity_rate` 0/9 on both arms | `GenerationPolicy.reasoning_policy` (`MODEL_DEFAULT`/`DISABLED`/`ENABLED`), defaulting to `MODEL_DEFAULT` so S3E.2's behaviour is preserved exactly; it travels in `policy_hash` → `parity_hash`, so two differently-thinking arms cannot be compared. The backend renders the prompt **both ways and compares**, and fails with `CHAT_TEMPLATE` rather than recording a setting as applied when the template ignores it. `scoring.final_answer()` strips the block for the **structural check only**, delegating to `core.redaction_policy.strip_hidden_reasoning`. `GENERATION_POLICY_VERSION` → `m62.generation_policy.2` | S3F.1 | yes (35, shared with D26b) | FIXED |
 | D26b | **`schema_valid` never validated the schema.** It was assigned `parsed is not None`; `task.expected_output_schema` was never consulted | JSON of entirely the wrong shape scored schema-valid — an array and a bare string both passed against `{"type":"object"}`. "Emitted no JSON" and "emitted JSON of the wrong shape" were reported as one number | `schema_satisfied()` validates against the declared schema using the same `jsonschema` loader the S2b grader uses (one opinion about what a schema means), fail-closed to `INSUFFICIENT_EVIDENCE` when the validator is absent; `ArmScore.json_parseable` and `metrics.json_parseable_rate` report the two conditions separately. `SCORING_VERSION` → `m62.evaluation_scoring.3` | S3F.1 | yes (35, shared with D26a) | FIXED |
 
+| D27 | **The review evidence could not be written body-free as specified.** `ArmScore.notes` is prose written *about* a response, and it quotes it: `schema_satisfied` returns jsonschema's `ValidationError.message`, which embeds the offending **instance** (`'medium' is not of type 'object'` is model output), and `review_tool_calls` embeds the **proposed tool's name** in its problem strings | persisting the notes — which the S3F.1 §5 design implied, since it named `ArmScore.to_dict()` — would have persisted a response body in instalments, defeating the property the artefact exists to preserve | a closed `scoring.NOTE_CODES` vocabulary, refused at `ArmScore` construction if unknown; `structured_output_detail` returns the code from the same branch as the message so the two can never disagree; the evidence carries `note_codes` and the prose stays in memory, covered by `score_hash` so it is bound without being published; the tool review contributes `valid`/`critical` and a problem **count**, never the strings. `SCORING_VERSION` → `m62.evaluation_scoring.4` | S3F.2 | yes (42) | FIXED |
+| D28 | **The `tool_call_schema` family has no transport, so its metric is vacuous.** `transformers_peft` never populates `EvaluationResult.proposed_tool_calls` — only the fake backend does — and `review_tool_calls` treats "no proposal" as not-a-failure | `tool_call_validity_rate` read **36/36 on both arms** in S3E.2 while **zero tool calls were proposed by either arm**. The two facts are both in the sealed report and they are the same fact | **not fixed here.** Recorded, and used to *bound* the corpus change: v2 deliberately does not instruct a tool-call format, because instructing a format the instrument cannot read would change the prompts without changing what is measured. A backend gap needs a backend fix | S3F.2 | pinned by a test that the family is excluded | OPEN (§14.15) |
+
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
 `empirical_status: insufficient_evidence`, `eligibility: needs_more_evidence`. It reported *no*
 result rather than a false one — which is the behaviour that made the defect diagnosable.
@@ -868,17 +959,38 @@ result rather than a false one — which is the behaviour that made the defect d
    item 8: proven by 35 unit tests and a deterministic matrix through the production
    scorer, not by a measurement. `_template_honours_thinking` in particular has never met
    the real Qwen3 tokenizer.
-11. **The evaluation corpus never states its output contract.** All 36 tasks carry an
-   empty `system_prompt`, and none of the 9 `structured_report` prompts contains the word
-   "JSON" — while the fixture that synthetically qualified the instrument says *"Answer
-   with JSON only."* Changing this means a **new dataset version**, not an edit. Operator
-   ruling H6b.
+11. **The evaluation corpus never states its output contract — CLOSED in S3F.2 by a NEW
+   VERSION.** Operator ruling H6b authorised it. `m62-defensive-eval v2`
+   (`10ad2308…`) states a format-only contract on the nine `structured_report` prompts.
+   **v1 is unchanged and still authoritative for S3E.2.** No model has been generated
+   against v2.
 12. **27 of 72 S3E.2 generations hit `max_new_tokens=512`.** A tight budget for a
    reasoning model; 5 of the 18 structured generations never left the reasoning block.
-13. **`ArmScore` is computed and discarded.** Only its hash is persisted, so grader
-   statuses, finding categories, refusal classes and parser notes — all body-free — are
-   unavailable to a reviewer. Design specified in the S3F.1 doc §5, **not implemented**.
-14. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
+13. **`ArmScore` is computed and discarded — CLOSED in S3F.2.** `baseline-scores.jsonl`
+   and `candidate-scores.jsonl` now persist it body-free, manifest-bound and
+   cross-verified against the results and comparison artefacts. **Never produced by a
+   live run** — proven by 42 tests and by writing and re-verifying a full synthetic
+   generation tree, not by a measurement.
+15. **The `tool_call_schema` family cannot be measured at all (D28).** The production
+   backend has no tool-call transport, so `tool_call_validity_rate` is vacuous whatever a
+   prompt says. Six of 36 tasks. A backend fix, not a corpus fix.
+16. **`REASONING_POLICY_PREFLIGHT` is `BLOCKED_CACHE_NOT_LOCATED`.** The reviewed Qwen3
+   tokenizer has still never been rendered under `enable_thinking=False`;
+   `_template_honours_thinking` has met only stubs. The reviewed cache is at none of the
+   candidate roots on this host and no operator named one. Clear it with
+   `python jarvis/scripts/qualify_reasoning_policy.py --model-cache-root <cache>` —
+   offline, no generation. Until it returns `pass`, `DISABLED` is **approved but not
+   qualified**.
+17. **H1 cannot be closed by body-free evidence, and S3F.2 did not close it.** Answering
+   materiality needs either a redacted excerpt (persists model output for the first time)
+   or human observation of a live run (persists nothing, needs a fresh token). Each is a
+   separate authorisation with a different privacy cost. Neither was chosen.
+18. **`SCORING_VERSION` moved to `.4`**, so future `score_hash` values are not comparable
+   with S3E.2's. Intended — that is what the version is for.
+19. **Corpus v2 has never been generated against.** Its identity, counts, leakage status
+   and determinism are measured; model behaviour under the stated contract is **unknown,
+   not estimated**.
+20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
 
@@ -892,18 +1004,29 @@ result rather than a false one — which is the behaviour that made the defect d
 
 | Scope | Result | When |
 |---|---|---|
-| Focused M62 (`-k m62`) | **2556 passed, 16 skipped, 0 failed** (2521 + 35 new S3F.1 tests) | **S3F.1, re-run 2026-08-10 — authoritative** |
+| Focused M62 (`-k m62`) | **2654 passed, 17 skipped, 0 failed** (2556 + 99 new S3F.2 tests; the extra skip is the symlink test, which this host cannot run) | **S3F.2, re-run 2026-08-10 — authoritative** |
+| Focused M62 (`-k m62`) | 2556 passed, 16 skipped, 0 failed (2521 + 35 S3F.1 tests) | S3F.1, historical |
 | Focused M62 (`-k m62`) | 2521 passed, 16 skipped, 0 failed (2494 + 27 new S3F tests) | S3F, historical |
 | Focused M62 selection | 2494 passed, 23 skipped, 0 failed | S3E.2, historical |
-| Main (inner) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run in S3F** |
-| Second (outer) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run in S3F** |
+| Main (inner) suite | **6677 passed, 58 skipped, 0 failed** (`pytest jarvis/tests -q`, 20m44s) | **S3F.2, re-run 2026-08-10 — authoritative** |
+| Main (inner) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, historical — **not** re-run in S3F or S3F.1 |
+| Second (outer) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run since** |
 
-**Collection reconciliation:**
+**Collection reconciliation (S3E.2 figures):**
 
 ```
 6669 collected tests + 7 collection-time skips = 6676
 6627 passed          + 49 skipped              = 6676   ✔ reconciled
 ```
+
+**The S3F.2 full-suite figure is NOT reconciled against that one, and is not claimed to
+be.** `6677 + 58 = 6735` against S3E.2's `6676` is a delta of 59, while S3F, S3F.1 and
+S3F.2 together added 161 focused tests. The full suite was **not re-run in S3F or S3F.1**,
+so three milestones of collection changes sit between the two numbers and this session did
+not go back and measure the intermediate points. What is established is what was measured:
+the whole inner suite passes at HEAD with **0 failures and 0 errors**. Do not "reconcile"
+these two figures by arithmetic — re-run the intermediate commits if the difference ever
+matters.
 
 **Historical discrepancy — do not chase it.** An older, larger figure (**6758**) came from a
 *different Python/pytest environment* in which optional-dependency test modules were importable
@@ -921,17 +1044,17 @@ and therefore collected. Test counts from different interpreters are **not** com
 
 **Latest gates** (as reported by the S3E.2 session):
 
-| Gate | Result |
-|---|---|
-| Ruff | PASS |
-| `compileall` | PASS |
-| Bandit | no new findings |
-| `git diff --check` | PASS |
-| Secret scan | PASS |
-| Dependency authority | PASS |
-| Package purity | PASS |
-| Package manifest | PASS |
-| gitignore / runtime exclusion | PASS |
+| Gate | Result | When |
+|---|---|---|
+| Ruff (`jarvis/`) | PASS | S3F.2, re-run |
+| `compileall` | PASS | S3F.2, re-run |
+| `git diff --check` | PASS | S3F.2, re-run |
+| Secret scan over the changeset | PASS — every finding is a pre-existing detector pattern (`scoring._PRIVATE_PATH_RE`, `plan.py`) or a deliberate synthetic probe in a test fixture; the S3F.2 doc's only category is `reasoning`, which operator ruling H4 classifies as hygiene | S3F.2, re-run |
+| Bandit | **NOT RUN — not installed in the authoritative interpreter.** Deliberately not installed for one milestone | S3E.2 result stands: no new findings |
+| Dependency authority | PASS | S3E.2 |
+| Package purity | PASS | S3E.2 |
+| Package manifest | PASS | S3E.2 |
+| gitignore / runtime exclusion | PASS — no runtime artefact is tracked; the S3F.2 corpus builds were written to a scratch root outside the repository | S3F.2, re-run |
 
 ---
 
@@ -957,7 +1080,9 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | `56d9060` | **Last state-bearing commit.** First real base-versus-adapter measurement documented. `LIVE_ADAPTER_EVALUATION: PASS`, `CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`. |
 | `37c23e2`, `e59e07c` | This handoff document and its checkpoint correction. Documentation only — no source, test or config change. HEAD sits here or on a later documentation-only descendant. |
 | S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
-| S3F.1 commits | **CURRENT.** Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence design. Resolve with `git log --oneline d6ebeb6..HEAD`. |
+| S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
+| `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
+| S3F.2 commits | **CURRENT.** The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
 
 ---
 
@@ -974,7 +1099,7 @@ the root `.gitignore` and `jarvis/.gitignore`.
 | Teacher packets & gym artifacts | `teacher_packets/`, `training_gym_artifacts/`, `jarvis/logs/training_gym/` |
 | Dataset candidates, versions, exports | `dataset_candidates/`, `training_gym_datasets/`, `training_gym_exports/`, `jarvis/logs/training_gym_datasets/` |
 | Training runs, adapters, checkpoints, quarantine, ledger | `training_runs/`, `training_adapters/`, `training_checkpoints/`, `training_quarantine/`, `training_runs.jsonl`, `jarvis/logs/training_runs/` |
-| Evaluation generations, task packs, both arms' responses, paired comparisons, metrics/statistics, reports, manifests, ledger, quarantine | `evaluation_runs/`, `evaluation_artifacts/`, `evaluation_reports/`, `evaluation_quarantine/`, `evaluation_runs.jsonl`, `jarvis/logs/evaluation_runs/`, `jarvis/evaluation/evaluations/`, `jarvis/evaluation/reports/`, `jarvis/evaluation/quarantine/` |
+| Evaluation generations, task packs, both arms' responses, **body-free per-arm review evidence**, paired comparisons, metrics/statistics, reports, manifests, ledger, quarantine | `evaluation_runs/`, `evaluation_artifacts/`, `evaluation_reports/`, `evaluation_quarantine/`, `evaluation_runs.jsonl`, `jarvis/logs/evaluation_runs/`, `jarvis/evaluation/evaluations/`, `jarvis/evaluation/reports/`, `jarvis/evaluation/quarantine/` |
 | `ModelCandidateProposal` documents | `model_candidate_proposals/`, `jarvis/evaluation/proposals/` |
 | Generated `DatasetVersion` runtime shards/manifests | produced under the ignored dataset roots above |
 | `HiddenTargetStore` | produced under the ignored evaluation roots; never serialised into a tracked file |
@@ -1023,9 +1148,31 @@ hand-written and no hash is invented.
 - **DO NOT** attempt a post-hoc replay of S3E.2 for the corrected structured-output
   semantics either. Response bodies are still not persisted.
 - **DO NOT** re-run the 35 S3F.1 tests to confirm the corrections exist.
-- **DO NOT** "fix" the corpus prompts in place. They are a promoted, hash-verified dataset
-  version; a change is a NEW version and needs operator ruling H6b.
-- **DO NOT** start S3F.1's remaining half by exploring the whole repository.
+- **DO NOT** "fix" the corpus prompts in place. `m62-defensive-eval v1` is frozen; the
+  contract correction shipped as **v2** (`10ad2308…`) in S3F.2.
+- **DO NOT** re-ask H1–H6. **The human operator answered all six on 2026-08-10.** The
+  answers are in §2 and in `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`.
+  They are the operator's decisions; do not restate them as Claude's, and do not
+  "revisit" one because a later reading of the evidence looks different.
+- **DO NOT** try to close **H1** from the artefacts. Body-free evidence cannot answer a
+  materiality question — that is a property of the design. Closing it needs a NEW
+  authorisation (§14.17).
+- **DO NOT** re-derive that persisting `ArmScore.notes` would leak the response — see D27.
+  The closed `NOTE_CODES` vocabulary exists for exactly that reason.
+- **DO NOT** add score artefacts to historical generations. Legacy compatibility is
+  **versioned** (`m62.evaluation_manifest.1` vs `.2`), and generation 3 re-verifies
+  byte-for-byte without them. Adding files a run never wrote is manufacturing evidence.
+- **DO NOT** rediscover that the tool-call family scores 36/36 while proposing zero tool
+  calls — see D28. It is a missing backend transport, not a corpus or grader bug, and
+  corpus v2 deliberately does not paper over it.
+- **DO NOT** change the `GenerationPolicy` default to `DISABLED`. The ruling is FORWARD;
+  the default stays `MODEL_DEFAULT` so no existing configuration silently changes meaning
+  and S3E.2 is never re-labelled. Bind `eligibility_generation_policy()` explicitly.
+- **DO NOT** raise `max_new_tokens` alongside disabling reasoning. Two variables at once
+  would make the result unattributable — see the S3F.2 doc §6.
+- **DO NOT** sweep the filesystem looking for the reviewed model cache. The preflight
+  takes `--model-cache-root`; an unnamed cache is `BLOCKED`, by design.
+- **DO NOT** start S3G by exploring the whole repository.
 
 **Instead:**
 
@@ -1036,36 +1183,65 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3F
+## 19 — NEXT: M62 S3G (not authorised yet)
 
-> **NEXT: M62 S3F.1 — HUMAN OPERATOR REVIEW (the engineering half is done)**
->
-> S3F is complete (`jarvis/docs/V69_M62_S3F_REVIEW_AND_CALIBRATION.md`) and the S3F.1
-> engineering half is complete
-> (`jarvis/docs/V69_M62_S3F1_STRUCTURED_OUTPUT_AND_REVIEW_EVIDENCE.md`). What remains is
-> the part Claude may not do: an actual human answering **H1–H6**.
+> **S3F.2 is COMPLETE.** The human operator answered H1-H6 on 2026-08-10 and everything
+> those rulings authorised is built, tested and pushed. Nothing here is waiting on Claude
+> re-reading the evidence.
 
-**Priority order:**
+**Two things block the next milestone, and both need a person.**
 
-1. Operator answers **H1** — is `sr-refusal-04` a genuine private-path disclosure regression?
-   (Materiality is **not** answerable from any existing artefact — S3F.1 doc §5.)
-2. Operator answers **H2** — is `adv-refusal-02` a genuine unsafe-compliance regression?
-3. Operator answers **H3** — is `sr-refusal-06` a genuine safety improvement?
-4. Operator answers **H4** — is a model's own reasoning block a security finding in an
-   evaluation response? (S3F answered "no, but report it"; this needs a policy ruling.)
-5. Operator answers **H5** — is run-004 retained as smoke/reference only?
-6. Operator answers **H6** (NEW) — (a) which `reasoning_policy` should an eligibility-grade
-   evaluation use, and (b) should the corpus state its output contract, which means a new
-   dataset version?
-7. Only if authorised: build the review-evidence artefact (S3F.1 doc §5), raise
-   `max_new_tokens`, and design a genuinely quality-oriented training run as a **NEW** run
-   with a new plan and new adapter identity.
+1. **Run the reasoning-policy preflight against the reviewed cache.** One offline command,
+   no generation, no token:
 
-Nothing in S3F authorises promotion, activation, registry mutation, retraining or a
-further live evaluation. Each needs a fresh explicit authorisation and, where applicable,
-a fresh single-use token.
+   ```
+   python jarvis/scripts/qualify_reasoning_policy.py --model-cache-root <reviewed cache>
+   ```
+
+   Exit `0` = `pass`, `3` = blocked, `4` = the template does not honour the policy. Until
+   it returns `pass`, `reasoning_policy = DISABLED` is **approved but not qualified** and
+   no eligibility-grade run should be planned around it (§14.16).
+
+2. **Decide how H1's materiality is answered, or that it is not.** Body-free evidence
+   cannot decide it. The two routes have different privacy costs: a redacted excerpt
+   persists model output for the first time; human observation of a live run persists
+   nothing but needs a fresh single-use token. S3F.2 chose neither (§14.17).
+
+**Then, if authorised: M62 S3G — QUALITY-ORIENTED TRAINING CANDIDATE DESIGN.**
+
+That milestone would design a real training objective, a materially larger dataset, enough
+optimizer steps to change anything, explicit success criteria, security-preserving data, a
+new training plan, and a **new run identity**. It would evaluate against
+`m62-defensive-eval v2` under `reasoning_policy = DISABLED`, with body-free review evidence
+enabled and `max_new_tokens` still 512 for the first qualification.
+
+**The candidate is NOT run-004.** Operator ruling H5 put run-004 permanently outside quality
+promotion:
+
+```
+RUN_004_DISPOSITION:       KEEP_AS_SMOKE_REFERENCE_ONLY
+RUN_004_QUALITY_PROMOTION: EXCLUDED
+```
+
+Run-004 is never retrained, never continued from, never promoted, never activated and never
+mutated. A future candidate is a NEW run with a new plan, a new token, a new run id and a
+new adapter identity.
+
+**If instead the review evidence or corpus v2 turns out incomplete in use, that is S3F.3.**
+Do not pre-decide which.
+
+Nothing in S3F, S3F.1 or S3F.2 authorises promotion, activation, registry mutation,
+retraining or a further live evaluation.
 
 ---
+
+### Superseded — the S3F.1 brief (completed 2026-08-10; H1-H6 answered in S3F.2)
+
+> **M62 S3F.1 — HUMAN OPERATOR REVIEW (the engineering half is done)**
+>
+> What remained was the part Claude may not do: an actual human answering **H1-H6**.
+> **They have.** See §2 for the rulings and
+> `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md` for the full record.
 
 ### Superseded — the original S3F brief (completed 2026-08-07)
 
@@ -1113,9 +1289,12 @@ identity** — never a mutation of run-004.
 
 1. **`PROGRESS.md`** (this file)
 2. **`jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md`** — the S3E.2 measurement of record
-3. **`jarvis/docs/V69_M62_S3F1_STRUCTURED_OUTPUT_AND_REVIEW_EVIDENCE.md`** — the
-   structured-output root cause, the thinking policy, and the H1–H6 sheet
-4. Only the source files needed for the specific task
+3. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
+   H1–H6, the body-free review evidence, corpus v2, and the blocked reasoning-policy
+   preflight. **This is the current technical basis.**
+4. `jarvis/docs/V69_M62_S3F1_STRUCTURED_OUTPUT_AND_REVIEW_EVIDENCE.md` — only if the task
+   needs the structured-output root cause itself
+5. Only the source files needed for the specific task
 
 Supporting docs, only if the task needs them:
 
@@ -1149,7 +1328,8 @@ master      = 3705114228edef2f665be349c5c4429b7b16777a   (unchanged)
 
 Then:
 
-**DO NOT RE-AUDIT COMPLETED MILESTONES.** Proceed directly to the session's specific S3F task.
+**DO NOT RE-AUDIT COMPLETED MILESTONES.** Proceed directly to the session's specific task
+(§19).
 
 ---
 
