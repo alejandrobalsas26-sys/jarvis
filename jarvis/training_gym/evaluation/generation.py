@@ -296,7 +296,39 @@ class GenerationPolicy:
 
 #: The one policy an eligibility-grade evaluation uses unless a config defensibly
 #: overrides individual bounds. Named so a test can assert the default is greedy.
+#:
+#: ``reasoning_policy`` stays ``MODEL_DEFAULT`` here on purpose. It is what S3E.2 did,
+#: and a different default would silently reinterpret every existing configuration and
+#: make the historical measurement look like it used a setting it never had.
 DEFAULT_GENERATION_POLICY = GenerationPolicy()
+
+
+def eligibility_generation_policy(*, seed: int = 0, **overrides) -> GenerationPolicy:
+    """The policy V69 M62 operator ruling **H6a** approved for an eligibility-grade run.
+
+    ``reasoning_policy=DISABLED``: measure the model's final answer rather than spend a
+    large part of the token budget narrating hidden reasoning that then interferes with a
+    machine-readable contract. In S3E.2 every one of the 72 responses opened with a
+    ``<think>`` block, 27 of them hit the token ceiling, and 5 of the 18 structured
+    generations never left the reasoning block at all.
+
+    This is a FORWARD policy and it is a SEPARATE, NAMED object rather than a new default.
+    S3E.2 ran under ``MODEL_DEFAULT`` and its artefacts still say so; historical
+    comparability survives because the policy travels inside ``policy_hash`` and therefore
+    inside ``parity_hash``, so a report always names the semantics that produced it.
+
+    Two arms under different reasoning policies cannot be compared —
+    ``assert_identical_policies`` refuses the pair before anything is generated — and a
+    chat template that ignores the request makes the backend fail with ``CHAT_TEMPLATE``
+    rather than record a setting as applied when it was not.
+    """
+    return GenerationPolicy(seed=seed,
+                            reasoning_policy=ReasoningPolicy.DISABLED,
+                            **overrides)
+
+
+#: The reasoning policy an eligibility-grade evaluation binds (operator ruling H6a).
+ELIGIBILITY_REASONING_POLICY = ReasoningPolicy.DISABLED
 
 
 def assert_identical_policies(baseline: GenerationPolicy,
@@ -319,8 +351,9 @@ def assert_identical_policies(baseline: GenerationPolicy,
 
 __all__ = [
     "DEFAULT_GENERATION_POLICY", "EVALUATION_DEVICE_POLICIES",
-    "EVALUATION_PRECISION_POLICIES", "GENERATION_POLICY_VERSION",
-    "ReasoningPolicy",
+    "ELIGIBILITY_REASONING_POLICY", "EVALUATION_PRECISION_POLICIES",
+    "GENERATION_POLICY_VERSION", "ReasoningPolicy",
+    "eligibility_generation_policy",
     "MAX_BATCH_SIZE", "MAX_GENERATION_TIMEOUT_S", "MAX_INPUT_TOKENS_CEILING",
     "MAX_NEW_TOKENS_CEILING", "MAX_STOP_SEQUENCES", "GenerationMode",
     "GenerationPolicy", "GenerationPolicyError", "TruncationSide",

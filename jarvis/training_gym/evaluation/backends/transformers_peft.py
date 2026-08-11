@@ -153,6 +153,12 @@ def generation_kwargs(policy) -> dict:
     return kwargs
 
 
+def template_honours_reasoning_policy(tokenizer, messages: list) -> bool:
+    """Public name for the check below, so a preflight uses this authority rather than a
+    second implementation of the same comparison."""
+    return _template_honours_thinking(tokenizer, messages)
+
+
 def _template_honours_thinking(tokenizer, messages: list) -> bool:
     """Whether this chat template actually implements ``enable_thinking``.
 
@@ -493,4 +499,5 @@ __all__ = [
     "BACKEND_ID", "BACKEND_VERSION", "LOCAL_FILES_ONLY", "RUNTIME_PACKAGES",
     "TRUST_REMOTE_CODE", "LoadStrategy", "RuntimeUnavailable",
     "TransformersPeftEvaluationBackend", "generation_kwargs",
+    "template_honours_reasoning_policy",
 ]
