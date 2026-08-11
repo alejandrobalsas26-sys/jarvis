@@ -239,7 +239,12 @@ def test_a_task_declaring_no_schema_records_that_parsing_was_the_whole_contract(
 
 
 def test_the_scoring_version_records_that_a_verdict_changed():
-    assert SCORING_VERSION == "m62.evaluation_scoring.3"
+    # S3F.1 set .3 for the structured-output correction. S3F.2 added ``note_codes`` to
+    # ``ArmScore.to_dict``, which moves every ``score_hash``, so the version moved again.
+    # What S3F.1 needs is that the version is never again one that predates its fix.
+    assert SCORING_VERSION not in ("m62.evaluation_scoring.1",
+                                   "m62.evaluation_scoring.2")
+    assert SCORING_VERSION.startswith("m62.evaluation_scoring.")
 
 
 def test_the_two_failure_modes_are_reported_as_separate_metrics():

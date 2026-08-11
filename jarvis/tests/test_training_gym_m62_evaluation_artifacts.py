@@ -23,6 +23,10 @@ from training_gym.evaluation.backends.fake import FakeMode
 from training_gym.evaluation.gates import evaluate_gates
 from training_gym.evaluation.plan import EvaluationPlan, plan_state_sequence
 from training_gym.evaluation.policy import EvaluationPolicySet, ResourceCeilings
+from training_gym.evaluation.score_evidence import (
+    build_score_evidence,
+    response_digests,
+)
 from training_gym.evaluation.reports import (
     CandidateEligibility,
     EmpiricalStatus,
@@ -278,13 +282,22 @@ def _write(tmp_path, mode: FakeMode = FakeMode.IDENTICAL, **overrides):
         measured_pairs=report.measured_pairs, files=(), total_bytes=0, tree_hash="",
         created_at_utc=_NOW)
     directory = tmp_path / "gen-1"
+    baseline_records = result_records(results_by_role(run, EvaluationRole.BASELINE))
+    candidate_records = result_records(results_by_role(run, EvaluationRole.CANDIDATE))
     payload = dict(
         plan_record=_plan().to_record(), task_pack_records=pack.task_records(),
         task_pack_manifest=pack.to_record(),
-        baseline_records=result_records(results_by_role(run, EvaluationRole.BASELINE)),
-        candidate_records=result_records(
-            results_by_role(run, EvaluationRole.CANDIDATE)),
+        baseline_records=baseline_records,
+        candidate_records=candidate_records,
         comparison_records=summary.comparison_records(),
+        baseline_score_records=build_score_evidence(
+            summary.comparisons, role="baseline", evaluation_id=manifest.evaluation_id,
+            generation=manifest.generation,
+            response_digests=response_digests(baseline_records)),
+        candidate_score_records=build_score_evidence(
+            summary.comparisons, role="candidate", evaluation_id=manifest.evaluation_id,
+            generation=manifest.generation,
+            response_digests=response_digests(candidate_records)),
         metrics_record={"baseline": summary.baseline_metrics.to_dict(),
                         "candidate": summary.candidate_metrics.to_dict()},
         report_record=report_record, manifest=manifest)
@@ -297,7 +310,8 @@ def test_a_written_generation_verifies(tmp_path):
     directory, validation, _ = _write(tmp_path)
     assert validation.ok
     assert A.verify_evaluation_generation(directory) == ()
-    assert set(p.name for p in directory.iterdir()) == set(A.REQUIRED_EVALUATION_FILES)
+    assert set(p.name for p in directory.iterdir()) == set(
+        A.required_evaluation_files(A.EVALUATION_MANIFEST_VERSION))
 
 
 def test_the_manifest_is_written_last(tmp_path):
