@@ -15,7 +15,8 @@ RAW_RESPONSE_PERSISTED:           NO
 EVAL_CORPUS_V2:                   PASS
 EVAL_CORPUS_V2_LEAKAGE:           CLEAN
 REASONING_POLICY_PLAN_BOUND:      YES
-REASONING_POLICY_PREFLIGHT:       BLOCKED_CACHE_NOT_LOCATED
+REASONING_POLICY_PREFLIGHT:       BLOCKED_CACHE_NOT_LOCATED   (at S3F.2 close)
+                                  -> PASS  (2026-08-11, see the addendum in §11)
 SECURITY_RAW_RESPONSE_VISIBILITY: PRESERVED
 MAX_NEW_TOKENS_CHANGE:            NO
 HISTORICAL_S3E2_MUTATED:          NO
@@ -142,7 +143,7 @@ Requirements the operator attached, and where each now lives:
 
 | Requirement | Status |
 |---|---|
-| the reviewed tokenizer must actually honour `enable_thinking=False` | preflight built; **`BLOCKED_CACHE_NOT_LOCATED`** on this host (§5) |
+| the reviewed tokenizer must actually honour `enable_thinking=False` | preflight built; `BLOCKED_CACHE_NOT_LOCATED` at S3F.2 close (§5), then **`PASS`** on 2026-08-11 once the operator supplied the cache root (§11) |
 | the backend must refuse if the template ignores the requested policy | already true (S3F.1 D26a); pinned by three tokenizer doubles |
 | `reasoning_policy` stays in `GenerationPolicy` identity | pinned |
 | policy hash / parity binding must bind it | pinned |
@@ -390,8 +391,13 @@ turns out empty is indistinguishable from having looked in the wrong place. No f
 sweep was performed.
 
 **The check was not weakened into a pass.** `_template_honours_thinking` still has not met
-the real Qwen3 tokenizer — the S3F.1 limitation stands unchanged. To clear it, an operator
-runs:
+the real Qwen3 tokenizer — the S3F.1 limitation stands unchanged.
+
+> **SUPERSEDED on 2026-08-11 — see §11.** The operator supplied the reviewed cache root and
+> the preflight was run against the real tokenizer. It returned `pass`. Everything above
+> remains the accurate record of where S3F.2 *closed*, and is retained for that reason.
+
+To clear it, an operator runs:
 
 ```
 python jarvis/scripts/qualify_reasoning_policy.py --model-cache-root <reviewed cache>
@@ -453,10 +459,11 @@ what this repository does not currently have. Nothing was activated.
 
 ## 8. Limitations — read before trusting anything above
 
-1. **`REASONING_POLICY_PREFLIGHT` is `BLOCKED`, not `PASS`.** The reviewed tokenizer has
-   still never been rendered under `enable_thinking=False`. The backend is written to refuse
-   rather than guess, and the preflight is written to block rather than assume, but neither
-   has met the real template.
+1. ~~**`REASONING_POLICY_PREFLIGHT` is `BLOCKED`, not `PASS`.** The reviewed tokenizer has
+   still never been rendered under `enable_thinking=False`.~~ **CLOSED 2026-08-11 (§11).**
+   The operator supplied the cache root; the real template renders differently under
+   `enable_thinking` on and off, so the preflight returned `pass`. This limitation was
+   accurate at S3F.2 close and is struck through rather than deleted.
 2. **H1 is still open and this milestone could not close it.** Body-free evidence cannot
    answer a materiality question. That is a property of the design, not a gap in it.
 3. **The review evidence has never been produced by a live run.** It is proven by 41 tests
@@ -496,9 +503,9 @@ now says what S3F.1 needs — that the version never returns to `.1` or `.2`.
 **S3F.2 is complete on everything it was authorised to do.** What remains needs a person or
 a separate authorisation:
 
-1. **Run the reasoning-policy preflight against the reviewed cache.** One command, offline,
-   no generation. Until it returns `pass`, `reasoning_policy=DISABLED` is approved but not
-   qualified.
+1. ~~**Run the reasoning-policy preflight against the reviewed cache.**~~ **DONE
+   2026-08-11 — `pass` (§11).** `reasoning_policy=DISABLED` is now approved *and*
+   qualified against the real tokenizer.
 2. **Decide how H1's materiality is answered**, if it is to be answered: redacted excerpt
    (persists model output for the first time) or human observation of a live run (persists
    nothing, needs a fresh token). This session chose neither.
@@ -508,3 +515,66 @@ a separate authorisation:
 
 Nothing in this document authorises promotion, activation, registry mutation, retraining or
 a further live evaluation.
+
+---
+
+## 11. Addendum — reasoning-policy preflight qualified (2026-08-11, post-S3F.2)
+
+**This is a post-milestone qualification, not a revision of S3F.2.** S3F.2 closed with
+`REASONING_POLICY_PREFLIGHT: BLOCKED_CACHE_NOT_LOCATED`, and that remains the honest record
+of that milestone: the reviewed cache was at none of the candidate roots and no operator had
+named one. Nothing above was rewritten to pretend otherwise.
+
+**What changed is an input, not a conclusion.** The human operator subsequently supplied the
+reviewed cache root used by the successful M62 live training and evaluation work. The
+existing, unmodified `scripts/qualify_reasoning_policy.py` was run against exactly that
+root, on the authoritative isolated interpreter (`.venv-training-smoke`).
+
+```
+REASONING_POLICY_PREFLIGHT: PASS
+```
+
+| | |
+|---|---|
+| Cache root | supplied by the operator; digest `40f747d2037e389b` — the path is not recorded here |
+| Tokenizer | `Qwen/Qwen3-0.6B` @ `c1899de289a04d12100db370d81485cdf75e47ca` (immutable commit) |
+| Environment | `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_HUB_DISABLE_TELEMETRY=1` |
+| Load | `local_files_only=True`, `trust_remote_code=False`, `cache_dir` bound to the supplied root |
+| Policy under test | `reasoning_policy = DISABLED`, `policy_hash` `623c44a1a1a58a71…` |
+| Model weights loaded | **no** — `AutoTokenizer.from_pretrained` reads tokenizer and config metadata only |
+| Generation performed | **no**; `tokens_produced: 0` |
+
+### The three renderings
+
+Character counts and digest prefixes only — a chat template can carry a system preamble,
+and a preamble is content this file has no reason to publish.
+
+| Rendering | chars | sha256 (prefix) |
+|---|---|---|
+| `MODEL_DEFAULT` (nothing passed) | 79 | `ca0259367339443e` |
+| `ENABLED` (`enable_thinking=True`) | 79 | `ca0259367339443e` |
+| `DISABLED` (`enable_thinking=False`) | **98** | **`2b7898f3175013ff`** |
+
+`RENDERS_DIFFER: YES`. `TEMPLATE_HONOURS_REASONING_POLICY: YES`. The fail-closed authority
+`template_honours_reasoning_policy` — the backend's own, not a second implementation —
+returned `True`, so `reasoning_policy=DISABLED` is a request this template **implements**
+rather than silently ignores.
+
+### Two things this incidentally confirms, for the first time against the real tokenizer
+
+1. **`MODEL_DEFAULT` and `ENABLED` render byte-identically.** Qwen3's template default *is*
+   thinking-on. That is the S3F/S3F.1 root cause (D24, D26a) — until now inferred from the
+   `reasoning` category firing across both arms of S3E.2, and now shown directly. S3E.2
+   passing nothing was, exactly as recorded, the same thing as asking for thinking.
+2. **`DISABLED` renders *longer*, not shorter** (98 against 79 characters). The template
+   does not merely omit a directive; it emits something in the assistant turn. What that is
+   was not read and is not asserted here — only that the two renderings are genuinely
+   different, which is the whole question the preflight was built to answer.
+
+### What this does NOT establish
+
+No model was loaded and no token was generated, so nothing here says anything about how
+Qwen3 *behaves* under `DISABLED` — only that the template honours the request. The first
+eligibility-grade run under this policy remains unauthorised, needs a fresh plan and a
+fresh single-use `EVAL:` token, and `max_new_tokens` stays 512 for it
+(§6). Operator ruling **H1** is untouched and still `PENDING_EVIDENCE`.

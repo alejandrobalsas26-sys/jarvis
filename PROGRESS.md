@@ -7,7 +7,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-10T12:00Z |
+| **Last updated** | 2026-08-11T00:00Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
@@ -117,7 +117,8 @@ RAW_RESPONSE_PERSISTED:           NO
 EVAL_CORPUS_V2:                   PASS        (m62-defensive-eval v2)
 EVAL_CORPUS_V2_LEAKAGE:           CLEAN
 REASONING_POLICY_PLAN_BOUND:      YES
-REASONING_POLICY_PREFLIGHT:       BLOCKED_CACHE_NOT_LOCATED
+REASONING_POLICY_PREFLIGHT:       BLOCKED_CACHE_NOT_LOCATED  (at S3F.2 close)
+                                  -> PASS (2026-08-11, post-S3F.2 qualification)
 SECURITY_RAW_RESPONSE_VISIBILITY: PRESERVED
 MAX_NEW_TOKENS_CHANGE:            NO
 MAX_NEW_TOKENS_RECOMMENDATION:    KEEP_512_FOR_FIRST_DISABLED_REASONING_QUALIFICATION
@@ -429,14 +430,50 @@ populates `proposed_tool_calls`, so the tool-call family has no transport and wa
 deliberately left unchanged.
 **Built (C) reasoning policy:** `eligibility_generation_policy()` /
 `ELIGIBILITY_REASONING_POLICY`, a *named* object rather than a new default, plus the
-offline `scripts/qualify_reasoning_policy.py` preflight. On this host the reviewed cache
-is at none of the candidate roots: `REASONING_POLICY_PREFLIGHT: BLOCKED_CACHE_NOT_LOCATED`,
-not weakened into a pass.
+offline `scripts/qualify_reasoning_policy.py` preflight. At S3F.2 close the reviewed cache
+was at none of the candidate roots: `REASONING_POLICY_PREFLIGHT: BLOCKED_CACHE_NOT_LOCATED`,
+not weakened into a pass. **Post-S3F.2 (2026-08-11) the operator supplied the reviewed cache
+root and the same unmodified script returned `pass`** — see the timeline entry below.
 **Analysed, not changed:** `max_new_tokens` stays 512 — raising it in the same change
 would confound the measurement.
 **Critically:** historical generation 3 re-verifies byte-for-byte; run-004, the S3E.2
 artefacts, `m62-defensive-eval v1` and the `NOT_ELIGIBLE` verdict are all untouched.
 **Real training/eval:** none. **Enabled:** S3G's design work, once authorised.
+
+### M62 S3F.2 addendum — reasoning-policy preflight qualified (2026-08-11)
+**Not a new milestone and not a revision of S3F.2.** S3F.2 closed `BLOCKED_CACHE_NOT_LOCATED`
+and that remains the honest record of it; what changed afterwards was an *input*, not a
+conclusion. The human operator supplied the reviewed cache root used by the successful M62
+live training and evaluation work, and the existing, **unmodified**
+`scripts/qualify_reasoning_policy.py` was run against exactly that root on the authoritative
+isolated interpreter (`.venv-training-smoke`), offline.
+
+```
+REASONING_POLICY_PREFLIGHT: PASS
+```
+
+| Rendering of one neutral probe prompt | chars | sha256 (prefix) |
+|---|---|---|
+| `MODEL_DEFAULT` (nothing passed) | 79 | `ca0259367339443e` |
+| `ENABLED` | 79 | `ca0259367339443e` |
+| `DISABLED` | **98** | **`2b7898f3175013ff`** |
+
+Tokenizer `Qwen/Qwen3-0.6B` @ `c1899de2…`, `local_files_only=true`,
+`trust_remote_code=false`, `cache_dir` bound to the supplied root (digest
+`40f747d2037e389b`; the path is not recorded in a tracked file). **No model weights were
+loaded** — `AutoTokenizer.from_pretrained` reads tokenizer and config metadata only — **no
+token was generated**, no plan was consumed and no source changed.
+
+**Two things this confirms directly against the real tokenizer for the first time:**
+`MODEL_DEFAULT` and `ENABLED` render **byte-identically**, so Qwen3's template default *is*
+thinking-on — the D24/D26a root cause, until now inferred from the `reasoning` category
+firing across both S3E.2 arms; and `DISABLED` renders **longer** (98 vs 79), so the template
+emits something rather than merely omitting a directive. What it emits was not read and is
+not asserted.
+
+`reasoning_policy = DISABLED` is now **approved *and* qualified**. It says nothing about how
+the model behaves under it: no eligibility-grade run is authorised, and one would still need
+a fresh plan and a fresh single-use `EVAL:` token.
 
 ### Commit index
 
@@ -974,13 +1011,12 @@ result rather than a false one — which is the behaviour that made the defect d
 15. **The `tool_call_schema` family cannot be measured at all (D28).** The production
    backend has no tool-call transport, so `tool_call_validity_rate` is vacuous whatever a
    prompt says. Six of 36 tasks. A backend fix, not a corpus fix.
-16. **`REASONING_POLICY_PREFLIGHT` is `BLOCKED_CACHE_NOT_LOCATED`.** The reviewed Qwen3
-   tokenizer has still never been rendered under `enable_thinking=False`;
-   `_template_honours_thinking` has met only stubs. The reviewed cache is at none of the
-   candidate roots on this host and no operator named one. Clear it with
-   `python jarvis/scripts/qualify_reasoning_policy.py --model-cache-root <cache>` —
-   offline, no generation. Until it returns `pass`, `DISABLED` is **approved but not
-   qualified**.
+16. ~~**`REASONING_POLICY_PREFLIGHT` is `BLOCKED_CACHE_NOT_LOCATED`.**~~ **CLOSED
+   2026-08-11.** The operator supplied the reviewed cache root and the preflight returned
+   `pass`: the real template renders differently under `enable_thinking` on and off, so
+   `DISABLED` is approved **and** qualified. Struck through rather than deleted, because
+   it was accurate at S3F.2 close. **What is still true:** the policy has never been used
+   in a live run, so nothing is known about how the model *behaves* under it.
 17. **H1 cannot be closed by body-free evidence, and S3F.2 did not close it.** Answering
    materiality needs either a redacted excerpt (persists model output for the first time)
    or human observation of a live run (persists nothing, needs a fresh token). Each is a
@@ -1172,6 +1208,11 @@ hand-written and no hash is invented.
   would make the result unattributable — see the S3F.2 doc §6.
 - **DO NOT** sweep the filesystem looking for the reviewed model cache. The preflight
   takes `--model-cache-root`; an unnamed cache is `BLOCKED`, by design.
+- **DO NOT** re-run the reasoning-policy preflight. It returned `pass` on 2026-08-11
+  against the real tokenizer, and the result is recorded with its three rendering digests
+  in §4 and in the S3F.2 doc §11.
+- **DO NOT** read the `pass` as evidence about the MODEL. It says the template honours the
+  request. Nothing has been generated under `DISABLED`.
 - **DO NOT** start S3G by exploring the whole repository.
 
 **Instead:**
@@ -1189,23 +1230,18 @@ requested next step
 > those rulings authorised is built, tested and pushed. Nothing here is waiting on Claude
 > re-reading the evidence.
 
-**Two things block the next milestone, and both need a person.**
+**One thing still blocks the next milestone, and it needs a person.**
 
-1. **Run the reasoning-policy preflight against the reviewed cache.** One offline command,
-   no generation, no token:
+1. ~~Run the reasoning-policy preflight against the reviewed cache.~~ **DONE 2026-08-11 —
+   `PASS`.** The operator supplied the cache root; the real Qwen3 template renders
+   differently under `enable_thinking` on and off. `reasoning_policy = DISABLED` is
+   approved **and** qualified. See the S3F.2 addendum in §4 and
+   `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md` §11. **Do not re-run it.**
 
-   ```
-   python jarvis/scripts/qualify_reasoning_policy.py --model-cache-root <reviewed cache>
-   ```
-
-   Exit `0` = `pass`, `3` = blocked, `4` = the template does not honour the policy. Until
-   it returns `pass`, `reasoning_policy = DISABLED` is **approved but not qualified** and
-   no eligibility-grade run should be planned around it (§14.16).
-
-2. **Decide how H1's materiality is answered, or that it is not.** Body-free evidence
-   cannot decide it. The two routes have different privacy costs: a redacted excerpt
-   persists model output for the first time; human observation of a live run persists
-   nothing but needs a fresh single-use token. S3F.2 chose neither (§14.17).
+2. **Decide how H1's materiality is answered, or that it is not.** *Still open.* Body-free
+   evidence cannot decide it. The two routes have different privacy costs: a redacted
+   excerpt persists model output for the first time; human observation of a live run
+   persists nothing but needs a fresh single-use token. S3F.2 chose neither (§14.17).
 
 **Then, if authorised: M62 S3G — QUALITY-ORIENTED TRAINING CANDIDATE DESIGN.**
 
