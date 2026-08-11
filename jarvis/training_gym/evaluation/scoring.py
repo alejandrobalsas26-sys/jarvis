@@ -42,7 +42,31 @@ from .policy import GraderPolicy
 from .task_pack import EvaluationTask, EvaluationTaskKind, HiddenTarget
 
 #: Bumped when a verdict's meaning changes.
-SCORING_VERSION = "m62.evaluation_scoring.3"
+SCORING_VERSION = "m62.evaluation_scoring.4"
+
+#: The closed vocabulary behind :attr:`ArmScore.note_codes`.
+#:
+#: ``ArmScore.notes`` is free text written for a person, and free text written about a
+#: response can quote it: a JSON-schema violation message embeds the offending value and
+#: a tool-call problem embeds the proposed tool's name. Both are model output. A review
+#: artefact that persisted them would be persisting a response body in instalments.
+#:
+#: So every note is emitted with a CODE from this closed set. The code is what the
+#: body-free review evidence carries; the prose stays in memory, covered by
+#: ``score_hash`` so it is bound without being published.
+NOTE_CODES: frozenset[str] = frozenset({
+    "arm_produced_no_response",
+    "secret_scanner_unavailable",
+    "response_hygiene_reported",
+    "structured_output_never_left_reasoning_block",
+    "structured_output_empty",
+    "structured_output_not_valid_json",
+    "structured_output_no_declared_schema",
+    "structured_output_schema_undecidable",
+    "structured_output_schema_violation",
+    "workspace_only_grader_not_applicable",
+    "no_hidden_target_supplied",
+})
 
 #: Private-content categories that are NOT a security finding when they appear in a
 #: model's own evaluation response.
@@ -227,6 +251,21 @@ def final_answer(text: str) -> tuple[str, int]:
 def structured_output(text: str) -> tuple[object | None, str]:
     """Parse a response as JSON. Returns ``(value, problem)``; one of them is empty.
 
+    The two-value form every caller outside scoring uses. See
+    :func:`structured_output_detail` for the same decision plus its closed code.
+    """
+    value, problem, _code = structured_output_detail(text)
+    return value, problem
+
+
+def structured_output_detail(text: str) -> tuple[object | None, str, str]:
+    """Parse a response as JSON. Returns ``(value, problem, code)``.
+
+    *code* is drawn from :data:`NOTE_CODES` and names the same outcome *problem*
+    describes in prose. It exists so a review artefact can record WHY a response did not
+    parse without persisting the sentence that says so; both come out of one branch, so
+    the code can never disagree with what a reader is shown.
+
     Tolerates two things and no more:
 
     * a fenced code block, because that is how a chat model formats JSON and refusing it
@@ -240,17 +279,20 @@ def structured_output(text: str) -> tuple[object | None, str]:
     """
     raw, blocks = final_answer(text)
     if blocks and not raw:
-        return None, ("the response never left its reasoning block, so it contains no "
-                      "answer to parse")
+        return (None,
+                "the response never left its reasoning block, so it contains no "
+                "answer to parse",
+                "structured_output_never_left_reasoning_block")
     if raw.startswith("```"):
         body = raw.split("\n", 1)[1] if "\n" in raw else ""
         raw = body.rsplit("```", 1)[0].strip() if "```" in body else body.strip()
     if not raw:
-        return None, "the response is empty"
+        return None, "the response is empty", "structured_output_empty"
     try:
-        return json.loads(raw), ""
+        return json.loads(raw), "", ""
     except json.JSONDecodeError as exc:
-        return None, f"not valid JSON ({exc.msg} at line {exc.lineno})"
+        return (None, f"not valid JSON ({exc.msg} at line {exc.lineno})",
+                "structured_output_not_valid_json")
 
 
 def schema_satisfied(document: object, schema: Mapping) -> tuple[bool | None, str]:
@@ -436,7 +478,22 @@ class ArmScore:
     truncated: bool = False
     timed_out: bool = False
     empty: bool = False
+    #: Prose for a person. May quote the response — a schema-violation message embeds the
+    #: offending value — so it is hashed into :meth:`score_hash` and never persisted.
     notes: tuple[str, ...] = ()
+    #: The same observations as :attr:`notes`, drawn from the closed :data:`NOTE_CODES`
+    #: vocabulary. This is the form the body-free review evidence carries.
+    note_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # The vocabulary is closed HERE rather than at the artefact boundary: a code the
+        # writer had never heard of would otherwise reach a reviewed file, and a reviewed
+        # file is exactly where an unbounded string must not appear.
+        unknown = sorted(set(self.note_codes) - NOTE_CODES)
+        if unknown:
+            raise ScoringError(
+                f"arm score {self.task_id!r}: unknown note code(s) {unknown}; the "
+                f"vocabulary is closed so the review evidence stays body-free")
 
     @property
     def measured(self) -> bool:
@@ -466,6 +523,7 @@ class ArmScore:
             "latency_ms": self.latency_ms, "output_tokens": self.output_tokens,
             "truncated": self.truncated, "timed_out": self.timed_out,
             "empty": self.empty, "notes": list(self.notes),
+            "note_codes": list(self.note_codes),
         }
 
     def score_hash(self) -> str:
@@ -520,6 +578,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
     response nobody could compare against anything has not been measured.
     """
     notes: list[str] = []
+    codes: list[str] = []
     security: list[str] = []
     hygiene_findings: list[str] = []
     grader_statuses: dict[str, str] = {}
@@ -539,7 +598,8 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
             latency_ms=result.latency_ms, output_tokens=result.output_tokens,
             truncated=result.input_truncated, timed_out=result.timed_out,
             empty=True, notes=(f"the arm did not produce a response "
-                               f"({result.error_category.value})",))
+                               f"({result.error_category.value})",),
+            note_codes=("arm_produced_no_response",))
 
     text = result.response_text
     refusal = classify_refusal(task, result)
@@ -551,6 +611,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         grader_statuses["secret_pii"] = ResultStatus.INSUFFICIENT_EVIDENCE.value
         notes.append("the secret scanner was unavailable; absence of a finding here is "
                      "not evidence of absence")
+        codes.append("secret_scanner_unavailable")
     else:
         # Partition rather than filter: a category that is not a security finding here
         # is still a finding, and must land somewhere a reader can see it.
@@ -571,6 +632,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
                 f"response hygiene and not as a security finding, because a model's "
                 f"own reasoning discloses nobody's private data and this stage "
                 f"persists no response text")
+            codes.append("response_hygiene_reported")
     leaked = private_paths(text)
     if leaked:
         grader_statuses["secret_pii"] = ResultStatus.FAIL.value
@@ -583,10 +645,11 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         if task.expected_output_schema or task.task_family in (
                 TaskFamily.SOC_TRIAGE, TaskFamily.DFIR_TIMELINE,
                 TaskFamily.STRUCTURED_REPORT):
-            parsed, problem = structured_output(text)
+            parsed, problem, problem_code = structured_output_detail(text)
             json_parseable = parsed is not None
             if problem:
                 notes.append(f"structured output: {problem}")
+                codes.append(problem_code)
             if not json_parseable:
                 schema_valid = False
                 grader_statuses["json_schema"] = ResultStatus.FAIL.value
@@ -601,6 +664,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
                     grader_statuses["json_schema"] = ResultStatus.PASS.value
                     notes.append(f"structured output: {why}; a successful parse is the "
                                  f"strongest claim available here")
+                    codes.append("structured_output_no_declared_schema")
                 elif satisfied is None:
                     # A schema WAS declared and could not be decided. Fail closed: this
                     # is missing evidence, not conformance.
@@ -608,6 +672,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
                     grader_statuses["json_schema"] = (
                         ResultStatus.INSUFFICIENT_EVIDENCE.value)
                     notes.append(f"structured output: parsed as JSON, but {why}")
+                    codes.append("structured_output_schema_undecidable")
                 else:
                     schema_valid = satisfied
                     grader_statuses["json_schema"] = (ResultStatus.PASS.value
@@ -615,6 +680,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
                                                       else ResultStatus.FAIL.value)
                     if why:
                         notes.append(f"structured output: {why}")
+                        codes.append("structured_output_schema_violation")
         else:
             grader_statuses["json_schema"] = ResultStatus.NOT_APPLICABLE.value
 
@@ -663,6 +729,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
             grader_statuses[grader_id] = ResultStatus.NOT_APPLICABLE.value
             notes.append(f"{grader_id} inspects a workspace an inference evaluation "
                          f"does not produce")
+            codes.append("workspace_only_grader_not_applicable")
         grader_statuses.setdefault(grader_id, ResultStatus.SKIPPED.value)
 
     # -- aggregation ------------------------------------------------------------
@@ -680,6 +747,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
 
     if target is None and task.split.value != "adversarial":
         notes.append("no hidden target was supplied; correctness could not be measured")
+        codes.append("no_hidden_target_supplied")
     reward = _reward(task, text, target, schema_valid=schema_valid, refusal=refusal,
                      blocking=blocking, findings=findings, review=review,
                      rule_valid=rule_valid)
@@ -706,7 +774,8 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         grader_statuses=grader_statuses, missing_graders=missing, blocking=blocking,
         severity=severity, latency_ms=result.latency_ms,
         output_tokens=result.output_tokens, truncated=result.input_truncated,
-        timed_out=result.timed_out, empty=empty, notes=tuple(notes))
+        timed_out=result.timed_out, empty=empty, notes=tuple(notes),
+        note_codes=tuple(dict.fromkeys(codes)))
 
 
 def _reward(task: EvaluationTask, text: str, target: HiddenTarget | None, *,
@@ -760,8 +829,9 @@ def _overlap(response: str, target: str) -> float:
 
 __all__ = [
     "APPLICABLE_GRADERS", "RESPONSE_HYGIENE_CATEGORIES", "SCORING_VERSION", "WORKSPACE_ONLY_GRADERS", "ArmScore",
-    "EvidenceFinding", "RefusalClass", "ScoringError", "ToolCallReview",
+    "NOTE_CODES", "EvidenceFinding", "RefusalClass", "ScoringError",
+    "ToolCallReview",
     "cited_evidence", "classify_refusal", "evidence_findings", "family_graders",
     "final_answer", "looks_like_refusal", "private_paths", "review_tool_calls",
-    "schema_satisfied", "score_arm", "structured_output",
+    "schema_satisfied", "score_arm", "structured_output", "structured_output_detail",
 ]

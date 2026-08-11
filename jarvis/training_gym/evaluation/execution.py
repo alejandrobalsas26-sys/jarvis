@@ -41,6 +41,7 @@ from .pack_builder import build_task_pack_from_dataset, pack_blockers
 from .references import EvaluationRole
 from .reports import build_report
 from .runner import result_records, results_by_role, run_paired_evaluation
+from .score_evidence import build_score_evidence, response_digests
 from .store import (
     consume_plan,
     create_generation_directory,
@@ -290,14 +291,30 @@ def _run(request: ExecutionRequest, machine: _Machine, outcome: ExecutionOutcome
         task_count=summary.task_count, measured_pairs=summary.measured_pairs,
         files=(), total_bytes=0, tree_hash="", created_at_utc=request.at)
 
+    # Built once and passed to both the results artefact and the review evidence, so the
+    # response digest a reviewer reads is literally the one the results file recorded
+    # rather than a second computation that could disagree with it.
+    baseline_records = result_records(results_by_role(run, EvaluationRole.BASELINE))
+    candidate_records = result_records(results_by_role(run, EvaluationRole.CANDIDATE))
+    evidence = {
+        role: build_score_evidence(
+            summary.comparisons, role=role, evaluation_id=config.evaluation_id,
+            generation=config.evaluation_generation,
+            response_digests=response_digests(records))
+        for role, records in (("baseline", baseline_records),
+                              ("candidate", candidate_records))
+    }
+
     validation = write_evaluation_artifacts(
         directory,
         plan_record=plan.to_record(),
         task_pack_records=built.pack.task_records(),
         task_pack_manifest={**built.pack.to_record(), **built.manifest()},
-        baseline_records=result_records(results_by_role(run, EvaluationRole.BASELINE)),
-        candidate_records=result_records(results_by_role(run, EvaluationRole.CANDIDATE)),
+        baseline_records=baseline_records,
+        candidate_records=candidate_records,
         comparison_records=summary.comparison_records(),
+        baseline_score_records=evidence["baseline"],
+        candidate_score_records=evidence["candidate"],
         report_record=report.to_record(),
         # Both arms in one record, each carrying its own denominators, so a rate that
         # was computed from nothing stays visibly computed from nothing.

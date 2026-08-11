@@ -55,6 +55,10 @@ EXPECTED_EVALUATION_FILES: tuple[str, ...] = (
     "evaluation-plan.json", "task-pack.jsonl", "task-pack-manifest.json",
     "baseline-results.jsonl", "candidate-results.jsonl", "paired-comparisons.jsonl",
     "metrics.json", "evaluation-report.json", "evaluation-manifest.json",
+    # V69 M62 S3F.2: body-free per-arm review evidence. PERMITTED here, not defaulted —
+    # this tuple is the set a plan may declare, and no plan's ``expected_files`` is
+    # derived from it, so widening it moves no existing plan hash.
+    "baseline-scores.jsonl", "candidate-scores.jsonl",
 )
 
 

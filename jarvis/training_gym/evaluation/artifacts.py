@@ -39,9 +39,23 @@ from ..schemas import (
 )
 from .plan import EXPECTED_EVALUATION_FILES
 from .policy import ResourceCeilings
+from .score_evidence import (
+    BASELINE_SCORES_FILE,
+    CANDIDATE_SCORES_FILE,
+    verify_score_evidence,
+)
 
 #: Bumped when the manifest's shape changes.
-EVALUATION_MANIFEST_VERSION = "m62.evaluation_manifest.1"
+#:
+#: ``.2`` adds the two body-free review-evidence files. The version is what decides
+#: whether they are REQUIRED, so a generation sealed under ``.1`` — which is every
+#: generation that exists today, including the S3E.2 measurement of record — still
+#: verifies without them. Migrating an old tree to contain files its run never wrote
+#: would be manufacturing evidence, so nothing is migrated.
+EVALUATION_MANIFEST_VERSION = "m62.evaluation_manifest.2"
+
+#: The first manifest version whose generations must carry review evidence.
+SCORE_EVIDENCE_MANIFEST_VERSION = "m62.evaluation_manifest.2"
 
 #: The manifest cannot cover itself, so it is excluded from its own digest list.
 EVALUATION_MANIFEST_FILE = "evaluation-manifest.json"
@@ -52,8 +66,13 @@ REQUIRED_EVALUATION_FILES: frozenset[str] = frozenset({
     "baseline-results.jsonl", "candidate-results.jsonl", "paired-comparisons.jsonl",
     "metrics.json", "evaluation-report.json", EVALUATION_MANIFEST_FILE})
 
+#: Body-free per-arm review evidence (see ``score_evidence``). Required from manifest
+#: version ``.2`` onward, permitted-but-absent on the ``.1`` generations that predate it.
+SCORE_EVIDENCE_EVALUATION_FILES: frozenset[str] = frozenset({
+    BASELINE_SCORES_FILE, CANDIDATE_SCORES_FILE})
+
 #: Files that may be present.
-OPTIONAL_EVALUATION_FILES: frozenset[str] = frozenset()
+OPTIONAL_EVALUATION_FILES: frozenset[str] = SCORE_EVIDENCE_EVALUATION_FILES
 
 #: Everything permitted in a generation directory.
 ALLOWED_EVALUATION_FILES: frozenset[str] = (
@@ -62,7 +81,19 @@ ALLOWED_EVALUATION_FILES: frozenset[str] = (
 #: Files whose records are one per line, so a line count is a meaningful check.
 JSONL_FILES: frozenset[str] = frozenset({
     "task-pack.jsonl", "baseline-results.jsonl", "candidate-results.jsonl",
-    "paired-comparisons.jsonl"})
+    "paired-comparisons.jsonl"}) | SCORE_EVIDENCE_EVALUATION_FILES
+
+
+def required_evaluation_files(manifest_version: str) -> frozenset[str]:
+    """Which files a generation sealed under *manifest_version* must contain.
+
+    Versioned rather than absolute because the requirement was added after generations
+    existed. An older tree is not incomplete; it was complete under the contract it was
+    written to.
+    """
+    if str(manifest_version) >= SCORE_EVIDENCE_MANIFEST_VERSION:
+        return REQUIRED_EVALUATION_FILES | SCORE_EVIDENCE_EVALUATION_FILES
+    return REQUIRED_EVALUATION_FILES
 
 
 class EvaluationArtifactError(SchemaError):
@@ -155,9 +186,15 @@ def evaluation_tree_hash(files: Sequence[ArtifactFile]) -> str:
 
 def validate_evaluation_directory(directory: str | Path, *,
                                   expect_manifest: bool = False,
-                                  ceilings: ResourceCeilings | None = None
+                                  ceilings: ResourceCeilings | None = None,
+                                  require_score_evidence: bool = False
                                   ) -> ArtifactValidation:
-    """Everything that must hold about a generation directory, re-derived from disk."""
+    """Everything that must hold about a generation directory, re-derived from disk.
+
+    *require_score_evidence* defaults to False so a legacy tree is judged by the contract
+    it was sealed under. The writer passes True, and :func:`verify_evaluation_generation`
+    derives it from the manifest's own version.
+    """
     limits = ceilings or ResourceCeilings()
     path = Path(directory)
     problems: list[str] = []
@@ -176,6 +213,8 @@ def validate_evaluation_directory(directory: str | Path, *,
                         f"{limits.max_artifact_files} ceiling")
 
     required = set(REQUIRED_EVALUATION_FILES)
+    if require_score_evidence:
+        required |= set(SCORE_EVIDENCE_EVALUATION_FILES)
     if not expect_manifest:
         required.discard(EVALUATION_MANIFEST_FILE)
     for missing in sorted(required - set(present)):
@@ -259,6 +298,11 @@ class EvaluationManifest:
             "created_at_utc": self.created_at_utc,
         }
 
+    @property
+    def requires_score_evidence(self) -> bool:
+        """Whether this generation's contract includes the review-evidence files."""
+        return str(self.manifest_version) >= SCORE_EVIDENCE_MANIFEST_VERSION
+
     def manifest_hash(self) -> str:
         return sha256_obj(self.to_dict())
 
@@ -338,6 +382,8 @@ def write_evaluation_artifacts(directory: str | Path, *, plan_record: Mapping,
                                metrics_record: Mapping,
                                report_record: Mapping,
                                manifest: EvaluationManifest,
+                               baseline_score_records: Sequence[Mapping],
+                               candidate_score_records: Sequence[Mapping],
                                ceilings: ResourceCeilings | None = None
                                ) -> ArtifactValidation:
     """Write the tree, then verify it from disk. The manifest goes last.
@@ -364,9 +410,14 @@ def write_evaluation_artifacts(directory: str | Path, *, plan_record: Mapping,
     write_jsonl(path / "paired-comparisons.jsonl", comparison_records)
     write_json(path / "metrics.json", metrics_record)
     write_json(path / "evaluation-report.json", report_record)
+    # Body-free review evidence. Written before the manifest like every other file, so
+    # the digests the manifest carries are taken from bytes already on disk.
+    write_jsonl(path / BASELINE_SCORES_FILE, baseline_score_records)
+    write_jsonl(path / CANDIDATE_SCORES_FILE, candidate_score_records)
 
-    interim = validate_evaluation_directory(path, expect_manifest=False,
-                                            ceilings=ceilings)
+    interim = validate_evaluation_directory(
+        path, expect_manifest=False, ceilings=ceilings,
+        require_score_evidence=manifest.requires_score_evidence)
     if not interim.ok:
         raise EvaluationArtifactError(
             f"the artefacts did not verify after writing: "
@@ -377,7 +428,9 @@ def write_evaluation_artifacts(directory: str | Path, *, plan_record: Mapping,
                                    "tree_hash": interim.tree_hash})
     write_json(path / EVALUATION_MANIFEST_FILE, sealed.to_record())
 
-    final = validate_evaluation_directory(path, expect_manifest=True, ceilings=ceilings)
+    final = validate_evaluation_directory(
+        path, expect_manifest=True, ceilings=ceilings,
+        require_score_evidence=manifest.requires_score_evidence)
     if not final.ok:
         raise EvaluationArtifactError(
             f"the sealed tree did not verify: {'; '.join(final.problems[:5])}")
@@ -430,6 +483,8 @@ def verify_evaluation_generation(directory: str | Path, *,
             f"the tree digest {short(validation.tree_hash)} does not match the "
             f"manifest's {short(manifest.tree_hash)}")
 
+    problems.extend(_score_evidence_problems(path, manifest))
+
     report_path = path / "evaluation-report.json"
     if report_path.is_file():
         try:
@@ -444,10 +499,64 @@ def verify_evaluation_generation(directory: str | Path, *,
     return tuple(problems)
 
 
+def _read_jsonl(path: Path) -> list[dict]:
+    """Every line of a JSONL artefact, or a raised ``ValueError`` naming the bad line."""
+    records: list[dict] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            raise ValueError(f"{path.name}: line {number} is not JSON") from None
+    return records
+
+
+def _score_evidence_problems(path: Path,
+                             manifest: EvaluationManifest) -> list[str]:
+    """Re-derive the review evidence's bindings, or explain why it may not be believed.
+
+    A generation sealed before the evidence existed is judged by its own contract: absent
+    is correct there, and PRESENT is not — a file the manifest never named is an addition
+    to a sealed tree, which the digest reconciliation above already refuses.
+    """
+    present = {name for name in (BASELINE_SCORES_FILE, CANDIDATE_SCORES_FILE)
+               if (path / name).is_file()}
+    if not manifest.requires_score_evidence:
+        return []
+    missing = sorted({BASELINE_SCORES_FILE, CANDIDATE_SCORES_FILE} - present)
+    if missing:
+        return [f"{name}: is missing; manifest version "
+                f"{manifest.manifest_version} requires body-free review evidence"
+                for name in missing]
+    try:
+        comparisons = _read_jsonl(path / "paired-comparisons.jsonl")
+        results = {
+            "baseline": _read_jsonl(path / "baseline-results.jsonl"),
+            "candidate": _read_jsonl(path / "candidate-results.jsonl"),
+        }
+        evidence = {
+            "baseline": _read_jsonl(path / BASELINE_SCORES_FILE),
+            "candidate": _read_jsonl(path / CANDIDATE_SCORES_FILE),
+        }
+    except (OSError, ValueError) as exc:
+        return [str(exc)]
+
+    problems: list[str] = []
+    for role in ("baseline", "candidate"):
+        problems.extend(verify_score_evidence(
+            evidence[role], role=role, comparison_records=comparisons,
+            result_records_=results[role], evaluation_id=manifest.evaluation_id,
+            generation=manifest.generation))
+    return problems
+
+
 __all__ = [
     "ALLOWED_EVALUATION_FILES", "EVALUATION_MANIFEST_FILE",
     "EVALUATION_MANIFEST_VERSION", "EXPECTED_EVALUATION_FILES", "JSONL_FILES",
-    "OPTIONAL_EVALUATION_FILES", "REQUIRED_EVALUATION_FILES", "ArtifactFile",
+    "OPTIONAL_EVALUATION_FILES", "REQUIRED_EVALUATION_FILES",
+    "SCORE_EVIDENCE_EVALUATION_FILES", "SCORE_EVIDENCE_MANIFEST_VERSION",
+    "required_evaluation_files", "ArtifactFile",
     "ArtifactValidation", "ArtifactVerdict", "EvaluationArtifactError",
     "EvaluationManifest", "evaluation_tree_hash", "validate_evaluation_directory",
     "verify_evaluation_generation", "write_evaluation_artifacts", "write_json",
