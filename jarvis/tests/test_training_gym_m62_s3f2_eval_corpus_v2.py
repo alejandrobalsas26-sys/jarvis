@@ -291,3 +291,69 @@ def test_the_v2_pack_hash_is_not_the_plan_time_commitment_digest(promoted):
     commitment digest covers the dataset manifest and its split counts."""
     built = _pack(promoted["v2"][0], "v2")
     assert built.pack.pack_hash() != promoted["v2"][1]["manifest_hash"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  What a request built from v2 under the approved policy actually carries
+# ══════════════════════════════════════════════════════════════════════════════
+def _requests(pack, policy):
+    """One baseline and one candidate request per task. Nothing is generated."""
+    from training_gym.evaluation.backend import EvaluationRequest, EvaluationRole
+
+    from _m62_evaluation_fixtures import adapter_reference, baseline_reference
+    baseline, adapter = baseline_reference(), adapter_reference()
+    return [(EvaluationRequest(role=EvaluationRole.BASELINE, task=task,
+                               generation=policy, baseline=baseline, adapter=None),
+             EvaluationRequest(role=EvaluationRole.CANDIDATE, task=task,
+                               generation=policy, baseline=baseline, adapter=adapter))
+            for task in pack.tasks]
+
+
+def test_both_arms_see_a_byte_identical_prompt_under_the_approved_policy(promoted):
+    from training_gym.evaluation.generation import eligibility_generation_policy
+
+    pack = _pack(promoted["v2"][0], "v2").pack
+    policy = eligibility_generation_policy(seed=11)
+    for base, cand in _requests(pack, policy):
+        assert base.task.system_prompt == cand.task.system_prompt
+        assert base.task.user_prompt == cand.task.user_prompt
+        assert base.generation.policy_hash() == cand.generation.policy_hash()
+        assert base.generation.reasoning_policy.value == "disabled"
+        assert cand.generation.reasoning_policy.value == "disabled"
+        # The adapter is the only permitted difference between the two arms.
+        assert base.parity_hash() == cand.parity_hash()
+        assert base.adapter is None and cand.adapter is not None
+
+
+def test_the_parity_hash_over_v2_moves_when_the_reasoning_policy_moves(promoted):
+    from training_gym.evaluation.generation import (
+        GenerationPolicy,
+        eligibility_generation_policy,
+    )
+
+    pack = _pack(promoted["v2"][0], "v2").pack
+    disabled = _requests(pack, eligibility_generation_policy(seed=11))[0][0]
+    default = _requests(pack, GenerationPolicy(seed=11))[0][0]
+    assert disabled.parity_hash() != default.parity_hash()
+
+
+def test_the_v2_expected_output_schema_stays_model_safe(promoted):
+    """A schema listing the permitted values of a verdict field would publish the answer
+    key under a heading. The registry schema is structural and content-free, and v2 does
+    not change it."""
+    pack = _pack(promoted["v2"][0], "v2").pack
+    for task in pack.tasks:
+        body = json.dumps(task.expected_output_schema)
+        for publishing_keyword in ("enum", "const", "default", "examples"):
+            assert publishing_keyword not in body, task.task_id
+        assert "insufficient_evidence" not in body and "refuse" not in body
+
+
+def test_a_v2_request_carries_no_hidden_target_field(promoted):
+    from training_gym.evaluation.generation import eligibility_generation_policy
+
+    pack = _pack(promoted["v2"][0], "v2").pack
+    described = json.dumps([base.to_public_dict() for base, _cand
+                            in _requests(pack, eligibility_generation_policy(seed=11))])
+    for field in ("target", "expected_answer", "teacher", "rubric", "answer_key"):
+        assert field not in described
