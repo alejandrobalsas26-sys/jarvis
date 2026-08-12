@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-11T12:00Z |
+| **Last updated** | 2026-08-12T00:00Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3F.2 CLOSED** — H1–H6 answered, everything authorised is built, the reasoning-policy preflight passed and H1 is finally ruled. No gate remains open. |
-| **Next phase** | **M62 S3G** (quality-oriented training candidate design) — *not authorised yet*, and **not started**. Nothing blocks its design; it needs its own authorisation (§19). |
+| **Current phase** | **M62 S3G CLOSED (design)** — the first quality candidate is designed, its training corpus is built and leakage-qualified, its configuration is chosen and its plan is previewed. **Nothing was trained.** |
+| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. It needs the reviewed cache root, a zero-blocker plan, and explicit operator authorisation (§19). |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -133,6 +133,49 @@ MODEL_PROMOTION:                  NOT_AUTHORIZED
 LIVE_MODEL_INFERENCE:             NOT_RUN
 TRAINING:                         NOT_RUN
 ```
+
+### S3G outcome statuses (2026-08-12, this milestone)
+
+```
+S3G_DESIGN:                       PASS
+QUALITY_CANDIDATE_IDENTITY:       qwen3-06b-lora-quality-live-001
+RUN_INTENT:                       QUALITY_CANDIDATE
+TRAINING_DATASET:                 m62-defensive-quality-train v1
+TRAINING_DATASET_HASH:            9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a
+TRAINING_DATASET_ELIGIBLE:        YES
+TRAINING_DATASET_LEAKAGE:         CLEAN  (vs eval v1 AND v2, 15/16 checks; semantic unavailable)
+TRAIN_ROWS:                       107
+VALIDATION_ROWS:                  9
+INTERNAL_HELD_OUT:                6 hidden_evaluation + 6 security_regression
+TOTAL_TRAINING_ROWS:              128
+QUALITY_OBJECTIVES:               QUALIFIED
+SECURITY_CURRICULUM:              QUALIFIED
+OVER_REFUSAL_PROTECTION:          QUALIFIED   (37 refusal / 91 completion rows; 17 counterexamples)
+STRUCTURED_OUTPUT_CURRICULUM:     QUALIFIED
+D28_TOOL_CALL_DECISION:           OUT_OF_SCOPE_FOR_FIRST_QUALITY_CANDIDATE
+TRAINING_CONFIG:                  QUALIFIED
+COMPUTE_OPTION_RECOMMENDED:       B
+ESTIMATED_TRAINING_RUNTIME:       19-48 minutes (estimated, not measured)
+HARD_RUNTIME_CEILING_RECOMMENDATION: 4 hours
+TRAINING_PLAN:                    PREVIEW_ONLY  (one operator-resolvable blocker: cache root)
+TRAIN_TOKEN_CREATED:              NO
+TRAIN_TOKEN_CONSUMED:             NO
+TRAINING_EXECUTED:                NO
+ADAPTER_CREATED:                  NO
+FUTURE_EVAL_CORPUS:               m62-defensive-eval v2
+FUTURE_REASONING_POLICY:          DISABLED
+FUTURE_MAX_NEW_TOKENS:            512  (unchanged)
+FUTURE_REVIEW_EVIDENCE:           BODY_FREE_ENABLED
+RUN_004_MUTATED:                  NO
+MODEL_REGISTRY_MUTATED:           NO
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+LIVE_MODEL_INFERENCE:             NOT_RUN
+```
+
+**The acceptance gates were predeclared, before any training.** They are counts over
+named denominators, not calibrated percentages, and each is labelled (V) security veto /
+(S) sign-test defensible / (R) stated product requirement / (O) operational. See
+`jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` §6.
 
 **The rulings are the operator's, not Claude's.** S3F.1 recorded a *model-assisted
 assessment* per question and left every verdict blank; S3F.2 records the human answers.
@@ -521,6 +564,57 @@ pretend otherwise.
 
 Doc: `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md` §12.
 
+### M62 S3G — First quality-oriented training candidate design
+**Purpose:** design the first candidate whose point is quality rather than plumbing:
+a charter, predeclared acceptance gates, a real training corpus, a configuration, a
+compute budget and a previewed plan. **Design milestone — nothing was trained, no model
+was loaded, no token was created or consumed.**
+**Status:** COMPLETE. **Doc:**
+`jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md`.
+**Candidate:** `qwen3-06b-lora-quality-live-001`, `RUN_INTENT: QUALITY_CANDIDATE`. It is
+**not** run-004 and never touches it.
+**Corpus built:** `m62-defensive-quality-train v1` (`9bbac2f0…`) — 128 records through the
+full authority chain, TRAIN 107 / VALIDATION 9 / HIDDEN_EVALUATION 6 /
+SECURITY_REGRESSION 6, SFT export 107 rows. Eleven curriculum categories, each with a
+recorded rationale. 37 refusal rows against 91 completion rows including 17 explicit
+over-refusal counterexamples — the anti-collapse counterweight. **TRAIN and VALIDATION
+were assigned by the deterministic splitter, not chosen**: `plan_splits` refuses a forced
+train-side destination for any record. Built twice into different roots and reproduced
+every hash byte-identically (the promotion-plan hash differs by design — it binds
+`output_root_id`).
+**Leakage:** CLEAN against `m62-defensive-eval` **v1 and v2**, run through the existing
+16-check analyser over both corpora in one candidate set. 0 findings, 3385 / 3692
+comparisons, maximum observed similarity **0.179 / 0.188** against a 0.60 warn threshold.
+`semantic_similarity` did **not** run (no backend bundled) and is reported unavailable,
+so near-duplicate detection is **lexical** — recorded as a limitation, and no embedding
+dependency was added for it.
+**Two findings:**
+**D29** — `looks_like_refusal` recognises sixteen literal English phrasings, and the
+held-out corpus's own JSON refusal targets contain none of them, so a model emitting the
+expected answer verbatim would score `unsafe_acceptance`. **Recorded, deliberately NOT
+fixed**: widening the detector would move `SCORING_VERSION` again and put a second
+variable into the first reasoning-disabled measurement. Every refusal target is instead
+written in wording the detector reads, and a test pins the held-out targets as
+unrecognised so the day D29 is addressed the failure points here.
+**D30** — **FIXED here.** `plan_training` derived `plan.blockers` from a snapshot of
+`missing` taken *before* the model-cache check appended to it, so a plan could report
+`is_executable: true` with an empty blocker list while the planner's own
+`download_note` said a future execution would refuse to fetch the weights. That would
+issue a spendable `TRAIN:` token for a run that cannot load its model. Both directions
+pinned by tests; run-004's plan hash is unaffected (its cache probed `present`).
+**D28 decided:** `OUT_OF_SCOPE_FOR_FIRST_QUALITY_CANDIDATE`. No `tool_call_schema` row
+exists in the corpus, `tool_call_validity_rate` must be reported `VACUOUS`, and the
+candidate's record must carry `TOOL_CALL_CAPABILITY: NOT_QUALIFIED`.
+**Configuration:** three complete options; **B recommended** — LoRA r16/α32/dropout 0.05
+over the seven named projections, lr 2e-4, warmup 0.1, 3 epochs, `max_steps` 40, batch 1
+× grad-accum 8, fp32, CPU, `checkpoint_strategy: no`, `gradient_checkpointing: false`.
+Estimated 19–48 min, ~3.8 GB peak RAM, ~38 MB adapter. Hard operator ceiling: 4 hours.
+**Plan:** `PREVIEW_ONLY` with exactly one operator-resolvable blocker — the reviewed model
+cache root was not supplied this session and is never searched for. Everything else
+qualifies: dataset `verified`, dependencies ready on the isolated interpreter, device
+`cpu`, precision `fp32`.
+**Real training/eval:** none. **Enabled:** S3H, once authorised.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -582,7 +676,8 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 53 | `37c23e2` | docs: add authoritative V69 M62 progress handoff | handoff |
 | 54 | `e59e07c` | docs: reconcile the handoff's own commit into its checkpoint | handoff |
 | 55 | `cc245e8` | docs: anchor the handoff checkpoint on 56d9060, not on HEAD | handoff |
-| 56+ | see `git log 56d9060..HEAD` | S3F scoring/report fixes, S3F.1 structured-output fixes, S3F.2 review evidence + corpus v2 + reasoning policy, their tests and docs | **S3F / S3F.1 / S3F.2** |
+| 57+ | see `git log 28f1d45..HEAD` | S3G quality corpus, candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc | **S3G** |
+| 56 | see `git log 56d9060..28f1d45` | S3F scoring/report fixes, S3F.1 structured-output fixes, S3F.2 review evidence + corpus v2 + reasoning policy, their tests and docs | **S3F / S3F.1 / S3F.2** |
 
 ---
 
@@ -998,6 +1093,8 @@ rule is a structural guarantee, not a performance knob.
 | D27 | **The review evidence could not be written body-free as specified.** `ArmScore.notes` is prose written *about* a response, and it quotes it: `schema_satisfied` returns jsonschema's `ValidationError.message`, which embeds the offending **instance** (`'medium' is not of type 'object'` is model output), and `review_tool_calls` embeds the **proposed tool's name** in its problem strings | persisting the notes — which the S3F.1 §5 design implied, since it named `ArmScore.to_dict()` — would have persisted a response body in instalments, defeating the property the artefact exists to preserve | a closed `scoring.NOTE_CODES` vocabulary, refused at `ArmScore` construction if unknown; `structured_output_detail` returns the code from the same branch as the message so the two can never disagree; the evidence carries `note_codes` and the prose stays in memory, covered by `score_hash` so it is bound without being published; the tool review contributes `valid`/`critical` and a problem **count**, never the strings. `SCORING_VERSION` → `m62.evaluation_scoring.4` | S3F.2 | yes (42) | FIXED |
 | D28 | **The `tool_call_schema` family has no transport, so its metric is vacuous.** `transformers_peft` never populates `EvaluationResult.proposed_tool_calls` — only the fake backend does — and `review_tool_calls` treats "no proposal" as not-a-failure | `tool_call_validity_rate` read **36/36 on both arms** in S3E.2 while **zero tool calls were proposed by either arm**. The two facts are both in the sealed report and they are the same fact | **not fixed here.** Recorded, and used to *bound* the corpus change: v2 deliberately does not instruct a tool-call format, because instructing a format the instrument cannot read would change the prompts without changing what is measured. A backend gap needs a backend fix | S3F.2 | pinned by a test that the family is excluded | OPEN (§14.15) |
 
+| D30 | **A plan could authorise a run whose weights were not known to be cached.** `plan_training` builds `plan_blockers` from `feasibility.missing_evidence` — a snapshot of the local `missing` list taken when the feasibility report is constructed — and the model-cache check appended to `missing` *after* that construction, writing to a list nothing read again | measured on this host: `cache_status: unknown`, `download_required: True`, policy `deny`, `download_note` "a future execution would refuse rather than fetch them" — and `plan.is_executable: True` with `plan.blockers: []`. A plan in that state issues a spendable single-use `TRAIN:<hash>` token for a run that cannot load its model, which is the D22 wasted-token failure arriving by a different route | determine the cache **before** the feasibility report is built, so an unverified cache is missing evidence rather than a pass. `download_required` already treats `UNKNOWN` as "might need a download" by design. The blocker fires only when the cache is not `present` **and** the policy is `deny`, so run-004's plan hash (`db6dd55b…`, cache `present`) is unaffected | S3G | yes (8, both directions, incl. that planning is still a dry run) | FIXED |
+
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
 `empirical_status: insufficient_evidence`, `eligibility: needs_more_evidence`. It reported *no*
 result rather than a false one — which is the behaviour that made the defect diagnosable.
@@ -1082,6 +1179,43 @@ result rather than a false one — which is the behaviour that made the defect d
 19. **Corpus v2 has never been generated against.** Its identity, counts, leakage status
    and determinism are measured; model behaviour under the stated contract is **unknown,
    not estimated**.
+21. **D29 — the refusal detector and the held-out corpus's own answers disagree.**
+   `scoring.looks_like_refusal` recognises sixteen literal English phrasings; the
+   twelve held-out required-refusal targets are JSON objects (`{"decision": "refuse",
+   …}`) containing none of them. A model emitting the corpus's OWN expected answer
+   verbatim would score `UNSAFE_ACCEPTANCE`. **Recorded in S3G, deliberately not
+   fixed** — widening the detector moves `SCORING_VERSION` again and confounds the
+   first reasoning-disabled measurement. It bounds what QG-1 means: a rise in
+   `required_refusal_success_rate` is evidence of **recognised refusal phrasing**, not
+   of safety judgement. Pinned by a test, so the day it is addressed the failure lands
+   in S3G's corpus tests rather than passing silently.
+22. **The S3G training corpus is synthetic and single-author**, 128 records written in
+   one session — the same limitation the held-out corpus carries, and it compounds:
+   both came from the same process, so a systematic blind spot would be invisible to a
+   comparison between them.
+23. **Semantic leakage checking has never run.** No backend is bundled and none was
+   added. The S3G cross-corpus result is CLEAN on 15 of 16 checks, all lexical; a
+   paraphrase sharing no character 5-grams and no token shingles would not be caught.
+   Maximum observed similarity was 0.179 (v1) / 0.188 (v2) against a 0.60 warn
+   threshold.
+24. **The S3G training-target token counts are ESTIMATED, not tokenized.** No model
+   cache root was supplied this session, so no tokenizer was loaded. Characters are
+   measured; tokens are 3.5–4.5 chars/token estimates. Confirm against the real
+   tokenizer before training.
+25. **The S3G compute estimate rests on one calibration point** — run-004's duration
+   *category* ("minutes"). Per-step training timing has never been recorded on this
+   host. The ranges are wide on purpose and the 4-hour ceiling exists to catch a wrong
+   cost model, not variance.
+26. **The S3G plan is `PREVIEW_ONLY`.** One operator-resolvable blocker remains: the
+   reviewed model cache root. It is never searched for. A plan hash computed without it
+   is **not** the plan hash that will be trained against — the blocker list is part of
+   the plan.
+27. **`TrainingConfig.config_hash()` binds `output_root_id`**, so the S3G config and
+   plan hashes are root-dependent and must be re-derived, not quoted. The
+   root-independent identities are the dataset manifest hash and the dataset reference
+   hash `1f4cdc6f…`.
+28. **The D30 fix has never been exercised by a live training run.** Proven by 8 tests
+   and by reproducing the defect on this host, not by a run it saved.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -1096,11 +1230,13 @@ result rather than a false one — which is the behaviour that made the defect d
 
 | Scope | Result | When |
 |---|---|---|
-| Focused M62 (`-k m62`) | **2654 passed, 17 skipped, 0 failed** (2556 + 99 new S3F.2 tests; the extra skip is the symlink test, which this host cannot run) | **S3F.2, re-run 2026-08-10 — authoritative** |
+| **Main (inner) suite** | **6708 passed, 59 skipped, 0 failed** (`pytest tests -q` from `jarvis/`, 14m50s) | **S3G, re-run 2026-08-12 - AUTHORITATIVE** |
+| Focused M62 (`-k m62`) | 2684 passed, 18 skipped, 0 failed (after the one adjusted test) | S3G, 2026-08-12 |
+| Focused M62 (`-k m62`) | 2654 passed, 17 skipped, 0 failed (2556 + 99 new S3F.2 tests; the extra skip is the symlink test, which this host cannot run) | **S3F.2, re-run 2026-08-10 — authoritative** |
 | Focused M62 (`-k m62`) | 2556 passed, 16 skipped, 0 failed (2521 + 35 S3F.1 tests) | S3F.1, historical |
 | Focused M62 (`-k m62`) | 2521 passed, 16 skipped, 0 failed (2494 + 27 new S3F tests) | S3F, historical |
 | Focused M62 selection | 2494 passed, 23 skipped, 0 failed | S3E.2, historical |
-| Main (inner) suite | **6677 passed, 58 skipped, 0 failed** (`pytest jarvis/tests -q`, 20m44s) | **S3F.2, re-run 2026-08-10 — authoritative** |
+| Main (inner) suite | 6677 passed, 58 skipped, 0 failed (`pytest jarvis/tests -q`, 20m44s) | S3F.2, historical |
 | Main (inner) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, historical — **not** re-run in S3F or S3F.1 |
 | Second (outer) suite | 6627 passed, 49 skipped, 0 failed | S3E.2, **not re-run since** |
 
@@ -1134,13 +1270,34 @@ and therefore collected. Test counts from different interpreters are **not** com
 - **No M62, evaluation or security test was hidden by the discrepancy.** The delta is entirely
   optional-dependency modules that are skipped at collection when the packages are absent.
 
-**Latest gates** (as reported by the S3E.2 session):
+**S3G reconciliation, and the one thing not chased.** Collection is `6708 + 59 = 6767`
+against S3F.2's `6677 + 58 = 6735`: a delta of exactly **32**, which is exactly the number
+of tests S3G added. Passed rose by 31 and skipped by 1. The two new files run **32 passed,
+0 skipped** on their own, so the extra skip is a pre-existing test that skipped in this
+session and did not in S3F.2. **It was not identified**, and this section's standing
+warning applies: skip sets are host- and environment-dependent and these counts must not
+be reconciled by arithmetic across sessions. What is established is what was measured -
+the whole inner suite passes at this commit with **0 failures and 0 errors**.
+
+**One pre-existing test was adjusted by the D30 fix**, and only one:
+`test_a_changed_hardware_report_invalidates_the_confirmation` called `run_preflight`
+without the model cache root the rest of that file supplies, so it now refused at
+`CONFIGURATION` before reaching the confirmation check. Supplying the cache root makes the
+accelerator probe the only variable, which is what the test's name claims to measure. No
+assertion was weakened and no production behaviour was changed to make it pass. See the
+S3G doc section 15.
+
+**Latest gates** (S3G, re-run 2026-08-12 unless noted):
 
 | Gate | Result | When |
 |---|---|---|
-| Ruff (`jarvis/`) | PASS | S3F.2, re-run |
-| `compileall` | PASS | S3F.2, re-run |
-| `git diff --check` | PASS | S3F.2, re-run |
+| Ruff | PASS - over the S3G changeset | S3G |
+| `compileall` | PASS - `jarvis/scripts`, `jarvis/training_gym`, `jarvis/tests` | S3G |
+| `git diff --check` | PASS | S3G |
+| Secret scan over the S3G changeset | PASS - the only category is `reasoning`, and every hit is the literal token `<think` inside the invariant check that FORBIDS it or in prose describing it. Operator ruling H4 classifies reasoning markup as hygiene, not a security leak. Host-path scan clean: no Windows user path, `/home/...` or `/Users/...` in any tracked file | S3G |
+| Ruff (`jarvis/`) | PASS | S3F.2, historical |
+| `compileall` | PASS | S3F.2, historical |
+| `git diff --check` | PASS | S3F.2, historical |
 | Secret scan over the changeset | PASS — every finding is a pre-existing detector pattern (`scoring._PRIVATE_PATH_RE`, `plan.py`) or a deliberate synthetic probe in a test fixture; the S3F.2 doc's only category is `reasoning`, which operator ruling H4 classifies as hygiene | S3F.2, re-run |
 | Bandit | **NOT RUN — not installed in the authoritative interpreter.** Deliberately not installed for one milestone | S3E.2 result stands: no new findings |
 | Dependency authority | PASS | S3E.2 |
@@ -1174,7 +1331,8 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
-| S3F.2 commits | **CURRENT.** The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
+| S3G commits | **CURRENT.** The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
+| S3F.2 commits | The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
 
 ---
 
@@ -1275,6 +1433,32 @@ hand-written and no hash is invented.
 - **DO NOT** read the `pass` as evidence about the MODEL. It says the template honours the
   request. Nothing has been generated under `DISABLED`.
 - **DO NOT** start S3G by exploring the whole repository.
+- **DO NOT** retrain, resume or reuse `qwen3-06b-lora-quality-live-001` as anything
+  other than what S3G designed. Nothing has been trained under that identity yet.
+- **DO NOT** rebuild `m62-defensive-quality-train v1` unless the ignored runtime copy is
+  missing or fails verification. Manifest `9bbac2f0…` is authoritative and the build is
+  deterministic across roots.
+- **DO NOT** train on `m62-defensive-eval` v1 or v2. They are evaluation-only,
+  `dataset_eligible: false`, and three authorities refuse it.
+- **DO NOT** re-run the S3G cross-corpus leakage analysis to confirm it. CLEAN against
+  both versions, 0 findings, max similarity 0.179 / 0.188. It takes minutes.
+- **DO NOT** re-diagnose D29. The refusal detector's sixteen phrasings and the held-out
+  corpus's JSON refusal targets are a known, recorded disagreement (§14.21).
+- **DO NOT** "fix" D29 by widening `looks_like_refusal` alongside the first
+  reasoning-disabled evaluation. That is two variables in one comparison.
+- **DO NOT** re-derive D30. The cache blocker was dropped because `plan_blockers` reads a
+  snapshot taken before the check appended to it; fixed in S3G with tests both ways.
+- **DO NOT** claim `TOOL_CALL_CAPABILITY: PASS`, or cite the historical 36/36
+  `tool_call_validity_rate`, while D28 is open. The correct value is `VACUOUS` and the
+  correct capability status is `NOT_QUALIFIED`.
+- **DO NOT** add tool-call training rows to the quality corpus while D28 is open — a test
+  pins their absence, and it is a scope decision, not an oversight.
+- **DO NOT** quote the S3G `config_hash` or `plan_hash` as durable. They bind
+  `output_root_id` (§14.27); re-derive them.
+- **DO NOT** invent acceptance thresholds after training. They are predeclared in
+  `V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` §6, before any run existed.
+- **DO NOT** sweep the filesystem for the model cache in S3H either. The operator
+  supplies `--model-cache-root`; an unnamed cache is a blocker, by design.
 
 **Instead:**
 
@@ -1285,56 +1469,73 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3G (not authorised yet)
+## 19 — NEXT: M62 S3H (not authorised)
 
-> **S3F.2 is COMPLETE.** The human operator answered H1-H6 on 2026-08-10 and everything
-> those rulings authorised is built, tested and pushed. Nothing here is waiting on Claude
-> re-reading the evidence.
+> **S3G is COMPLETE as a design milestone.** The first quality candidate is specified,
+> its corpus is built and qualified, its configuration is chosen and its plan is
+> previewed. **Nothing was trained.** Doc:
+> `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md`.
 
-**Nothing blocks the next milestone any more. Both former gates are closed.**
+**What S3G produced**
 
-1. ~~Run the reasoning-policy preflight against the reviewed cache.~~ **DONE 2026-08-11 —
-   `PASS`.** The operator supplied the cache root; the real Qwen3 template renders
-   differently under `enable_thinking` on and off. `reasoning_policy = DISABLED` is
-   approved **and** qualified. See §4 and
-   `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md` §11. **Do not re-run it.**
+```
+QUALITY_CANDIDATE:   DESIGNED    qwen3-06b-lora-quality-live-001
+TRAINING_DATASET:    QUALIFIED   m62-defensive-quality-train v1  (9bbac2f0…)
+TRAINING_CONFIG:     QUALIFIED   option B
+TRAINING_PLAN:       PREVIEW_ONLY (one operator-resolvable blocker)
+TRAIN_TOKEN:         NOT CREATED, NOT CONSUMED
+TRAINING_EXECUTED:   NO
+ADAPTER_CREATED:     NO
+```
 
-2. ~~Decide how H1's materiality is answered, or that it is not.~~ **DONE 2026-08-11 —
-   `HISTORICAL_MATERIALITY_UNRESOLVABLE`.** The finding is preserved, the material
-   sensitivity is `NOT_ESTABLISHED`, no retroactive work remains, and
-   `H1_BLOCKS_S3G_DESIGN: NO`. See §4 and the S3F.2 doc §12. **Do not reopen it.**
+**The one open gate, and it is the operator's**
 
-**S3G is therefore unblocked — and still NOT AUTHORISED, and NOT STARTED.** An open gate
-closing is not an authorisation. S3G needs its own explicit operator authorisation, and any
-live work inside it needs a fresh plan and a fresh single-use token.
+The plan carries exactly one blocker: `model weights are not known to be cached and the
+download policy is deny`. This session was not given the reviewed model cache root and
+does not search for one — the same rule the reasoning-policy preflight is written under.
+Supplying it is the only step between here and a zero-blocker plan:
 
-**Then, if authorised: M62 S3G — QUALITY-ORIENTED TRAINING CANDIDATE DESIGN.**
+```
+python jarvis/scripts/build_quality_training_config.py     --dataset-root <dataset root> --output-root <runs root>     --model-cache-root <reviewed cache> --plan
+```
 
-That milestone would design a real training objective, a materially larger dataset, enough
-optimizer steps to change anything, explicit success criteria, security-preserving data, a
-new training plan, and a **new run identity**. It would evaluate against
-`m62-defensive-eval v2` under `reasoning_policy = DISABLED`, with body-free review evidence
-enabled and `max_new_tokens` still 512 for the first qualification.
+**Then, if authorised: M62 S3H — FIRST QUALITY-ORIENTED LIVE TRAINING RUN.**
 
-**The candidate is NOT run-004.** Operator ruling H5 put run-004 permanently outside quality
-promotion:
+Preconditions, all four required:
+
+1. the reviewed cache root supplied and the plan rebuilt to **zero blockers**;
+2. confirmation against the real tokenizer that no training row truncates at 512
+   (the corpus's token counts are currently estimated, not tokenized);
+3. **explicit operator authorisation for live training** — S3G authorises none;
+4. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once.
+
+The run itself: option B, ~19–48 minutes estimated, 4-hour hard ceiling, CPU, fp32,
+offline, no checkpoints, LoRA-only artefacts.
+
+**After that, separately authorised:** the eligibility-grade paired evaluation under the
+contract in §12 of the S3G doc — `m62-defensive-eval v2`, `reasoning_policy = DISABLED`,
+`max_new_tokens` 512, body-free review evidence, a fresh `EVAL` plan and token — judged
+against the acceptance gates predeclared in §6 of that document **before any of it ran**.
+
+**The candidate is NOT run-004.** Operator ruling H5 stands:
 
 ```
 RUN_004_DISPOSITION:       KEEP_AS_SMOKE_REFERENCE_ONLY
 RUN_004_QUALITY_PROMOTION: EXCLUDED
 ```
 
-Run-004 is never retrained, never continued from, never promoted, never activated and never
-mutated. A future candidate is a NEW run with a new plan, a new token, a new run id and a
-new adapter identity.
-
-**If instead the review evidence or corpus v2 turns out incomplete in use, that is S3F.3.**
-Do not pre-decide which.
-
-Nothing in S3F, S3F.1 or S3F.2 authorises promotion, activation, registry mutation,
-retraining or a further live evaluation.
+**S3H must not begin automatically.** Nothing in S3G authorises training, evaluation,
+promotion, activation, registry mutation, merge, tag or a version bump.
 
 ---
+
+### Superseded — the S3G brief (completed 2026-08-12)
+
+> **M62 S3G — QUALITY-ORIENTED TRAINING CANDIDATE DESIGN.** Design a real training
+> objective, a materially larger dataset, enough optimizer steps to change anything,
+> explicit success criteria, security-preserving data, a new training plan and a new run
+> identity. **Done.** The one thing it could not close is the model cache root, which is
+> an operator input, not a design decision.
 
 ### Superseded — the S3F.1 brief (completed 2026-08-10; H1-H6 answered in S3F.2)
 
@@ -1390,12 +1591,16 @@ identity** — never a mutation of run-004.
 
 1. **`PROGRESS.md`** (this file)
 2. **`jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md`** — the S3E.2 measurement of record
-3. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
-   H1–H6, the body-free review evidence, corpus v2, and the blocked reasoning-policy
-   preflight. **This is the current technical basis.**
-4. `jarvis/docs/V69_M62_S3F1_STRUCTURED_OUTPUT_AND_REVIEW_EVIDENCE.md` — only if the task
+3. **`jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md`** — the first
+   quality candidate, its training corpus, its predeclared acceptance gates, the D28
+   decision, D29, D30 and the previewed plan. **This is the current technical basis
+   for anything about training.**
+4. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
+   H1–H6, the body-free review evidence, corpus v2, and the reasoning-policy
+   preflight. **This is the current technical basis for anything about evaluation.**
+5. `jarvis/docs/V69_M62_S3F1_STRUCTURED_OUTPUT_AND_REVIEW_EVIDENCE.md` — only if the task
    needs the structured-output root cause itself
-5. Only the source files needed for the specific task
+6. Only the source files needed for the specific task
 
 Supporting docs, only if the task needs them:
 
