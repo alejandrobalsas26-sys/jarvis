@@ -260,10 +260,18 @@ def test_a_changed_hardware_report_invalidates_the_confirmation(world):
     from training_gym.training.environment import AcceleratorProbe, Availability
 
     stale = world.token()
+    # The cache root is supplied here for the same reason `World.planning` and
+    # `World.run` supply it: it makes the accelerator probe the ONLY thing that differs
+    # between the plan the token was minted from and the plan being checked. Omitting it
+    # also changed `cache_status`, so the token was stale for two reasons at once and
+    # this test could not tell which one it was measuring. Since S3G's D30 fix an
+    # unverified cache is additionally a plan BLOCKER, so omitting it now refuses at
+    # `CONFIGURATION` before the confirmation is ever compared.
     preflight = run_preflight(
         world.config(), dataset_root=world.corpus.root,
         output_root=world.output_root, confirmation=stale,
         export_root=world.corpus.export_root,
+        model_cache_root=world.model_cache_root,
         accelerator_probe=lambda: AcceleratorProbe(
             cuda_runtime=Availability.AVAILABLE, cuda_device_count=1,
             accelerator_memory_gb=24.0))

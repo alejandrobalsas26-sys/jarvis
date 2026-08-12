@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import TrainingConfig
+from .config import ModelDownloadPolicy, TrainingConfig
 from .dataset_reference import (
     DatasetEvidence,
     DatasetReferenceVerification,
@@ -133,7 +133,25 @@ def plan_training(
     # 6. The destination. Nothing is created; an existing run directory is a refusal.
     blockers.extend(f"output: {p}" for p in check_output_root(output_root, config.run_id))
 
-    # 7. Feasibility, memory and disk.
+    # 7. Whether the weights are actually reachable, BEFORE the feasibility report is
+    # built. `plan_blockers` is derived from `feasibility.missing_evidence`, which is a
+    # snapshot of `missing` taken at construction — so appending to `missing` afterwards
+    # writes to a list nothing reads again. That is defect D30: the planner concluded
+    # "a future execution would refuse rather than fetch them" and still returned
+    # `is_executable: True` with no blocker, which would issue a spendable TRAIN token
+    # for a run that cannot load its model. `cache_status` UNKNOWN counts as "might need
+    # a download" by design (see `download_required`), so an unverified cache is missing
+    # evidence rather than a pass.
+    needs_download = download_required(cache_status=identity.cache_status.value,
+                                       config=config)
+    note = download_authorization_note(config.model_download_policy,
+                                       required=needs_download,
+                                       flag_supplied=allow_model_download_flag)
+    if needs_download and config.model_download_policy is ModelDownloadPolicy.DENY:
+        missing.append(
+            "model weights are not known to be cached and the download policy is deny")
+
+    # 8. Feasibility, memory and disk.
     feasibility = build_feasibility_report(
         config, hardware=hardware, device=device.selected,
         precision=precision.selected,
@@ -143,15 +161,6 @@ def plan_training(
         cache_status=identity.cache_status.value,
         blockers=tuple(blockers), warnings=tuple(warnings),
         missing_evidence=tuple(missing))
-
-    needs_download = download_required(cache_status=identity.cache_status.value,
-                                       config=config)
-    note = download_authorization_note(config.model_download_policy,
-                                       required=needs_download,
-                                       flag_supplied=allow_model_download_flag)
-    if needs_download and config.model_download_policy.value == "deny":
-        missing.append(
-            "model weights are not known to be cached and the download policy is deny")
 
     plan_blockers = tuple(feasibility.blockers) + tuple(
         m for m in feasibility.missing_evidence)
