@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-13T22:25Z (S3H) |
+| **Last updated** | 2026-08-13T23:40Z (S3I.0) |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 / S3G / S3G.1 / S3G.2 / S3H commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
-| **Next phase** | **M62 S3I** (first quality-candidate held-out eligibility evaluation) — *not authorised*, **not started**. It needs explicit operator authorisation plus a fresh `EVAL` plan and single-use token (§19). |
+| **Current phase** | **M62 S3I.0 CLOSED (held-out evaluation runtime qualification)** — model loading measured at **2.2–2.8 % of a median request**, so the per-request load strategy is **deliberately kept**; no production source changed. Two defects found while preparing the evaluation: **D32** (the recorded eval-v2 manifest digest does not reproduce) and **D33** (the declared generation timeout is not enforced). **Nothing was generated.** Previously: **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
+| **Next phase** | **M62 S3I** (first quality-candidate held-out eligibility evaluation) — *not authorised*, **not started**. It needs explicit operator authorisation, a fresh `EVAL` plan and single-use token, and ratification of the two S3I.0 conditions (D32's corrected corpus digest, D33's explicit `timeout_s`) — §19. |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -340,6 +340,56 @@ is the *shape* S3G §10.3 predicted as this candidate's likeliest failure mode, 
 visible only because S3G.2 fixed D31. It is also nine rows: too weak to rank anything, not a
 quality score, and not eligibility evidence. See
 `jarvis/docs/V69_M62_S3H_FIRST_QUALITY_LIVE_TRAINING.md` §8.3.
+
+### S3I.0 outcome statuses (2026-08-13, this milestone)
+
+**Nothing above is revised by these.** S3H trained the candidate and it stays
+`TRAINED_UNEVALUATED`. This milestone measured the evaluation runtime and generated nothing.
+
+```
+S3I0_RUNTIME_QUALIFICATION:       PASS
+TOKENS_GENERATED:                 0
+HELDOUT_TASKS_EXECUTED:           0
+MODEL_FORWARD_PASSES_FOR_EVAL:    0
+EVAL_TOKEN_CREATED:               NO
+EVAL_TOKEN_CONSUMED:              NO
+SOURCE_CHANGED:                   NO
+
+HISTORICAL_MODEL_LOAD_LIFECYCLE:  PER_REQUEST  (traced, not assumed)
+EXPECTED_MODEL_LOADS_FOR_36x2:    72
+BASELINE_LOAD_FIRST_SECONDS:      1.9384
+BASELINE_LOAD_MEDIAN_SECONDS:     1.7701      (+0.53-0.68 s release)
+CANDIDATE_LOAD_FIRST_SECONDS:     3.0725
+CANDIDATE_LOAD_MEDIAN_SECONDS:    2.8915      (+0.52-0.55 s release; adapter attach 0.88-1.10 s)
+LOAD_SHARE_OF_MEDIAN_REQUEST:     2.23% baseline / 2.80% candidate
+ESTIMATED_HISTORICAL_LOAD_OVERHEAD: ~212 s of >=8370 s  (<= 2.5%)
+FRAMEWORK_IMPORT_SECONDS:         21.2  (once per process, not per load)
+RUNTIME_OPTIMIZATION_DECISION:    KEEP_EXISTING_LOADING_STRATEGY
+QUALIFIED_RUNTIME_LOAD_STRATEGY:  isolated_loads (per request, unchanged)
+TOTAL_MODEL_LOADS_FUTURE:         72
+TOTAL_GENERATIONS_FUTURE:         72
+
+GENERATION_SEMANTICS_CHANGED:     NO
+SCORING_CHANGED:                  NO
+SECURITY_SCANNING_CHANGED:        NO
+RAW_RESPONSE_PERSISTENCE_CHANGED: NO
+BODY_FREE_EVIDENCE_CHANGED:       NO
+ACCEPTANCE_GATES_CHANGED:         NO
+
+D32_EVAL_V2_MANIFEST_DIGEST:      FOUND — the recorded digest does not reproduce
+EVAL_V2_MANIFEST_HASH_MEASURED:   82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60
+EVAL_V2_MANIFEST_HASH_SUPERSEDED: 10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0
+EVAL_V1_CONTROL:                  0970600c… reproduced exactly (the control passes)
+EVAL_V2_CORPUS_CONTENT:           UNCHANGED (36/36, splits 12/12/12, families 12/9/9/6, clean)
+D33_GENERATION_TIMEOUT:           OPEN — declared, hashed, never enforced by the production backend
+TIMEOUT_RATE_METRIC:              VACUOUS (like D28's tool_call_validity_rate)
+
+CANDIDATE_STATUS:                 TRAINED_UNEVALUATED  (unchanged)
+LIVE_HELDOUT_EVALUATION:          NOT_RUN
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+MODEL_REGISTRY_MUTATED:           NO
+S3I_READY:                        YES — conditional on ratifying D32 and D33
+```
 
 **The acceptance gates were predeclared, before any training.** They are counts over
 named denominators, not calibrated percentages, and each is labelled (V) security veto /
@@ -949,6 +999,48 @@ response was generated, no grader ran, no S3G §6 gate was evaluated. **Candidat
 `TRAINED_UNEVALUATED`.**
 **Real training:** yes, once. **Real evaluation:** none. **Enabled:** S3I, once authorised.
 
+### M62 S3I.0 — Held-out evaluation runtime qualification
+**Purpose:** determine by measurement whether the evaluation runtime wastes material wall
+time reloading weights, and sessionize only if the evidence justified it. **Load-only
+milestone — weights were loaded, nothing was generated.**
+**Status:** COMPLETE. **Doc:** `jarvis/docs/V69_M62_S3I0_EVALUATION_RUNTIME_QUALIFICATION.md`.
+**Lifecycle traced, not assumed:** `run_paired_evaluation` loops over tasks, `_invoke` calls
+`backend.generate` once per arm per task, and `generate` ends in `finally: self.release()`.
+So the weights load and release **72 times** for 36 × 2 — `PER_REQUEST`, in one process.
+The `LoadStrategy.ISOLATED` docstring's *"once per arm"* describes the guarantee, not the
+count; the implementation is strictly stronger than the sentence.
+**Measured (6 real loads, 0 tokens):** baseline first 1.9384 s / median 1.7701 s; candidate
+first 3.0725 s / median 2.8915 s, of which adapter attach is 0.88–1.10 s; release 0.52–0.68 s;
+framework import 21.2 s once per process. Identity proved on every load —
+`PeftModelForCausalLM` with `active_adapters` true, r16/α32, eval mode, revision `c1899de2…`
+— **without a single forward pass**.
+**Attribution is direct, not modelled:** the backend's `started` mark precedes the load and
+`latency_ms` derives from it, so S3E.2's medians already contain the load. Load is **2.23 %**
+of a median baseline request and **2.80 %** of a candidate one; ~212 s of a run that was at
+least 8370 s. **Decision: `KEEP_EXISTING_LOADING_STRATEGY`** — sessionizing saves ~3 minutes
+of a ≥2 h 19 min run, and would trade away the reason the backend refuses `SHARED_BASE` in
+code: nobody has proven that attaching and detaching an adapter leaves no residue, and the
+failure it prevents reports the wrong arm without crashing. **No production source changed.**
+**D32 — the recorded `m62-defensive-eval v2` manifest digest does not reproduce.** Rebuilding
+v2 from the tracked generator yields `82b60bfd…`, not the recorded `10ad2308…`. **v1 is the
+control and reproduces `0970600c…` exactly**, so the generator and the authority chain are
+sound. The generator has not changed since `68ba078`, the commit that created v2, and a
+temporary worktree at that commit produces `82b60bfd…` too — three roots, two code versions,
+one answer. The corpus **content** is exactly as S3F.2 described (36/36, splits 12/12/12,
+families 12/9/9/6, leakage clean, parent = v1), so this is a **documentation** defect, not a
+corpus defect. It would have surfaced as an unexplained mismatch at the moment a fresh `EVAL`
+token was about to be spent. Why S3F.2 recorded the other value is **not established**.
+**D33 — the declared per-task generation timeout is not enforced.** `timeout_s` is validated,
+serialised and travels inside `policy_hash` → `parity_hash`, and there is a `TIMEOUT` error
+category, a `timed_out` field, a `timeout_rate` metric and a gate over it — but the production
+`transformers_peft` backend never reads it; the only consumer is the fake backend. S3E.2
+declared 300 s, observed p95 latencies of 596.5 s and 704.4 s, and reported **0 timeouts**;
+those reconcile only if it was never applied. `timeout_rate` is therefore **vacuous**, exactly
+like D28's tool-call rate. **Not fixed** — enforcement would change run behaviour and add a
+second variable to the first reasoning-disabled measurement.
+**Real training/eval:** none. **Enabled:** an S3I whose two remaining conditions are decisions
+rather than engineering.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -1012,7 +1104,8 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 55 | `cc245e8` | docs: anchor the handoff checkpoint on 56d9060, not on HEAD | handoff |
 | 57+ | see `git log 28f1d45..HEAD` | S3G quality corpus, candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc | **S3G** |
 | 56 | see `git log 56d9060..28f1d45` | S3F scoring/report fixes, S3F.1 structured-output fixes, S3F.2 review evidence + corpus v2 + reasoning policy, their tests and docs | **S3F / S3F.1 / S3F.2** |
-| 58+ | see `git log a167420..HEAD` | S3H: the first quality-oriented live training run and this handoff update. **Documentation only — no tracked source changed**; the adapter and its manifests are gitignored runtime artefacts | **S3H** |
+| 58+ | see `git log a167420..4772a2c` | S3H: the first quality-oriented live training run and its handoff update. **Documentation only — no tracked source changed**; the adapter and its manifests are gitignored runtime artefacts | **S3H** |
+| 60+ | see `git log 4772a2c..HEAD` | S3I.0: the evaluation-runtime load benchmark, the keep-the-loader decision, D32 and D33. **Documentation only — no tracked source changed** | **S3I.0** |
 
 ---
 
@@ -1131,7 +1224,7 @@ username, hostname, cache path, credential or raw dataset row appears in any exp
 | Dataset | `m62-defensive-eval` |
 | Version | `v1` (frozen) and **`v2`** (S3F.2, the version a future eligibility-grade run binds) |
 | Manifest hash `v1` | `0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b` |
-| Manifest hash `v2` | `10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0` |
+| Manifest hash `v2` | `82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60` — **corrected in S3I.0 (D32)**; the previously recorded `10ad2308…` does not reproduce and is superseded, not deleted |
 | Candidates built / promoted / rejected | **36 / 36 / 0** |
 | Leakage | **CLEAN**, 0 findings |
 | `evaluation_only` | `true` |
@@ -1167,7 +1260,7 @@ rather than replacing it, which is the mechanism that stops the two drifting. Ev
 in this section is unchanged: 36 tasks, splits 12/12/12, families 12/9/9/6, decision
 classes 12/6/18, TRAIN 0, VALIDATION 0, leakage CLEAN with 0 findings, `evaluation_only`
 true, `dataset_eligible` false.
-**v1 was rebuilt in S3F.2 and reproduced `0970600c…` exactly. It is frozen.**
+**v1 was rebuilt in S3F.2 and reproduced `0970600c…` exactly. It is frozen**, and S3I.0 reproduced it again as the control that proves the generator and the authority chain are sound while v2's *recorded digest* was wrong (D32).
 **The `tool_call_schema` family was deliberately left alone** — see D28.
 
 **Sensitivity class:** records are `INTERNAL`, not `SYNTHETIC`. The leakage analyser correctly
@@ -1431,6 +1524,9 @@ rule is a structural guarantee, not a performance knob.
 | D31 | **The VALIDATION split reached the trainer as nothing at all.** Three boundaries: `training_gym.datasets.export` could only write the TRAIN split (`SFT_SOURCE_SPLIT`, and a manifest refusing any other `source_split`/`filename`), so no artefact held the validation rows in a shape a trainer could read; `training_gym.training.execution` built every `ExecutionRequest` with `validation_file=None` **hard-coded at two sites**, although the field had existed since S3B and the planner was already binding `validation_split_manifest_hash`/`validation_shard_hash` into the plan hash; and `TransformersPeftBackend._train` built `Trainer(train_dataset=rows)` with no `eval_dataset` | nine promoted, digest-bound, tokenizer-audited rows contributed to no measurement, and `BackendResult.eval_loss` / `AdapterManifest.eval_loss` both reported `0.0` — the dataclass default, which looks like a measurement. The cost was diagnosis: S3G named overfitting on 107 rows as the candidate's likeliest failure mode and its compute table claimed it was *"watched by VALIDATION"* | an **additive** sibling export authority (`export_sft_validation` / `verify_sft_validation_export`) over one shared `_export_split`, with a closed `EXPORTABLE_SPLITS` table that cross-binds `(source_split, filename)` — stricter than the two independent checks it replaced, and the four held-out splits are absent from it; `ValidationStrategy` on `TrainingConfig`, value-gated into the canonical form so identity moves exactly when behaviour does; `validation_file` threaded through preflight → execution → request; `Trainer(eval_dataset=eval_rows)` with `eval_strategy` (the one spelling valid across `>=4.44` **and** transformers 5, which removed `evaluation_strategy`), `save_strategy` untouched, explicit `load_best_model_at_end=False`, early-stopping callbacks stripped, and one closing `evaluate()` because `max_steps` stops the run at 2.99 epochs | S3G.2 | yes (70, incl. 5 that fail against the exact pre-fix line) | FIXED |
 | D30 | **A plan could authorise a run whose weights were not known to be cached.** `plan_training` builds `plan_blockers` from `feasibility.missing_evidence` — a snapshot of the local `missing` list taken when the feasibility report is constructed — and the model-cache check appended to `missing` *after* that construction, writing to a list nothing read again | measured on this host: `cache_status: unknown`, `download_required: True`, policy `deny`, `download_note` "a future execution would refuse rather than fetch them" — and `plan.is_executable: True` with `plan.blockers: []`. A plan in that state issues a spendable single-use `TRAIN:<hash>` token for a run that cannot load its model, which is the D22 wasted-token failure arriving by a different route | determine the cache **before** the feasibility report is built, so an unverified cache is missing evidence rather than a pass. `download_required` already treats `UNKNOWN` as "might need a download" by design. The blocker fires only when the cache is not `present` **and** the policy is `deny`, so run-004's plan hash (`db6dd55b…`, cache `present`) is unaffected | S3G | yes (8, both directions, incl. that planning is still a dry run) | FIXED |
 
+| D32 | **The recorded `m62-defensive-eval v2` manifest digest does not reproduce.** PROGRESS §7, the S3F.2 doc, S3G §12, S3G.2 §5 and the S3H doc all bind the held-out corpus by `10ad2308…`. Rebuilding v2 from the tracked generator produces `82b60bfd…` | a future S3I would bind the corpus by a digest nothing produces, and would meet an unexplained mismatch at exactly the moment a fresh single-use `EVAL` token was about to be spent — the D22 / D30 wasted-authority shape arriving a third way | **the corpus was NOT changed.** v1 rebuilt as a control reproduces `0970600c…` exactly, so the generator and the authority chain are sound; the generator has not changed since `68ba078` (the commit that created v2) and a temporary worktree at that commit also yields `82b60bfd…` — three roots, two code versions, one answer. Content is unchanged (36/36, splits 12/12/12, families 12/9/9/6, leakage clean, parent = v1). PROGRESS is corrected to `82b60bfd…`; the historical milestone docs keep their text per the supersession convention. **Why S3F.2 recorded the other value is not established** | S3I.0 | corpus rebuild reproduced across 3 roots and 2 code versions | **FIXED (documentation)** |
+| D33 | **The declared per-task generation timeout is not enforced.** `GenerationPolicy.timeout_s` is validated, serialised and travels inside `policy_hash` → `parity_hash`; there is a `TIMEOUT` error category, an `ArmScore.timed_out` field, a `timeout_rate` metric and a `max_timeout_rate_increase` gate — and the production `transformers_peft` evaluation backend contains no reference to it at all. The only consumer is the fake backend | a runaway generation has no automatic bound, and `timeout_rate` is **structurally vacuous** over a production run, so the gate above it decides nothing — D28's shape exactly. S3E.2 declared `timeout_s=300`, observed p95 latencies of 596.5 s and 704.4 s, and reported **0 timeouts**; those three facts reconcile only if it was never applied | **not fixed.** Enforcement would change run behaviour — tasks that previously completed could be cut off — and would put a second variable into the first reasoning-disabled measurement, the trade S3F.2 refused over `max_new_tokens` and S3G refused over D29. The S3I report must record `timeout_rate` as `VACUOUS` alongside `tool_call_validity_rate` | S3I.0 | searched across the whole evaluation package | **OPEN (§14.44)** |
+
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
 `empirical_status: insufficient_evidence`, `eligibility: needs_more_evidence`. It reported *no*
 result rather than a false one — which is the behaviour that made the defect diagnosable.
@@ -1483,7 +1579,8 @@ result rather than a false one — which is the behaviour that made the defect d
    the real Qwen3 tokenizer.
 11. **The evaluation corpus never states its output contract — CLOSED in S3F.2 by a NEW
    VERSION.** Operator ruling H6b authorised it. `m62-defensive-eval v2`
-   (`10ad2308…`) states a format-only contract on the nine `structured_report` prompts.
+   (`82b60bfd…`, corrected in S3I.0 — D32) states a format-only contract on the nine
+   `structured_report` prompts.
    **v1 is unchanged and still authoritative for S3E.2.** No model has been generated
    against v2.
 12. **27 of 72 S3E.2 generations hit `max_new_tokens=512`.** A tight budget for a
@@ -1616,6 +1713,29 @@ result rather than a false one — which is the behaviour that made the defect d
 40. **The S3H adapter has never been loaded for inference.** Its 392 tensors are verified
    as bytes — finite, LoRA-only, correctly shaped — and no forward pass through the
    adapted model has been run by anything except the trainer's own evaluation arm.
+41. **The S3I.0 load benchmark is three cycles per arm on one host.** Enough to
+   separate ~2 s from ~110 s by two orders of magnitude; not a distribution. Do not
+   re-run it unless the model, the runtime, the dependencies or the host change.
+42. **The historical load-overhead fraction is an upper bound.** It divides measured load
+   cost into a total obtained by summing S3E.2's *medians* (8370 s), while the p95 tail
+   was 596.5 s / 704.4 s — so the real total was larger and the real fraction smaller.
+   The keep-the-loader decision is insensitive to this: it only gets stronger.
+43. **Release does not return memory exactly to the pre-load baseline.** ~8 MB (baseline)
+   to ~10 MB (candidate) of RSS residue per load/release cycle, measured over three
+   cycles each. Extrapolated over 36 cycles that is ~300–400 MB on a host with far more
+   to spare. Recorded, not diagnosed, and it did not affect the decision.
+44. **D33 — the declared generation timeout is not enforced, and `timeout_rate` is
+   vacuous.** Open. Two consequences bind S3I: a runaway generation has no automatic
+   bound, and `timeout_rate` must be reported `VACUOUS` rather than as evidence. A
+   related trap: the policy default is **120 s** while S3E.2 ran **300 s** and the
+   measured median request latencies were 109.5 s / 123.0 s, so a config that silently
+   inherits the default would — if the timeout were ever made real — cut off roughly half
+   the candidate arm. **S3I must state `timeout_s` explicitly.**
+45. **D32's cause is not established.** What is established is that `82b60bfd…`
+   reproduces under two code versions and three roots and `10ad2308…` reproduces under
+   none, and that the corpus content is exactly what S3F.2 described. The historical
+   milestone docs still carry the superseded digest by convention — **PROGRESS §7 is the
+   authoritative value.**
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -1730,6 +1850,14 @@ tests above. The S3G full-suite figure stands unre-measured and is labelled as s
 
 | Gate | Result | When |
 |---|---|---|
+| Full suite / focused M62 / Ruff / `compileall` / Bandit | **NOT RUN — no tracked source changed.** S3I.0 is a measurement plus documentation; these gate source changes | S3I.0 |
+| Load-only benchmark, both arms | **PASS** — 6 real loads, identity proved on each, **0 tokens generated**, 0 forward passes | S3I.0 |
+| S3H adapter re-verification | **PASS** — `verify_completed_run` 0 problems, sha256 matches `43213035…` | S3I.0 |
+| Eval corpus v1 reproduction (control) | **PASS** — `0970600c…` | S3I.0 |
+| Eval corpus v2 reproduction | **MISMATCH vs the record → D32** — `82b60bfd…` across 3 roots and 2 code versions | S3I.0 |
+| Timeout-enforcement search over the evaluation package | **ABSENT → D33** | S3I.0 |
+| Temporary worktree (historical rebuild) | removed, `git worktree prune` clean | S3I.0 |
+| `git diff --check` / secret / host-path scan | **PASS** — no host path, no username, no cache location, no token | S3I.0 |
 | Full suite / focused M62 | **NOT RE-RUN — no tracked source changed.** S3G.2 ran the authoritative suite (6701 / 2755) at the exact commit S3H executed from; re-running it for a documentation-only milestone would measure the same tree | S3H |
 | Completed-run verification (`verify_completed_run`) | **PASS — 0 problems** over the bytes on disk | S3H |
 | Safetensors / tensor finiteness / parameter reconciliation | **PASS** — 392 tensors, 0 non-finite, 0 all-zero, adapter param count equals the backend's trainable count | S3H |
@@ -1791,7 +1919,8 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
 | S3G.2 commits | Train-side validation wiring: the D31 fix across the export authority, the config schema, the execution stage and the SFT backend; the validation export authority; 70 regression tests; the new zero-blocker plan `122efc62…` under config `b5f63cd8…`; S3G.1's plan `a9b8c6e2…` marked `SUPERSEDED_PREVALIDATION_PREVIEW`. First source change since S3G. Resolve with `git log --oneline 290f7d7..HEAD`. |
-| S3H commits | **CURRENT.** The first quality-oriented live training run: one `TRAIN:` token derived and consumed once against plan `122efc62…`, `qwen3-06b-lora-quality-live-001` trained 40/40 steps in 27m47s, adapter `43213035…` verified with 0 problems, candidate `TRAINED_UNEVALUATED`. Documentation only — no tracked source changed. |
+| S3I.0 commits | **CURRENT.** Held-out evaluation runtime qualification: the load benchmark (2.2–2.8 % of a median request), the `KEEP_EXISTING_LOADING_STRATEGY` decision, **D32** (eval-v2 digest corrected to `82b60bfd…`) and **D33** (timeout not enforced, open). Documentation only — no tracked source changed, nothing generated. |
+| S3H commits | The first quality-oriented live training run: one `TRAIN:` token derived and consumed once against plan `122efc62…`, `qwen3-06b-lora-quality-live-001` trained 40/40 steps in 27m47s, adapter `43213035…` verified with 0 problems, candidate `TRAINED_UNEVALUATED`. Documentation only — no tracked source changed. |
 | `a167420` | The S3G.2 close, and the exact commit the S3H run executed from. |
 | S3G.1 commit | The final pre-train qualification: reviewed cache verified, real tokenizer audit (0 of 128 rows truncate at 512), zero-blocker plan `a9b8c6e2…`, S3G plan `4548905157…` marked `SUPERSEDED_PREVIEW`. Documentation only — no source, test or config change. |
 | S3G commits | The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
@@ -1862,7 +1991,8 @@ hand-written and no hash is invented.
   semantics either. Response bodies are still not persisted.
 - **DO NOT** re-run the 35 S3F.1 tests to confirm the corrections exist.
 - **DO NOT** "fix" the corpus prompts in place. `m62-defensive-eval v1` is frozen; the
-  contract correction shipped as **v2** (`10ad2308…`) in S3F.2.
+  contract correction shipped as **v2** (`82b60bfd…` — the digest S3F.2 recorded was
+  wrong; see D32) in S3F.2.
 - **DO NOT** re-ask H1–H6. **The human operator answered all six on 2026-08-10.** The
   answers are in §2 and in `jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`.
   They are the operator's decisions; do not restate them as Claude's, and do not
@@ -1986,7 +2116,7 @@ hand-written and no hash is invented.
 - **DO NOT** treat the S3H validation loss as held-out quality. It is nine rows of
   train-side steering material, it appears in no S3G §6 gate, and it authorises nothing.
 - **DO NOT** evaluate the candidate with `m62-defensive-eval` **v1**. Eligibility-grade
-  work binds **v2** (`10ad2308…`).
+  work binds **v2** (`82b60bfd…` — D32 corrected the recorded digest).
 - **DO NOT** evaluate with `reasoning_policy = MODEL_DEFAULT`. Ruling H6a binds `DISABLED`,
   via `eligibility_generation_policy()`, and the global default stays `MODEL_DEFAULT`.
 - **DO NOT** promote, activate, register or merge the S3H adapter before a held-out
@@ -2009,6 +2139,32 @@ hand-written and no hash is invented.
   makes the end-of-run number unconditional. See the S3H doc §8.2.
 - **DO NOT** re-run the full suite to "confirm" S3H. No tracked source changed; S3G.2's
   6701/2755 run at `a167420` is the authoritative measurement of this tree.
+
+- **DO NOT** re-run the S3I.0 load benchmark to confirm it. Baseline median
+  1.7701 s, candidate 2.8915 s, 2.2–2.8 % of a median request. Re-measure only if the
+  model, the runtime, the dependencies or the host change.
+- **DO NOT** reinterpret the measured load overhead as a reason to sessionize. It was
+  ~212 s of a run that was at least 8370 s, and the per-request reload is the mechanism
+  behind a stated safety property, not an oversight.
+- **DO NOT** sessionize the evaluation backend or enable `LoadStrategy.SHARED_BASE`.
+  S3I.0 measured the case and decided `KEEP_EXISTING_LOADING_STRATEGY`. The backend
+  refuses `SHARED_BASE` in code, with its reason: nobody has proven that attaching and
+  removing an adapter leaves no residue.
+- **DO NOT** bind the held-out corpus by `10ad2308…`. It reproduces under no code version
+  and no root. The value is **`82b60bfd…`** (D32). The historical milestone docs still
+  carry the superseded digest by the supersession convention — **PROGRESS §7 is
+  authoritative.**
+- **DO NOT** "fix" `m62-defensive-eval v2` to make it hash to the old value. The corpus
+  content is correct and reproducible; only the recorded digest was wrong.
+- **DO NOT** cite `timeout_rate` as evidence in any S3I report. It is vacuous — D33 — for
+  the same reason D28 makes `tool_call_validity_rate` vacuous.
+- **DO NOT** let the S3I configuration inherit the default `timeout_s`. The default is
+  120 s, S3E.2 ran 300 s, and measured median latencies are 109.5 s / 123.0 s. State it
+  explicitly.
+- **DO NOT** fix D33 inside S3I. Enforcing the timeout changes run behaviour and adds a
+  second variable to the first reasoning-disabled measurement. It is its own decision.
+- **DO NOT** generate "just one task" to sanity-check the evaluation path. S3I.0 held a
+  hard zero-generation rule and S3I needs its own authorisation and a fresh token.
 
 **Instead:**
 
@@ -2055,7 +2211,7 @@ S3G §12 fixed and against the gates S3G §6 predeclared **before any of it ran*
 
 | | |
 |---|---|
-| Held-out corpus | `m62-defensive-eval` **v2** (`10ad2308…`) — never v1 for eligibility-grade work |
+| Held-out corpus | `m62-defensive-eval` **v2** (`82b60bfd…`, corrected in S3I.0 — D32) — never v1 for eligibility-grade work |
 | Baseline arm | `Qwen/Qwen3-0.6B` @ `c1899de2…`, no adapter |
 | Candidate arm | the same model + the S3H adapter (`43213035…`) |
 | `reasoning_policy` | **`DISABLED`**, bound via `eligibility_generation_policy()`; the global default stays `MODEL_DEFAULT` |
@@ -2072,9 +2228,19 @@ Preconditions:
 1. ~~a trained quality candidate to evaluate~~ — **CLOSED 2026-08-13 (S3H)**;
 2. ~~a verified adapter whose identity binds its plan, config, dataset and base revision~~ —
    **CLOSED 2026-08-13 (S3H)**;
-3. **explicit operator authorisation for a live evaluation** — **not given**. S3H
+3. ~~a measured decision on the evaluation runtime's model-load strategy~~ —
+   **CLOSED 2026-08-13 (S3I.0)**: `KEEP_EXISTING_LOADING_STRATEGY`, 72 loads, measured at
+   2.2–2.8 % of a median request;
+4. **ratify the two S3I.0 conditions** — that `m62-defensive-eval v2` is **`82b60bfd…`**
+   (D32), and that `timeout_s` is stated explicitly in the S3I configuration knowing it is
+   **not enforced** (D33). Both are decisions, not engineering;
+5. **explicit operator authorisation for a live evaluation** — **not given**. S3H
    authorised training and nothing after it;
-4. a fresh `EVAL` plan and its single-use token, consumed exactly once — **not created**.
+6. a fresh `EVAL` plan and its single-use token, consumed exactly once — **not created**.
+
+**Two things the S3I report must say, and cannot be allowed to omit.**
+`tool_call_validity_rate` is `VACUOUS` (D28) and `timeout_rate` is `VACUOUS` (D33). Both are
+metrics whose transport does not exist, and both would otherwise read as clean passes.
 
 **Cost warning, from measured history.** The current evaluation strategy reloads the model
 per request, so 36 tasks × 2 arms = 72 model loads and S3E.2 took hours on this CPU (§12).
