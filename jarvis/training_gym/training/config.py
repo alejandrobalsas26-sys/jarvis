@@ -180,6 +180,38 @@ SUPPORTED_CHECKPOINT_STRATEGIES: frozenset[CheckpointStrategy] = frozenset(
     {CheckpointStrategy.NO})
 
 
+class ValidationStrategy(str, Enum):
+    """Whether the trainer measures the VALIDATION split DURING the run, and how often.
+
+    This is a *diagnostic* arm, not an eligibility measurement. VALIDATION is train-side
+    steering material by this repository's ``TRAIN_SIDE_SPLITS`` definition: its loss says
+    whether the run is fitting or memorising, and it never decides whether a candidate may
+    be promoted. Held-out eligibility evidence is ``m62-defensive-eval``, it is
+    ``evaluation_only``, and it is never read by a training run.
+
+    ``NO`` is the default and is exactly the historical behaviour: no ``eval_dataset``
+    reaches ``Trainer``, and the config's canonical form is byte-identical to what it was
+    before this field existed — so no configuration written before it silently changes
+    meaning, and no historical config hash moves.
+
+    ``EPOCH`` evaluates once at the end of each epoch. ``STEPS`` is named so the refusal
+    can say what was asked for rather than "not a valid strategy", and it is refused: the
+    corpus this exists for holds nine validation rows against a forty-step run, so
+    per-step evaluation would re-measure the same nine rows forty times, add its cost to
+    every step, and produce a curve whose movement is sampling noise rather than
+    learning. A cadence that expensive needs its own evidence, not a default.
+    """
+
+    NO = "no"
+    EPOCH = "epoch"
+    STEPS = "steps"
+
+
+#: The cadences a run may actually use. See :class:`ValidationStrategy` on why not STEPS.
+SUPPORTED_VALIDATION_STRATEGIES: frozenset[ValidationStrategy] = frozenset(
+    {ValidationStrategy.NO, ValidationStrategy.EPOCH})
+
+
 class LoggingTarget(str, Enum):
     """Where run logs go. Both members are local.
 
@@ -682,6 +714,7 @@ class TrainingConfig:
     resource_policy: TrainingResourcePolicy = TrainingResourcePolicy()
     training_split: DatasetSplit = DatasetSplit.TRAIN
     validation_split: DatasetSplit = DatasetSplit.VALIDATION
+    validation_strategy: ValidationStrategy = ValidationStrategy.NO
     hidden_evaluation_reference: DatasetSplit = DatasetSplit.HIDDEN_EVALUATION
     security_regression_reference: DatasetSplit = DatasetSplit.SECURITY_REGRESSION
     trust_remote_code: bool = False
@@ -694,7 +727,8 @@ class TrainingConfig:
         "schema_version", "run_id", "experiment_name", "method", "base_model_id",
         "base_model_revision", "base_model_parameters_b", "base_model_family",
         "tokenizer_id", "tokenizer_revision", "trust_remote_code", "dataset_reference",
-        "training_split", "validation_split", "hidden_evaluation_reference",
+        "training_split", "validation_split", "validation_strategy",
+        "hidden_evaluation_reference",
         "security_regression_reference", "output_root_id", "seed", "epochs",
         "max_steps", "batch_size", "gradient_accumulation_steps", "learning_rate",
         "weight_decay", "warmup_ratio", "max_sequence_length",
@@ -775,6 +809,18 @@ class TrainingConfig:
             raise TrainingConfigError(
                 "validation_split: must differ from training_split; validating on the "
                 "training split measures memorisation and calls it generalisation")
+        setattr_(self, "validation_strategy",
+                 require_enum(self.validation_strategy, ValidationStrategy,
+                              "validation_strategy"))
+        if self.validation_strategy not in SUPPORTED_VALIDATION_STRATEGIES:
+            raise TrainingConfigError(
+                f"validation_strategy: {self.validation_strategy.value!r} is not "
+                f"supported (supported: "
+                f"{sorted(s.value for s in SUPPORTED_VALIDATION_STRATEGIES)}). "
+                f"Per-step evaluation re-measures the same small validation split once "
+                f"per optimizer step and charges its cost to every one of them; the "
+                f"movement it produces is sampling noise, not learning. A cadence that "
+                f"expensive needs its own evidence rather than a default")
         if self.hidden_evaluation_reference in _TRAIN_SIDE:
             raise TrainingConfigError(
                 "hidden_evaluation_reference: names a train-side split; a hidden "
@@ -861,6 +907,19 @@ class TrainingConfig:
                 f"that cannot enter the adapter artifact allowlist, so the run would "
                 f"train to completion and then be refused at artifact verification. "
                 f"Use 'no'.")
+        if (self.validation_strategy is not ValidationStrategy.NO
+                and self.checkpoint_strategy is not CheckpointStrategy.NO):
+            # Belt and braces: `checkpoint_strategy` is already restricted to NO by the
+            # check immediately above, so this is unreachable today. It is written anyway
+            # because the ONE route by which enabling evaluation could reintroduce
+            # pickle-shaped trainer state is arriving alongside checkpointing, and the
+            # refusal should exist before the combination does rather than after somebody
+            # widens the other enum.
+            raise TrainingConfigError(
+                f"validation_strategy: {self.validation_strategy.value!r} with "
+                f"checkpoint_strategy {self.checkpoint_strategy.value!r}; train-time "
+                f"validation never authorises checkpoint writing, and the adapter "
+                f"artifact policy refuses the pickle-shaped state a checkpoint holds")
         if not isinstance(self.lora, LoRAConfig):
             raise TrainingConfigError("lora: expected a LoRAConfig")
         if (self.method.needs_quantization
@@ -888,6 +947,15 @@ class TrainingConfig:
         return self.batch_size * self.gradient_accumulation_steps
 
     @property
+    def train_time_validation_enabled(self) -> bool:
+        """Whether a run would hand its VALIDATION split to the trainer as an eval arm.
+
+        One property rather than ``!= NO`` scattered across the backend, the execution
+        stage and the CLI, so "is validation on" has a single answer.
+        """
+        return self.validation_strategy is not ValidationStrategy.NO
+
+    @property
     def has_immutable_revision(self) -> bool:
         return is_immutable_revision(self.base_model_revision)
 
@@ -896,8 +964,25 @@ class TrainingConfig:
         return is_placeholder(self.base_model_revision)
 
     def to_dict(self) -> dict:
-        """The canonical, exportable form. Contains no path and no host detail."""
+        """The canonical, exportable form. Contains no path and no host detail.
+
+        ``validation_strategy`` appears only when it is not ``NO``, and that is
+        deliberate. The key is what makes a run measure its validation split, so the
+        canonical form — and therefore ``config_hash``, and therefore every plan hash
+        derived from it — gains it at exactly the moment the run's behaviour gains it. A
+        config that performs no train-time validation hashes to what it always hashed to,
+        so no configuration written before this field existed is re-identified, and a
+        config that does perform it can never share an identity with one that does not.
+
+        The same rule already governs :func:`training_gym.datasets.export.sft_row`, which
+        emits a system turn only for a candidate that has one, for the same reason: an
+        always-present key whose value means "absent" makes two different things look
+        like one.
+        """
+        strategy = ({"validation_strategy": self.validation_strategy.value}
+                    if self.validation_strategy is not ValidationStrategy.NO else {})
         return {
+            **strategy,
             "schema_version": self.schema_version,
             "run_id": self.run_id,
             "experiment_name": self.experiment_name,
@@ -984,6 +1069,12 @@ class TrainingConfig:
                 known["dataset_reference"]),
             training_split=known.get("training_split", defaults.training_split),  # type: ignore[arg-type]
             validation_split=known.get("validation_split", defaults.validation_split),  # type: ignore[arg-type]
+            # Absent means NO, which is what every config written before this field
+            # existed meant. A document that does name it is read as written; a document
+            # that names it under a build too old to know it is refused by
+            # `reject_unknown_fields` rather than silently losing the setting.
+            validation_strategy=known.get("validation_strategy",
+                                          defaults.validation_strategy),  # type: ignore[arg-type]
             hidden_evaluation_reference=known.get(
                 "hidden_evaluation_reference", defaults.hidden_evaluation_reference),  # type: ignore[arg-type]
             security_regression_reference=known.get(
@@ -1120,11 +1211,12 @@ __all__ = [
     "MAX_LORA_RANK", "MAX_NOTES_CHARS", "PLACEHOLDER_PREFIX", "PLANNER_VERSION",
     "REQUIRED_REVISION_PLACEHOLDER", "RESOURCE_POLICY_VERSION",
     "S3A_REACHABLE_STATES", "SUPPORTED_CHECKPOINT_STRATEGIES",
-    "TRAINING_SCHEMA_VERSION", "CheckpointStrategy",
+    "SUPPORTED_VALIDATION_STRATEGIES", "TRAINING_SCHEMA_VERSION", "CheckpointStrategy",
     "DependencyProfile", "DevicePolicy", "LoRABias", "LoRAConfig",
     "LoRATargetPolicy", "LoggingTarget", "ModelDownloadPolicy", "PrecisionPolicy",
     "TrainingConfig", "TrainingConfigError", "TrainingMethod",
     "TrainingResourcePolicy", "TrainingRunState", "TrainingTransitionError",
+    "ValidationStrategy",
     "check_training_transition", "is_immutable_revision", "is_placeholder",
     "legacy_method", "load_config_document", "load_training_config",
     "refuse_path_like", "require_model_id", "require_revision",

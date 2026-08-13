@@ -200,6 +200,14 @@ def plan_training(
             "max_checkpoints": config.max_checkpoints,
             "logging_target": config.logging_target.value,
             "logging_interval_steps": config.logging_interval_steps,
+            # Value-gated, exactly as `TrainingConfig.to_dict` gates it and for the same
+            # reason: the plan hash already moves with `training_config_hash`, and this
+            # key is here so a reader of `plan.to_record()` can see the cadence without
+            # re-deriving it from a config document. A run with no train-time validation
+            # keeps the hyperparameter block it has always had.
+            **({"validation_strategy": config.validation_strategy.value,
+                "validation_split": config.validation_split.value}
+               if config.train_time_validation_enabled else {}),
         },
         lora=config.lora.to_dict(),
         resource_policy_version=config.resource_policy.policy_version,

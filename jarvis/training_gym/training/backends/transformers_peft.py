@@ -18,6 +18,22 @@ call, so a module-level ``import torch`` here would break it from three directio
 once. The imports live in :func:`_runtime`, which is called only from
 :meth:`TransformersPeftBackend.execute`.
 
+WHY THE VALIDATION SPLIT IS AN EVAL ARM AND NOT A SECOND TRAINING SET
+---------------------------------------------------------------------
+When the reviewed config sets a ``validation_strategy`` other than ``no``, the promoted
+VALIDATION split is encoded by *this* object, through the same ``_encode`` and the same
+``build_labels`` the training rows go through, and handed to ``Trainer`` as
+``eval_dataset``. It contributes no gradient: ``Trainer`` computes loss over
+``eval_dataset`` under ``torch.no_grad`` and takes no optimizer step for it.
+
+Three things are deliberately NOT done with it. There is no early stopping — no
+``EarlyStoppingCallback``, and none is importable from here — because a nine-row split
+must not decide when a run ends. There is no ``load_best_model_at_end``, which is what
+would make ``Trainer`` demand ``save_strategy`` match ``eval_strategy`` and start writing
+the pickle-shaped checkpoint state the adapter artifact policy refuses (defect D16).
+And there is no generation: evaluation here is teacher-forced cross-entropy over targets
+the corpus already contains, so no response body is produced, scored or persisted.
+
 WHY ASSISTANT-ONLY LOSS IS BUILT BY HAND
 -----------------------------------------
 ``trl.DataCollatorForCompletionOnlyLM`` is the obvious tool and it is not used. Its import
@@ -195,6 +211,23 @@ def _token_ids(rendered: object, *, label: str) -> list[int]:
     return list(ids)
 
 
+def _finite(value: object) -> float:
+    """A float a result may carry, or ``0.0``. NaN and infinity are not measurements.
+
+    ``BackendResult`` already refuses a non-finite metric, so a NaN reaching it turns a
+    diverged run into a raised contract error rather than a reported number. The
+    per-evaluation history has no such guard, and a curve containing ``NaN`` would be
+    persisted and later read as though it were data.
+    """
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if number != number or number in (float("inf"), float("-inf")):
+        return 0.0
+    return number
+
+
 def _dtype(runtime: _Runtime, precision: str):
     """Map the selected precision onto a torch dtype. Unknown means fp32, never a guess."""
     table = {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32",
@@ -238,6 +271,27 @@ class TransformersPeftBackend:
             problems.append("trust_remote_code is enabled; this backend never sets it")
         if not Path(request.train_file).is_file():
             problems.append("the training corpus is not a readable file")
+        if request.config.train_time_validation_enabled:
+            # Asked for while refusing is still free. A config that enables train-time
+            # validation and reaches the trainer without a validation corpus would either
+            # crash after the plan was spent, or -- worse -- be "handled" by quietly
+            # training with no eval arm while the config, the plan and the report all say
+            # it had one.
+            if request.validation_file is None:
+                problems.append(
+                    f"validation_strategy is "
+                    f"{request.config.validation_strategy.value!r} but no validation "
+                    f"corpus was supplied; a run cannot measure a split it was not "
+                    f"given, and silently training without the eval arm the plan "
+                    f"records would misreport what ran")
+            elif not Path(request.validation_file).is_file():
+                problems.append("the validation corpus is not a readable file")
+        elif request.validation_file is not None:
+            problems.append(
+                "a validation corpus was supplied but validation_strategy is 'no'; the "
+                "reviewed config decides whether a run measures its validation split, "
+                "and a file passed alongside a config that does not ask for one is a "
+                "disagreement about what was approved")
         return tuple(problems)
 
     # ── the run ───────────────────────────────────────────────────────────────
@@ -304,6 +358,42 @@ class TransformersPeftBackend:
                 f"assistant-only loss could not be proven ({list(masking.problems)}); "
                 f"refusing rather than silently fitting the system and user turns",
                 started)
+
+        # The eval arm. Encoded by the SAME tokenizer, the same chat template, the same
+        # `max_sequence_length` and the same label masking as the training rows -- a
+        # validation loss produced under different rendering rules is not comparable to
+        # the training loss it is read against, and the whole point of the number is the
+        # comparison.
+        eval_rows: list[dict] | None = None
+        eval_truncated = 0
+        eval_masking: MaskingEvidence | None = None
+        if config.train_time_validation_enabled:
+            validation = convert_sft_export(
+                request.validation_file,
+                max_sequence_length=config.max_sequence_length)
+            eval_rows, eval_truncated = self._encode(
+                validation, tokenizer=tokenizer,
+                max_length=config.max_sequence_length)
+            eval_masking = self._masking_self_test(eval_rows)
+            if not eval_masking.verified:
+                return self._failed(
+                    request, "dataset",
+                    f"assistant-only loss could not be proven for the validation split "
+                    f"({list(eval_masking.problems)}); an eval loss computed over the "
+                    f"prompt tokens is not the quantity the training loss is compared "
+                    f"against", started)
+            shared = ({r.candidate_id for r in dataset.records}
+                      & {r.candidate_id for r in validation.records})
+            if shared:
+                # The splitter already made these disjoint and the export reads one shard
+                # each, so this cannot fire today. It is checked because the failure it
+                # describes -- measuring on rows that were fitted -- reports memorisation
+                # as generalisation, and it is the one defect a loss curve cannot show.
+                return self._failed(
+                    request, "dataset",
+                    f"{len(shared)} candidate(s) appear in both the training and the "
+                    f"validation corpus; a split the model was fitted on measures "
+                    f"nothing about it", started)
         cancellation.raise_if_requested()
 
         model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -343,21 +433,65 @@ class TransformersPeftBackend:
             gradient_checkpointing=config.gradient_checkpointing,
             dataloader_num_workers=config.dataloader_workers,
             logging_steps=config.logging_interval_steps,
+            # Unchanged by the eval arm, and that is the point. `eval_strategy` and
+            # `save_strategy` are only coupled by `load_best_model_at_end`, which is
+            # never set here, so evaluation runs while the trainer still writes no
+            # checkpoint at all.
             save_strategy=config.checkpoint_strategy.value,
             save_total_limit=config.max_checkpoints,
+            # `eval_strategy`, not `evaluation_strategy`. The rename landed in
+            # transformers 4.41 -- below the `>=4.44` floor requirements/training.txt
+            # declares -- and the old name was REMOVED in transformers 5, which is what
+            # is installed. So `eval_strategy` is the one spelling valid across the whole
+            # declared support range, and it is passed unconditionally: this module makes
+            # exactly one keyword conditional (see `_serialization_options`) so that a
+            # future removal is a loud failure rather than a silently dropped setting.
+            eval_strategy=config.validation_strategy.value,
+            per_device_eval_batch_size=config.batch_size,
             # Every remote integration, off. transformers defaults report_to="all",
             # which activates any tracker that merely happens to be importable and
             # reintroduces the exfiltration endpoint the config vocabulary removed.
             report_to=[], push_to_hub=False, disable_tqdm=True,
+            # Stated rather than left to a default that could change under us. True is
+            # what would couple evaluation to checkpoint writing (D16) and let a nine-row
+            # split silently choose which weights are saved.
+            load_best_model_at_end=False,
             **_serialization_options(transformers))
         trainer = transformers.Trainer(
             model=model, args=arguments, train_dataset=rows,
+            # None when the config asks for no validation, which is exactly what
+            # `Trainer` received unconditionally before this: the split was promoted,
+            # digest-bound into the plan and length-audited, and nothing read it.
+            eval_dataset=eval_rows,
             data_collator=transformers.DataCollatorForSeq2Seq(
                 tokenizer, padding=True, label_pad_token_id=-100))
+        # No callback is registered, and that is a decision rather than an omission:
+        # `EarlyStoppingCallback` would let nine validation rows terminate the run, and a
+        # stop chosen by a split that small is noise wearing a policy's clothes.
+        if getattr(trainer, "callback_handler", None) is not None:
+            trainer.callback_handler.callbacks = [
+                cb for cb in trainer.callback_handler.callbacks
+                if "EarlyStopping" not in type(cb).__name__]
 
         cancellation.raise_if_requested()
         metrics = trainer.train().metrics
         cancellation.raise_if_requested()
+        # Snapshot BEFORE the closing evaluation, so the per-epoch curve and the
+        # end-of-run measurement stay two distinguishable things in the record.
+        periodic = list(getattr(getattr(trainer, "state", None), "log_history", []) or [])
+        final_metrics: dict = {}
+        if config.train_time_validation_enabled:
+            # One explicit closing pass, because `max_steps` bounds the run and can cut
+            # the last epoch short -- the planned candidate stops at 2.99 epochs -- so the
+            # final epoch-boundary evaluation is not necessarily a measurement of the
+            # weights the run actually ends with, and on some step counts there is no
+            # third boundary to evaluate at all. Teacher-forced loss over the same nine
+            # rows: no generation, no response body, no gradient, no checkpoint.
+            final_metrics = dict(trainer.evaluate() or {})
+            cancellation.raise_if_requested()
+        validation_evidence = self._validation_evidence(
+            config=config, rows=eval_rows, truncated=eval_truncated,
+            masking=eval_masking, history=periodic, final_metrics=final_metrics)
 
         # safe_serialization is passed explicitly rather than relied on as a default:
         # a pickle fallback is the one output shape the artifact policy will not accept.
@@ -373,7 +507,12 @@ class TransformersPeftBackend:
             steps_completed=completed,
             epochs_completed=float(getattr(state, "epoch", 0.0) or 0.0),
             train_loss=float(metrics.get("train_loss", 0.0)),
-            eval_loss=float(metrics.get("eval_loss", 0.0)),
+            # `train()` returns TRAINING metrics; a per-epoch eval loss lives in
+            # `trainer.state.log_history`, which is where the final one is read from.
+            # `metrics` is still consulted first so a future transformers that does
+            # surface it there is not second-guessed.
+            eval_loss=float(metrics.get(
+                "eval_loss", validation_evidence.get("final_eval_loss", 0.0)) or 0.0),
             duration_seconds=time.monotonic() - started,
             output_files=tuple(sorted(p.name for p in
                                       Path(request.run_directory).iterdir()
@@ -383,6 +522,7 @@ class TransformersPeftBackend:
             evidence={
                 "assistant_only_loss": True,
                 "assistant_only_loss_evidence": masking.to_dict(),
+                "train_time_validation": validation_evidence,
                 "tokenizer_chat_template_hash": chat_template_hash(
                     getattr(tokenizer, "chat_template", None)),
                 "trainable_parameters": trainable,
@@ -421,6 +561,81 @@ class TransformersPeftBackend:
                          "labels": list(labels),
                          "prompt_length": len(prompt_ids)})
         return rows, truncated
+
+    # ── validation observability ──────────────────────────────────────────────
+    def _validation_evidence(self, *, config, rows, truncated: int,
+                             masking: MaskingEvidence | None, history: list,
+                             final_metrics: dict) -> dict:
+        """What the eval arm measured, in numbers only.
+
+        ``history`` is ``trainer.state.log_history`` rather than ``train().metrics``,
+        which carries training metrics: the per-evaluation entries are the only place a
+        per-epoch curve exists, and a single final number cannot show the train/eval
+        divergence the split is here to make visible. ``final_metrics`` is the closing
+        evaluation, kept separate so "the loss at the end of epoch 2" and "the loss of the
+        weights this run produced" are never read as the same measurement.
+
+        **Numbers only, by construction.** Every value below is an int, a float, a bool or
+        a fixed vocabulary string. No prompt, no target, no generated text and no response
+        body -- there is none to carry, because a teacher-forced loss produces no
+        generation -- so this record can be persisted in ``backend_result.json`` without
+        a body-free filter having to be trusted to remove something.
+
+        This is **diagnostic** evidence. It is not a quality score, it does not authorise
+        promotion, and it does not stand in for the held-out eligibility corpus.
+        """
+        if not config.train_time_validation_enabled:
+            return {"enabled": False, "strategy": config.validation_strategy.value,
+                    "validation_rows": 0, "evaluations": 0,
+                    "note": "the reviewed config asks for no train-time validation"}
+
+        evaluations: list[dict] = []
+        for entry in history:
+            if not isinstance(entry, dict) or "eval_loss" not in entry:
+                continue
+            measured = {"eval_loss": _finite(entry.get("eval_loss")),
+                        "epoch": _finite(entry.get("epoch")),
+                        "step": int(entry.get("step") or 0)}
+            for optional in ("eval_runtime", "eval_samples_per_second",
+                             "eval_steps_per_second"):
+                if optional in entry:
+                    measured[optional] = _finite(entry.get(optional))
+            evaluations.append(measured)
+        # Training losses are kept alongside so a reader can put the two curves next to
+        # each other without re-deriving one of them from a different artefact.
+        train_losses = [{"loss": _finite(e.get("loss")), "epoch": _finite(e.get("epoch")),
+                         "step": int(e.get("step") or 0)}
+                        for e in history
+                        if isinstance(e, dict) and "loss" in e and "eval_loss" not in e]
+        closing = {"eval_loss": _finite(final_metrics.get("eval_loss")),
+                   "epoch": _finite(final_metrics.get("epoch")),
+                   "at_end_of_training": True}
+        for optional in ("eval_runtime", "eval_samples_per_second",
+                         "eval_steps_per_second"):
+            if optional in final_metrics:
+                closing[optional] = _finite(final_metrics.get(optional))
+        return {
+            "enabled": True,
+            "strategy": config.validation_strategy.value,
+            "split": config.validation_split.value,
+            "validation_rows": len(rows or ()),
+            "validation_rows_truncated": int(truncated),
+            "evaluations": len(evaluations),
+            "eval_loss_by_evaluation": evaluations,
+            "final_evaluation": closing,
+            # The end-of-run number when there is one, and otherwise the last periodic
+            # measurement. Never silently one presented as the other.
+            "final_eval_loss": (closing["eval_loss"] if final_metrics
+                                else (evaluations[-1]["eval_loss"] if evaluations
+                                      else 0.0)),
+            "train_loss_by_logging_step": train_losses,
+            "assistant_only_loss_evidence": masking.to_dict() if masking else {},
+            "early_stopping": False,
+            "load_best_model_at_end": False,
+            "contributes_gradients": False,
+            "generation_performed": False,
+            "is_held_out_eligibility_evidence": False,
+        }
 
     def _masking_self_test(self, rows) -> MaskingEvidence:
         """Prove on real tokenized rows that no prompt token is supervised.

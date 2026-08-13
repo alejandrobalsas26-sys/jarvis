@@ -10,9 +10,22 @@ directory, hands all of it away in one line of code.
 
 So this module has exactly one source: a dataset version that VERIFIES. It calls
 :func:`~training_gym.datasets.manifests.load_manifest`, which re-hashes every shard before
-returning, and it opens exactly one file — ``train.jsonl``. The held-out shards are never
-read, not even to count them: code that has a path to hidden-evaluation material is code
-that can leak it, and the cheapest way not to leak a file is not to open it.
+returning, and it opens exactly one file per export — ``train.jsonl`` for the corpus a
+model is FITTED on, ``validation.jsonl`` for the corpus a run is STEERED by. The held-out
+shards are never read, not even to count them: code that has a path to
+hidden-evaluation material is code that can leak it, and the cheapest way not to leak a
+file is not to open it.
+
+TWO EXPORTS, ONE CODE PATH, TWO CLOSED NAMES
+--------------------------------------------
+:func:`export_sft` and :func:`export_sft_validation` are the same procedure over a
+different split, and the split is not a caller-supplied value: it is chosen by which
+function was called, and each has exactly one legal pair of filenames. That is why
+:data:`EXPORTABLE_SPLITS` is a table rather than a membership test — a caller cannot ask
+for the hidden-evaluation split under the train export's filename, because the
+``(split, filename)`` pair has to be an entry in it. VALIDATION is exportable because
+``TRAIN_SIDE_SPLITS`` already says a model may be steered on it; the four held-out splits
+are absent from the table and there is no argument that adds them.
 
 FIVE FILTERS THAT ARE ALL REDUNDANT, ON PURPOSE
 -----------------------------------------------
@@ -79,8 +92,29 @@ EXPORT_DIR = "exports"
 SFT_FILENAME = "sft_train.jsonl"
 SFT_MANIFEST_FILENAME = "sft_train.manifest.json"
 
-#: The only split an SFT export may read.
+#: The train-side steering export. A SEPARATE pair of names rather than a suffix on the
+#: train export's: two files whose names differ by one word are two files somebody
+#: eventually confuses, and the manifest binds the name it was written under.
+SFT_VALIDATION_FILENAME = "sft_validation.jsonl"
+SFT_VALIDATION_MANIFEST_FILENAME = "sft_validation.manifest.json"
+
+#: The only split an SFT *training* export may read.
 SFT_SOURCE_SPLIT = DatasetSplit.TRAIN
+
+#: The only split an SFT *validation* export may read.
+SFT_VALIDATION_SOURCE_SPLIT = DatasetSplit.VALIDATION
+
+#: The closed table of exportable splits and the one legal pair of filenames for each.
+#: Membership here is the whole authorisation: a split absent from this mapping has no
+#: export function, no filename and no manifest that would accept it. Both members are
+#: train-side (``TRAIN_SIDE_SPLITS``) — a model may be fitted on TRAIN and steered by
+#: VALIDATION. HIDDEN_EVALUATION, SECURITY_REGRESSION, ADVERSARIAL and QUARANTINE are
+#: deliberately absent, and no argument adds them.
+EXPORTABLE_SPLITS: dict[DatasetSplit, tuple[str, str]] = {
+    SFT_SOURCE_SPLIT: (SFT_FILENAME, SFT_MANIFEST_FILENAME),
+    SFT_VALIDATION_SOURCE_SPLIT: (SFT_VALIDATION_FILENAME,
+                                  SFT_VALIDATION_MANIFEST_FILENAME),
+}
 
 
 class ExportError(SchemaError):
@@ -139,10 +173,18 @@ def row_hash(row: dict) -> str:
 
 
 def _exclusion_reason(candidate: DatasetCandidate, split: DatasetSplit,
-                      revocation: RevocationSnapshot) -> str:
-    """Why this record may not be exported, or ``""``. Every check is deliberate."""
-    if split is not SFT_SOURCE_SPLIT:
-        return "not_train_split"
+                      revocation: RevocationSnapshot, *,
+                      source_split: DatasetSplit = SFT_SOURCE_SPLIT) -> str:
+    """Why this record may not be exported, or ``""``. Every check is deliberate.
+
+    ``source_split`` is the split the export was asked for, never a caller-supplied
+    filter: the reason string names it, so ``not_train_split`` keeps exactly the wording
+    — and therefore exactly the ``excluded_counts`` distribution, and therefore exactly
+    the export hash — that every train export written before the validation export
+    existed already recorded.
+    """
+    if split is not source_split:
+        return f"not_{source_split.value}_split"
     if candidate.state is not CandidateState.PROMOTED:
         return "not_promoted"
     if revocation.is_revoked(candidate):
@@ -204,14 +246,21 @@ class SFTExportManifest:
         setattr_(self, "record_count", require_int(self.record_count,
                                                    "export.record_count", minimum=1,
                                                    maximum=1_000_000))
-        if self.filename != SFT_FILENAME:
-            raise ExportError(f"export.filename: {self.filename!r} is not the one legal "
-                              f"export name ({SFT_FILENAME!r})")
-        if self.source_split != SFT_SOURCE_SPLIT.value:
+        # The pair is checked, not the two fields independently. A manifest naming the
+        # validation split under the train export's filename describes a file that is
+        # not the one it was written as, and either field alone would accept it.
+        legal = {split.value: names for split, names in EXPORTABLE_SPLITS.items()}
+        names = legal.get(self.source_split)
+        if names is None:
             raise ExportError(
-                f"export.source_split: {self.source_split!r}; an SFT export reads the "
-                f"train split and nothing else, because every other split exists to "
-                f"measure the model rather than to fit it")
+                f"export.source_split: {self.source_split!r}; an SFT export reads a "
+                f"train-side split — {sorted(legal)} — and nothing else, because every "
+                f"other split exists to measure the model rather than to fit or steer "
+                f"it")
+        if self.filename != names[0]:
+            raise ExportError(
+                f"export.filename: {self.filename!r} is not the one legal export name "
+                f"for the {self.source_split} split ({names[0]!r})")
         for name in ("task_family_distribution", "target_source_distribution",
                      "source_model_distribution", "excluded_counts"):
             setattr_(self, name, dict(sorted((getattr(self, name) or {}).items())))
@@ -304,22 +353,70 @@ def _distribution(values: Sequence[str]) -> dict:
 def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
                revocation: RevocationSnapshot, created_at_utc: str,
                out_root: str | Path | None = None) -> SFTExport:
-    """Write the SFT export for one verified dataset version.
+    """Write the SFT TRAINING export — the rows a model is fitted on."""
+    return _export_split(
+        split=SFT_SOURCE_SPLIT, root=root, dataset_id=dataset_id,
+        dataset_version=dataset_version, revocation=revocation,
+        created_at_utc=created_at_utc, out_root=out_root)
+
+
+def export_sft_validation(*, root: str | Path, dataset_id: str, dataset_version: str,
+                          revocation: RevocationSnapshot, created_at_utc: str,
+                          out_root: str | Path | None = None) -> SFTExport:
+    """Write the SFT VALIDATION export — the rows a run is steered BY, never fitted on.
+
+    Same procedure, same filters, same row shape and same tokenizer-free output as the
+    training export; a different split and a different pair of filenames. It exists
+    because the split was already assigned by the deterministic splitter and already
+    bound into the training plan by digest, and the trainer had no file to read it from —
+    so ``Trainer`` was built with no ``eval_dataset`` and the split contributed nothing
+    to any measurement.
+
+    **These rows never contribute a gradient.** They are the trainer's evaluation arm,
+    and evaluation is teacher-forced loss over the same assistant-only mask the training
+    rows use. Nothing here makes them held-out evidence: held-out eligibility material is
+    ``m62-defensive-eval``, it is ``evaluation_only``, and three authorities refuse it a
+    train-side split.
+    """
+    return _export_split(
+        split=SFT_VALIDATION_SOURCE_SPLIT, root=root, dataset_id=dataset_id,
+        dataset_version=dataset_version, revocation=revocation,
+        created_at_utc=created_at_utc, out_root=out_root)
+
+
+def _export_split(*, split: DatasetSplit, root: str | Path, dataset_id: str,
+                  dataset_version: str, revocation: RevocationSnapshot,
+                  created_at_utc: str,
+                  out_root: str | Path | None = None) -> SFTExport:
+    """Write one train-side split's export for one verified dataset version.
 
     Refuses rather than producing an empty file when nothing is eligible: a zero-record
     export is not a small dataset, it is the absence of one, and it would sail through
     every downstream integrity check on the way to a training run that learned nothing.
+
+    ``split`` is not reachable from a command line, a config field or a manifest: the two
+    public wrappers above are the only callers, and a split outside
+    :data:`EXPORTABLE_SPLITS` is refused here before a directory is read.
     """
+    names = EXPORTABLE_SPLITS.get(split)
+    if names is None:
+        raise ExportError(
+            f"export: {getattr(split, 'value', split)!r} is not an exportable split; "
+            f"only {sorted(s.value for s in EXPORTABLE_SPLITS)} may be written, because "
+            f"every other split exists to measure the model rather than to fit or steer "
+            f"it")
+    data_name, manifest_name = names
+
     manifest = load_manifest(root=root, dataset_id=dataset_id,
                              dataset_version=dataset_version)
-    shard = manifest.shard_for(SFT_SOURCE_SPLIT)
+    shard = manifest.shard_for(split)
     if shard is None:
         raise ExportError(
-            f"export: dataset {dataset_id}/{dataset_version} has no train shard; there "
-            f"is nothing to fine-tune on and an empty export would not say so")
+            f"export: dataset {dataset_id}/{dataset_version} has no {split.value} "
+            f"shard; there is nothing to export and an empty export would not say so")
 
     directory = version_dir(root, dataset_id, dataset_version)
-    records = read_shard(directory / shard_filename(SFT_SOURCE_SPLIT))
+    records = read_shard(directory / shard_filename(split))
     by_id = {row.candidate_id: row for row in manifest.candidates}
 
     rows: list[dict] = []
@@ -330,7 +427,8 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
         if row_meta is None:  # pragma: no cover — verify_version already enforces this
             raise ExportError(f"export: {candidate.candidate_id} is in the shard but not "
                               f"in the manifest")
-        reason = _exclusion_reason(candidate, row_meta.split, revocation)
+        reason = _exclusion_reason(candidate, row_meta.split, revocation,
+                                   source_split=split)
         if reason:
             excluded.append(reason)
             continue
@@ -346,15 +444,16 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
 
     if not rows:
         raise ExportError(
-            f"export: dataset {dataset_id}/{dataset_version} yielded no eligible train "
-            f"records (excluded: {_distribution(excluded)}). Refusing to write an empty "
-            f"export rather than producing a file that verifies and teaches nothing")
+            f"export: dataset {dataset_id}/{dataset_version} yielded no eligible "
+            f"{split.value} records (excluded: {_distribution(excluded)}). Refusing to "
+            f"write an empty export rather than producing a file that verifies and "
+            f"teaches nothing")
 
     text = "".join(f"{canonical_json(row)}\n" for row in rows)
     destination = export_dir(out_root if out_root is not None else root, dataset_id,
                              dataset_version)
-    path = destination / SFT_FILENAME
-    manifest_path = destination / SFT_MANIFEST_FILENAME
+    path = destination / data_name
+    manifest_path = destination / manifest_name
     # BOTH names are checked. Removing only the data file and re-exporting would
     # otherwise overwrite a manifest that still describes the previous bytes, and the
     # replacement would verify against it exactly once — while it happened to match.
@@ -369,7 +468,8 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
     export_manifest = SFTExportManifest(
         dataset_id=dataset_id, dataset_version=dataset_version,
         dataset_manifest_hash=manifest.manifest_hash(),
-        source_manifest_hash=shard.sha256_file, filename=SFT_FILENAME,
+        source_manifest_hash=shard.sha256_file, filename=data_name,
+        source_split=split.value,
         sha256_file=sha256_file(path), size_bytes=path.stat().st_size,
         record_count=len(rows), created_at_utc=created_at_utc,
         system_prompt_versions=tuple(c.system_prompt_version for c in kept),
@@ -380,14 +480,15 @@ def export_sft(*, root: str | Path, dataset_id: str, dataset_version: str,
         row_hashes_hash=sha256_obj([row_hash(r) for r in rows]))
     atomic_write_text(manifest_path, canonical_json(export_manifest.to_record()))
 
-    verified = verify_sft_export(out_root=out_root if out_root is not None else root,
-                                 dataset_id=dataset_id, dataset_version=dataset_version)
+    verified = _verify_export(split=split,
+                              out_root=out_root if out_root is not None else root,
+                              dataset_id=dataset_id, dataset_version=dataset_version)
     if verified.problems:
         raise ExportError(f"export: written but immediately unverifiable "
                           f"({list(verified.problems)})")
     return SFTExport(manifest=export_manifest, relative_paths=(
-        f"{EXPORT_DIR}/{dataset_id}/{dataset_version}/{SFT_FILENAME}",
-        f"{EXPORT_DIR}/{dataset_id}/{dataset_version}/{SFT_MANIFEST_FILENAME}"))
+        f"{EXPORT_DIR}/{dataset_id}/{dataset_version}/{data_name}",
+        f"{EXPORT_DIR}/{dataset_id}/{dataset_version}/{manifest_name}"))
 
 
 @dataclass(frozen=True)
@@ -411,14 +512,39 @@ class ExportVerification:
 
 def verify_sft_export(*, out_root: str | Path, dataset_id: str,
                       dataset_version: str) -> ExportVerification:
-    """Re-hash a written export against its manifest. Reports rather than raises."""
+    """Re-hash a written TRAINING export against its manifest. Reports, never raises."""
+    return _verify_export(split=SFT_SOURCE_SPLIT, out_root=out_root,
+                          dataset_id=dataset_id, dataset_version=dataset_version)
+
+
+def verify_sft_validation_export(*, out_root: str | Path, dataset_id: str,
+                                 dataset_version: str) -> ExportVerification:
+    """Re-hash a written VALIDATION export against its manifest. Reports, never raises.
+
+    Separate from :func:`verify_sft_export` rather than a parameter on it, so that a
+    caller asking about the training corpus can never be answered about the validation
+    corpus — including the caller inside ``_export_split`` that decides whether what it
+    just wrote is usable.
+    """
+    return _verify_export(split=SFT_VALIDATION_SOURCE_SPLIT, out_root=out_root,
+                          dataset_id=dataset_id, dataset_version=dataset_version)
+
+
+def _verify_export(*, split: DatasetSplit, out_root: str | Path, dataset_id: str,
+                   dataset_version: str) -> ExportVerification:
+    """Re-hash one written export against its manifest. Reports rather than raises."""
+    names = EXPORTABLE_SPLITS.get(split)
+    if names is None:  # pragma: no cover — unreachable from the two public wrappers
+        return ExportVerification(
+            dataset_id=str(dataset_id), dataset_version=str(dataset_version),
+            problems=(f"{getattr(split, 'value', split)!r} is not an exportable split",))
     try:
         directory = export_dir(out_root, dataset_id, dataset_version)
     except SchemaError as exc:
         return ExportVerification(dataset_id=str(dataset_id),
                                   dataset_version=str(dataset_version),
                                   problems=(str(exc),))
-    manifest_path = directory / SFT_MANIFEST_FILENAME
+    manifest_path = directory / names[1]
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return ExportVerification(dataset_id=dataset_id, dataset_version=dataset_version,
                                   problems=("the export manifest is missing",))
@@ -431,6 +557,14 @@ def verify_sft_export(*, out_root: str | Path, dataset_id: str,
                                   problems=(f"the export manifest is unusable ({exc})",))
 
     problems: list[str] = []
+    if manifest.source_split != split.value:
+        # The manifest cross-binds its own (source_split, filename) pair, so this can
+        # only fire when a manifest for one split was written at the OTHER split's
+        # manifest path. Answering the caller's question about the wrong corpus is worse
+        # than answering it with a problem.
+        problems.append(
+            f"{names[1]}: describes the {manifest.source_split} split, not "
+            f"{split.value}")
     path = directory / manifest.filename
     if path.is_symlink():
         problems.append(f"{manifest.filename}: is a symlink")
@@ -463,8 +597,10 @@ def verify_sft_export(*, out_root: str | Path, dataset_id: str,
 
 
 __all__ = [
-    "EXPORT_DIR", "EXPORT_VERSION", "SFT_FILENAME", "SFT_MANIFEST_FILENAME",
-    "SFT_SOURCE_SPLIT", "ExportError", "ExportVerification", "ManifestError", "SFTExport",
-    "SFTExportManifest", "export_dir", "export_sft", "row_hash", "sft_row",
-    "verify_sft_export",
+    "EXPORTABLE_SPLITS", "EXPORT_DIR", "EXPORT_VERSION", "SFT_FILENAME",
+    "SFT_MANIFEST_FILENAME", "SFT_SOURCE_SPLIT", "SFT_VALIDATION_FILENAME",
+    "SFT_VALIDATION_MANIFEST_FILENAME", "SFT_VALIDATION_SOURCE_SPLIT", "ExportError",
+    "ExportVerification", "ManifestError", "SFTExport", "SFTExportManifest",
+    "export_dir", "export_sft", "export_sft_validation", "row_hash", "sft_row",
+    "verify_sft_export", "verify_sft_validation_export",
 ]

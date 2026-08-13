@@ -249,7 +249,8 @@ def _execute(args) -> int:
     outcome = execute_training(
         config, dataset_root=args.dataset_root, output_root=args.output_root,
         confirmation=args.confirm, backend=backend,
-        train_file=_train_file(args, config), actor=_safe_actor(),
+        train_file=_train_file(args, config),
+        validation_file=_validation_file(args, config), actor=_safe_actor(),
         at=_utc_now(), nonce=_nonce(),
         export_root=args.export_root or args.dataset_root,
         model_cache_root=args.model_cache_root or None,
@@ -287,6 +288,24 @@ def _train_file(args, config) -> str:
     root = args.export_root or args.dataset_root
     return str(export_dir(root, reference.dataset_id, reference.dataset_version)
                / SFT_FILENAME)
+
+
+def _validation_file(args, config) -> str | None:
+    """Where the verified validation export lives, or ``None``.
+
+    The CONFIG decides, not the command line: there is no flag that supplies a validation
+    corpus to a config that did not ask for one, and none that suppresses the corpus for a
+    config that did. Both directions are refused by the backend's readiness check, before
+    the plan is spent — which is the property a flag here would destroy.
+    """
+    from training_gym.datasets.export import SFT_VALIDATION_FILENAME, export_dir
+
+    if not config.train_time_validation_enabled:
+        return None
+    reference = config.dataset_reference
+    root = args.export_root or args.dataset_root
+    return str(export_dir(root, reference.dataset_id, reference.dataset_version)
+               / SFT_VALIDATION_FILENAME)
 
 
 def _safe_actor() -> str:

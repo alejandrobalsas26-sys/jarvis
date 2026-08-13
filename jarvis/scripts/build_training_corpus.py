@@ -1661,7 +1661,7 @@ def leakage_against_held_out(dataset_version: str) -> dict:
 #  The promotion, which is the only way a version comes into existence
 # ══════════════════════════════════════════════════════════════════════════════
 def build(root: Path, *, export: bool = True) -> dict:
-    """Promote the corpus, export the SFT rows, and return the counts.
+    """Promote the corpus, export the train and validation rows, and return the counts.
 
     Raises on the first refusal. Nothing is written before ``invariant_problems`` is
     clean: a corpus that would train the wrong behaviour should not reach a manifest and
@@ -1669,7 +1669,12 @@ def build(root: Path, *, export: bool = True) -> dict:
     """
     from training_gym.datasets.candidate import DatasetSplit
     from training_gym.datasets.candidate_store import CandidateStore
-    from training_gym.datasets.export import export_sft, verify_sft_export
+    from training_gym.datasets.export import (
+        export_sft,
+        export_sft_validation,
+        verify_sft_export,
+        verify_sft_validation_export,
+    )
     from training_gym.datasets.leakage import LeakageAnalyzer
     from training_gym.datasets.manifests import RevocationSnapshot, verify_version
     from training_gym.datasets.promotion_plan import (
@@ -1769,6 +1774,27 @@ def build(root: Path, *, export: bool = True) -> dict:
         summary["sft_export_excluded"] = dict(exported.manifest.excluded_counts)
         summary["sft_export_family_distribution"] = dict(
             exported.manifest.task_family_distribution)
+
+        # The VALIDATION split, exported as its own artefact so the trainer has a file to
+        # read it from. Written from the same promoted version, through the same filters,
+        # AFTER the training export -- the dataset's own identity (`manifest_hash`) and
+        # the training export's hashes above are already fixed by the time this runs, so
+        # nothing here can move them.
+        validation = export_sft_validation(
+            root=root, dataset_id=DATASET_ID, dataset_version=DATASET_VERSION,
+            revocation=RevocationSnapshot(), created_at_utc=NOW)
+        validation_check = verify_sft_validation_export(
+            out_root=root, dataset_id=DATASET_ID, dataset_version=DATASET_VERSION)
+        if not validation_check.ok:
+            raise RuntimeError(f"the validation export does not verify: "
+                               f"{validation_check.to_dict()}")
+        summary["validation_export_rows"] = validation.manifest.record_count
+        summary["validation_export_hash"] = validation.manifest.export_hash()
+        summary["validation_export_file_sha256"] = validation.manifest.sha256_file
+        summary["validation_export_excluded"] = dict(
+            validation.manifest.excluded_counts)
+        summary["validation_export_family_distribution"] = dict(
+            validation.manifest.task_family_distribution)
     return summary
 
 
@@ -1784,7 +1810,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="run the leakage analysis against both held-out corpus "
                              "versions, and write nothing")
     parser.add_argument("--no-export", action="store_true",
-                        help="promote without writing the SFT export")
+                        help="promote without writing the SFT training or validation "
+                             "exports")
     args = parser.parse_args(argv)
 
     try:

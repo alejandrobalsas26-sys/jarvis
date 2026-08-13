@@ -163,7 +163,8 @@ def run_preflight(config: TrainingConfig, *, dataset_root: str | Path,
                   revoked_candidate_ids: frozenset[str] = frozenset(),
                   accelerator_probe=None,
                   backend: TrainingBackend | None = None,
-                  train_file: str | Path | None = None) -> Preflight:
+                  train_file: str | Path | None = None,
+                  validation_file: str | Path | None = None) -> Preflight:
     """Re-derive the plan and check the token against it. Creates nothing, spends nothing.
 
     Every refusal here is free. That is the whole point of doing all of it before the
@@ -244,7 +245,7 @@ def run_preflight(config: TrainingConfig, *, dataset_root: str | Path,
     if backend is not None:
         unready = tuple(require_backend(backend).readiness(_request(
             config, planning, Path(output_root), allow_model_download,
-            model_cache_root, train_file)))
+            model_cache_root, train_file, validation_file)))
         if unready:
             return Preflight(planning=planning, category=ErrorCategory.DEPENDENCY,
                              problems=unready)
@@ -283,7 +284,8 @@ def _blocker_category(blockers: tuple[str, ...]) -> ErrorCategory:
 
 def _request(config: TrainingConfig, planning, run_directory: Path,
              allow_model_download: bool, model_cache_root,
-             train_file: str | Path | None = None) -> ExecutionRequest:
+             train_file: str | Path | None = None,
+             validation_file: str | Path | None = None) -> ExecutionRequest:
     """The request a backend's readiness check is asked about, before anything is spent.
 
     ``train_file`` is the corpus the run would actually read. It has to be the real one:
@@ -292,11 +294,18 @@ def _request(config: TrainingConfig, planning, run_directory: Path,
     about whatever it is handed. Passing the run directory here made that check compare a
     directory against ``is_file()`` and refuse every real run, while the fake backend used
     by the structural tests never looks at the field and so never noticed.
+
+    ``validation_file`` is the same argument for the steering corpus, and it is
+    ``None`` unless the reviewed config actually asks for train-time validation. It is
+    threaded rather than defaulted for the reason the train file was: this is the request
+    the readiness check answers about, so a config that enables validation against an
+    absent or unreadable validation export must be refused HERE, while refusing is still
+    free, rather than after the token is spent and the model is loaded.
     """
     return ExecutionRequest(
         config=config, plan=planning.plan, run_directory=run_directory,
         train_file=Path(train_file) if train_file is not None else run_directory,
-        validation_file=None,
+        validation_file=(Path(validation_file) if validation_file is not None else None),
         device=planning.device.selected, precision=planning.precision.selected,
         allow_model_download=allow_model_download,
         model_cache_root=Path(model_cache_root) if model_cache_root else None)
@@ -309,6 +318,7 @@ def execute_training(config: TrainingConfig, *, dataset_root: str | Path,
                      output_root: str | Path, confirmation: object,
                      backend: TrainingBackend, train_file: str | Path,
                      actor: str, at: str, nonce: str,
+                     validation_file: str | Path | None = None,
                      export_root: str | Path | None = None,
                      model_cache_root: str | Path | None = None,
                      allow_model_download: bool = False,
@@ -327,7 +337,7 @@ def execute_training(config: TrainingConfig, *, dataset_root: str | Path,
         allow_model_download=allow_model_download,
         revoked_candidate_ids=revoked_candidate_ids,
         accelerator_probe=accelerator_probe, backend=backend,
-        train_file=train_file)
+        train_file=train_file, validation_file=validation_file)
     if not preflight.ok:
         return ExecutionOutcome(
             run_id=config.run_id, state=TrainingRunState.FAILED,
@@ -373,7 +383,10 @@ def execute_training(config: TrainingConfig, *, dataset_root: str | Path,
     write_run_state(directory, record)
     return _run(record=record, directory=directory, planning=planning, config=config,
                 backend=backend, output_root=Path(output_root),
-                train_file=Path(train_file), actor=actor, at=at, nonce=nonce,
+                train_file=Path(train_file),
+                validation_file=(Path(validation_file)
+                                 if validation_file is not None else None),
+                actor=actor, at=at, nonce=nonce,
                 allow_model_download=allow_model_download,
                 model_cache_root=model_cache_root,
                 expected_export_sha256=expected_export_sha256,
@@ -383,7 +396,8 @@ def execute_training(config: TrainingConfig, *, dataset_root: str | Path,
 
 
 def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig,
-         backend: TrainingBackend, output_root: Path, train_file: Path, actor: str,
+         backend: TrainingBackend, output_root: Path, train_file: Path,
+         validation_file: Path | None, actor: str,
          at: str, nonce: str, allow_model_download: bool, model_cache_root,
          expected_export_sha256: str, expected_record_count: int,
          revoked_candidate_ids: frozenset[str],
@@ -411,7 +425,12 @@ def _run(*, record: RunRecord, directory: Path, planning, config: TrainingConfig
 
         request = ExecutionRequest(
             config=config, plan=plan, run_directory=directory, train_file=train_file,
-            validation_file=None, device=planning.device.selected,
+            # The steering corpus, or None when the reviewed config asks for no
+            # train-time validation. Hard-coded None here was the whole of defect D31:
+            # the split was assigned, promoted, digest-bound into the plan and measured,
+            # and the field that would have carried it to the trainer was written by the
+            # caller as "there isn't one".
+            validation_file=validation_file, device=planning.device.selected,
             precision=planning.precision.selected,
             allow_model_download=allow_model_download,
             model_cache_root=Path(model_cache_root) if model_cache_root else None)

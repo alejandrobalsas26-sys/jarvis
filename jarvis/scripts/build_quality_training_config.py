@@ -83,6 +83,14 @@ TRAINING_DATASET_VERSION = "v1"
 #                                           host does not need for a 0.6B fp32 adapter run
 #    logging               local_jsonl      the only non-phone-home target in the schema
 #    download policy       deny             offline by invariant
+#    validation_strategy   epoch            S3G.2: the promoted VALIDATION split (9 rows)
+#                                           is handed to the trainer as an eval arm and
+#                                           measured once per epoch. Three evaluations
+#                                           over three epochs -- enough to see a
+#                                           train/eval divergence, few enough that the
+#                                           cost is negligible. It steers NOTHING
+#                                           automatically: no early stopping, no
+#                                           load_best_model_at_end, no checkpoint
 #
 #  ``optimizer`` and ``lr_scheduler`` are NOT fields of this schema. The backend passes
 #  ``TrainingArguments`` without overriding either, so the installed transformers
@@ -221,6 +229,28 @@ def dataset_reference(root: Path):
         dataset_schema_version=manifest.dataset_manifest_version)
 
 
+def validation_export(root: Path):
+    """The verified VALIDATION export's manifest, or a refusal.
+
+    Checked here because the configuration this script emits sets
+    ``validation_strategy=epoch``, and a config that asks for train-time validation
+    against an export that does not verify is a config whose plan would be refused at
+    preflight. Better to fail while producing the document than to hand over one that
+    cannot be executed.
+    """
+    from training_gym.datasets.export import verify_sft_validation_export
+
+    verified = verify_sft_validation_export(
+        out_root=root, dataset_id=TRAINING_DATASET_ID,
+        dataset_version=TRAINING_DATASET_VERSION)
+    if not verified.ok or verified.manifest is None:
+        raise RuntimeError(
+            f"the validation export does not verify: {verified.to_dict()}. Rebuild the "
+            f"corpus with build_training_corpus.py --root <the same dataset root>; the "
+            f"build is deterministic and must reproduce the promoted manifest hash")
+    return verified.manifest
+
+
 def build_config(option: str, *, dataset_root: Path, output_root: Path):
     """One complete, strictly-validated :class:`TrainingConfig`."""
     from training_gym.training.config import (
@@ -235,6 +265,7 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path):
         PrecisionPolicy,
         TrainingConfig,
         TrainingMethod,
+        ValidationStrategy,
     )
     from training_gym.training.plan import output_root_id
 
@@ -273,6 +304,13 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path):
         dataloader_workers=0,
         checkpoint_strategy=CheckpointStrategy.NO,
         max_checkpoints=1,
+        # S3G.2. Once per epoch, over the 9 promoted VALIDATION rows, for visibility into
+        # eval_loss and train/eval divergence. `epoch` rather than `steps` because 40
+        # optimizer steps over 9 rows would re-measure the same rows 40 times and produce
+        # a curve made of sampling noise. It is DIAGNOSTIC: the held-out eligibility
+        # corpus is still `m62-defensive-eval v2`, post-training and separately
+        # authorised, and no gate in the S3G acceptance set reads this number.
+        validation_strategy=ValidationStrategy.EPOCH,
         logging_target=LoggingTarget.LOCAL_JSONL, logging_interval_steps=5,
         model_download_policy=ModelDownloadPolicy.DENY,
         dependency_profile=DependencyProfile.TRAINING,
@@ -353,8 +391,22 @@ def main(argv: list[str] | None = None) -> int:
             "config_hash": config.config_hash(),
             "dataset_reference_hash": config.dataset_reference.reference_hash(),
             "effective_batch_size": config.effective_batch_size,
+            "validation_strategy": config.validation_strategy.value,
+            "validation_split": config.validation_split.value,
+            "train_time_validation_enabled": config.train_time_validation_enabled,
+            "early_stopping": False,
+            "load_best_model_at_end": False,
+            "checkpoint_strategy": config.checkpoint_strategy.value,
             "trained_anything": False, "wrote_adapter": False,
         }
+        if config.train_time_validation_enabled:
+            manifest = validation_export(dataset_root)
+            payload.update({
+                "validation_export_rows": manifest.record_count,
+                "validation_export_hash": manifest.export_hash(),
+                "validation_export_file_sha256": manifest.sha256_file,
+                "validation_export_source_split": manifest.source_split,
+            })
 
         if args.emit:
             destination = Path(args.emit)
