@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-13T00:00Z (S3G.2) |
+| **Last updated** | 2026-08-13T22:25Z (S3H) |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
-| **HEAD** | the S3F / S3F.1 / S3F.2 commits on top of it — check with `git rev-parse HEAD` |
+| **HEAD** | the S3F / S3F.1 / S3F.2 / S3G / S3G.1 / S3G.2 / S3H commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3G.2 CLOSED (train-side validation wiring)** — the 9 promoted VALIDATION rows now reach `Trainer` as `eval_dataset`, eval loss is observable per epoch plus a closing measurement, and the plan rebuilds to **zero blockers** under a new identity. **Nothing was trained.** S3G (design) and S3G.1 (qualification) remain closed and unrevised. |
-| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. All three technical preconditions are now closed; what remains is **explicit operator authorisation** and a fresh single-use token (§19). |
+| **Current phase** | **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
+| **Next phase** | **M62 S3I** (first quality-candidate held-out eligibility evaluation) — *not authorised*, **not started**. It needs explicit operator authorisation plus a fresh `EVAL` plan and single-use token (§19). |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -32,7 +32,7 @@ Nothing has been promoted.
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
 | **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` (`56d9060`) — the anchor. Everything §2–§16 describes the repository at this commit. |
-| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`), then the **S3F**, **S3F.1**, **S3F.2**, **S3G** and **S3G.1** commits. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
+| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`), then the **S3F**, **S3F.1**, **S3F.2**, **S3G**, **S3G.1**, **S3G.2** and **S3H** commits. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
 | `origin/jarvis-v69-m62-training-gym` | identical to HEAD |
 | Divergence (`--left-right --count`) | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -266,6 +266,80 @@ ADAPTER_CREATED:                  NO
 S3H_READY:                        YES   (preconditions only — NOT an authorisation)
 LIVE_MODEL_INFERENCE:             NOT_RUN
 ```
+
+### S3H outcome statuses (2026-08-13, this milestone)
+
+**Nothing above is revised by these.** S3G, S3G.1 and S3G.2 each closed with
+`TRAINING_EXECUTED: NO`, and that stays the honest record of them. What changed here is
+that the operator authorised **one** live attempt and it was taken.
+
+```
+S3H_LIVE_TRAINING:                PASS
+S3H_PRETOKEN_GATE:                PASS
+QUALITY_CANDIDATE_IDENTITY:       qwen3-06b-lora-quality-live-001
+RUN_INTENT:                       QUALITY_CANDIDATE
+TRAINING_DATASET:                 m62-defensive-quality-train v1 (9bbac2f0…, unchanged)
+TRAIN_ROWS / VALIDATION_ROWS:     107 / 9
+BASE_MODEL / REVISION:            Qwen/Qwen3-0.6B @ c1899de289a04d12100db370d81485cdf75e47ca
+MODEL_CACHE:                      present (root digest 40f747d2037e389b, evidence f399355ef441e8ec)
+CHAT_TEMPLATE_DIGEST:             a55ee1b1660128b7  (unchanged since S3G.1)
+ROWS_TRUNCATED_AT_512:            0  (re-checked on both train-side splits)
+CONFIG_HASH:                      b5f63cd8f65c7bc91c52b58b1d53a18bc757ff361d59f83b98e33f7a1dcafb03
+PLAN_HASH:                        122efc62491256b25756eb24be37d3695347763295682f7409ea231293507ffe
+PLAN_BLOCKER_COUNT:               0
+PLAN_WARNINGS:                    2  (M17 memory cross-check disagreement; CPU-run caution)
+TRAIN_TOKEN_CREATED:              YES  (exactly one, derived from the plan)
+TRAIN_TOKEN_CONSUMED:             YES  (exactly once, 2026-08-13T21:57:26Z)
+TRAIN_ATTEMPTS:                   1
+RETRY_AUTHORIZED:                 NO
+TRAINING_RESULT:                  SUCCESS
+DEVICE / PRECISION:               CPU / FP32
+WALL_TIME:                        27m47s  (1667 s; backend 1662.828 s) against a 4-hour ceiling
+OPTIMIZER_STEPS:                  40 planned / 40 completed
+EPOCHS_COMPLETED:                 2.897196   (max_steps bounds the run, as designed)
+TRAIN_LOSS:                       2.991393   (curve 4.100562 -> 2.503183 over 8 logged points)
+VALIDATION_STRATEGY:              EPOCH_PLUS_FINAL
+PERIODIC_VALIDATION_EVALUATIONS:  3   (epoch 1.0 step 14; epoch 2.0 step 28; epoch 2.897 step 40)
+PERIODIC_VALIDATION_LOSSES:       3.205301 / 3.122892 / 3.125407
+FINAL_VALIDATION_EVALUATION:      PRESENT  (closing evaluate(), 18.4869 s)
+FINAL_VALIDATION_LOSS:            3.125407
+VALIDATION_ROWS_TRUNCATED:        0 / 9
+VALIDATION_CONTRIBUTES_GRADIENTS: NO
+GENERATION_DURING_VALIDATION:     NO
+NON_FINITE_METRIC_DETECTED:       NO
+EARLY_STOPPING:                   DISABLED
+CHECKPOINT_SAVING:                DISABLED
+LOAD_BEST_MODEL_AT_END:           FALSE
+ADAPTER_CREATED:                  YES
+ADAPTER_FILE:                     adapter_model.safetensors
+ADAPTER_SIZE_BYTES:               40422168
+ADAPTER_SHA256:                   43213035c15cd38928d2d6a3bdbd9af96872a954801c6bfd0a9b82a8e22ac858
+ADAPTER_MANIFEST_HASH:            1f76ccfbb8efc566c293ab6430d041dd24748035ed48aec6552d1e3bac24699f
+ARTIFACT_SET_TREE_HASH:           00aa57bbbe7f0af73501dae2330fb0b08682ede813843f92b26681ec77d659b6
+LORA_TENSORS:                     392  (196 lora_A + 196 lora_B; 0 non-LoRA)
+ADAPTER_TENSORS_FINITE:           YES  (0 of 392 non-finite; 0 all-zero)
+TRAINABLE_PARAMETERS:             10,092,544 of 606,142,464  (1.665%)
+SAFETENSORS_ONLY:                 YES
+CHECKPOINT_DIRECTORIES:           0
+FORBIDDEN_ARTIFACTS:              0
+BASE_MODEL_DUMP_DETECTED:         NO
+ARTIFACT_VERIFICATION:            PASS  (verify_completed_run -> 0 problems)
+SOURCE_CHANGED:                   NO
+LIVE_HELDOUT_EVALUATION:          NOT_RUN
+EVAL_TOKEN_CREATED:               NO
+EVAL_TOKEN_CONSUMED:              NO
+CANDIDATE_STATUS:                 TRAINED_UNEVALUATED
+QUALITY_CANDIDATE_ELIGIBILITY:    UNKNOWN
+RUN_004_MUTATED:                  NO
+MODEL_REGISTRY_MUTATED:           NO
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+```
+
+**Training loss fell; validation loss flattened and turned up by 0.002515 at the end.** That
+is the *shape* S3G §10.3 predicted as this candidate's likeliest failure mode, and it is
+visible only because S3G.2 fixed D31. It is also nine rows: too weak to rank anything, not a
+quality score, and not eligibility evidence. See
+`jarvis/docs/V69_M62_S3H_FIRST_QUALITY_LIVE_TRAINING.md` §8.3.
 
 **The acceptance gates were predeclared, before any training.** They are counts over
 named denominators, not calibrated percentages, and each is labelled (V) security veto /
@@ -831,6 +905,50 @@ wrong cost model, not a 6% addition.
 **Real training/eval:** none. **Enabled:** an S3H run whose overfitting is visible while it
 happens.
 
+### M62 S3H — First quality-oriented live training run
+**Purpose:** consume one single-use `TRAIN:` authority and execute the qualified candidate
+once, on real weights. **Execution milestone — a model was loaded and trained; nothing was
+evaluated on held-out material and nothing was promoted.**
+**Status:** COMPLETE — `TRAINING_RESULT: SUCCESS`. **Doc:**
+`jarvis/docs/V69_M62_S3H_FIRST_QUALITY_LIVE_TRAINING.md`.
+**Authorisation:** the operator authorised **exactly one** attempt. One token was derived,
+consumed once, and no retry is authorised whatever the outcome had been.
+**Starting checkpoint:** HEAD `a167420f831c9359152a147d8cf12c40cebc8434`, `0 0`, master
+unchanged, tree clean.
+**Every identity was re-derived before the token existed, not quoted:** dataset `9bbac2f0…`
+(128 rows, 107/9/6/6), train export `b785e713…`, validation export `589e056b…`, dataset
+reference `1f4cdc6f…`, cache `present` with `c1899de2…` the only revision, root digest
+`40f747d2037e389b`, chat template `a55ee1b1660128b7`, 0 rows truncating at 512, config
+`b5f63cd8…`, plan `122efc62…` with **0 blockers** and the same 2 pre-existing warnings. The
+plan was reproduced by **two independent callers** — the tracked generator and the production
+`train_experiment --print-plan`, which is what `--execute` recomputes against — and both left
+the runs root empty and the ledger at two lines.
+**The run:** CPU, fp32, offline, `local_files_only`, `trust_remote_code=false`, nothing
+downloaded. **40 of 40 optimizer steps, 2.897196 realised epochs, 27m47s** against a 4-hour
+ceiling and a 20–52 minute estimate. Train loss **2.991393** (4.100562 → 2.503183 across 8
+logged points, monotone). Three periodic validation evaluations (3.205301 / 3.122892 /
+3.125407) plus the closing `trainer.evaluate()` at **3.125407**. No non-finite metric
+anywhere.
+**The one S3G.2 prediction that did not hold, corrected forward:** S3G.2 reasoned that a
+2.99-epoch run *"may have no third boundary to fire at"*. On this transformers build a third
+periodic evaluation **did** fire, at step 40. The closing pass therefore measured the same
+weights and returned the same loss — with a visibly different runtime (18.49 s vs 14.79 s),
+which is what shows they are two passes and not one number twice. **The closing pass is not
+redundant and must not be removed:** it guarantees an end-of-run number whatever the cadence
+does, and the cadence's behaviour at a fractional final epoch is a property of the installed
+build, not of this repository.
+**Artefacts:** `adapter_model.safetensors` 40,422,168 bytes, sha256 `43213035…`, **392 LoRA
+tensors** (196 + 196, zero non-LoRA), all finite, all F32, none all-zero, 10,092,544 trainable
+of 606,142,464. Manifest `1f76ccfb…`, tree hash `00aa57bb…`. `verify_completed_run` returned
+**0 problems**. **0 checkpoint directories, 0 forbidden files, no base-model dump, no pickle,
+no symlink, no nested directory.** The ledger gained exactly `started` and `completed`.
+**D30, D31 and the checkpoint-safety coupling are now exercised by a live run** for the first
+time, and `AdapterManifest.eval_loss` carries a real measurement instead of the `0.0` default.
+**What it does not establish:** anything about quality. No held-out material was touched, no
+response was generated, no grader ran, no S3G §6 gate was evaluated. **Candidate status is
+`TRAINED_UNEVALUATED`.**
+**Real training:** yes, once. **Real evaluation:** none. **Enabled:** S3I, once authorised.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -894,6 +1012,7 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 55 | `cc245e8` | docs: anchor the handoff checkpoint on 56d9060, not on HEAD | handoff |
 | 57+ | see `git log 28f1d45..HEAD` | S3G quality corpus, candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc | **S3G** |
 | 56 | see `git log 56d9060..28f1d45` | S3F scoring/report fixes, S3F.1 structured-output fixes, S3F.2 review evidence + corpus v2 + reasoning policy, their tests and docs | **S3F / S3F.1 / S3F.2** |
+| 58+ | see `git log a167420..HEAD` | S3H: the first quality-oriented live training run and this handoff update. **Documentation only — no tracked source changed**; the adapter and its manifests are gitignored runtime artefacts | **S3H** |
 
 ---
 
@@ -1475,6 +1594,28 @@ result rather than a false one — which is the behaviour that made the defect d
    tokenizer. Any change to a row, to the chat template, or to the tokenizer revision
    invalidates it and it must be re-measured — a length audit is not a property of the
    number 512.
+36. **The S3H candidate is trained and unevaluated.** `CANDIDATE_STATUS:
+   TRAINED_UNEVALUATED`. Everything about its quality is **unknown, not estimated**. A
+   falling training loss means the optimiser reduced the objective it was given on 107
+   rows; it is not evidence about refusal behaviour, structured output, over-refusal or
+   security.
+37. **The S3H validation signal is nine rows.** Validation loss went 3.205301 → 3.122892 →
+   3.125407: a 0.002515 uptick at the end, well inside what sampling noise on a nine-row
+   denominator can produce. It is enough to see a gross train/eval divergence and it is
+   the shape S3G §10.3 predicted — it is **not** enough to rank two runs and it is not
+   eligibility evidence. §14.33 stands unchanged.
+38. **S3H is one host, one seed, one run.** No repeat, no second seed, no second host, no
+   ablation. `deterministic_reproduction_claimed` is `false`; no bit-reproducibility is
+   claimed. The compute model now has a second calibration point (27m47s for option B on
+   this machine), not many — §14.25 stands.
+39. **The optimizer and scheduler S3H actually used were transformers defaults**
+   (`adamw_torch`, linear decay with the configured warmup ratio). They are not fields of
+   `TrainingConfig`, so they are **not** pinned by the config hash and a future
+   transformers upgrade could change them without moving any identity in this repository.
+   Recorded as an observation about the backend, exactly as S3G §10.1 framed it.
+40. **The S3H adapter has never been loaded for inference.** Its 392 tensors are verified
+   as bytes — finite, LoRA-only, correctly shaped — and no forward pass through the
+   adapted model has been run by anything except the trainer's own evaluation arm.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -1589,6 +1730,17 @@ tests above. The S3G full-suite figure stands unre-measured and is labelled as s
 
 | Gate | Result | When |
 |---|---|---|
+| Full suite / focused M62 | **NOT RE-RUN — no tracked source changed.** S3G.2 ran the authoritative suite (6701 / 2755) at the exact commit S3H executed from; re-running it for a documentation-only milestone would measure the same tree | S3H |
+| Completed-run verification (`verify_completed_run`) | **PASS — 0 problems** over the bytes on disk | S3H |
+| Safetensors / tensor finiteness / parameter reconciliation | **PASS** — 392 tensors, 0 non-finite, 0 all-zero, adapter param count equals the backend's trainable count | S3H |
+| Artefact allowlist, checkpoint and forbidden-extension scan | **PASS** — 0 `checkpoint*`, 0 `.bin`/`.pt`/`.pth`/`.pkl`/`.pickle`, no base-model dump, no symlink, no nested directory | S3H |
+| Dataset / export / cache re-verification before the token existed | **PASS** — every hash reproduced; `probe_cache` `present`; one revision cached | S3H |
+| Plan reproduction (generator **and** production CLI) | **PASS** — `122efc62…` both times, 0 blockers, nothing created | S3H |
+| `git diff --check` | **PASS** | S3H |
+| Secret scan over the S3H changeset | **PASS**, findings named not suppressed — one `reasoning` category (pre-existing `<think>` prose, hygiene under ruling H4) and one `home_path` category, whose hits are the sentences *asserting the absence* of such a path. Neither was reworded to quiet the detector. See the S3H doc §12 | S3H |
+| Host-path / token scan over the S3H changeset and the run artefacts | **PASS** — no absolute host path, no username, no cache location, and no literal `TRAIN:` token in any tracked file or in any file the run wrote | S3H |
+| Runtime artefact exclusion | **PASS** — `git check-ignore` confirms `training_runs/`; the adapter, manifests and ledger are untracked | S3H |
+| Ruff / `compileall` / Bandit | **NOT RUN — they gate tracked source changes; S3H has none** | S3H |
 | Ruff | **PASS** — over all 11 changed S3G.2 files | S3G.2 |
 | `compileall` | **PASS** — `training_gym`, `scripts`, `tests` | S3G.2 |
 | `git diff --check` | **PASS** | S3G.2 |
@@ -1638,7 +1790,9 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
-| S3G.2 commits | **CURRENT.** Train-side validation wiring: the D31 fix across the export authority, the config schema, the execution stage and the SFT backend; the validation export authority; 70 regression tests; the new zero-blocker plan `122efc62…` under config `b5f63cd8…`; S3G.1's plan `a9b8c6e2…` marked `SUPERSEDED_PREVALIDATION_PREVIEW`. First source change since S3G. Resolve with `git log --oneline 290f7d7..HEAD`. |
+| S3G.2 commits | Train-side validation wiring: the D31 fix across the export authority, the config schema, the execution stage and the SFT backend; the validation export authority; 70 regression tests; the new zero-blocker plan `122efc62…` under config `b5f63cd8…`; S3G.1's plan `a9b8c6e2…` marked `SUPERSEDED_PREVALIDATION_PREVIEW`. First source change since S3G. Resolve with `git log --oneline 290f7d7..HEAD`. |
+| S3H commits | **CURRENT.** The first quality-oriented live training run: one `TRAIN:` token derived and consumed once against plan `122efc62…`, `qwen3-06b-lora-quality-live-001` trained 40/40 steps in 27m47s, adapter `43213035…` verified with 0 problems, candidate `TRAINED_UNEVALUATED`. Documentation only — no tracked source changed. |
+| `a167420` | The S3G.2 close, and the exact commit the S3H run executed from. |
 | S3G.1 commit | The final pre-train qualification: reviewed cache verified, real tokenizer audit (0 of 128 rows truncate at 512), zero-blocker plan `a9b8c6e2…`, S3G plan `4548905157…` marked `SUPERSEDED_PREVIEW`. Documentation only — no source, test or config change. |
 | S3G commits | The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
 | S3F.2 commits | The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
@@ -1821,6 +1975,41 @@ hand-written and no hash is invented.
 - **DO NOT** read `S3H_READY: YES` as an authorisation. It is a statement about
   preconditions; the operator has not authorised training.
 
+- **DO NOT** reuse the consumed S3H `TRAIN:` token. It was spent once, at
+  2026-08-13T21:57:26Z, against plan `122efc62…`. Replay is refused before anything is
+  spent, and a token derived again from the same plan hash authorises a run the operator
+  did not approve.
+- **DO NOT** rerun `qwen3-06b-lora-quality-live-001`. The authorised run **succeeded**.
+  Retraining it would destroy the artefact the next milestone is supposed to evaluate.
+- **DO NOT** retry automatically if a future authorised run fails. A retry is a new
+  operator decision, never an inference from a failure.
+- **DO NOT** treat the S3H validation loss as held-out quality. It is nine rows of
+  train-side steering material, it appears in no S3G §6 gate, and it authorises nothing.
+- **DO NOT** evaluate the candidate with `m62-defensive-eval` **v1**. Eligibility-grade
+  work binds **v2** (`10ad2308…`).
+- **DO NOT** evaluate with `reasoning_policy = MODEL_DEFAULT`. Ruling H6a binds `DISABLED`,
+  via `eligibility_generation_policy()`, and the global default stays `MODEL_DEFAULT`.
+- **DO NOT** promote, activate, register or merge the S3H adapter before a held-out
+  eligibility evaluation exists. `CANDIDATE_STATUS` is `TRAINED_UNEVALUATED`.
+- **DO NOT** mutate the S3H adapter — no merge into base weights, no re-save, no requant,
+  no rename. Its manifest and tree hash bind the exact bytes.
+- **DO NOT** retrain run-004, and do not compare S3H's losses with run-004's 3.283784. That
+  number came from 4 steps over 8 rows of a different corpus at rank 8; they are not
+  comparable quantities.
+- **DO NOT** re-run the S3G.1 tokenizer qualification. S3H re-checked the bound inputs — the
+  chat template digest `a55ee1b1660128b7`, the 512 cap and both train-side splits — and
+  every one reproduced. Re-measure only if a corpus row, the template or the tokenizer
+  revision changes (§14.30).
+- **DO NOT** re-open D31. The validation wiring worked in a live run: 9 rows reached
+  `eval_dataset`, three periodic evaluations plus a closing pass were recorded, and
+  `AdapterManifest.eval_loss` carries a real number for the first time.
+- **DO NOT** remove the closing `trainer.evaluate()` on the grounds that S3H's third
+  periodic evaluation happened to fire at step 40 and return the same loss. That is a
+  property of the installed transformers build, not a guarantee — the closing pass is what
+  makes the end-of-run number unconditional. See the S3H doc §8.2.
+- **DO NOT** re-run the full suite to "confirm" S3H. No tracked source changed; S3G.2's
+  6701/2755 run at `a167420` is the authoritative measurement of this tree.
+
 **Instead:**
 
 ```
@@ -1830,86 +2019,93 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3H (not authorised)
+## 19 — NEXT: M62 S3I (not authorised)
 
-> **S3G is COMPLETE as a design milestone, S3G.1 as a qualification milestone, and S3G.2 as
-> the wiring milestone.** The candidate is specified, its corpus is built, leakage-qualified
-> and tokenizer-audited, its configuration is chosen, **its validation split now reaches the
-> trainer**, and its plan rebuilds to **zero blockers**. **Nothing was trained.** Docs:
+> **S3G is COMPLETE as a design milestone, S3G.1 as a qualification milestone, S3G.2 as the
+> wiring milestone, and S3H as the first live training run.** The candidate now **exists**:
+> it was trained once, under one consumed token, and its adapter is verified. Docs:
 > `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` (design),
-> `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md` (qualification) and
-> `jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md` (wiring). **Read all three before S3H.**
+> `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md` (qualification),
+> `jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md` (wiring) and
+> **`jarvis/docs/V69_M62_S3H_FIRST_QUALITY_LIVE_TRAINING.md`** (the run of record).
+> **Read the S3H doc first for anything about the candidate.**
 
 **Where the candidate stands**
 
 ```
-QUALITY_CANDIDATE:   DESIGNED    qwen3-06b-lora-quality-live-001
-TRAINING_DATASET:    QUALIFIED   m62-defensive-quality-train v1  (9bbac2f0…)
-TRAINING_CONFIG:     QUALIFIED   option B, config_hash b5f63cd8…  (validation_strategy=epoch)
-MODEL_CACHE:         VERIFIED    present, c1899de2… the only revision cached
-MAX_SEQ_LENGTH_512:  QUALIFIED   0 of 128 rows truncate; longest row 178 tokens
-TRAIN_DATASET_WIRED:      YES    107 rows -> train_dataset
-VALIDATION_DATASET_WIRED: YES    9 rows  -> eval_dataset, once per epoch + closing evaluate()
-EARLY_STOPPING:      DISABLED
-CHECKPOINT_SAVING:   DISABLED
-TRAINING_PLAN:       READY_PREVIEW  122efc62…, 0 blockers, 2 warnings
-TRAIN_TOKEN:         NOT CREATED, NOT CONSUMED
-TRAINING_EXECUTED:   NO
-ADAPTER_CREATED:     NO
-S3H_READY:           YES  (preconditions only — NOT an authorisation)
+QUALITY_CANDIDATE:        TRAINED      qwen3-06b-lora-quality-live-001
+TRAINING_RESULT:          SUCCESS      40/40 steps, 2.897 epochs, 27m47s, CPU/fp32
+TRAIN_LOSS:               2.991393     curve 4.100562 -> 2.503183
+FINAL_VALIDATION_LOSS:    3.125407     3 periodic evals + 1 closing evaluate()
+ADAPTER:                  VERIFIED     adapter_model.safetensors, 392 LoRA tensors, all finite
+ADAPTER_SHA256:           43213035c15cd38928d2d6a3bdbd9af96872a954801c6bfd0a9b82a8e22ac858
+ADAPTER_MANIFEST_HASH:    1f76ccfbb8efc566c293ab6430d041dd24748035ed48aec6552d1e3bac24699f
+ARTIFACT_VERIFICATION:    PASS         verify_completed_run -> 0 problems
+TRAIN_TOKEN:              CONSUMED     exactly once; RETRY_AUTHORIZED: NO
+CANDIDATE_EVALUATED:      NO
+CANDIDATE_ELIGIBILITY:    UNKNOWN
+MODEL_PROMOTION:          NOT_AUTHORIZED
+MODEL_REGISTRY_MUTATED:   NO
 ```
 
 **The remaining gate is the operator's, and it is the only one**
 
-All three technical preconditions are closed. To reproduce the plan (a dry run — it creates
-nothing and spends nothing):
+**M62 S3I — FIRST QUALITY-CANDIDATE HELD-OUT ELIGIBILITY EVALUATION**, under the contract
+S3G §12 fixed and against the gates S3G §6 predeclared **before any of it ran**:
 
-```
-python jarvis/scripts/build_quality_training_config.py     --dataset-root <repo>/jarvis/training_gym_datasets     --output-root  <repo>/jarvis/training_runs     --model-cache-root <the reviewed cache the operator supplies> --plan
-```
-
-Expect `config_hash b5f63cd8…`, `plan_hash 122efc62…`, `plan_blockers: []`,
-`validation_strategy: epoch`, `validation_export_rows: 9`. If the corpus is absent from that
-dataset root, rebuild it first with `jarvis/scripts/build_training_corpus.py --root <same
-dataset root>`; it is deterministic, must reproduce manifest `9bbac2f0…`, and **now writes
-both exports** (`sft_train.jsonl` and `sft_validation.jsonl`). **A different output root
-changes both hashes** (§14.27) — that is expected, not a mismatch to investigate.
-
-**Then, if authorised: M62 S3H — FIRST QUALITY-ORIENTED LIVE TRAINING RUN.**
+| | |
+|---|---|
+| Held-out corpus | `m62-defensive-eval` **v2** (`10ad2308…`) — never v1 for eligibility-grade work |
+| Baseline arm | `Qwen/Qwen3-0.6B` @ `c1899de2…`, no adapter |
+| Candidate arm | the same model + the S3H adapter (`43213035…`) |
+| `reasoning_policy` | **`DISABLED`**, bound via `eligibility_generation_policy()`; the global default stays `MODEL_DEFAULT` |
+| `max_new_tokens` | **512**, unchanged — moving it in the same run would make any movement unattributable |
+| Review evidence | body-free per-arm score artefacts enabled (`m62.evaluation_manifest.2`) |
+| Raw response persistence | **NO** |
+| Parity | one shared `parity_hash`, two distinct backend objects, balanced execution order |
+| Security | a **veto**, never a weight |
+| Tool calls | `TOOL_CALL_CAPABILITY: NOT_QUALIFIED`; `tool_call_validity_rate` reported `VACUOUS` (D28) |
+| Authority | a **fresh** `EVAL` plan and a fresh single-use token, consumed exactly once |
 
 Preconditions:
 
-1. ~~the reviewed cache root supplied and the plan rebuilt to **zero blockers**~~ —
-   **CLOSED 2026-08-13 (S3G.1, re-confirmed in S3G.2 at `122efc62…`)**;
-2. ~~confirmation against the real tokenizer that no training row truncates at 512~~ —
-   **CLOSED 2026-08-13 (S3G.1): 0 of 128 rows**;
-3. ~~a validation split the trainer actually reads~~ — **CLOSED 2026-08-13 (S3G.2, D31)**;
-4. **explicit operator authorisation for live training** — **still not given**. None of
-   S3G, S3G.1 or S3G.2 authorises any;
-5. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once — **not
-   created**.
+1. ~~a trained quality candidate to evaluate~~ — **CLOSED 2026-08-13 (S3H)**;
+2. ~~a verified adapter whose identity binds its plan, config, dataset and base revision~~ —
+   **CLOSED 2026-08-13 (S3H)**;
+3. **explicit operator authorisation for a live evaluation** — **not given**. S3H
+   authorised training and nothing after it;
+4. a fresh `EVAL` plan and its single-use token, consumed exactly once — **not created**.
 
-The run itself: option B, **~20–52 minutes** estimated (19–48 plus an estimated +1 to +4 for
-the eval arm), 4-hour hard ceiling, CPU, fp32, offline, no checkpoints, LoRA-only artefacts,
-**validation loss observable per epoch plus a closing measurement**.
+**Cost warning, from measured history.** The current evaluation strategy reloads the model
+per request, so 36 tasks × 2 arms = 72 model loads and S3E.2 took hours on this CPU (§12).
+Budget for that, or address the loading strategy first as its own milestone — but never at
+the cost of the two-distinct-backend-objects isolation rule.
 
-**After that, separately authorised:** the eligibility-grade paired evaluation under the
-contract in §12 of the S3G doc — `m62-defensive-eval v2`, `reasoning_policy = DISABLED`,
-`max_new_tokens` 512, body-free review evidence, a fresh `EVAL` plan and token — judged
-against the acceptance gates predeclared in §6 of that document **before any of it ran**.
-
-**The candidate is NOT run-004.** Operator ruling H5 stands:
+**The candidate is NOT run-004, and S3H did not change that.** Operator ruling H5 stands:
 
 ```
 RUN_004_DISPOSITION:       KEEP_AS_SMOKE_REFERENCE_ONLY
 RUN_004_QUALITY_PROMOTION: EXCLUDED
 ```
 
-**S3H must not begin automatically.** Nothing in S3G, S3G.1 *or S3G.2* authorises training,
-evaluation, promotion, activation, registry mutation, merge, tag or a version bump.
-`S3H_READY: YES` describes preconditions; it is not permission.
+Run-004 was not read, mutated, retrained or compared against during S3H, and its losses are
+not a baseline for the new candidate's — 4 steps over 8 rows at rank 8 on a different corpus
+is not a comparable quantity.
+
+**S3I must not begin automatically.** Nothing in S3G, S3G.1, S3G.2 *or S3H* authorises
+evaluation, promotion, activation, registry mutation, merge, tag or a version bump. A
+trained adapter is not an eligible one.
 
 ---
+
+### Superseded — the S3H brief (completed 2026-08-13)
+
+> **M62 S3H — FIRST QUALITY-ORIENTED LIVE TRAINING RUN.** Consume a single-use `TRAIN:`
+> authority exactly once and execute the qualified S3G.2 plan on real weights: CPU, fp32,
+> offline, no checkpoints, train-side validation as a diagnostic arm, then verify the
+> adapter and close the run immutably. **Done** — `TRAINING_RESULT: SUCCESS`, one attempt,
+> one token, one adapter. The one thing it deliberately did not do is evaluate the result;
+> that needs its own authorisation.
 
 ### Superseded — the S3G.2 brief (completed 2026-08-13)
 
@@ -1998,9 +2194,13 @@ identity** — never a mutation of run-004.
    with the S3G doc, not instead of it: S3G designs the candidate, S3G.1 qualifies it
    for execution.
 3c. **`jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md`** — D31, the validation wiring, the
-   eval cadence, the checkpoint-safety argument, the metric record, and the **current**
-   config `b5f63cd8…` / plan `122efc62…`. **Read all three before anything about S3H**;
-   this one holds the current hashes.
+   eval cadence, the checkpoint-safety argument, the metric record, and the config
+   `b5f63cd8…` / plan `122efc62…` the live run consumed.
+3d. **`jarvis/docs/V69_M62_S3H_FIRST_QUALITY_LIVE_TRAINING.md`** — **the run of record.**
+   The consumed token, the measured losses, the validation cadence as it actually behaved,
+   the verified adapter and its digests, and what the run does *not* establish. **Read this
+   first for anything about the quality candidate**; the three S3G documents explain how it
+   came to be, this one says what happened.
 4. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
    H1–H6, the body-free review evidence, corpus v2, and the reasoning-policy
    preflight. **This is the current technical basis for anything about evaluation.**
