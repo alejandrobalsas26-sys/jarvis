@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-12T00:00Z |
+| **Last updated** | 2026-08-13T00:00Z |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3G CLOSED (design)** — the first quality candidate is designed, its training corpus is built and leakage-qualified, its configuration is chosen and its plan is previewed. **Nothing was trained.** |
-| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. It needs the reviewed cache root, a zero-blocker plan, and explicit operator authorisation (§19). |
+| **Current phase** | **M62 S3G.1 CLOSED (pre-train qualification)** — the reviewed cache is verified, the corpus is audited with the *real* tokenizer, no row truncates at 512, and the plan rebuilds to **zero blockers**. **Nothing was trained.** S3G (design) remains closed and unrevised. |
+| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. Its two technical preconditions are now closed; what remains is **explicit operator authorisation** and a fresh single-use token (§19). |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -32,7 +32,7 @@ Nothing has been promoted.
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
 | **Last state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` (`56d9060`) — the anchor. Everything §2–§16 describes the repository at this commit. |
-| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`), then the **S3F**, **S3F.1** and **S3F.2** commits. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
+| HEAD | a descendant of `56d9060`: three documentation-only handoff commits (`37c23e2`, `e59e07c`, `cc245e8`), then the **S3F**, **S3F.1**, **S3F.2**, **S3G** and **S3G.1** commits. Resolve with `git rev-parse HEAD`; what matters is that it descends from `56d9060` and `git status` is clean. |
 | `origin/jarvis-v69-m62-training-gym` | identical to HEAD |
 | Divergence (`--left-right --count`) | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -169,6 +169,49 @@ FUTURE_REVIEW_EVIDENCE:           BODY_FREE_ENABLED
 RUN_004_MUTATED:                  NO
 MODEL_REGISTRY_MUTATED:           NO
 MODEL_PROMOTION:                  NOT_AUTHORIZED
+LIVE_MODEL_INFERENCE:             NOT_RUN
+```
+
+### S3G.1 outcome statuses (2026-08-13, this milestone)
+
+**S3G is not revised by these.** S3G closed with an unverified cache and *estimated* token
+counts, and that stays the honest record of it. What changed here is an **input** — the
+operator supplied the reviewed cache root — and a **measurement** S3G could not take.
+
+```
+S3G1_PRETRAIN_QUALIFICATION:      PASS
+CACHE_ROOT_SUPPLIED:              YES   (operator-supplied reviewed cache; digest 40f747d2037e389b)
+CACHE_STATUS:                     present
+CACHE_REVISION_MISMATCH:          NONE  (c1899de2… is the only revision cached)
+REMOTE_DOWNLOAD_REQUIRED:         NO
+TOKENIZER_LOADED:                 YES   (Qwen/Qwen3-0.6B @ c1899de2…, offline)
+MODEL_WEIGHTS_LOADED:             NO
+TOKENS_GENERATED:                 0
+TOKEN_STATS_SOURCE:               REAL_TOKENIZER   (supersedes the S3G estimates)
+PROMPT_TOKENS_TRAIN:              min 20  median 29  p95 64  max 82
+TARGET_TOKENS_TRAIN:              min 38  median 81  p95 108 max 125
+FULL_SAMPLE_TOKENS_TRAIN:         min 65  median 113 p95 149 max 169
+FULL_SAMPLE_TOKENS_VALIDATION:    min 90  median 109 p95 150 max 150
+FULL_SAMPLE_TOKENS_MAX_ALL_128:   178   (a HIDDEN_EVALUATION row; never trained)
+ROWS_TRUNCATED_AT_512:            0     (of all 128 promoted rows)
+MAX_SEQUENCE_LENGTH_512:          QUALIFIED
+STRUCTURED_OUTPUT_CONTRACT:       PASS  (21/21 single JSON objects, no fence, no prose, no <think>)
+CORPUS_MUTATED:                   NO    (dataset identity unchanged: 9bbac2f0…)
+D29_STATUS:                       UNCHANGED — not fixed, not worked around
+CONFIG_HASH:                      654393d815e6caed85e13d6d7ca804ac779d2271712083a95c6ad2d7228c0fd4
+TRAINING_PLAN:                    READY_PREVIEW
+TRAINING_PLAN_HASH:               a9b8c6e20c7070badf7ea671c4923b4775b245f3826fb189fb774e4e5eacea1a
+PLAN_BLOCKER_COUNT:               0
+PLAN_WARNINGS:                    2  (M17 memory cross-check disagreement; CPU-run caution)
+OLD_PLAN_HASH:                    4548905157b1e1483e32f85321b4262d611329d80439bc3ca96e5d7443710ae8
+OLD_PLAN_STATUS:                  SUPERSEDED_PREVIEW  (not deleted, not wrong)
+ESTIMATED_TRAINING_RUNTIME:       19-48 minutes (estimated, unchanged)
+HARD_RUNTIME_CEILING:             4 hours (unchanged)
+TRAIN_TOKEN_CREATED:              NO
+TRAIN_TOKEN_CONSUMED:             NO
+TRAINING_EXECUTED:                NO
+ADAPTER_CREATED:                  NO
+S3H_READY:                        YES   (preconditions only — NOT an authorisation)
 LIVE_MODEL_INFERENCE:             NOT_RUN
 ```
 
@@ -614,6 +657,55 @@ cache root was not supplied this session and is never searched for. Everything e
 qualifies: dataset `verified`, dependencies ready on the isolated interpreter, device
 `cpu`, precision `fp32`.
 **Real training/eval:** none. **Enabled:** S3H, once authorised.
+
+### M62 S3G.1 — Final pre-train qualification
+**Purpose:** close the two technical prerequisites S3G left open — verify the
+operator-supplied reviewed model cache and rebuild the plan to zero blockers, and replace
+the estimated token counts with a real tokenizer measurement. **Qualification milestone —
+nothing was trained, no model weights were loaded, no token was created or consumed.**
+**Status:** COMPLETE. **Doc:** `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md`.
+**Not a revision of S3G.** S3G's `PREVIEW_ONLY` plan and its estimated token counts remain
+the honest record of what S3G could establish. An input changed, not a conclusion.
+**Corpus rebuilt, because the runtime copy was missing** — the one condition §18 permits.
+Built from the tracked generator into two roots and reproduced every root-independent hash
+byte-identically (`9bbac2f0…`, `b91712a2…`, `1c8b242a…`, `535f37bb…`, `b785e713…`,
+`83f62904…`, `1f4cdc6f…`); the promotion-plan hash differed by root, as designed. It now
+lives in the canonical ignored dataset root so S3H need not rediscover it.
+**Cache VERIFIED** through the repository's own `probe_cache`: `present`, weights and all
+four tokenizer files there, and `c1899de2…` is the **only** revision in the cache. Root
+digest `40f747d2037e389b` — byte-identical to the reasoning-policy preflight's, which is
+what identifies it as the same reviewed cache without either document naming the path.
+**The tokenizer audit measured a different thing, not a refined estimate.** S3G counted
+characters of the authored target; this counts the token sequence the backend actually
+builds, template overhead and generation prompt included. The production path was traced,
+not approximated: `SFT_SOURCE_SPLIT` → `convert_sft_export` → `TransformersPeftBackend._encode`
+→ `build_labels`. Each split was encoded twice — once uncapped so nothing is cut before it
+is measured, once at 512 so the backend's own truncation counter is read.
+**Result: 0 of 128 rows truncate at 512.** Longest training row 169 tokens, longest row
+anywhere 178, against a 512 cap — 2.9× headroom on the worst case. Every measured value
+fell at or below the low end of S3G's estimated range, so the 3.5–4.5 chars/token model
+erred in the safe direction. `max_sequence_length` unchanged; no change proposed.
+**Stated precisely, because it is easy to get wrong:** TRAIN (107) is the only split SFT
+consumes; VALIDATION (9) is passed to **nothing** — the backend builds `Trainer` with no
+`eval_dataset` — and the 12 internal held-out rows are bound by digest and refused from the
+export. All were measured anyway, and all qualify.
+**Corpus untouched:** 21/21 structured targets are single JSON objects with no fence, no
+prose and no `<think>`; 0 of 128 rows carry reasoning markup or trip `scan_for_leaks`; 37
+non-structured targets are recognised by the production `looks_like_refusal` and 70 are
+not — exactly S3G's balance. `invariant_problems` re-ran `clean`. **No row was modified**,
+so the dataset identity and the plan's binding to it are unaffected.
+**D30 demonstrated in the positive direction.** The same unmodified code that fired in S3G
+on an unverified cache now sees `present`, appends no missing evidence and returns
+`plan_blockers: []`. A defect previously provable only one way is now provable both.
+**Plan: zero blockers**, `a9b8c6e2…`, `is_executable: true`, `feasible_with_warnings`, two
+warnings reported rather than suppressed. Still a dry run, measured not assumed: no
+training framework entered `sys.modules`, no run directory was created, the ledger did not
+grow, and **no token was created** — a `TRAIN:` token is *derived* from a plan hash, never
+issued by one.
+**Only the disk estimate moved** (1.931 → 0.406 GB) and the reason is exact:
+`model_cache_gb = 0.0 if weights_cached else params * 2.0`. The verified cache removes a
+download allowance that will not be spent. The run's footprint did not change.
+**Real training/eval:** none. **Enabled:** S3H, once an operator authorises it.
 
 ### Commit index
 
@@ -1198,24 +1290,45 @@ result rather than a false one — which is the behaviour that made the defect d
    paraphrase sharing no character 5-grams and no token shingles would not be caught.
    Maximum observed similarity was 0.179 (v1) / 0.188 (v2) against a 0.60 warn
    threshold.
-24. **The S3G training-target token counts are ESTIMATED, not tokenized.** No model
-   cache root was supplied this session, so no tokenizer was loaded. Characters are
-   measured; tokens are 3.5–4.5 chars/token estimates. Confirm against the real
-   tokenizer before training.
+24. ~~**The S3G training-target token counts are ESTIMATED, not tokenized.**~~ **CLOSED
+   2026-08-13 (S3G.1).** The operator supplied the reviewed cache root and the real
+   pinned tokenizer measured all 128 rows through the production encoder: TRAIN full
+   sample median 113 / p95 149 / **max 169**, longest row anywhere 178. Every measured
+   value fell at or below the low end of the estimated range, so the chars/token model
+   erred in the safe direction. Struck through rather than deleted, because it was
+   accurate at S3G close. **What is still true:** these are lengths, not a statement
+   about what the model does with them.
 25. **The S3G compute estimate rests on one calibration point** — run-004's duration
    *category* ("minutes"). Per-step training timing has never been recorded on this
    host. The ranges are wide on purpose and the 4-hour ceiling exists to catch a wrong
    cost model, not variance.
-26. **The S3G plan is `PREVIEW_ONLY`.** One operator-resolvable blocker remains: the
-   reviewed model cache root. It is never searched for. A plan hash computed without it
-   is **not** the plan hash that will be trained against — the blocker list is part of
-   the plan.
-27. **`TrainingConfig.config_hash()` binds `output_root_id`**, so the S3G config and
-   plan hashes are root-dependent and must be re-derived, not quoted. The
-   root-independent identities are the dataset manifest hash and the dataset reference
-   hash `1f4cdc6f…`.
+26. ~~**The S3G plan is `PREVIEW_ONLY`.**~~ **CLOSED 2026-08-13 (S3G.1).** The operator
+   supplied the reviewed cache root and the plan rebuilt to **zero blockers**:
+   `a9b8c6e2…`, `is_executable: true`, `feasible_with_warnings`, two warnings. The S3G
+   plan `4548905157…` is **`SUPERSEDED_PREVIEW`** — not deleted and not wrong; its
+   blocker was the correct answer to the question it was asked, and the blocker list is
+   part of the plan, so the two are different documents by construction.
+27. **`TrainingConfig.config_hash()` binds `output_root_id`**, so the config and plan
+   hashes are root-dependent and must be re-derived, not quoted. **This bit S3G.1**: the
+   S3G option-B config hash `3fc62193…` did **not** reproduce, because that scratch root
+   no longer exists. The current pair is `654393d8…` / `a9b8c6e2…` against the canonical
+   ignored runs root `jarvis/training_runs` (`output_root_id` digest `56bb1a6e85d39398`).
+   **S3H must plan against that same root or re-derive both.** The root-independent
+   identities are the dataset manifest hash and the dataset reference hash `1f4cdc6f…`.
 28. **The D30 fix has never been exercised by a live training run.** Proven by 8 tests
-   and by reproducing the defect on this host, not by a run it saved.
+   and by reproducing the defect on this host, not by a run it saved. **Updated
+   2026-08-13:** S3G.1 exercised it in the *positive* direction — the same unmodified
+   code on a verified cache returns an empty blocker list — so both directions are now
+   demonstrated on real host state. Still not exercised by a training run.
+29. **The S3G.1 qualification is a statement about preconditions, not about quality.**
+   `S3H_READY: YES` means the cache, the corpus, the lengths, the dependencies and the
+   plan all check out. It says nothing about whether the candidate will improve
+   anything, and every S3G limitation above survives it intact.
+30. **The 512 qualification is bound to this corpus at this manifest hash.** It was
+   measured over `m62-defensive-quality-train v1` (`9bbac2f0…`) with the pinned
+   tokenizer. Any change to a row, to the chat template, or to the tokenizer revision
+   invalidates it and it must be re-measured — a length audit is not a property of the
+   number 512.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -1230,6 +1343,7 @@ result rather than a false one — which is the behaviour that made the defect d
 
 | Scope | Result | When |
 |---|---|---|
+| S3G regression files only (`s3g_quality_training_corpus` + `s3g_plan_cache_blocker`) | **32 passed, 0 failed** (4m17s) | S3G.1, 2026-08-13 — bounded check, **no source changed** |
 | **Main (inner) suite** | **6708 passed, 59 skipped, 0 failed** (`pytest tests -q` from `jarvis/`, 14m50s) | **S3G, re-run 2026-08-12 - AUTHORITATIVE** |
 | Focused M62 (`-k m62`) | 2684 passed, 18 skipped, 0 failed (after the one adjusted test) | S3G, 2026-08-12 |
 | Focused M62 (`-k m62`) | 2654 passed, 17 skipped, 0 failed (2556 + 99 new S3F.2 tests; the extra skip is the symlink test, which this host cannot run) | **S3F.2, re-run 2026-08-10 — authoritative** |
@@ -1287,10 +1401,21 @@ accelerator probe the only variable, which is what the test's name claims to mea
 assertion was weakened and no production behaviour was changed to make it pass. See the
 S3G doc section 15.
 
+**S3G.1 ran no full suite, deliberately.** No tracked source changed — the milestone is
+documentation plus a re-derivation from tracked generators — so the brief's test policy
+applies and the 6708-test suite was not re-run for ceremony. The bounded checks that
+qualify the work were run instead: corpus reproduction into two roots, the corpus
+invariants from the production modules, cross-corpus leakage, cache verification, the real
+tokenizer audit over all 128 rows, the structured/refusal target contract audit, plan
+construction and preflight, planner purity, Git cleanliness, and the 32 S3G regression
+tests above. The S3G full-suite figure stands unre-measured and is labelled as such.
+
 **Latest gates** (S3G, re-run 2026-08-12 unless noted):
 
 | Gate | Result | When |
 |---|---|---|
+| Host-path scan over the S3G.1 changeset | PASS - the new doc and this file record digests, repository-relative roots and hashes; **no absolute host path**, no Windows user path, no `/home/...`, no `/Users/...` | S3G.1 |
+| Ruff / `compileall` / `git diff --check` / secret scan | **NOT RUN — no tracked code changed.** They gate source changes; S3G.1 has none | S3G.1 |
 | Ruff | PASS - over the S3G changeset | S3G |
 | `compileall` | PASS - `jarvis/scripts`, `jarvis/training_gym`, `jarvis/tests` | S3G |
 | `git diff --check` | PASS | S3G |
@@ -1331,7 +1456,8 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
-| S3G commits | **CURRENT.** The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
+| S3G.1 commit | **CURRENT.** The final pre-train qualification: reviewed cache verified, real tokenizer audit (0 of 128 rows truncate at 512), zero-blocker plan `a9b8c6e2…`, S3G plan `4548905157…` marked `SUPERSEDED_PREVIEW`. Documentation only — no source, test or config change. |
+| S3G commits | The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
 | S3F.2 commits | The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
 
 ---
@@ -1459,6 +1585,23 @@ hand-written and no hash is invented.
   `V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` §6, before any run existed.
 - **DO NOT** sweep the filesystem for the model cache in S3H either. The operator
   supplies `--model-cache-root`; an unnamed cache is a blocker, by design.
+- **DO NOT** re-run the S3G.1 tokenizer audit to confirm it. It measured all 128 rows
+  through the production encoder against the pinned tokenizer and found **0** rows over
+  512, with the longest row at 178. **Re-measure only if** a corpus row, the chat
+  template or the tokenizer revision changes — §14.30.
+- **DO NOT** re-estimate tokens from characters. That was S3G's method under a missing
+  cache, and it is superseded by a measurement.
+- **DO NOT** raise `max_sequence_length` above 512. Nothing truncates; raising it would
+  change the configuration, the config hash and the plan hash to buy nothing.
+- **DO NOT** treat the S3G plan `4548905157…` as executable authority. It is
+  `SUPERSEDED_PREVIEW`; the blocker list is part of the plan.
+- **DO NOT** quote `654393d8…` or `a9b8c6e2…` as durable either. They bind
+  `output_root_id` (§14.27). S3H plans against `jarvis/training_runs` or re-derives both.
+- **DO NOT** re-verify the reviewed model cache by inspecting it a second way.
+  `probe_cache` returned `present`, `c1899de2…` is the only revision there, and the root
+  digest matches the reasoning-policy preflight's.
+- **DO NOT** read `S3H_READY: YES` as an authorisation. It is a statement about
+  preconditions; the operator has not authorised training.
 
 **Instead:**
 
@@ -1471,43 +1614,54 @@ requested next step
 
 ## 19 — NEXT: M62 S3H (not authorised)
 
-> **S3G is COMPLETE as a design milestone.** The first quality candidate is specified,
-> its corpus is built and qualified, its configuration is chosen and its plan is
-> previewed. **Nothing was trained.** Doc:
-> `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md`.
+> **S3G is COMPLETE as a design milestone and S3G.1 as a qualification milestone.** The
+> candidate is specified, its corpus is built, leakage-qualified and now **tokenizer-audited**,
+> its configuration is chosen, and its plan rebuilds to **zero blockers**. **Nothing was
+> trained.** Docs: `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` (design)
+> and `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md` (qualification).
 
-**What S3G produced**
+**Where the candidate stands**
 
 ```
 QUALITY_CANDIDATE:   DESIGNED    qwen3-06b-lora-quality-live-001
 TRAINING_DATASET:    QUALIFIED   m62-defensive-quality-train v1  (9bbac2f0…)
-TRAINING_CONFIG:     QUALIFIED   option B
-TRAINING_PLAN:       PREVIEW_ONLY (one operator-resolvable blocker)
+TRAINING_CONFIG:     QUALIFIED   option B, config_hash 654393d8…
+MODEL_CACHE:         VERIFIED    present, c1899de2… the only revision cached
+MAX_SEQ_LENGTH_512:  QUALIFIED   0 of 128 rows truncate; longest row 178 tokens
+TRAINING_PLAN:       READY_PREVIEW  a9b8c6e2…, 0 blockers, 2 warnings
 TRAIN_TOKEN:         NOT CREATED, NOT CONSUMED
 TRAINING_EXECUTED:   NO
 ADAPTER_CREATED:     NO
+S3H_READY:           YES  (preconditions only — NOT an authorisation)
 ```
 
-**The one open gate, and it is the operator's**
+**The remaining gate is the operator's, and it is the only one**
 
-The plan carries exactly one blocker: `model weights are not known to be cached and the
-download policy is deny`. This session was not given the reviewed model cache root and
-does not search for one — the same rule the reasoning-policy preflight is written under.
-Supplying it is the only step between here and a zero-blocker plan:
+The two technical preconditions are closed. To reproduce the plan (a dry run — it creates
+nothing and spends nothing):
 
 ```
-python jarvis/scripts/build_quality_training_config.py     --dataset-root <dataset root> --output-root <runs root>     --model-cache-root <reviewed cache> --plan
+python jarvis/scripts/build_quality_training_config.py     --dataset-root <repo>/jarvis/training_gym_datasets     --output-root  <repo>/jarvis/training_runs     --model-cache-root <the reviewed cache the operator supplies> --plan
 ```
+
+Expect `config_hash 654393d8…`, `plan_hash a9b8c6e2…`, `plan_blockers: []`. If the corpus
+is absent from that dataset root, rebuild it first with
+`jarvis/scripts/build_training_corpus.py --root <same dataset root>`; it is deterministic
+and must reproduce manifest `9bbac2f0…`. **A different output root changes both hashes**
+(§14.27) — that is expected, not a mismatch to investigate.
 
 **Then, if authorised: M62 S3H — FIRST QUALITY-ORIENTED LIVE TRAINING RUN.**
 
-Preconditions, all four required:
+Preconditions:
 
-1. the reviewed cache root supplied and the plan rebuilt to **zero blockers**;
-2. confirmation against the real tokenizer that no training row truncates at 512
-   (the corpus's token counts are currently estimated, not tokenized);
-3. **explicit operator authorisation for live training** — S3G authorises none;
-4. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once.
+1. ~~the reviewed cache root supplied and the plan rebuilt to **zero blockers**~~ —
+   **CLOSED 2026-08-13 (S3G.1)**;
+2. ~~confirmation against the real tokenizer that no training row truncates at 512~~ —
+   **CLOSED 2026-08-13 (S3G.1): 0 of 128 rows**;
+3. **explicit operator authorisation for live training** — **still not given**. Neither
+   S3G nor S3G.1 authorises any;
+4. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once — **not
+   created**.
 
 The run itself: option B, ~19–48 minutes estimated, 4-hour hard ceiling, CPU, fp32,
 offline, no checkpoints, LoRA-only artefacts.
@@ -1524,10 +1678,19 @@ RUN_004_DISPOSITION:       KEEP_AS_SMOKE_REFERENCE_ONLY
 RUN_004_QUALITY_PROMOTION: EXCLUDED
 ```
 
-**S3H must not begin automatically.** Nothing in S3G authorises training, evaluation,
-promotion, activation, registry mutation, merge, tag or a version bump.
+**S3H must not begin automatically.** Nothing in S3G *or S3G.1* authorises training,
+evaluation, promotion, activation, registry mutation, merge, tag or a version bump.
+`S3H_READY: YES` describes preconditions; it is not permission.
 
 ---
+
+### Superseded — the S3G.1 brief (completed 2026-08-13)
+
+> **M62 S3G.1 — FINAL PRE-TRAIN QUALIFICATION.** Verify the operator-supplied reviewed
+> model cache, rebuild the plan to zero blockers, and replace the estimated token counts
+> with a real tokenizer measurement over the qualified corpus. **Done.** The only thing it
+> could not close is operator authorisation for live training, which is not a technical
+> prerequisite.
 
 ### Superseded — the S3G brief (completed 2026-08-12)
 
@@ -1595,6 +1758,10 @@ identity** — never a mutation of run-004.
    quality candidate, its training corpus, its predeclared acceptance gates, the D28
    decision, D29, D30 and the previewed plan. **This is the current technical basis
    for anything about training.**
+3b. **`jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md`** — the verified cache, the
+   real tokenizer audit, the 512 qualification and the **zero-blocker** plan. Read it
+   with the S3G doc, not instead of it: S3G designs the candidate, S3G.1 qualifies it
+   for execution. **Read both before anything about S3H.**
 4. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
    H1–H6, the body-free review evidence, corpus v2, and the reasoning-policy
    preflight. **This is the current technical basis for anything about evaluation.**
