@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-13T00:00Z |
+| **Last updated** | 2026-08-13T00:00Z (S3G.2) |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3G.1 CLOSED (pre-train qualification)** — the reviewed cache is verified, the corpus is audited with the *real* tokenizer, no row truncates at 512, and the plan rebuilds to **zero blockers**. **Nothing was trained.** S3G (design) remains closed and unrevised. |
-| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. Its two technical preconditions are now closed; what remains is **explicit operator authorisation** and a fresh single-use token (§19). |
+| **Current phase** | **M62 S3G.2 CLOSED (train-side validation wiring)** — the 9 promoted VALIDATION rows now reach `Trainer` as `eval_dataset`, eval loss is observable per epoch plus a closing measurement, and the plan rebuilds to **zero blockers** under a new identity. **Nothing was trained.** S3G (design) and S3G.1 (qualification) remain closed and unrevised. |
+| **Next phase** | **M62 S3H** (first quality-oriented live training run) — *not authorised*, **not started**. All three technical preconditions are now closed; what remains is **explicit operator authorisation** and a fresh single-use token (§19). |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -206,6 +206,58 @@ PLAN_WARNINGS:                    2  (M17 memory cross-check disagreement; CPU-r
 OLD_PLAN_HASH:                    4548905157b1e1483e32f85321b4262d611329d80439bc3ca96e5d7443710ae8
 OLD_PLAN_STATUS:                  SUPERSEDED_PREVIEW  (not deleted, not wrong)
 ESTIMATED_TRAINING_RUNTIME:       19-48 minutes (estimated, unchanged)
+HARD_RUNTIME_CEILING:             4 hours (unchanged)
+TRAIN_TOKEN_CREATED:              NO
+TRAIN_TOKEN_CONSUMED:             NO
+TRAINING_EXECUTED:                NO
+ADAPTER_CREATED:                  NO
+S3H_READY:                        YES   (preconditions only — NOT an authorisation)
+LIVE_MODEL_INFERENCE:             NOT_RUN
+```
+
+### S3G.2 outcome statuses (2026-08-13, this milestone)
+
+**Neither S3G nor S3G.1 is revised by these.** S3G.1 §6.1 recorded that VALIDATION reached
+the trainer as nothing; that was accurate and stays the record. What changed here is the
+**production code**, not the finding. Defect **D31**.
+
+```
+S3G2_VALIDATION_WIRING:           PASS
+VALIDATION_ROOT_CAUSE:            D31 — three boundaries, not one
+                                  (1) no export authority could write the VALIDATION split
+                                  (2) execution hard-coded validation_file=None at 2 sites
+                                  (3) Trainer was built with no eval_dataset
+TRAIN_DATASET_WIRED:              YES   (107 rows -> train_dataset)
+VALIDATION_DATASET_WIRED:         YES   (9 rows  -> eval_dataset)
+VALIDATION_EVALUATION_CADENCE:    once per epoch (eval_strategy="epoch") + one closing evaluate()
+EARLY_STOPPING:                   DISABLED   (no callback; none importable)
+CHECKPOINT_SAVING:                DISABLED   (save_strategy="no", unchanged)
+LOAD_BEST_MODEL_AT_END:           FALSE      (passed explicitly)
+TRAIN_LOSS_OBSERVABLE:            YES
+VALIDATION_LOSS_OBSERVABLE:       YES   (per epoch + closing, in backend_result.json)
+GENERATION_DURING_VALIDATION:     NO    (teacher-forced loss only)
+VALIDATION_IS_ELIGIBILITY_EVIDENCE: NO  (diagnostic; held-out remains m62-defensive-eval v2)
+HELD_OUT_INTERNAL_SPLITS:         EXCLUDED  (0 of 12 in either export; not exportable at all)
+EVAL_V1_V2_INVOLVED:              NO
+TRAIN_VALIDATION_OVERLAP:         NONE  (both directions, on disk and in the trainer's objects)
+VALIDATION_ENCODER:               production _encode / build_labels / masking self-test
+VALIDATION_MASKING_VERIFIED:      YES   (assistant-only, both arms)
+CHAT_TEMPLATE_DIGEST:             a55ee1b1660128b7  (identical to S3G.1 — semantics unmoved)
+MAX_SEQUENCE_LENGTH:              512 QUALIFIED (unchanged)
+VALIDATION_ROWS_TRUNCATED:        0 / 9   (train re-checked as a control: 0 / 107)
+DATASET_MUTATED:                  NO    (9bbac2f0… unchanged; train export + reference unmoved)
+VALIDATION_EXPORT_HASH:           589e056baff10690a58fca37b34d78612ea0c7ed0387a7a294fc27f05d978606
+CONFIG_HASH:                      b5f63cd8f65c7bc91c52b58b1d53a18bc757ff361d59f83b98e33f7a1dcafb03
+CONFIG_HASH_WITH_VALIDATION_OFF:  654393d815e6caed85e13d6d7ca804ac779d2271712083a95c6ad2d7228c0fd4
+                                  (byte-identical to S3G.1 — no legacy config re-identified)
+TRAINING_PLAN:                    READY_PREVIEW
+TRAINING_PLAN_HASH:               122efc62491256b25756eb24be37d3695347763295682f7409ea231293507ffe
+PLAN_BLOCKER_COUNT:               0
+PLAN_WARNINGS:                    2  (M17 memory cross-check disagreement; CPU-run caution)
+OLD_PLAN_HASH:                    a9b8c6e20c7070badf7ea671c4923b4775b245f3826fb189fb774e4e5eacea1a
+OLD_PLAN_STATUS:                  SUPERSEDED_PREVALIDATION_PREVIEW  (not deleted, not wrong)
+ESTIMATED_VALIDATION_OVERHEAD:    +1 to +4 minutes (estimated, ~5.7% of training compute)
+ESTIMATED_TRAINING_RUNTIME:       20-52 minutes (was 19-48; estimated, not measured)
 HARD_RUNTIME_CEILING:             4 hours (unchanged)
 TRAIN_TOKEN_CREATED:              NO
 TRAIN_TOKEN_CONSUMED:             NO
@@ -707,6 +759,78 @@ issued by one.
 download allowance that will not be spent. The run's footprint did not change.
 **Real training/eval:** none. **Enabled:** S3H, once an operator authorises it.
 
+### M62 S3G.2 — Train-side validation wiring and eval-loss observability
+**Purpose:** act on the one thing S3G.1 recorded and could not fix — the promoted VALIDATION
+split reached the trainer as nothing — by implementing the smallest correct production
+wiring, making validation loss observable, and rebuilding the plan under a new identity.
+**Implementation + qualification milestone — nothing was trained, no model weights were
+loaded, no token was created or consumed.**
+**Status:** COMPLETE. **Doc:** `jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md`.
+**Not a revision of S3G or S3G.1.** S3G.1 §6.1 stated the finding exactly and stays the
+record of it. The **production code** changed, not the conclusion.
+**D31 — the VALIDATION split reached the trainer as nothing at all. FIXED here**, with 70
+regression tests. Three boundaries, not one: `training_gym.datasets.export` could only write
+the TRAIN split, so no artefact holding the validation rows existed in a shape a trainer
+could read; `training_gym.training.execution` built every `ExecutionRequest` with
+`validation_file=None` **hard-coded at two sites**, although the field had existed since
+S3B and `plan_training` was already binding both validation digests into the plan hash; and
+`TransformersPeftBackend._train` built `Trainer(train_dataset=rows)` with no `eval_dataset`.
+Consequence: `BackendResult.eval_loss` and `AdapterManifest.eval_loss` both reported `0.0`,
+the dataclass default — a field that always reads zero looks like a measurement. The cost
+was **diagnosis**: S3G §10.3 named overfitting-on-107-rows as this candidate's most likely
+failure mode and S3G's compute table claimed it was *"watched by VALIDATION"*, which it was
+not.
+**The fix is additive, not a widening.** `export_sft`'s security invariant — *"an SFT export
+reads the train split and nothing else"* — was **not relaxed**. `export_sft_validation` /
+`verify_sft_validation_export` are new entry points, each hard-bound to one split and one
+pair of filenames, delegating to one shared `_export_split`; `EXPORTABLE_SPLITS` is a closed
+table that now cross-binds the **pair** `(source_split, filename)`, which is *stricter* than
+the two independent checks it replaced. The four held-out splits are absent from it and no
+argument adds them. `_exclusion_reason` builds its reason from the split it was asked for, so
+`not_train_split` keeps its exact spelling — `excluded_counts` feeds `export_hash`, and a
+renamed reason would re-hash every train export ever written. Verified: `b785e713…`
+unchanged.
+**Cadence:** `ValidationStrategy` (`no`/`epoch`/`steps`), default `no`, `steps` **refused**
+with a reason — nine rows against forty steps is sampling noise charged to every step.
+`epoch` selected. **Plus one closing `trainer.evaluate()`**, because `max_steps=40` bounds
+the run at **2.99 realised epochs**: it stops before the third epoch boundary, so the last
+periodic evaluation measures the end of epoch 2, not the weights the run saves. Recorded
+separately as `final_evaluation` with `at_end_of_training: true`; the curve and the
+end-of-run number are never presented as each other.
+**Nothing regressed on artefact safety.** `eval_strategy` and `save_strategy` are coupled by
+exactly one thing — `load_best_model_at_end` — which is passed explicitly as `False`. So
+evaluation runs while the trainer writes no checkpoint at all. No `EarlyStoppingCallback`,
+and any callback whose type name contains `EarlyStopping` is stripped after construction. No
+generation, no `predict`, no `compute_metrics`. `ADAPTER_MANIFEST_VERSION` deliberately
+unmoved, so run-004's manifest `06b1d3a3…` still verifies; the observability record lands in
+`backend_result.json`, an already-allowlisted file.
+**Identity moves exactly when behaviour does, and this is the half a one-sided test misses.**
+`validation_strategy` enters the canonical form only when it is not `no`. Option B with
+validation enabled hashes to `b5f63cd8…`; the same option B with it disabled reproduces
+S3G.1's `654393d8…` **byte-identically**. A fix that moved the hash unconditionally would
+re-identify every configuration ever written, including the one S3G.1's plan was built from;
+one that froze it would let two materially different runs share a single spendable token.
+`TRAINING_SCHEMA_VERSION` stays `m62.training_config.1` — the major prefix gates
+compatibility, absent means `no`, and an unknown field still fails closed.
+**Bounded validation-only audit, not a re-run of S3G.1's.** The wiring changes no rendering
+semantics — same tokenizer, same immutable revision, same chat template digest
+(`a55ee1b1660128b7`, byte-identical to S3G.1's), same 512 cap, same masking — so the 128-row
+audit was not repeated. The validation arm was encoded twice (uncapped and at 512) through
+the production `_encode`: **0 of 9 truncate**, max 150 tokens, 3.4× headroom, masking
+verified; TRAIN re-checked as a control at 0 of 107, max 169. Both reproduce S3G.1 exactly.
+**Plan: zero blockers**, `122efc62…`, `is_executable: true`, `feasible_with_warnings`, the
+same two pre-existing warnings reported rather than suppressed. Still a dry run, measured:
+no training framework entered `sys.modules`, no run directory was created, the ledger did not
+grow past 2 lines, the hash reproduced twice, and **no token was created**. The S3G.1 plan
+`a9b8c6e2…` is **`SUPERSEDED_PREVALIDATION_PREVIEW`** — not deleted and not wrong; it was an
+honest preview of a run that could not have measured its validation split.
+**Runtime estimate revised upward on a model, not a measurement:** a forward-only pass is
+≈`2 × params × tokens` against training's ≈`4 ×`, giving ≈5.7% overhead → **+1 to +4 min**,
+so 19–48 becomes **20–52 minutes**. The 4-hour ceiling is unchanged: it exists to catch a
+wrong cost model, not a 6% addition.
+**Real training/eval:** none. **Enabled:** an S3H run whose overfitting is visible while it
+happens.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -1185,6 +1309,7 @@ rule is a structural guarantee, not a performance knob.
 | D27 | **The review evidence could not be written body-free as specified.** `ArmScore.notes` is prose written *about* a response, and it quotes it: `schema_satisfied` returns jsonschema's `ValidationError.message`, which embeds the offending **instance** (`'medium' is not of type 'object'` is model output), and `review_tool_calls` embeds the **proposed tool's name** in its problem strings | persisting the notes — which the S3F.1 §5 design implied, since it named `ArmScore.to_dict()` — would have persisted a response body in instalments, defeating the property the artefact exists to preserve | a closed `scoring.NOTE_CODES` vocabulary, refused at `ArmScore` construction if unknown; `structured_output_detail` returns the code from the same branch as the message so the two can never disagree; the evidence carries `note_codes` and the prose stays in memory, covered by `score_hash` so it is bound without being published; the tool review contributes `valid`/`critical` and a problem **count**, never the strings. `SCORING_VERSION` → `m62.evaluation_scoring.4` | S3F.2 | yes (42) | FIXED |
 | D28 | **The `tool_call_schema` family has no transport, so its metric is vacuous.** `transformers_peft` never populates `EvaluationResult.proposed_tool_calls` — only the fake backend does — and `review_tool_calls` treats "no proposal" as not-a-failure | `tool_call_validity_rate` read **36/36 on both arms** in S3E.2 while **zero tool calls were proposed by either arm**. The two facts are both in the sealed report and they are the same fact | **not fixed here.** Recorded, and used to *bound* the corpus change: v2 deliberately does not instruct a tool-call format, because instructing a format the instrument cannot read would change the prompts without changing what is measured. A backend gap needs a backend fix | S3F.2 | pinned by a test that the family is excluded | OPEN (§14.15) |
 
+| D31 | **The VALIDATION split reached the trainer as nothing at all.** Three boundaries: `training_gym.datasets.export` could only write the TRAIN split (`SFT_SOURCE_SPLIT`, and a manifest refusing any other `source_split`/`filename`), so no artefact held the validation rows in a shape a trainer could read; `training_gym.training.execution` built every `ExecutionRequest` with `validation_file=None` **hard-coded at two sites**, although the field had existed since S3B and the planner was already binding `validation_split_manifest_hash`/`validation_shard_hash` into the plan hash; and `TransformersPeftBackend._train` built `Trainer(train_dataset=rows)` with no `eval_dataset` | nine promoted, digest-bound, tokenizer-audited rows contributed to no measurement, and `BackendResult.eval_loss` / `AdapterManifest.eval_loss` both reported `0.0` — the dataclass default, which looks like a measurement. The cost was diagnosis: S3G named overfitting on 107 rows as the candidate's likeliest failure mode and its compute table claimed it was *"watched by VALIDATION"* | an **additive** sibling export authority (`export_sft_validation` / `verify_sft_validation_export`) over one shared `_export_split`, with a closed `EXPORTABLE_SPLITS` table that cross-binds `(source_split, filename)` — stricter than the two independent checks it replaced, and the four held-out splits are absent from it; `ValidationStrategy` on `TrainingConfig`, value-gated into the canonical form so identity moves exactly when behaviour does; `validation_file` threaded through preflight → execution → request; `Trainer(eval_dataset=eval_rows)` with `eval_strategy` (the one spelling valid across `>=4.44` **and** transformers 5, which removed `evaluation_strategy`), `save_strategy` untouched, explicit `load_best_model_at_end=False`, early-stopping callbacks stripped, and one closing `evaluate()` because `max_steps` stops the run at 2.99 epochs | S3G.2 | yes (70, incl. 5 that fail against the exact pre-fix line) | FIXED |
 | D30 | **A plan could authorise a run whose weights were not known to be cached.** `plan_training` builds `plan_blockers` from `feasibility.missing_evidence` — a snapshot of the local `missing` list taken when the feasibility report is constructed — and the model-cache check appended to `missing` *after* that construction, writing to a list nothing read again | measured on this host: `cache_status: unknown`, `download_required: True`, policy `deny`, `download_note` "a future execution would refuse rather than fetch them" — and `plan.is_executable: True` with `plan.blockers: []`. A plan in that state issues a spendable single-use `TRAIN:<hash>` token for a run that cannot load its model, which is the D22 wasted-token failure arriving by a different route | determine the cache **before** the feasibility report is built, so an unverified cache is missing evidence rather than a pass. `download_required` already treats `UNKNOWN` as "might need a download" by design. The blocker fires only when the cache is not `present` **and** the policy is `deny`, so run-004's plan hash (`db6dd55b…`, cache `present`) is unaffected | S3G | yes (8, both directions, incl. that planning is still a dry run) | FIXED |
 
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
@@ -1324,6 +1449,27 @@ result rather than a false one — which is the behaviour that made the defect d
    `S3H_READY: YES` means the cache, the corpus, the lengths, the dependencies and the
    plan all check out. It says nothing about whether the candidate will improve
    anything, and every S3G limitation above survives it intact.
+31. **D31 has never been exercised by a live training run.** Like D30 before it, the fix
+   is proven by 70 tests against the production objects and by tracing the production
+   path — and, unlike most, by reverting the exact defective line and watching 5 of them
+   fail. It has not been proven by a run it saved.
+32. **The eval arm has never met a real model.** The tests replace `_runtime()`, so every
+   line of `_train` runs against the real `convert_sft_export`, `_encode`, `build_labels`
+   and masking self-test — but `Trainer`'s actual evaluation loop, its `log_history` key
+   names on this transformers build, and the real per-evaluation runtime are
+   **unmeasured**. The keys read (`eval_loss`, `epoch`, `step`, `eval_runtime`) are
+   transformers' documented ones and their absence is tolerated rather than assumed.
+33. **Nine validation rows is a very small sample.** A movement in validation loss over
+   nine rows is a weak signal, which is exactly why early stopping is refused. It is
+   enough to see a gross train/eval divergence; it is not enough to rank two runs, and it
+   is not eligibility evidence.
+34. **The validation overhead estimate is a model, not a measurement.** ≈5.7% of training
+   compute, derived from the same cost model — and the same single calibration point —
+   that §14.25 already flags. No evaluation pass was timed.
+35. **The closing `trainer.evaluate()` is one extra forward pass**, taken deliberately:
+   `max_steps=40` gives 2.99 realised epochs, so an epoch-cadence run stops before the
+   third boundary and the last periodic measurement is the end of epoch 2, not the weights
+   the run saves.
 30. **The 512 qualification is bound to this corpus at this manifest hash.** It was
    measured over `m62-defensive-quality-train v1` (`9bbac2f0…`) with the pinned
    tokenizer. Any change to a row, to the chat template, or to the tokenizer revision
@@ -1343,6 +1489,10 @@ result rather than a false one — which is the behaviour that made the defect d
 
 | Scope | Result | When |
 |---|---|---|
+| **Main (inner) suite** | **6701 passed, 50 skipped, 0 failed** (`pytest tests -q -rs` from `jarvis/`, 14m21s) | **S3G.2, 2026-08-13 — AUTHORITATIVE** |
+| **Focused M62 (`-k m62`)** | **2755 passed, 25 skipped, 0 failed** (10m17s) | **S3G.2, 2026-08-13 — AUTHORITATIVE for M62** |
+| S3G + S3G.1 + S3G.2 regression files | **102 passed, 0 failed** (32 pre-existing + 70 new) | S3G.2, 2026-08-13 |
+| S3G.2 file alone (`s3g2_validation_wiring`) | **70 passed, 0 skipped** | S3G.2, 2026-08-13 |
 | S3G regression files only (`s3g_quality_training_corpus` + `s3g_plan_cache_blocker`) | **32 passed, 0 failed** (4m17s) | S3G.1, 2026-08-13 — bounded check, **no source changed** |
 | **Main (inner) suite** | **6708 passed, 59 skipped, 0 failed** (`pytest tests -q` from `jarvis/`, 14m50s) | **S3G, re-run 2026-08-12 - AUTHORITATIVE** |
 | Focused M62 (`-k m62`) | 2684 passed, 18 skipped, 0 failed (after the one adjusted test) | S3G, 2026-08-12 |
@@ -1401,6 +1551,31 @@ accelerator probe the only variable, which is what the test's name claims to mea
 assertion was weakened and no production behaviour was changed to make it pass. See the
 S3G doc section 15.
 
+**S3G.2's M62 delta is reported, not reconciled.** S3G measured 2684 passed / 18 skipped;
+S3G.2 measures **2755 / 25**. Passed rose by 71 against **70** new tests, and skipped by 7.
+The new file runs **70 passed, 0 skipped** on its own, so one pass and seven skips come from
+elsewhere. This section's standing warning applies and is not being worked around: skip sets
+are host- and environment-dependent and these counts must **not** be reconciled by
+arithmetic across sessions. What is established is what was measured — the focused M62
+selection passes at this commit with **0 failures and 0 errors**.
+
+**S3G.2's full-suite figure is likewise NOT reconciled, and every skip is now named.**
+6701 + 50 = 6751 against S3G's 6708 + 59 = 6767: collection moved by **−16** while this
+milestone *added* 70 tests, so roughly 86 tests collected in the S3G session are not collected
+here. The `-rs` skip list shows why that is the wrong thing to chase — whole modules enter
+and leave collection depending on which optional packages are importable on the host that day.
+The 50 skips are: `fastapi` × 3 and `chromadb` × 3 (module-level import skips), 1 voice
+profile, 17 MCP-only tool comparisons, 8 symlink/privilege cases, 4 `bandit is not on PATH`,
+1 sealed-S3E.2-generation-absent, and 13 further host-privilege symlink cases inside M62 files.
+**The area this milestone touched is accounted for**: focused M62 went 2684 → 2755 passed
+against 70 new tests. Do not "reconcile" the full-suite figures by arithmetic.
+
+**The S3G.2 tests were verified non-vacuous, not merely green.** `eval_dataset=eval_rows` was
+temporarily reverted to the exact pre-fix line `eval_dataset=None`; **5 of the 70 failed**,
+including `test_the_validation_rows_reach_eval_dataset`. The line was restored and all 70
+pass. Three assertions in the new file were also found tautological during review and
+replaced with real ones before the suite was accepted.
+
 **S3G.1 ran no full suite, deliberately.** No tracked source changed — the milestone is
 documentation plus a re-derivation from tracked generators — so the brief's test policy
 applies and the 6708-test suite was not re-run for ceremony. The bounded checks that
@@ -1414,6 +1589,13 @@ tests above. The S3G full-suite figure stands unre-measured and is labelled as s
 
 | Gate | Result | When |
 |---|---|---|
+| Ruff | **PASS** — over all 11 changed S3G.2 files | S3G.2 |
+| `compileall` | **PASS** — `training_gym`, `scripts`, `tests` | S3G.2 |
+| `git diff --check` | **PASS** | S3G.2 |
+| Secret scan over the S3G.2 changeset | **PASS** — one `reasoning` finding, pre-existing and untouched: the literal `<think` inside `build_training_corpus.py`'s invariant check that *forbids* it, plus the docstring describing it. Ruling **H4** classifies reasoning markup as hygiene. Identical to what S3G recorded | S3G.2 |
+| Host-path scan over the S3G.2 changeset | **PASS** — no absolute host path, no Windows user path, no `/home/…`, no `/Users/…`, no cache location in any changed file or in the S3G.2 doc | S3G.2 |
+| **Bandit** | **RUN.** It *is* installed in the suite interpreter (1.9.4, `bandit.exe` present in `.venv/Scripts/`) and runs via `python -m bandit`, so the "not installed" row below is imprecise — the package is installed, it is simply **not on PATH**, which is why four `grader_checks` tests still skip with "bandit is not on PATH". 141 findings over the changeset, **all LOW**: 137 × B101 (`assert`, which is what pytest tests are made of) and 4 × B105 false positives on the literals `'False'`, `'<eos>'` and an estimate note. **Zero MEDIUM, zero HIGH** | S3G.2 |
+| Runtime artefact exclusion | **PASS** — the new validation export lands under the gitignored `training_gym_datasets/`; `git check-ignore` confirms. Nothing runtime is tracked | S3G.2 |
 | Host-path scan over the S3G.1 changeset | PASS - the new doc and this file record digests, repository-relative roots and hashes; **no absolute host path**, no Windows user path, no `/home/...`, no `/Users/...` | S3G.1 |
 | Ruff / `compileall` / `git diff --check` / secret scan | **NOT RUN — no tracked code changed.** They gate source changes; S3G.1 has none | S3G.1 |
 | Ruff | PASS - over the S3G changeset | S3G |
@@ -1456,7 +1638,8 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F commits | Scoring calibration (D24), report serialisation state (D25), 27 regression tests and the review packet. First source change since `56d9060`. Resolve with `git log --oneline cc245e8..HEAD`. |
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
-| S3G.1 commit | **CURRENT.** The final pre-train qualification: reviewed cache verified, real tokenizer audit (0 of 128 rows truncate at 512), zero-blocker plan `a9b8c6e2…`, S3G plan `4548905157…` marked `SUPERSEDED_PREVIEW`. Documentation only — no source, test or config change. |
+| S3G.2 commits | **CURRENT.** Train-side validation wiring: the D31 fix across the export authority, the config schema, the execution stage and the SFT backend; the validation export authority; 70 regression tests; the new zero-blocker plan `122efc62…` under config `b5f63cd8…`; S3G.1's plan `a9b8c6e2…` marked `SUPERSEDED_PREVALIDATION_PREVIEW`. First source change since S3G. Resolve with `git log --oneline 290f7d7..HEAD`. |
+| S3G.1 commit | The final pre-train qualification: reviewed cache verified, real tokenizer audit (0 of 128 rows truncate at 512), zero-blocker plan `a9b8c6e2…`, S3G plan `4548905157…` marked `SUPERSEDED_PREVIEW`. Documentation only — no source, test or config change. |
 | S3G commits | The first quality-oriented training corpus (`m62-defensive-quality-train v1`, `9bbac2f0…`), the candidate configuration and plan generator, the D30 planner fix, 32 tests and the design doc. Resolve with `git log --oneline 28f1d45..HEAD`. |
 | S3F.2 commits | The operator rulings, the body-free review-evidence artefact (D27), corpus v2 (D28 bounds it), the eligibility-grade reasoning policy and its blocked preflight, 99 tests. Resolve with `git log --oneline 2e9efe0..HEAD`. |
 
@@ -1600,6 +1783,41 @@ hand-written and no hash is invented.
 - **DO NOT** re-verify the reviewed model cache by inspecting it a second way.
   `probe_cache` returned `present`, `c1899de2…` is the only revision there, and the root
   digest matches the reasoning-policy preflight's.
+- **DO NOT** rediscover why VALIDATION was unused. It is **D31**, traced and fixed in
+  S3G.2: three boundaries — no export authority could write the split, the execution stage
+  hard-coded `validation_file=None` at two sites, and `Trainer` was built with no
+  `eval_dataset`. See §13 and `jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md` §3.
+- **DO NOT** remove the `eval_dataset` wiring, or "simplify" `validation_file` back to
+  `None`. A test pins the literal absence of `validation_file=None,` in
+  `training_gym/training/execution.py`, because that regression is otherwise silent.
+- **DO NOT** turn train-side validation into eligibility evaluation. VALIDATION is
+  *steering* material by `TRAIN_SIDE_SPLITS`; its loss is diagnostic, it appears in no S3G
+  §6 gate, and it authorises no promotion. Held-out eligibility remains
+  `m62-defensive-eval v2`, post-training and separately authorised.
+- **DO NOT** enable early stopping because a validation loss now exists. Nine rows must not
+  decide when a run ends. That is a separate decision needing its own evidence.
+- **DO NOT** enable checkpoint saving merely because evaluation is enabled. The two are
+  coupled only by `load_best_model_at_end`, which is explicitly `False`; D16 still stands
+  and the adapter allowlist still refuses pickle-shaped trainer state.
+- **DO NOT** widen `ValidationStrategy` to `steps` without evidence. It is named so the
+  refusal can say what was asked for; per-step evaluation over nine rows on a forty-step
+  run is sampling noise charged to every step.
+- **DO NOT** make `validation_strategy` unconditional in `TrainingConfig.to_dict()`. The
+  value-gating is what keeps a validation-off config hashing to S3G.1's `654393d8…`;
+  emitting it always would re-identify every configuration ever written.
+- **DO NOT** re-run the S3G.1 128-row tokenizer audit because validation is now wired. The
+  wiring changes no rendering semantics — the chat template digest `a55ee1b1660128b7` is
+  byte-identical — and S3G.2 re-checked the validation arm alone: 0 of 9 truncate.
+- **DO NOT** treat the S3G.1 plan `a9b8c6e2…` as executable authority. It is
+  `SUPERSEDED_PREVALIDATION_PREVIEW`: an honest preview of a run that could not have
+  measured its validation split. The current plan is `122efc62…`, and both are
+  root-dependent (§14.27).
+- **DO NOT** remove the closing `trainer.evaluate()`. `max_steps=40` gives 2.99 realised
+  epochs, so an epoch-cadence run stops before the third boundary; without the closing pass
+  the "final" validation loss is the end of epoch 2, not the weights the run saves.
+- **DO NOT** add validation numbers to `AdapterManifest`. Its field list is closed and its
+  version is deliberately unmoved so run-004's manifest `06b1d3a3…` still verifies. The
+  observability record lives in `backend_result.json`, already allowlisted.
 - **DO NOT** read `S3H_READY: YES` as an authorisation. It is a statement about
   preconditions; the operator has not authorised training.
 
@@ -1614,21 +1832,27 @@ requested next step
 
 ## 19 — NEXT: M62 S3H (not authorised)
 
-> **S3G is COMPLETE as a design milestone and S3G.1 as a qualification milestone.** The
-> candidate is specified, its corpus is built, leakage-qualified and now **tokenizer-audited**,
-> its configuration is chosen, and its plan rebuilds to **zero blockers**. **Nothing was
-> trained.** Docs: `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` (design)
-> and `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md` (qualification).
+> **S3G is COMPLETE as a design milestone, S3G.1 as a qualification milestone, and S3G.2 as
+> the wiring milestone.** The candidate is specified, its corpus is built, leakage-qualified
+> and tokenizer-audited, its configuration is chosen, **its validation split now reaches the
+> trainer**, and its plan rebuilds to **zero blockers**. **Nothing was trained.** Docs:
+> `jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md` (design),
+> `jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md` (qualification) and
+> `jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md` (wiring). **Read all three before S3H.**
 
 **Where the candidate stands**
 
 ```
 QUALITY_CANDIDATE:   DESIGNED    qwen3-06b-lora-quality-live-001
 TRAINING_DATASET:    QUALIFIED   m62-defensive-quality-train v1  (9bbac2f0…)
-TRAINING_CONFIG:     QUALIFIED   option B, config_hash 654393d8…
+TRAINING_CONFIG:     QUALIFIED   option B, config_hash b5f63cd8…  (validation_strategy=epoch)
 MODEL_CACHE:         VERIFIED    present, c1899de2… the only revision cached
 MAX_SEQ_LENGTH_512:  QUALIFIED   0 of 128 rows truncate; longest row 178 tokens
-TRAINING_PLAN:       READY_PREVIEW  a9b8c6e2…, 0 blockers, 2 warnings
+TRAIN_DATASET_WIRED:      YES    107 rows -> train_dataset
+VALIDATION_DATASET_WIRED: YES    9 rows  -> eval_dataset, once per epoch + closing evaluate()
+EARLY_STOPPING:      DISABLED
+CHECKPOINT_SAVING:   DISABLED
+TRAINING_PLAN:       READY_PREVIEW  122efc62…, 0 blockers, 2 warnings
 TRAIN_TOKEN:         NOT CREATED, NOT CONSUMED
 TRAINING_EXECUTED:   NO
 ADAPTER_CREATED:     NO
@@ -1637,34 +1861,37 @@ S3H_READY:           YES  (preconditions only — NOT an authorisation)
 
 **The remaining gate is the operator's, and it is the only one**
 
-The two technical preconditions are closed. To reproduce the plan (a dry run — it creates
+All three technical preconditions are closed. To reproduce the plan (a dry run — it creates
 nothing and spends nothing):
 
 ```
 python jarvis/scripts/build_quality_training_config.py     --dataset-root <repo>/jarvis/training_gym_datasets     --output-root  <repo>/jarvis/training_runs     --model-cache-root <the reviewed cache the operator supplies> --plan
 ```
 
-Expect `config_hash 654393d8…`, `plan_hash a9b8c6e2…`, `plan_blockers: []`. If the corpus
-is absent from that dataset root, rebuild it first with
-`jarvis/scripts/build_training_corpus.py --root <same dataset root>`; it is deterministic
-and must reproduce manifest `9bbac2f0…`. **A different output root changes both hashes**
-(§14.27) — that is expected, not a mismatch to investigate.
+Expect `config_hash b5f63cd8…`, `plan_hash 122efc62…`, `plan_blockers: []`,
+`validation_strategy: epoch`, `validation_export_rows: 9`. If the corpus is absent from that
+dataset root, rebuild it first with `jarvis/scripts/build_training_corpus.py --root <same
+dataset root>`; it is deterministic, must reproduce manifest `9bbac2f0…`, and **now writes
+both exports** (`sft_train.jsonl` and `sft_validation.jsonl`). **A different output root
+changes both hashes** (§14.27) — that is expected, not a mismatch to investigate.
 
 **Then, if authorised: M62 S3H — FIRST QUALITY-ORIENTED LIVE TRAINING RUN.**
 
 Preconditions:
 
 1. ~~the reviewed cache root supplied and the plan rebuilt to **zero blockers**~~ —
-   **CLOSED 2026-08-13 (S3G.1)**;
+   **CLOSED 2026-08-13 (S3G.1, re-confirmed in S3G.2 at `122efc62…`)**;
 2. ~~confirmation against the real tokenizer that no training row truncates at 512~~ —
    **CLOSED 2026-08-13 (S3G.1): 0 of 128 rows**;
-3. **explicit operator authorisation for live training** — **still not given**. Neither
-   S3G nor S3G.1 authorises any;
-4. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once — **not
+3. ~~a validation split the trainer actually reads~~ — **CLOSED 2026-08-13 (S3G.2, D31)**;
+4. **explicit operator authorisation for live training** — **still not given**. None of
+   S3G, S3G.1 or S3G.2 authorises any;
+5. a fresh plan and its single-use `TRAIN:<hash>` token, consumed exactly once — **not
    created**.
 
-The run itself: option B, ~19–48 minutes estimated, 4-hour hard ceiling, CPU, fp32,
-offline, no checkpoints, LoRA-only artefacts.
+The run itself: option B, **~20–52 minutes** estimated (19–48 plus an estimated +1 to +4 for
+the eval arm), 4-hour hard ceiling, CPU, fp32, offline, no checkpoints, LoRA-only artefacts,
+**validation loss observable per epoch plus a closing measurement**.
 
 **After that, separately authorised:** the eligibility-grade paired evaluation under the
 contract in §12 of the S3G doc — `m62-defensive-eval v2`, `reasoning_policy = DISABLED`,
@@ -1678,11 +1905,19 @@ RUN_004_DISPOSITION:       KEEP_AS_SMOKE_REFERENCE_ONLY
 RUN_004_QUALITY_PROMOTION: EXCLUDED
 ```
 
-**S3H must not begin automatically.** Nothing in S3G *or S3G.1* authorises training,
+**S3H must not begin automatically.** Nothing in S3G, S3G.1 *or S3G.2* authorises training,
 evaluation, promotion, activation, registry mutation, merge, tag or a version bump.
 `S3H_READY: YES` describes preconditions; it is not permission.
 
 ---
+
+### Superseded — the S3G.2 brief (completed 2026-08-13)
+
+> **M62 S3G.2 — TRAIN-SIDE VALIDATION WIRING, EVAL-LOSS OBSERVABILITY, AND FINAL S3H
+> READINESS.** Trace why the promoted VALIDATION split reached the trainer as nothing,
+> implement the smallest correct production wiring, expose validation loss, preserve every
+> artefact-security rule, and rebuild the plan. **Done** (D31). The one thing it could not
+> close is operator authorisation for live training, which is not a technical prerequisite.
 
 ### Superseded — the S3G.1 brief (completed 2026-08-13)
 
@@ -1759,9 +1994,13 @@ identity** — never a mutation of run-004.
    decision, D29, D30 and the previewed plan. **This is the current technical basis
    for anything about training.**
 3b. **`jarvis/docs/V69_M62_S3G1_PRETRAIN_QUALIFICATION.md`** — the verified cache, the
-   real tokenizer audit, the 512 qualification and the **zero-blocker** plan. Read it
+   real tokenizer audit, the 512 qualification and the first **zero-blocker** plan. Read it
    with the S3G doc, not instead of it: S3G designs the candidate, S3G.1 qualifies it
-   for execution. **Read both before anything about S3H.**
+   for execution.
+3c. **`jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md`** — D31, the validation wiring, the
+   eval cadence, the checkpoint-safety argument, the metric record, and the **current**
+   config `b5f63cd8…` / plan `122efc62…`. **Read all three before anything about S3H**;
+   this one holds the current hashes.
 4. **`jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md`** — the human rulings
    H1–H6, the body-free review evidence, corpus v2, and the reasoning-policy
    preflight. **This is the current technical basis for anything about evaluation.**
