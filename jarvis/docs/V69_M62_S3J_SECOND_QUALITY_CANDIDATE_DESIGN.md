@@ -239,7 +239,7 @@ test, so that property stays checkable rather than asserted.
 | Manifest | **`24ceb1e0677b14aaccaea2b667e6d7388530e73f2df4d7a463368500d818fc0f`** |
 | Split-plan hash | `17bdd8609b62ba5388810a5ef7fd23926425ec6810d61edafd6736195558dd49` |
 | Split-policy hash | `1c8b242a379dbe43cf58877f7d65e2bae77b797170c5655b5787caabf97df842` (identical to `v1`) |
-| Leakage report hash | `d2fbea6d…` (see §7.4 for the cross-corpus reports) |
+| Leakage report hash (intra-corpus, bound into the manifest) | `1d694ff432ccd53d1ed1de57d03b81c8d249b2b9ff60b5ba0a705a526faff06e` — see §7.4 for the six cross-corpus reports |
 | TRAIN export hash | `82780fa0edc4c99198d0074a8a01b08507fa3eed54b4af50c3e045d5e07ae921` |
 | TRAIN export file sha256 | `72065595893decf87b6276595634f01c8dbb2313cbfbbd482bbe660e63166410` |
 | VALIDATION export hash | `ac065112c4cb3a2195100c3f11289d1e109f40441d293ded280d9b6cddd540fd` |
@@ -743,7 +743,7 @@ GATE POLICY       e5003319…  (identical to the S3I live plan's binding)
 GRADER POLICY     2059579278f42d159447b3f281df2fa5b34e058d03cf944f7f0b8547763447b2
 METRIC POLICY     2d0830103bc11f280fc2a25e5ac8f0f79bd3e6a1ad589046d238e9fc5d9cfd87
 STATISTICAL       663ebf65b73536fe3bd41043568a1f737ff751a43a964d14ff67c4e12662bf18
-FAMILY POLICY     2059… / see the policy set; unchanged from S3I
+FAMILY POLICY     580fbe9104cbe684f702cba016e1191c83745fb8502642636c3fc885135065b1
 RESOURCE POLICY   0486300a3bca61717b0dd119721915709a4f34dd403f5ecdd45eb209bef65834
 GENERATION        reasoning DISABLED · max_new_tokens 512 · temperature 0.0 · seed 0
                   timeout_s 300 explicit (D33: declared, UNENFORCED)
