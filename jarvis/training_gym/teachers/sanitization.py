@@ -189,6 +189,34 @@ def _local_hostname() -> str:
         return ""
 
 
+def _identity_pattern(literal: str) -> re.Pattern[str]:
+    """Match *literal* as an identity, not as a syllable inside an ordinary word.
+
+    **Why this is not a plain substring match (V69 M62 S3J, defect D36).** It used to
+    be, and the consequence was that on a host whose account name happened to spell a
+    fragment of English, every corpus containing that fragment was silently rewritten
+    at promotion time — so a promoted dataset's ``manifest_hash`` became a function of
+    the building account's name. Measured: on a host whose account is a common
+    four-letter sequence, one row of ``m62-defensive-quality-train v1`` had an ordinary
+    word rewritten, and that version could not be rebuilt to the digest it was trained
+    under. A dataset identity that depends on host state is the D34 failure class, and
+    this module's own contract already forbade the behaviour: *"a sanitizer that mangles
+    ordinary data is a sanitizer an operator switches off."*
+
+    The guard is deliberately NARROWER than a word boundary. ``\\b`` would stop matching
+    ``kali`` in ``kali123`` and ``kali_2``, which are exactly the shapes a real leak
+    takes. This refuses the match only when the literal is flanked by ASCII letters on
+    BOTH sides — the one case where the hit cannot be an identity because it is the
+    middle of a longer word. Everything else — start or end of string, punctuation, a
+    digit, a separator, a path component — still matches and is still redacted.
+
+    :func:`sanitize_text` and :func:`scan_export_payload` both use this, so the redactor
+    and the independent verifier can never disagree about what an identity is.
+    """
+    return re.compile(
+        r"(?<![A-Za-z])" + re.escape(literal) + r"(?![A-Za-z])", re.IGNORECASE)
+
+
 def _identities() -> tuple[tuple[str, str], ...]:
     """``(literal, replacement)`` pairs for the operator's own identity strings.
 
@@ -283,8 +311,7 @@ def sanitize_text(text: object, *,
         categories.append("scanner_unavailable")
 
     for literal, replacement in _identities():
-        pattern = re.compile(re.escape(literal), re.IGNORECASE)
-        cleaned, hits = pattern.subn(replacement, cleaned)
+        cleaned, hits = _identity_pattern(literal).subn(replacement, cleaned)
         if hits:
             redactions += hits
             categories.append("identity")
@@ -384,9 +411,11 @@ def scan_export_payload(payload: object) -> tuple[str, ...]:
         found.append("absolute_path")
     if any(pattern.search(blob) for pattern in _REASONING_MARKERS):
         found.append("hidden_reasoning")
-    lowered = blob.lower()
     for literal, _replacement in _identities():
-        if literal.lower() in lowered:
+        # The same definition the redactor uses -- see `_identity_pattern`. A verifier
+        # that read "identity" more broadly than the redactor writes it would refuse
+        # every payload containing an ordinary word that spells the account name.
+        if _identity_pattern(literal).search(blob):
             found.append("identity")
             break
     return tuple(sorted(set(found)))
