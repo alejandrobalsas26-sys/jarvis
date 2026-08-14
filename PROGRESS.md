@@ -1129,6 +1129,72 @@ unchanged scorer.
 **Real training/eval:** none. **Enabled:** an S3I whose two remaining conditions are, again,
 operator decisions rather than engineering.
 
+### M62 S3I.1 — Kali-native evaluation runtime and canonical eval-v2 lineage
+**Purpose:** close the two blockers S3I stopped on. **Qualification milestone — two weights
+were loaded, nothing was generated.**
+**Status:** **COMPLETE.** **Doc:**
+`jarvis/docs/V69_M62_S3I1_KALI_RUNTIME_AND_CANONICAL_LINEAGE.md`.
+**The operator revoked the Windows-host requirement and chose Kali Linux as the S3I
+execution host,** authorising a fresh clean clone and a new pinned Linux runtime.
+**Fresh clone, because the old checkout is CRLF-dirty.** That checkout shows 182 tracked
+files modified, 72 417 (+) / 72 417 (−), with `git diff --ignore-all-space` **empty** — pure
+line endings from the Windows copy. It was left untouched and read only for the remote URL
+and its gitignored runtime artefacts. **No `.gitattributes` was added**; repository-wide EOL
+policy is separate work.
+**B1 closed — a new Linux runtime, not a reused Windows one.** Isolated gitignored venv:
+**Python 3.13.14**, **torch 2.13.0+cpu**, **transformers 5.14.1**, **peft 0.20.0** — the
+three the S3H manifest records, at exactly those releases — plus safetensors 0.8.0,
+tokenizers 0.22.2, accelerate 1.14.0, numpy 2.5.2, **jsonschema 4.26.0** (resolved from the
+version present in both copied Windows environments; `scoring.py` refuses schema validity
+without it). CPU, CUDA `False`. Python differs from S3H's 3.12.10 and `requires-python
+= ">=3.11"` permits it. `HISTORICAL_WINDOWS_RUNTIME: REFERENCE_ONLY`,
+`CROSS_PLATFORM_BYTEWISE_INFERENCE_EQUIVALENCE: NOT_CLAIMED` — what is guaranteed is that
+**both S3I arms run under this runtime and differ only by the adapter**. The
+**chat-template digest `a55ee1b1…` re-derived on Linux matches the Windows one exactly.**
+**Load-only qualification, zero inference.** Baseline `Qwen3ForCausalLM`, eval, CPU, fp32,
+596 049 920 params, all finite, no `peft_config`. Candidate `PeftModelForCausalLM`,
+`active_adapters ['default']`, r16/α32, 196 LoRA layers, **not merged**, adapter SHA
+unchanged by the load. Offline throughout, no download. `MODEL_FORWARD_PASSES: 0`,
+`TOKENS_GENERATED: 0`. S3I.0's loader decision was **not** revisited.
+**B2 closed — D34 FIXED.** Root cause reproduced from the fresh clone:
+`PromotionRequest.parent_manifest_hash` defaults to `""`, `resolved_parent()` falls back to
+`latest_manifest_hash(root, dataset_id)`, and the corpus generator never set the field — so
+disk state chose the lineage. Pre-fix: `v2` into a clean root → `genesis` / `10ad2308…`;
+after `v1` → `0970600c…` / `82b60bfd…`; `diff -r` reports **one** differing file
+(`manifest.json`) and **two** differing fields. **Fix (one tracked source file,
+`scripts/build_evaluation_corpus.py`):** a `CANONICAL_LINEAGE` map declares `v1` a genesis
+and `v2`'s parent as the exact `v1` digest; `build()` settles lineage before writing any
+candidate and passes `parent_manifest_hash` explicitly;
+`_materialize_canonical_parent` builds the parent if absent and **refuses** if what is on
+disk is not the declared parent. **Fails closed — never degrades to genesis.** The generic
+`latest_manifest_hash` default was deliberately left alone for other datasets.
+**Post-fix, four roots agree:** clean root, `v1`-first, root polluted with unrelated
+datasets, and a fresh independent root all produce parent `0970600c…` / manifest
+`82b60bfd…`. `v1` re-derives `0970600c…` everywhere.
+**Corpus unchanged:** 36 records, splits 12/12/12, families 12/9/9/6, leakage CLEAN 0
+findings, `created_at_utc` unchanged, **shards byte-identical**. `CORPUS_ROWS_CHANGED: 0`.
+**One derived digest moved and it is not a content change:** the `v2` task-pack hash
+`b4f9d6b1…` → **`3744a22e…`**, because a task record carries
+`source_dataset_manifest_hash` as provenance. Across all 36 records that is **the only one
+of 22 fields that differs** — `user_prompt`, `system_prompt`, `task_hash`,
+`expected_output_schema`, `tool_schemas`, `grader_ids`, `refusal_expected`, `kind`, `split`,
+`task_family` and `source_shard_hash` are identical. `v1`'s pack `d714d89b…` is the unmoved
+control. **Do not read this as the corpus changing.**
+**Tests:** new `test_training_gym_m62_s3i1_canonical_eval_lineage.py`, **18 tests**, of
+which **11 fail against the pre-fix generator**. `V2_MANIFEST_HASH` and `V2_PACK_HASH` in
+the S3F.2 file updated to the canonical values with the pre-D34 values recorded inline.
+**Plan PREVIEW, zero blockers:** `S3I_EVALUATION_PLAN_HASH:
+dc8723b0391505687771d48f1c8d5d6031b77d5140ed179ebb80ecd5a15732f3`, 0 blockers, 0 warnings,
+36 tasks / 36 + 36 generations / 216 grader executions, `dataset_manifest_hash` = the
+canonical `82b60bfd…`. **`--execute` was never invoked; no `EVAL:` token was created or
+consumed.** The hash binds runtime and output-root evidence, so it is **not** comparable to
+any Windows preview and the live run must re-derive it from the same clone.
+**D32 `SUPERSEDED_BY_D34`** — its "documentation defect" reading was incomplete; the root
+cause is `LINEAGE_DEPENDENT_ON_INCIDENTAL_BUILD_STATE`. **D33, D28, D29 untouched.**
+**Scoring, graders, S3G gates unchanged.**
+**Real training/eval:** none. **Enabled:** S3I is now `S3I_READY: YES`, awaiting only the
+explicit operator authorisation to spend the still-unspent one-run authority.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -1311,8 +1377,9 @@ username, hostname, cache path, credential or raw dataset row appears in any exp
 |---|---|
 | Dataset | `m62-defensive-eval` |
 | Version | `v1` (frozen) and **`v2`** (S3F.2, the version a future eligibility-grade run binds) |
-| Manifest hash `v1` | `0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b` |
-| Manifest hash `v2` | `82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60` — **corrected in S3I.0 (D32)**; the previously recorded `10ad2308…` does not reproduce and is superseded, not deleted |
+| Manifest hash `v1` | `0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b` — genesis, frozen |
+| Manifest hash `v2` | `82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60` — **canonical under D34**, parent `0970600c…` (= `v1`) |
+| Historical `v2` genesis digest | `10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0` — `HISTORICAL_GENESIS_LINEAGE_IDENTITY`. **Legitimate, reproducible, and NOT corrupt**; non-canonical for future eligibility. See D34 |
 | Candidates built / promoted / rejected | **36 / 36 / 0** |
 | Leakage | **CLEAN**, 0 findings |
 | `evaluation_only` | `true` |
@@ -1369,8 +1436,8 @@ PROMOTE:<plan-hash> → immutable DatasetVersion`. Deterministic across roots.
 |---|---|
 | Builder | `training_gym/evaluation/pack_builder.py` :: `build_task_pack_from_dataset` |
 | Materialized task count | **36** (both versions) |
-| Materialized task-pack hash `v1` | `d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0` |
-| Materialized task-pack hash `v2` | `b4f9d6b1f81ff13cc45d72e612a717b126bfcb64cccf326c2dc9b4b58abade11` |
+| Materialized task-pack hash `v1` | `d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0` — unmoved |
+| Materialized task-pack hash `v2` | `3744a22e1866a40b6e5b27ae20e798365dfbf2d3c071018afba14bf611ec2665` — **moved by D34, and NOT a content change.** A task record carries `source_dataset_manifest_hash`, so pack identity follows dataset identity. Across all 36 records that is the **only** one of 22 fields that differs between the two lineages; every model-facing field is identical. Pre-D34 value: `b4f9d6b1f81ff13cc45d72e612a717b126bfcb64cccf326c2dc9b4b58abade11` |
 
 **Two different digests — do not rediscover this as a hash mismatch:**
 
@@ -1825,22 +1892,37 @@ result rather than a false one — which is the behaviour that made the defect d
    none, and that the corpus content is exactly what S3F.2 described. The historical
    milestone docs still carry the superseded digest by convention — **PROGRESS §7 is the
    authoritative value.**
-46. **D34 — the v2 corpus digest is lineage-dependent, and D32 must be reopened.**
-   `82b60bfd…` and `10ad2308…` are *both* reproducible outputs of the unmodified tracked
-   generator; which one appears depends only on whether `v1` exists in the target dataset
-   root when `v2` is built. The corpus material is byte-identical in both. Until an
-   operator decides which lineage is canonical, **no plan may bind either digest**, and
-   §14.45's "`10ad2308…` reproduces under none" is superseded by measurement.
-47. **The generation runtime does not exist on this host.** `torch`, `transformers` and
-   `peft` are absent from the system interpreter, and `.venv` / `.venv-training-smoke`
-   are **Windows** virtual environments. Every live M62 run happened on that Windows
-   host. No held-out evaluation, and no other work needing real weights, can run here
-   until an execution host is supplied or provisioning is explicitly authorised — which
-   PROGRESS §3 makes an invariant and §19 makes an operator decision.
-48. **The working tree differs from the index in 183 files by line endings alone**
-   (CRLF worktree, LF index; `git diff --ignore-all-space` is empty). It is a copy
-   artefact, not an edit. It was **not** reset, restored, cleaned or stashed. Only the
-   two documentation files S3I legitimately writes were normalised to LF.
+46. **D34 — the v2 corpus digest was lineage-dependent. FIXED in S3I.1; D32 is
+   `SUPERSEDED_BY_D34`.** `82b60bfd…` and `10ad2308…` are *both* reproducible outputs of
+   the then-unmodified tracked generator; which one appeared depended only on whether `v1`
+   existed in the target dataset root when `v2` was built, because
+   `PromotionRequest.resolved_parent()` discovered the parent from disk and the generator
+   never declared one. The corpus material is byte-identical in both.
+   **Operator ruling D34: `CANONICALIZE_V2_PARENT_TO_V1`.** `v2` now declares parent
+   `0970600c…` explicitly and builds to `82b60bfd…` in every root and build order; it
+   fails closed rather than degrading to genesis. `10ad2308…` is
+   `HISTORICAL_GENESIS_LINEAGE_IDENTITY` — legitimate, reproducible, **not corrupt**, and
+   non-canonical for future eligibility. §14.45's "`10ad2308…` reproduces under none" was
+   superseded by measurement and is now fully resolved. **CLOSED.**
+47. **A generation runtime now exists on this host — the Kali-native one built in S3I.1.**
+   The *system* interpreter still has no `torch`/`transformers`/`peft`, and `.venv` /
+   `.venv-training-smoke` remain unusable **Windows** trees. Live work uses the isolated
+   gitignored Linux venv (Python 3.13.14 / torch 2.13.0+cpu / transformers 5.14.1 / peft
+   0.20.0 / jsonschema 4.26.0), which is **newly qualified** and is *not* claimed to be
+   bytewise equivalent to the Windows runtime that produced the S3H adapter. Both S3I arms
+   run under it and differ only by the adapter. Provisioning it was an explicit operator
+   authorisation, and PROGRESS §3's no-install invariant otherwise stands.
+48. **The ORIGINAL Kali checkout differs from its index in 182 files by line endings
+   alone** (CRLF worktree, LF index; `git diff --ignore-all-space` is empty). A copy
+   artefact, not an edit. It was **not** reset, restored, cleaned or stashed, and S3I.1
+   did not develop in it — a **fresh clone** was used instead. Repository-wide EOL policy
+   (a `.gitattributes`) is deliberately **still open** and is separate work.
+49. **On this host the full inner suite cannot be compared to the Windows baselines
+   without care.** `openai>=1.0.0` is a declared base dependency that is absent from the
+   system interpreter, and its absence alone fails 62 tests and breaks one module's
+   collection — reproduced identically at pristine HEAD, so it is environmental, not a
+   regression. Skip and failure sets are host-dependent; do **not** reconcile counts
+   across hosts by arithmetic.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -1855,7 +1937,10 @@ result rather than a false one — which is the behaviour that made the defect d
 
 | Scope | Result | When |
 |---|---|---|
-| **Main (inner) suite** | **6701 passed, 50 skipped, 0 failed** (`pytest tests -q -rs` from `jarvis/`, 14m21s) | **S3G.2, 2026-08-13 — AUTHORITATIVE** |
+| **Main (inner) suite** | **6755 passed, 54 skipped, 0 failed, 0 errors** (2m26s) | **S3I.1, 2026-08-13, KALI — AUTHORITATIVE for this host** |
+| **Focused M62 (`-k m62`)** | **2777 passed, 18 skipped, 0 failed** (1m29s) | **S3I.1, 2026-08-13, KALI — AUTHORITATIVE for M62 on this host** |
+| Main (inner) suite, bare system interpreter | 6651 passed, **62 failed**, 55 skipped, 1 error | S3I.1 — **all 63 are `No module named 'openai'`**, a declared base dependency absent here. Reproduced at pristine HEAD; **not** a regression, and no M62/dataset/evaluation test is among them |
+| **Main (inner) suite** | **6701 passed, 50 skipped, 0 failed** (`pytest tests -q -rs` from `jarvis/`, 14m21s) | **S3G.2, 2026-08-13, WINDOWS — authoritative for that host** |
 | **Focused M62 (`-k m62`)** | **2755 passed, 25 skipped, 0 failed** (10m17s) | **S3G.2, 2026-08-13 — AUTHORITATIVE for M62** |
 | S3G + S3G.1 + S3G.2 regression files | **102 passed, 0 failed** (32 pre-existing + 70 new) | S3G.2, 2026-08-13 |
 | S3G.2 file alone (`s3g2_validation_wiring`) | **70 passed, 0 skipped** | S3G.2, 2026-08-13 |
@@ -2060,6 +2145,25 @@ hand-written and no hash is invented.
 
 ## 18 — What future sessions must NOT redo
 
+- **DO NOT** reopen why `10ad2308…` and `82b60bfd…` differ. S3I.1 §7 settles it: one field,
+  `parent_manifest_hash`, and the digest derived from it.
+- **DO NOT** call `10ad2308…` corrupt, and do not rewrite history to say it was invalid. It
+  is the legitimate historical genesis-lineage build over byte-identical material.
+- **DO NOT** use the genesis-`v2` identity for future eligibility. Canonical is
+  `82b60bfd…`, parented on `v1` `0970600c…`.
+- **DO NOT** make the canonical `v2` lineage depend on filesystem state again, and do not
+  remove the explicit `v1` parent without a new schema decision.
+- **DO NOT** read the moved `v2` task-pack hash (`b4f9d6b1…` → `3744a22e…`) as a corpus
+  change — it is provenance following identity. See §8 and S3I.1 §8.1.
+- **DO NOT** develop tracked changes in the old CRLF-dirty checkout, and do not copy tracked
+  files out of it into a clean clone.
+- **DO NOT** reuse the Windows virtualenvs on Linux, and **DO NOT** describe the Kali
+  runtime as identical to the historical Windows one.
+- **DO NOT** re-run the S3I.0 loader benchmark. `KEEP_EXISTING_LOADING_STRATEGY` stands.
+- **DO NOT** change `reasoning_policy` from `DISABLED` or `max_new_tokens` from `512`.
+- **DO NOT** fix D33, D28 or D29 inside S3I.
+- **DO NOT** create `EVAL:` authority before the explicit live-S3I authorisation, and do not
+  paste the S3I.1 preview plan hash into a live run — re-derive it.
 - **DO NOT** re-run S3D training just to prove the adapter exists. It exists; 40 structural
   checks verified the bytes on disk.
 - **DO NOT** retrain `qwen3-06b-lora-smoke-live-004`.
@@ -2303,35 +2407,58 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3I retry (authorised, unspent, blocked)
+## 19 — NEXT: M62 S3I (authorised in principle, unspent, now READY)
 
-> **S3I was authorised and did not run.** The operator ratified D32 and D33 and authorised
-> exactly one held-out eligibility evaluation. The pre-token gate failed on two independent
-> blockers, so **no plan was built, no `EVAL:` authority was created, nothing was generated,
-> and the one-run authorisation remains unspent.** Doc:
-> **`jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`**.
+> **S3I.1 closed both blockers. `S3I_READY: YES`.** The runtime exists on this host, the
+> corpus has one canonical identity, and the real plan builds with **zero blockers**. What
+> remains is not engineering: it is the explicit operator authorisation to spend the
+> single-use `EVAL:` authority. Docs:
+> **`jarvis/docs/V69_M62_S3I1_KALI_RUNTIME_AND_CANONICAL_LINEAGE.md`** (qualification) and
+> `jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md` (the blocked attempt).
 
-**The two blockers, both operator decisions rather than engineering**
+**What the live S3I session must do**
 
 ```
-B1  EXECUTION HOST      no torch/transformers/peft here; both venvs are Windows trees.
-                        Either run S3I on the Windows host where the runtime, the reviewed
-                        cache and S3I.0's load measurement already apply, or explicitly
-                        authorise provisioning an equivalent isolated environment here and
-                        accept that a changed runtime is a changed measurement.
+HOST                    Kali Linux, the fresh clone, the gitignored Linux eval venv
+                        (Python 3.13.14 / torch 2.13.0+cpu / transformers 5.14.1 /
+                        peft 0.20.0 / jsonschema 4.26.0). Offline: HF_HUB_OFFLINE=1,
+                        TRANSFORMERS_OFFLINE=1, HF_HUB_DISABLE_TELEMETRY=1.
 
-B2  D34 / REOPEN D32    m62-defensive-eval v2 is 10ad2308… built standalone and 82b60bfd…
-                        built after v1 into the same root. Both reproduce; the shards are
-                        byte-identical. Decide which lineage is canonical — and whether the
-                        corpus identity should bind a parent link at all — before any plan
-                        binds a digest.
+PLAN                    Re-derive the plan and require 0 blockers. The reference hash is
+                        dc8723b0391505687771d48f1c8d5d6031b77d5140ed179ebb80ecd5a15732f3.
+                        It binds runtime and OUTPUT-ROOT evidence, so it reproduces only
+                        from the same clone with the same roots. Re-derive it; never paste
+                        it in, and never force an older value.
+
+BIND                    m62-defensive-eval v2, manifest 82b60bfd…, parent 0970600c… (D34);
+                        Qwen/Qwen3-0.6B @ c1899de2…; qwen3-06b-lora-quality-live-001,
+                        adapter 43213035…; reasoning DISABLED; max_new_tokens 512;
+                        timeout_s 300 (declared, UNENFORCED — D33);
+                        isolated_loads / PER_REQUEST, 36 + 36 = 72 loads.
+
+SPEND                   One EVAL: token, once. No retry. Then: no promotion, no activation,
+                        no registry mutation, no merge, no tag, no release, no version bump.
 ```
 
-**Everything else is ready and was verified this session:** the adapter
-(`verify_completed_run` → 0 problems, `43213035…`, manifest `1f76ccfb…`, tree `00aa57bb…`),
-the base revision `c1899de2…`, the reviewed cache, the corpus **content**, the unchanged S3G
-§6 gates, the unchanged scorer, `reasoning_policy = DISABLED`, `max_new_tokens = 512`,
-`timeout_s = 300` (unenforced, D33), and `isolated_loads` / 72 loads.
+**Verified and holding as of S3I.1:** the adapter (`verify_completed_run` → 0 problems,
+`43213035…`, manifest `1f76ccfb…`, tree `00aa57bb…`), the base revision `c1899de2…`, the
+reviewed cache, the chat template `a55ee1b1…` **re-derived on Linux**, the corpus content
+and its CLEAN leakage, the unchanged S3G §6 gates and the unchanged scorer.
+
+**Limitations that travel into the run and must be stated in its report:** D28
+(`tool_call_validity_rate` vacuous — the six `tool_call_schema` tasks cannot decide
+eligibility), D29 (refusal detection partly instrument-limited), D33 (`timeout_rate`
+structurally vacuous), and the fact that this runtime is **newly qualified on Linux** and is
+not claimed to be bytewise equivalent to the Windows runtime that produced the adapter.
+
+### Superseded — the two-blocker framing (S3I close, resolved by S3I.1)
+
+```
+B1  EXECUTION HOST      CLOSED by S3I.1 — the operator chose Kali and authorised a new
+                        pinned Linux runtime, which was built and qualified.
+B2  D34 / REOPEN D32    CLOSED by S3I.1 — canonical v2 explicitly parents v1; D32 is
+                        SUPERSEDED_BY_D34.
+```
 
 ### Superseded — the pre-S3I framing (S3I.0 close)
 
