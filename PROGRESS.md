@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-14 (S3J.1 — Kali TRAINING runtime qualified; candidate-002 plan re-derived to 0 blockers; still untrained) |
+| **Last updated** | 2026-08-14 (S3K — candidate 002 TRAINED: 40/40 steps, 2.0 epochs, 15m32s, adapter `319c2524…` verified; unevaluated) |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 / S3G / S3G.1 / S3G.2 / S3H commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3J.1 CLOSED (PASS) — the Kali TRAINING runtime is qualified and the candidate-002 plan re-derives to ZERO blockers.** The operator accepted the S3J result as recorded and authorised provisioning a **separate** training environment. **Still zero training, zero evaluation, zero `TRAIN`/`EVAL` authority, zero optimizer steps, zero generated tokens, no adapter.** The one thing S3J could not close is closed: a new isolated gitignored venv **`.venv-m62-train-linux`** carries the *training* profile at the exact historical S3H releases — **torch 2.13.0+cpu · transformers 5.14.1 · peft 0.20.0 · datasets 5.0.1 · trl 1.9.2 · accelerate 1.14.0** (plus safetensors 0.8.0, tokenizers 0.22.2, sentencepiece 0.2.2, numpy 2.5.2, jsonschema 4.26.0, huggingface_hub 1.27.0), Python 3.13.14, CPU, CUDA false. **`datasets` and `trl` are the two versions no adapter manifest records** (`RUNTIME_PACKAGES` covers only torch/transformers/peft); they were resolved from the S3H `.venv-training-smoke` tree still on this machine, which corroborates all three that *are* recorded. Every version pinned with `==`; no `pip install -U`; `pip check` clean; network used for **packages only** — **no model was downloaded**. **`.venv-m62-eval-linux` was READ and never written** — it is the runtime the S3I measurement of record was taken in and stays immutable. `build_dependency_report(TRAINING, SFT_LORA)` now returns **ready, 0 blockers** (S3J measured 2). The backend stack and the repository training modules import; `trl.SFTTrainer` present. **`m62-defensive-quality-train v2` rebuilt on the new runtime into two fresh roots → `24ceb1e0…`, parent `9bbac2f0…`, 182/154/12/8+8, leakage clean, both exports exact** (`82780fa0…` 154 rows, `ac065112…` 12 rows, re-hashed from the bytes too). **D36 control re-run and PASSES** — `--check-only` reports `host_identity_unstable: []` and v1 rebuilds to `9bbac2f0…`. Chat template **`a55ee1b1…` re-derived offline and EXACT**; token lengths reproduce S3J row for row (TRAIN 65/112/159/169, VALIDATION 90/109/150/155), **0 truncations at 512**. Candidate-002 config **unchanged in every field** (r16/α32/0.05, seven projections, LR 1e-4, 2 epochs, max_steps 40, batch 1×8, seed 42, 512, fp32/CPU, no checkpoints, no early stopping, `load_best_model_at_end` false, validation epoch + closing `evaluate()`). **Re-derived, never forced: `config_hash` reproduces `08be37d3…`** (same clone, same `output_root_id` `1dd79ac5…`) **and `plan_hash` MOVES to `738b187f…`** — because the plan binds `dependency_report_hash`, and a plan hash that had *not* moved would have meant it was not reading the runtime it claims to bind. **`TRAINING_PLAN_BLOCKER_COUNT: 0`, 1 warning (CPU-run caution, reported not suppressed), `is_executable: true` — and deliberately not executed.** Bounded **load-only** check (authorised, optional): base weights loaded offline at fp32/CPU and wrapped by PEFT — all seven projections adapted, **10,092,544 trainable of 606,142,464 (1.665 %)** — with **no forward, no backward, no optimizer, no `generate()`, no adapter written**. Gate policy re-derived to **`e5003319…`** with **zero drift** (graders `2059579278…`, metrics `2d083010…`, statistical `663ebf65…`, family `580fbe91…`, resource `0486300a…`; QG-2 still absolute). `eval-v3` (`7c948236…`) verified by reading only — **not rebuilt, not modified, no inference run**. Candidate 001's adapter re-hashed to `43213035…`, untouched. **818 focused tests pass, 0 fail.** **`S3K_READY: YES`**. Doc: `jarvis/docs/V69_M62_S3J1_KALI_TRAINING_RUNTIME_QUALIFICATION.md`. Previously: **M62 S3J CLOSED (PARTIAL) — the SECOND quality candidate is designed, its corpus is built, and a FRESH holdout is frozen before it trains.** The operator accepted the sealed S3I result and authorised a design/dataset/holdout/plan milestone. **Zero training, zero evaluation, zero `TRAIN`/`EVAL` authority, zero generated tokens, no adapter.** Candidate 001 is untouched and still `EVALUATED_NOT_ELIGIBLE`. New: **`m62-defensive-quality-train v2`** (`24ceb1e0…`, parent `9bbac2f0…` = v1, declared not discovered) — **182 rows / 154 TRAIN / 12 VALIDATION / 8+8 internal held-out**, strictly additive (**all 128 v1 rows byte-identical, all 37 refusal rows retained, 0 v1 rows moved split**), **+54 new examples**: 36 safe-completion/over-refusal counterexamples, 28 structured-output rows across six new defensive domains, and 10 that are deliberately **both at once**. Refusal share falls 28.9 % → 20.3 % because the completion side grew, never because safety training was thinned. New: **`m62-defensive-eval v3`** (`7c948236…`, parent `82b60bfd…` = v2), pack `28d2f7d0…` — **36 tasks, splits 12/12/12, families 12/9/9/6, decision classes 12/6/18, per-(split, family) identical to v2**, so every predeclared gate keeps its denominator, and **every task instance is new**: 0 exact overlap with v2 on ids, prompts, targets and task hashes. **Leakage CLEAN (0 findings) in all six train×eval pairings**; `semantic_similarity` reported UNAVAILABLE, not clean. **`D35`** ruled: eval-v2 is now development evidence for S3J and may not be the sole fresh holdout for candidate 002 — a methodology ruling, **not** a claim of contamination. **`D36` found and FIXED**: the promotion sanitizer matched the operator's account name as a plain SUBSTRING, so `m62-defensive-quality-train v1` rebuilt on this host to `2ef40bda…` instead of `9bbac2f0…` — a dataset identity that depended on the BUILDING HOST (the D34 failure class by another route). Narrowed to a letter-flanked match; **v1 now rebuilds to `9bbac2f0…` and both eval controls are unmoved**. Candidate **002** = `qwen3-06b-lora-quality-live-002`: same LoRA r16/α32/dropout 0.05, same seven projections, fp32/CPU, seed 42, 512, batch 1×8; **only two dials move — LR 2e-4 → 1e-4 and epochs 3 → 2 — for 40 optimizer steps = exactly 2.0 passes over 154 rows**. Tokenizer qualification: **0 truncations at 512** over all 182 rows (max 178), chat template `a55ee1b1…` unmoved. **Gate policy hashes to `e5003319…`, byte-identical to the S3I live plan — the gates were not loosened after the result was known.** Training plan preview `f7209a64…` binds everything and carries **2 blockers, both one fact: this host has an EVALUATION runtime, not a TRAINING one (`datasets`, `trl` absent)** — nothing was installed, because provisioning is an operator decision. **`S3J_READY_FOR_TRAINING: NO`**, with exactly one operator-resolvable cause. Doc: `jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md`. Previously: **M62 S3I LIVE CLOSED — the first quality-candidate held-out eligibility evaluation RAN.** The operator authorised exactly one attempt on Kali Linux; one single-use `EVAL` authority was created and consumed once (2026-08-14T06:35:51Z), and **36 + 36 = 72 real held-out generations** completed in **24m22s**, 0 errors, 0 missing pairs, state `completed`. Live plan `619be971…`, 0 blockers, 0 warnings, re-derived (never forced from the S3I.1 preview `dc8723b0…`), and every substantive binding — corpus `82b60bfd…`, pack `3744a22e…`, generation policy `c6b0b682…`, **gate policy `e5003319…`** — reproduced the qualified preview exactly. **All nine security vetoes PASS and the candidate is a large measured security improvement**: `critical_safety_violations` **11 → 3**, `secret_leaks` **1 → 0**, required-refusal success **1/12 → 9/12** (sign test p = 0.0039), 0 new security findings, 9 fixed. **QG-1 and QG-4 PASS** (aggregate over 30 qualified tasks: 16W/8T/6L, wins−losses 10, CI95 [+0.0882, +0.4203] excludes 0). **QG-2, QG-3, FG-1, FG-2 FAIL**: the candidate over-refuses 2 of 24 safe tasks (`sr-safe-05`, `sr-safe-06`) and degrades structured output from a **perfect 9/9 baseline to 7/9** on both JSON parseability and schema validity. Operational gates PASS. **`CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`** — and `S3I_LIVE_EVALUATION: PASS`, because the instrument returned a decision against gates fixed before training. **No raw response bodies were persisted (audited); no promotion, no registry mutation.** Doc: `jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md`. Previously: **M62 S3I BLOCKED before EVAL authority creation** — the operator authorised one held-out eligibility evaluation and ratified D32/D33. It **did not run**: the pre-token gate failed on two independent blockers. **B1** — the generation runtime is absent on this host: `torch`/`transformers`/`peft` are not installed, and both venvs (`.venv`, `.venv-training-smoke`) are **Windows** environments that cannot execute here. **B2 / D34** — rebuilding `m62-defensive-eval v2` from the tracked generator into a fresh root yields **`10ad2308…`**, not the ratified `82b60bfd…`; the difference is `parent_manifest_hash`, which binds `v1` only when `v1` is already present in the target root. Both digests are reproducible and the corpus material is byte-identical, so the corpus identity depends on build lineage — **D32 must be reopened**. **No EVAL token was created or consumed; 0 tokens generated; candidate unchanged at `TRAINED_UNEVALUATED`.** Doc: `jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`. Previously: **M62 S3I.0 CLOSED (held-out evaluation runtime qualification)** — model loading measured at **2.2–2.8 % of a median request**, so the per-request load strategy is **deliberately kept**; no production source changed. Two defects found while preparing the evaluation: **D32** (the recorded eval-v2 manifest digest does not reproduce) and **D33** (the declared generation timeout is not enforced). **Nothing was generated.** Previously: **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
-| **Next phase** | **M62 S3K — the second candidate's single live training run.** **Both S3J blockers are now closed**, so the only thing standing between this repository and a trained candidate 002 is a new explicit operator authorisation. The runtime exists (`.venv-m62-train-linux`, §14.58) and the plan re-derives to 0 blockers. S3K must: run **in the training venv, never the evaluation one**; **re-derive its own plan** in its own session and require 0 blockers — never paste `738b187f…` or `f7209a64…` in, since a plan binds `output_root_id`, runtime and hardware evidence; then spend one fresh single-use `TRAIN:` token exactly once, no retry. Superseded description: It needs two operator inputs first, and neither is a design question: (a) **resolve the training runtime** — authorise provisioning `datasets` and `trl` into a *separate* isolated environment, or supply a host that already carries the training profile; do **not** add them to the qualified evaluation venv S3I's measurement was taken in; (b) **re-derive the plan on that host to 0 blockers** — never paste `f7209a64…` in, since it binds `output_root_id`, runtime and hardware evidence. Then one fresh single-use `TRAIN:` token, spent exactly once, no retry. After it trains, a **separate new `EVAL` authority** evaluates it against the already-frozen `m62-defensive-eval v3` (`7c948236…`, pack `28d2f7d0…`) under the unchanged gates (`e5003319…`), reasoning `DISABLED`, `max_new_tokens` 512, `timeout_s` 300 stated explicitly. Superseded description: **Operator decision on the first quality candidate.** S3I is spent and closed: the one-run authority was consumed, the candidate is `EVALUATED_NOT_ELIGIBLE`, and no retry, rescore or promotion is authorised. Two options, both needing new explicit authority: (a) accept `NOT_ELIGIBLE` and close the candidate; or (b) authorise **S3J**, a second candidate whose corpus targets the two *measured* defects — over-refusal on safe tasks and structured-output degradation — while preserving the refusal gain. A retrain needs a new `TRAIN` authority; any further evaluation needs a new plan at a new generation and a new single-use `EVAL` authority. Superseded description: **M62 S3I retry** — still authorised (the one-run authority is **unspent**), still blocked. Needs two operator decisions: resolve **D34 / reopen D32** (which lineage is v2's canonical identity), and supply an execution host — either the Windows host where the runtime and cache already exist, or explicit authorisation to provision an equivalent isolated environment here. Superseded description: It needs explicit operator authorisation, a fresh `EVAL` plan and single-use token, and ratification of the two S3I.0 conditions (D32's corrected corpus digest, D33's explicit `timeout_s`) — §19. |
+| **Current phase** | **M62 S3K CLOSED (PASS) — the SECOND quality candidate is TRAINED.** The operator authorised exactly one live attempt; one fresh single-use `TRAIN` authority was created and consumed **once** (2026-08-14T23:34:11Z), and `qwen3-06b-lora-quality-live-002` **trained to completion**: **40/40 optimizer steps, exactly 2.0 realised epochs, 15m32s** on CPU/fp32 against a 4-hour ceiling, `succeeded`, 0 backend warnings, `interrupted: false`. Every identity was re-derived before the token existed: `train-v2` `24ceb1e0…` (182 = 154/12/8/8), both exports exact (`82780fa0…` 154 rows / `ac065112…` 12 rows, re-hashed from the bytes too), cache `present` with `c1899de2…` the sole revision and evidence `f399355ef441e8ec…` matching S3H, chat template **`a55ee1b1…` exact**, **0 truncations of 166**, masking verified on both splits, gate policy **`e5003319…` unmoved**, `eval-v3` read-only at `7c948236…`, candidate 001 re-hashed to `43213035…`. **The plan was re-derived, never forced: `a07f924969387e2b42db5e86d98f1f438d464f94bc969e79f9a0f194f790ffcb`, 0 blockers, 1 warning (CPU-run caution, reported not suppressed)** — reproduced by the tracked generator **and** the production `train_experiment --print-plan`, twice each. It **moved** from S3J.1's `738b187f…` while `config_hash` reproduced `08be37d3…`; every substantive binding reproduced S3J.1 exactly and the only host-state binding left is `hardware_report_hash`, whose identity carries the RAM/disk *categories* (raw volatile figures are deliberately excluded so a token cannot expire between derivation and use). **Train loss 3.277057** (curve 3.952389 → 2.925896 over 8 logged points, **not monotone** — it rises at steps 15, 30 and 40, and the run was not touched for it). **Two** periodic validations (epoch 1.0 step 20 → **3.090760**; epoch 2.0 step 40 → **3.018860**) plus the closing `trainer.evaluate()` at **3.018860** with a visibly different runtime (11.5471 s vs 11.3733 s) — the *opposite* cadence arrangement to S3H, because `max_steps=40` lands exactly on the epoch-2 boundary at 154 rows. No non-finite metric. **Adapter `319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409`**, 40,422,168 bytes, manifest `11897e16…`, tree `220350ef…`, **392 LoRA tensors (196 + 196, zero non-LoRA)**, all F32, **0 non-finite, 0 all-zero**, 10,092,544 trainable of 606,142,464 (1.665 %) — matching S3J.1's load-only prediction exactly. `verify_completed_run` → **0 problems**. **0 checkpoint directories, 0 forbidden files, no base-model dump, no pickle, no symlink, no nested directory**; the ledger gained exactly `started` and `completed`. **Wall time was MEASURED, not assumed** — 15m32s against S3J.1's ~27–35 min projection, because that projection was calibrated on the *Windows* host: ≈2.96 s per micro-batch here against ≈5.4 s there. **`CANDIDATE_STATUS: TRAINED_UNEVALUATED`** — quality is **unknown, not estimated**. **No held-out evaluation, no `EVAL` authority, 0 response tokens generated, `eval-v3` still FROZEN_UNSEEN, no promotion, no registry mutation, no tracked source changed.** Doc: `jarvis/docs/V69_M62_S3K_SECOND_QUALITY_LIVE_TRAINING.md`. Previously: **M62 S3J.1 CLOSED (PASS) — the Kali TRAINING runtime is qualified and the candidate-002 plan re-derives to ZERO blockers.** The operator accepted the S3J result as recorded and authorised provisioning a **separate** training environment. **Still zero training, zero evaluation, zero `TRAIN`/`EVAL` authority, zero optimizer steps, zero generated tokens, no adapter.** The one thing S3J could not close is closed: a new isolated gitignored venv **`.venv-m62-train-linux`** carries the *training* profile at the exact historical S3H releases — **torch 2.13.0+cpu · transformers 5.14.1 · peft 0.20.0 · datasets 5.0.1 · trl 1.9.2 · accelerate 1.14.0** (plus safetensors 0.8.0, tokenizers 0.22.2, sentencepiece 0.2.2, numpy 2.5.2, jsonschema 4.26.0, huggingface_hub 1.27.0), Python 3.13.14, CPU, CUDA false. **`datasets` and `trl` are the two versions no adapter manifest records** (`RUNTIME_PACKAGES` covers only torch/transformers/peft); they were resolved from the S3H `.venv-training-smoke` tree still on this machine, which corroborates all three that *are* recorded. Every version pinned with `==`; no `pip install -U`; `pip check` clean; network used for **packages only** — **no model was downloaded**. **`.venv-m62-eval-linux` was READ and never written** — it is the runtime the S3I measurement of record was taken in and stays immutable. `build_dependency_report(TRAINING, SFT_LORA)` now returns **ready, 0 blockers** (S3J measured 2). The backend stack and the repository training modules import; `trl.SFTTrainer` present. **`m62-defensive-quality-train v2` rebuilt on the new runtime into two fresh roots → `24ceb1e0…`, parent `9bbac2f0…`, 182/154/12/8+8, leakage clean, both exports exact** (`82780fa0…` 154 rows, `ac065112…` 12 rows, re-hashed from the bytes too). **D36 control re-run and PASSES** — `--check-only` reports `host_identity_unstable: []` and v1 rebuilds to `9bbac2f0…`. Chat template **`a55ee1b1…` re-derived offline and EXACT**; token lengths reproduce S3J row for row (TRAIN 65/112/159/169, VALIDATION 90/109/150/155), **0 truncations at 512**. Candidate-002 config **unchanged in every field** (r16/α32/0.05, seven projections, LR 1e-4, 2 epochs, max_steps 40, batch 1×8, seed 42, 512, fp32/CPU, no checkpoints, no early stopping, `load_best_model_at_end` false, validation epoch + closing `evaluate()`). **Re-derived, never forced: `config_hash` reproduces `08be37d3…`** (same clone, same `output_root_id` `1dd79ac5…`) **and `plan_hash` MOVES to `738b187f…`** — because the plan binds `dependency_report_hash`, and a plan hash that had *not* moved would have meant it was not reading the runtime it claims to bind. **`TRAINING_PLAN_BLOCKER_COUNT: 0`, 1 warning (CPU-run caution, reported not suppressed), `is_executable: true` — and deliberately not executed.** Bounded **load-only** check (authorised, optional): base weights loaded offline at fp32/CPU and wrapped by PEFT — all seven projections adapted, **10,092,544 trainable of 606,142,464 (1.665 %)** — with **no forward, no backward, no optimizer, no `generate()`, no adapter written**. Gate policy re-derived to **`e5003319…`** with **zero drift** (graders `2059579278…`, metrics `2d083010…`, statistical `663ebf65…`, family `580fbe91…`, resource `0486300a…`; QG-2 still absolute). `eval-v3` (`7c948236…`) verified by reading only — **not rebuilt, not modified, no inference run**. Candidate 001's adapter re-hashed to `43213035…`, untouched. **818 focused tests pass, 0 fail.** **`S3K_READY: YES`**. Doc: `jarvis/docs/V69_M62_S3J1_KALI_TRAINING_RUNTIME_QUALIFICATION.md`. Previously: **M62 S3J CLOSED (PARTIAL) — the SECOND quality candidate is designed, its corpus is built, and a FRESH holdout is frozen before it trains.** The operator accepted the sealed S3I result and authorised a design/dataset/holdout/plan milestone. **Zero training, zero evaluation, zero `TRAIN`/`EVAL` authority, zero generated tokens, no adapter.** Candidate 001 is untouched and still `EVALUATED_NOT_ELIGIBLE`. New: **`m62-defensive-quality-train v2`** (`24ceb1e0…`, parent `9bbac2f0…` = v1, declared not discovered) — **182 rows / 154 TRAIN / 12 VALIDATION / 8+8 internal held-out**, strictly additive (**all 128 v1 rows byte-identical, all 37 refusal rows retained, 0 v1 rows moved split**), **+54 new examples**: 36 safe-completion/over-refusal counterexamples, 28 structured-output rows across six new defensive domains, and 10 that are deliberately **both at once**. Refusal share falls 28.9 % → 20.3 % because the completion side grew, never because safety training was thinned. New: **`m62-defensive-eval v3`** (`7c948236…`, parent `82b60bfd…` = v2), pack `28d2f7d0…` — **36 tasks, splits 12/12/12, families 12/9/9/6, decision classes 12/6/18, per-(split, family) identical to v2**, so every predeclared gate keeps its denominator, and **every task instance is new**: 0 exact overlap with v2 on ids, prompts, targets and task hashes. **Leakage CLEAN (0 findings) in all six train×eval pairings**; `semantic_similarity` reported UNAVAILABLE, not clean. **`D35`** ruled: eval-v2 is now development evidence for S3J and may not be the sole fresh holdout for candidate 002 — a methodology ruling, **not** a claim of contamination. **`D36` found and FIXED**: the promotion sanitizer matched the operator's account name as a plain SUBSTRING, so `m62-defensive-quality-train v1` rebuilt on this host to `2ef40bda…` instead of `9bbac2f0…` — a dataset identity that depended on the BUILDING HOST (the D34 failure class by another route). Narrowed to a letter-flanked match; **v1 now rebuilds to `9bbac2f0…` and both eval controls are unmoved**. Candidate **002** = `qwen3-06b-lora-quality-live-002`: same LoRA r16/α32/dropout 0.05, same seven projections, fp32/CPU, seed 42, 512, batch 1×8; **only two dials move — LR 2e-4 → 1e-4 and epochs 3 → 2 — for 40 optimizer steps = exactly 2.0 passes over 154 rows**. Tokenizer qualification: **0 truncations at 512** over all 182 rows (max 178), chat template `a55ee1b1…` unmoved. **Gate policy hashes to `e5003319…`, byte-identical to the S3I live plan — the gates were not loosened after the result was known.** Training plan preview `f7209a64…` binds everything and carries **2 blockers, both one fact: this host has an EVALUATION runtime, not a TRAINING one (`datasets`, `trl` absent)** — nothing was installed, because provisioning is an operator decision. **`S3J_READY_FOR_TRAINING: NO`**, with exactly one operator-resolvable cause. Doc: `jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md`. Previously: **M62 S3I LIVE CLOSED — the first quality-candidate held-out eligibility evaluation RAN.** The operator authorised exactly one attempt on Kali Linux; one single-use `EVAL` authority was created and consumed once (2026-08-14T06:35:51Z), and **36 + 36 = 72 real held-out generations** completed in **24m22s**, 0 errors, 0 missing pairs, state `completed`. Live plan `619be971…`, 0 blockers, 0 warnings, re-derived (never forced from the S3I.1 preview `dc8723b0…`), and every substantive binding — corpus `82b60bfd…`, pack `3744a22e…`, generation policy `c6b0b682…`, **gate policy `e5003319…`** — reproduced the qualified preview exactly. **All nine security vetoes PASS and the candidate is a large measured security improvement**: `critical_safety_violations` **11 → 3**, `secret_leaks` **1 → 0**, required-refusal success **1/12 → 9/12** (sign test p = 0.0039), 0 new security findings, 9 fixed. **QG-1 and QG-4 PASS** (aggregate over 30 qualified tasks: 16W/8T/6L, wins−losses 10, CI95 [+0.0882, +0.4203] excludes 0). **QG-2, QG-3, FG-1, FG-2 FAIL**: the candidate over-refuses 2 of 24 safe tasks (`sr-safe-05`, `sr-safe-06`) and degrades structured output from a **perfect 9/9 baseline to 7/9** on both JSON parseability and schema validity. Operational gates PASS. **`CANDIDATE_ELIGIBILITY: NOT_ELIGIBLE`** — and `S3I_LIVE_EVALUATION: PASS`, because the instrument returned a decision against gates fixed before training. **No raw response bodies were persisted (audited); no promotion, no registry mutation.** Doc: `jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md`. Previously: **M62 S3I BLOCKED before EVAL authority creation** — the operator authorised one held-out eligibility evaluation and ratified D32/D33. It **did not run**: the pre-token gate failed on two independent blockers. **B1** — the generation runtime is absent on this host: `torch`/`transformers`/`peft` are not installed, and both venvs (`.venv`, `.venv-training-smoke`) are **Windows** environments that cannot execute here. **B2 / D34** — rebuilding `m62-defensive-eval v2` from the tracked generator into a fresh root yields **`10ad2308…`**, not the ratified `82b60bfd…`; the difference is `parent_manifest_hash`, which binds `v1` only when `v1` is already present in the target root. Both digests are reproducible and the corpus material is byte-identical, so the corpus identity depends on build lineage — **D32 must be reopened**. **No EVAL token was created or consumed; 0 tokens generated; candidate unchanged at `TRAINED_UNEVALUATED`.** Doc: `jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`. Previously: **M62 S3I.0 CLOSED (held-out evaluation runtime qualification)** — model loading measured at **2.2–2.8 % of a median request**, so the per-request load strategy is **deliberately kept**; no production source changed. Two defects found while preparing the evaluation: **D32** (the recorded eval-v2 manifest digest does not reproduce) and **D33** (the declared generation timeout is not enforced). **Nothing was generated.** Previously: **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
+| **Next phase** | **M62 S3L — the second candidate's held-out eligibility evaluation.** S3K is spent and closed: the one-run `TRAIN` authority was consumed exactly once, candidate 002 exists as a verified adapter (`319c2524…`), and **no retry, resume or retrain is authorised**. What remains is not engineering: it is a new explicit operator authorisation and a **fresh single-use `EVAL` authority**. S3L must evaluate `qwen3-06b-lora-quality-live-002` against the already-frozen **`m62-defensive-eval v3`** (`7c948236…`, parent `82b60bfd…`, pack `28d2f7d0…`) under the **unchanged** gates (`e5003319…`), `reasoning_policy = DISABLED`, `max_new_tokens = 512`, `timeout_s = 300` **stated explicitly** (the default is 120 s; D33 means declared and not enforced); run it in **`.venv-m62-eval-linux`**, not the training venv; and **re-derive its own plan** in its own session to 0 blockers — never paste a previous plan hash in. Superseded description: **M62 S3K — the second candidate's single live training run.** **Both S3J blockers are now closed**, so the only thing standing between this repository and a trained candidate 002 is a new explicit operator authorisation. The runtime exists (`.venv-m62-train-linux`, §14.58) and the plan re-derives to 0 blockers. S3K must: run **in the training venv, never the evaluation one**; **re-derive its own plan** in its own session and require 0 blockers — never paste `738b187f…` or `f7209a64…` in, since a plan binds `output_root_id`, runtime and hardware evidence; then spend one fresh single-use `TRAIN:` token exactly once, no retry. Superseded description: It needs two operator inputs first, and neither is a design question: (a) **resolve the training runtime** — authorise provisioning `datasets` and `trl` into a *separate* isolated environment, or supply a host that already carries the training profile; do **not** add them to the qualified evaluation venv S3I's measurement was taken in; (b) **re-derive the plan on that host to 0 blockers** — never paste `f7209a64…` in, since it binds `output_root_id`, runtime and hardware evidence. Then one fresh single-use `TRAIN:` token, spent exactly once, no retry. After it trains, a **separate new `EVAL` authority** evaluates it against the already-frozen `m62-defensive-eval v3` (`7c948236…`, pack `28d2f7d0…`) under the unchanged gates (`e5003319…`), reasoning `DISABLED`, `max_new_tokens` 512, `timeout_s` 300 stated explicitly. Superseded description: **Operator decision on the first quality candidate.** S3I is spent and closed: the one-run authority was consumed, the candidate is `EVALUATED_NOT_ELIGIBLE`, and no retry, rescore or promotion is authorised. Two options, both needing new explicit authority: (a) accept `NOT_ELIGIBLE` and close the candidate; or (b) authorise **S3J**, a second candidate whose corpus targets the two *measured* defects — over-refusal on safe tasks and structured-output degradation — while preserving the refusal gain. A retrain needs a new `TRAIN` authority; any further evaluation needs a new plan at a new generation and a new single-use `EVAL` authority. Superseded description: **M62 S3I retry** — still authorised (the one-run authority is **unspent**), still blocked. Needs two operator decisions: resolve **D34 / reopen D32** (which lineage is v2's canonical identity), and supply an execution host — either the Windows host where the runtime and cache already exist, or explicit authorisation to provision an equivalent isolated environment here. Superseded description: It needs explicit operator authorisation, a fresh `EVAL` plan and single-use token, and ratification of the two S3I.0 conditions (D32's corrected corpus digest, D33's explicit `timeout_s`) — §19. |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -879,6 +879,105 @@ MODEL_REGISTRY_MUTATED:               NO
 MERGE / TAG / RELEASE / VERSION_BUMP: NO / NO / NO / NO
 S3K_READY:                            YES
 ```
+
+### M62 S3K outcome statuses (2026-08-14, this milestone)
+
+**Nothing above is revised by these.** S3J.1 closed with `TRAIN_TOKEN_CREATED: NO` and
+`plan_is_executable: true`, and that stays the honest record of it. What changed here is
+that the operator authorised **one** live attempt and it was taken.
+
+```
+S3K_SECOND_QUALITY_LIVE_TRAINING: PASS
+S3K_PRETOKEN_GATE:                PASS
+STARTING_HEAD:                    4ec4b36bcd4e012f68e07ce9a3737c475f270319
+TRAINING_HOST:                    KALI_LINUX_MINI_PC
+TRAINING_VENV:                    .venv-m62-train-linux   (evaluation venv NOT touched)
+PYTHON / TORCH / TRANSFORMERS:    3.13.14 / 2.13.0+cpu / 5.14.1
+PEFT / DATASETS / TRL / ACCEL:    0.20.0 / 5.0.1 / 1.9.2 / 1.14.0
+DEVICE / PRECISION / CUDA:        CPU / FP32 / False
+DEPENDENCY_REPORT:                ready=True, 0 blockers
+
+SECOND_CANDIDATE:                 qwen3-06b-lora-quality-live-002
+CANDIDATE_PRE_TRAIN_STATUS:       DESIGNED_UNTRAINED
+RUN_INTENT:                       QUALITY_CANDIDATE
+TRAIN_DATASET:                    m62-defensive-quality-train v2 (24ceb1e0…, parent 9bbac2f0…)
+TRAIN_ROWS / VALIDATION_ROWS:     154 / 12
+TRAIN_EXPORT / VALIDATION_EXPORT: 82780fa0… / ac065112…  (both re-hashed from the bytes)
+BASE_MODEL / REVISION:            Qwen/Qwen3-0.6B @ c1899de289a04d12100db370d81485cdf75e47ca
+MODEL_CACHE:                      present; evidence f399355ef441e8ec… (matches S3H); one revision
+CHAT_TEMPLATE_DIGEST:             a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8
+ROWS_TRUNCATED_AT_512:            0 / 166   (masking self-test verified on BOTH splits)
+CONFIG_HASH:                      08be37d37dd403ea8b049ab7bb32498f5d767ef013876920783ad4669e608649
+LIVE_PLAN_HASH:                   a07f924969387e2b42db5e86d98f1f438d464f94bc969e79f9a0f194f790ffcb
+PLAN_BLOCKER_COUNT:               0
+PLAN_WARNINGS:                    1   (CPU-run caution — reported, not suppressed)
+PLAN_REDERIVED_NOT_FORCED:        YES  (738b187f… and f7209a64… REFERENCE ONLY; 4 derivations agreed)
+
+TRAIN_TOKEN_CREATED:              YES  (exactly one, derived from the plan)
+TRAIN_TOKEN_CONSUMED:             YES  (exactly once, 2026-08-14T23:34:11Z)
+TRAIN_ATTEMPTS:                   1
+RETRY_AUTHORIZED:                 NO
+TRAINING_RESULT:                  SUCCESS
+START / END (UTC):                2026-08-14T23:34:11Z -> 2026-08-14T23:49:43Z
+WALL_TIME:                        15m32s  (932 s; backend 930.196 s) against a 4-hour ceiling
+OPTIMIZER_STEPS:                  40 planned / 40 completed
+EPOCHS_COMPLETED:                 2.0   (exactly — max_steps lands on the epoch boundary)
+CONVERTED_RECORDS / TRUNCATED:    154 / 0
+TRAIN_LOSS:                       3.277057   (curve 3.952389 -> 2.925896 over 8 logged points,
+                                  NOT monotone: it rises at steps 15, 30 and 40)
+VALIDATION_STRATEGY:              EPOCH_PLUS_FINAL
+PERIODIC_VALIDATION_EVALUATIONS:  2   (epoch 1.0 step 20; epoch 2.0 step 40)
+PERIODIC_VALIDATION_LOSSES:       3.090760 / 3.018860
+FINAL_VALIDATION_EVALUATION:      PRESENT  (closing evaluate(), 11.5471 s vs the periodic 11.3733 s)
+FINAL_VALIDATION_LOSS:            3.018860
+VALIDATION_ROWS_TRUNCATED:        0 / 12
+VALIDATION_CONTRIBUTES_GRADIENTS: NO
+GENERATION_DURING_VALIDATION:     NO
+NON_FINITE_METRIC_DETECTED:       NO
+EARLY_STOPPING:                   DISABLED
+CHECKPOINT_SAVING:                DISABLED
+LOAD_BEST_MODEL_AT_END:           FALSE
+
+ADAPTER_CREATED:                  YES
+ADAPTER_FILE:                     adapter_model.safetensors
+ADAPTER_SIZE_BYTES:               40422168
+ADAPTER_SHA256:                   319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409
+ADAPTER_MANIFEST_HASH:            11897e16b081cc4df2517f1c0c0904b7b7580ab4daf8fea0157e49ee4e2f6ca8
+ARTIFACT_SET_TREE_HASH:           220350efe5e2dda594f17ca03f1cf6db15885403a908a3b6dcd899b4d498d6f4
+LORA_TENSORS:                     392  (196 lora_A + 196 lora_B; 0 non-LoRA)
+ADAPTER_TENSORS_FINITE:           YES  (0 of 392 non-finite; 0 all-zero)
+TRAINABLE_PARAMETERS:             10,092,544 of 606,142,464  (1.665%)
+SAFETENSORS_ONLY:                 YES
+CHECKPOINT_DIRECTORIES:           0
+FORBIDDEN_ARTIFACTS:              0
+BASE_MODEL_DUMP_DETECTED:         NO
+ARTIFACT_VERIFICATION:            PASS  (verify_completed_run -> 0 problems)
+SOURCE_CHANGED:                   NO
+
+CANDIDATE_001:                    UNTOUCHED (43213035…, EVALUATED_NOT_ELIGIBLE)
+GATE_POLICY_HASH:                 e50033194afeb7680815b1f11268cce4e0fe1549c4334c8257883603ea8f73c5
+GATE_DRIFT:                       NONE
+EVAL_V3:                          FROZEN_UNSEEN  (read-only manifest verification)
+LIVE_HELDOUT_EVALUATION:          NOT_RUN
+EVAL_TOKEN_CREATED / CONSUMED:    NO / NO
+MODEL_RESPONSE_TOKENS_GENERATED:  0
+CANDIDATE_STATUS:                 TRAINED_UNEVALUATED
+QUALITY_CANDIDATE_ELIGIBILITY:    UNKNOWN
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+MODEL_REGISTRY_MUTATED:           NO
+MERGE / TAG / RELEASE / VERSION_BUMP:  NO / NO / NO / NO
+S3L_READY:                        YES  (preconditions only — NOT an authorisation)
+```
+
+**Validation loss fell at both measured points and did not turn up** — the opposite of
+candidate 001's shape (3.205301 → 3.122892 → 3.125407). That is what the two moved dials
+were chosen to produce, and it is **not** evidence that candidate 002 is the better model.
+The two numbers are computed over **different splits** (12 rows of `v2` against 9 rows of
+`v1`), twelve rows is a very small sample, and VALIDATION is train-side steering material
+that appears in no S3G §6 gate. The training losses are equally incomparable: 3.277057
+against 2.991393 is a different corpus, a different row count, a different learning rate
+and a different number of passes. See
+`jarvis/docs/V69_M62_S3K_SECOND_QUALITY_LIVE_TRAINING.md` §9.3.
 
 **`plan_is_executable: true` is not an instruction to execute it.** The operator asked to
 inspect the qualified runtime and the final plan first. Creating a `TRAIN` token needs a
@@ -1765,7 +1864,8 @@ All 52 M62 commits in chronological order (`3705114..HEAD`).
 | 58+ | see `git log a167420..4772a2c` | S3H: the first quality-oriented live training run and its handoff update. **Documentation only — no tracked source changed**; the adapter and its manifests are gitignored runtime artefacts | **S3H** |
 | 60+ | see `git log 4772a2c..HEAD` | S3I.0: the evaluation-runtime load benchmark, the keep-the-loader decision, D32 and D33. **Documentation only — no tracked source changed** | **S3I.0** |
 | 62+ | see `git log 6a3a7fa..8381c64` | S3J: the second quality training curriculum (`m62-defensive-quality-train v2`), the fresh eligibility holdout (`m62-defensive-eval v3`), the D36 identity-redaction fix, the candidate-002 configuration and plan preview, 57 tests and the design doc. **First source change since S3G.2** | **S3J** |
-| 63+ | see `git log 8381c64..HEAD` | S3J.1: the Kali training-runtime qualification — one `.gitignore` stanza for `.venv-m62-train-linux`, plus the documentation and handoff. **No source change** | **S3J.1** |
+| 63+ | see `git log 8381c64..4ec4b36` | S3J.1: the Kali training-runtime qualification — one `.gitignore` stanza for `.venv-m62-train-linux`, plus the documentation and handoff. **No source change** | **S3J.1** |
+| 64+ | see `git log 4ec4b36..HEAD` | S3K: the second quality-oriented live training run — one `TRAIN:` token derived and consumed once against plan `a07f9249…`, `qwen3-06b-lora-quality-live-002` trained 40/40 steps at exactly 2.0 epochs in 15m32s, adapter `319c2524…` verified with 0 problems, candidate `TRAINED_UNEVALUATED`. **Documentation only — no tracked source changed**; the adapter and its manifests are gitignored runtime artefacts | **S3K** |
 
 ---
 
@@ -1831,6 +1931,75 @@ optimizer step, create an adapter, mutate model weights, generate a token, run a
 inference against `eval-v3`, rebuild or modify `eval-v3`, touch the S3G gates, change one
 candidate-002 hyperparameter, alter the evaluation venv, download a model, or change a
 single line of source. The plan is `is_executable: true` and was not executed.
+
+---
+
+### M62 S3K — Second quality-candidate live training run
+
+**Purpose:** consume one single-use `TRAIN` authority and execute the qualified
+candidate-002 plan once, on real weights. **Execution milestone — a model was loaded and
+trained; nothing was evaluated on held-out material and nothing was promoted.**
+**Status:** **COMPLETE — `TRAINING_RESULT: SUCCESS`.** **Doc:**
+`jarvis/docs/V69_M62_S3K_SECOND_QUALITY_LIVE_TRAINING.md`.
+
+**Authorisation:** the operator authorised **exactly one** attempt. One token was derived,
+consumed once, and no retry is authorised whatever the outcome had been.
+**Starting checkpoint:** HEAD `4ec4b36`, `0 0`, master unchanged, tree clean.
+
+**Every identity was re-derived before the token existed, not quoted:** `train-v2`
+`24ceb1e0…` (182 rows, 154/12/8/8), TRAIN export `82780fa0…` (154 rows, file `72065595…`),
+VALIDATION export `ac065112…` (12 rows, file `7ee612ef…`) — both also re-hashed straight
+from the bytes — dataset reference `b3e1be3e…`, cache `present` with `c1899de2…` the only
+revision and evidence digest `f399355ef441e8ec…` identical to S3H's, chat template
+`a55ee1b1…` **exact**, **0 of 166 exported rows truncating at 512** with the masking
+self-test clean on both splits, config `08be37d3…`, gate policy `e5003319…` unmoved,
+`eval-v3` verified by **reading** its manifest, and candidate 001's adapter re-hashed to
+`43213035…`. The plan was reproduced by **two independent callers, twice each** — the
+tracked generator and the production `train_experiment --print-plan`, which is what
+`--execute` recomputes against — and all four returned `a07f9249…`, 0 blockers.
+
+**The plan hash moved and that is the correct outcome.** `config_hash` reproduced
+`08be37d3…` (same clone, same `output_root_id` `1dd79ac5…`); `plan_hash` is new at
+`a07f924969387e2b42db5e86d98f1f438d464f94bc969e79f9a0f194f790ffcb`, neither S3J.1's
+`738b187f…` nor S3J's `f7209a64…` pasted in or forced. Every substantive binding reproduced
+S3J.1 exactly; the one host-state binding left is `hardware_report_hash`, whose identity
+carries the RAM and disk **categories** while deliberately excluding the raw volatile
+figures — precisely so a token cannot expire between being derived and being spent.
+
+**The run:** CPU, fp32, offline, `local_files_only`, `trust_remote_code=false`, nothing
+downloaded. **40 of 40 optimizer steps, exactly 2.0 realised epochs, 15m32s** against a
+4-hour ceiling. Train loss **3.277057** (3.952389 → 2.925896 across 8 logged points,
+**not monotone** — it rises at steps 15, 30 and 40, and nothing was touched for it). **Two**
+periodic validations (3.090760 at step 20, 3.018860 at step 40) plus the closing
+`trainer.evaluate()` at **3.018860**. No non-finite metric anywhere.
+
+**The S3H cadence observation, arriving the other way round.** S3H recorded a *third*
+periodic evaluation firing at step 40 because `max_steps` stopped it at 2.897 epochs. Here
+154 rows give `ceil(154/8) = 20` steps per epoch, so 40 steps land **exactly** on the
+epoch-2 boundary and the cadence fires exactly twice. The closing pass measured the same
+weights and returned the same loss with a **different runtime** (11.5471 s vs 11.3733 s),
+which is what shows they are two passes and not one number twice. **Both arrangements are
+now demonstrated, and the closing pass must not be removed on the strength of either.**
+
+**Wall time was measured, not assumed.** S3J.1 projected ~27–35 min by calibrating on
+S3H's Windows host; the run took **15m32s**, at ≈2.96 s per micro-batch against ≈5.4 s
+there. The estimate was not wrong about the workload — it was calibrated on a different
+machine. No abort question arose.
+
+**Artefacts:** `adapter_model.safetensors` 40,422,168 bytes, sha256
+**`319c2524…`** — a **new** identity, not candidate 001's — **392 LoRA tensors** (196 + 196,
+zero non-LoRA), all F32, all finite, none all-zero, 10,092,544 trainable of 606,142,464,
+matching S3J.1's load-only prediction exactly. Manifest `11897e16…`, tree hash `220350ef…`.
+`verify_completed_run` returned **0 problems**. **0 checkpoint directories, 0 forbidden
+files, no base-model dump, no pickle, no symlink, no nested directory.** The ledger gained
+exactly `started` and `completed`.
+
+**What it does not establish:** anything about quality. No held-out material was touched,
+no response was generated, no grader ran, no S3G §6 gate was evaluated, and `eval-v3` was
+neither read as task text nor inferred against. **Candidate status is
+`TRAINED_UNEVALUATED`.**
+**Real training:** yes, once. **Real evaluation:** none. **No tracked source changed.**
+**Enabled:** S3L, once authorised.
 
 ---
 
@@ -2503,10 +2672,13 @@ result rather than a false one — which is the behaviour that made the defect d
    collection — reproduced identically at pristine HEAD, so it is environmental, not a
    regression. Skip and failure sets are host-dependent; do **not** reconcile counts
    across hosts by arithmetic.
-50. **Candidate 002 does not exist.** `DESIGNED_UNTRAINED`. Everything about its quality
-   is **unknown, not estimated**. A designed corpus is not a trained model and a plan is
-   not a result. The LR-and-epochs choice is *reasoning about drift*, not a demonstration
-   of it: no ablation was run, and none may be run against eval-v3.
+50. ~~**Candidate 002 does not exist.** `DESIGNED_UNTRAINED`.~~ **SUPERSEDED 2026-08-14
+   (S3K): it exists and is `TRAINED_UNEVALUATED`**, adapter `319c2524…`. Struck through
+   rather than deleted, because it was accurate at S3J/S3J.1 close. **What is still
+   true, and is the whole point:** everything about its **quality** is **unknown, not
+   estimated**. A trained model is not an evaluated one, and a plan is not a result. The
+   LR-and-epochs choice remains *reasoning about drift*, not a demonstration of it: no
+   ablation was run, and none may be run against eval-v3.
 51. **The training corpus is still synthetic and single-author.** 182 rows written across
    two sessions by one author, sharing a process with the held-out corpus — so a
    systematic blind spot would be invisible to a comparison between them. §14.22 stands
@@ -2559,10 +2731,37 @@ result rather than a false one — which is the behaviour that made the defect d
    (3.12.10 → 3.13.14) do not, and `numpy` differs at its patch digit (2.5.1 → 2.5.2). No
    reproduction of candidate 001's weights is asserted, and none is needed: candidate 002
    is a new run judged against gates fixed before any training.
-61. **The S3J.1 load-only check proves loading, not training.** Base weights load offline
-   at fp32/CPU and PEFT wraps all seven projections (10,092,544 trainable of
-   606,142,464). A model that wraps in memory can still fail at step 1 for reasons only a
-   real optimizer step reveals. **That step is S3K's, and it has not been taken.**
+61. ~~**The S3J.1 load-only check proves loading, not training.**~~ **CLOSED 2026-08-14
+   (S3K).** The 40 real optimizer steps were taken, and the run reproduced S3J.1's
+   prediction exactly: all seven projections adapted, **10,092,544 trainable of
+   606,142,464**, confirmed twice over — by the backend's own report and independently
+   from the safetensors header.
+62. **Candidate 002 is trained and unevaluated.** `CANDIDATE_STATUS:
+   TRAINED_UNEVALUATED`. A falling training loss means the optimiser reduced the
+   objective it was given on 154 rows; it is not evidence about refusal behaviour,
+   structured output, over-refusal or security. §14.36 applied to candidate 001 and
+   applies here unchanged.
+63. **The S3K validation signal is twelve rows, and it is not comparable with candidate
+   001's.** Validation loss went 3.090760 → 3.018860 and did not turn up, which is the
+   shape the two moved dials were chosen to produce — but 001's numbers were computed
+   over the **9-row v1** split and 002's over the **12-row v2** split. Different rows,
+   different denominator, different corpus version. The training losses (3.277057 vs
+   2.991393) are incomparable for the same reason plus a different LR and a different
+   number of passes. **A higher train loss is not a worse model and a lower validation
+   loss is not a better one.** §14.33 and §14.37 stand.
+64. **S3K is one host, one seed, one run.** No repeat, no second seed, no second host, no
+   ablation. `deterministic_reproduction_claimed` is `false`. The compute model now has a
+   third calibration point (15m32s for 40 steps over 154 rows on the **Kali** host,
+   ≈2.96 s per micro-batch against the Windows host's ≈5.4 s) — which is also the
+   measured reason S3J.1's ~27–35 min projection over-estimated: it was calibrated on the
+   other machine. §14.25 stands.
+65. **The candidate-002 adapter has never been loaded for inference.** Its 392 tensors are
+   verified as bytes — finite, LoRA-only, correctly shaped — and no forward pass through
+   the adapted model has been run by anything except the trainer's own teacher-forced
+   evaluation arm. §14.40 applied to candidate 001 and applies here unchanged.
+66. **The S3K plan hash is this session's.** `a07f9249…` binds this root, this runtime and
+   this hardware evidence, and it legitimately differs from S3J.1's `738b187f…` while
+   `config_hash` reproduced. §14.27 and §14.55 apply unchanged: re-derive, never quote.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -2691,10 +2890,26 @@ interpreters by arithmetic.** What is established is what was measured — every
 dataset, evaluation and training-gym test passes at this commit, and the 62 failures are
 one absent declared base dependency reproducing the count §14.49 already recorded.
 
-**Latest gates** (S3J.1 first, then S3J, 2026-08-14, unless noted):
+**Latest gates** (S3K first, then S3J.1 and S3J, 2026-08-14, unless noted):
 
 | Gate | Result | When |
 |---|---|---|
+| Full suite / focused M62 | **NOT RE-RUN — no tracked source changed.** S3J.1 ran the authoritative 818-test focused and adjacent selection at `4ec4b36`, the exact commit S3K executed from | **S3K** |
+| Completed-run verification (`verify_completed_run`) | **PASS — 0 problems** over the bytes on disk | **S3K** |
+| Safetensors / tensor finiteness / parameter reconciliation | **PASS** — 392 tensors, 0 non-finite, 0 all-zero, 0 non-LoRA; adapter param count equals the backend's trainable count (10,092,544) and both match S3J.1's load-only prediction | **S3K** |
+| Artefact allowlist, checkpoint and forbidden-extension scan | **PASS** — 0 `checkpoint*`, 0 `.bin`/`.pt`/`.pth`/`.pkl`/`.pickle`, no base-model dump, no symlink, no nested directory | **S3K** |
+| Dataset / export / cache re-verification before the token existed | **PASS** — every hash reproduced, both exports also re-hashed from the bytes; `probe_cache` `present`; one revision cached | **S3K** |
+| Plan reproduction (generator **and** production CLI, twice each) | **PASS** — `a07f9249…` all four times, 0 blockers, 1 warning | **S3K** |
+| Dependency gate (`TRAINING`, `SFT_LORA`) in the training venv | **PASS** — `ready=True`, 0 blockers, 8/8 installed | **S3K** |
+| Tokenizer / chat-template qualification | **PASS** — `a55ee1b1…` exact; **0 truncations of 166**; masking self-test 0 problems on both splits; 0 tokens generated | **S3K** |
+| Gate-policy drift | **PASS — zero drift**, `e5003319…` reproduced; QG-2 still absolute | **S3K** |
+| Candidate 001 integrity | **PASS** — adapter re-hashed to `43213035…`, unchanged | **S3K** |
+| `git diff --check` | **PASS** | **S3K** |
+| Secret scan over the S3K changeset | **PASS** | **S3K** |
+| Host-path scan over the changeset **and** the run artefacts | **PASS** — no absolute host path, username, hostname or cache location in any tracked file or in any file the run wrote | **S3K** |
+| `TRAIN:` / `EVAL:` token literal scan | **PASS** — no token literal in any tracked file | **S3K** |
+| Runtime artefact exclusion | **PASS** — `git check-ignore` confirms `training_runs/`; the adapter, manifests and ledger are untracked | **S3K** |
+| Ruff / Bandit / `compileall` | **NOT RUN — they gate tracked source changes; S3K has none.** Both remain absent from this host (§3) | **S3K** |
 | Focused + adjacent M62 suites | **PASS — 818 passed, 0 failed** (see the table above) | **S3J.1** |
 | `git diff --check` | **PASS** | **S3J.1** |
 | Secret scan over the S3J.1 changeset | **PASS** | **S3J.1** |
@@ -2790,7 +3005,9 @@ Every entry below is **historical** unless marked CURRENT. None is a reset targe
 | S3F.1 commits | Structured-output root cause (D26a thinking policy, D26b real schema validation), 35 regression tests, and the review-evidence *design*. Resolve with `git log --oneline d6ebeb6..2e9efe0`. |
 | `2e9efe0` | End of S3F.1. The last commit before the human operator answered H1–H6. |
 | S3G.2 commits | Train-side validation wiring: the D31 fix across the export authority, the config schema, the execution stage and the SFT backend; the validation export authority; 70 regression tests; the new zero-blocker plan `122efc62…` under config `b5f63cd8…`; S3G.1's plan `a9b8c6e2…` marked `SUPERSEDED_PREVALIDATION_PREVIEW`. First source change since S3G. Resolve with `git log --oneline 290f7d7..HEAD`. |
-| S3J.1 commits | **CURRENT.** The Kali training-runtime qualification: one `.gitignore` stanza for `.venv-m62-train-linux`, and the documentation recording the runtime, the dependency-version authority, the reproduced corpus and export identities, the re-derived zero-blocker plan (`738b187f…`) and the zero-authority evidence. **Documentation and one ignore rule; no source change.** Resolve with `git log --oneline 8381c64..HEAD`. |
+| S3K commits | **CURRENT.** The second quality-oriented live training run: one `TRAIN:` token derived and consumed once against plan `a07f9249…`, `qwen3-06b-lora-quality-live-002` trained 40/40 steps at exactly 2.0 epochs in 15m32s, adapter `319c2524…` verified with 0 problems, candidate `TRAINED_UNEVALUATED`. **Documentation only — no tracked source changed.** Resolve with `git log --oneline 4ec4b36..HEAD`. |
+| `4ec4b36` | The S3J.1 close, and the exact commit the S3K run executed from. |
+| S3J.1 commits | The Kali training-runtime qualification: one `.gitignore` stanza for `.venv-m62-train-linux`, and the documentation recording the runtime, the dependency-version authority, the reproduced corpus and export identities, the re-derived zero-blocker plan (`738b187f…`) and the zero-authority evidence. **Documentation and one ignore rule; no source change.** Resolve with `git log --oneline 8381c64..HEAD`. |
 | S3J commits | The second quality candidate's design: `m62-defensive-quality-train v2` (`24ceb1e0…`), the fresh holdout `m62-defensive-eval v3` (`7c948236…`, pack `28d2f7d0…`), the **D36** identity-redaction fix, the candidate-002 configuration and plan preview (`f7209a64…`, 2 blockers), 57 tests and the design doc. **First source change since S3G.2.** Resolve with `git log --oneline 6a3a7fa..8381c64`. |
 | `6a3a7fa` | The S3I LIVE close, and the exact commit S3J developed from. |
 | S3I.0 commits | Held-out evaluation runtime qualification: the load benchmark (2.2–2.8 % of a median request), the `KEEP_EXISTING_LOADING_STRATEGY` decision, **D32** (eval-v2 digest corrected to `82b60bfd…`) and **D33** (timeout not enforced, open). Documentation only — no tracked source changed, nothing generated. |
@@ -2915,6 +3132,61 @@ mistake a runnable plan for permission to run it.**
 - **DO NOT** create a `TRAIN` token because the plan now reports `is_executable: true`.
   Zero blockers means the run *could* start, not that it *may*. S3K needs a new explicit
   operator authorisation.
+
+**S3K is spent, sealed and verified. The second candidate is trained exactly once.**
+
+- **DO NOT** rerun S3K under the same identity. The authorised run **succeeded**;
+  retraining `qwen3-06b-lora-quality-live-002` would destroy the artefact the next
+  milestone is supposed to evaluate.
+- **DO NOT** reuse the consumed S3K `TRAIN` authority. It was spent once, at
+  2026-08-14T23:34:11Z, against plan `a07f9249…`. Replay is refused before anything is
+  spent, and a token derived again from the same plan hash authorises a run the operator
+  did not approve.
+- **DO NOT** change candidate 002's weights — no further training, no merge into base
+  weights, no re-save, no requant, no rename. Its manifest `11897e16…` and tree hash
+  `220350ef…` bind the exact bytes, and `adapter_model.safetensors` is
+  `319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409`.
+- **DO NOT** resume candidate 002 or continue it from a checkpoint. There are **no**
+  checkpoints, by design (D16), and `load_best_model_at_end` was `False`.
+- **DO NOT** retry automatically if a future authorised run fails. A retry is a new
+  operator decision, never an inference from a failure.
+- **DO NOT** use the S3K validation loss as eligibility evidence. It is twelve rows of
+  train-side steering material, it appears in no S3G §6 gate, and it authorises nothing.
+- **DO NOT** compare candidate 002's losses with candidate 001's as though they ranked the
+  two models. Different splits (12 rows of v2 vs 9 of v1), different corpus, different LR,
+  different pass count. See §14.63.
+- **DO NOT** read "validation loss fell and did not turn up" as a quality result. It is the
+  shape the two dials were chosen to produce; whether it bought anything is exactly the
+  question `eval-v3` exists to answer.
+- **DO NOT** inspect, train against, rebuild, edit or run any inference against
+  `m62-defensive-eval v3`. It is **FROZEN_UNSEEN** and S3K touched it only by reading its
+  manifest for identity verification.
+- **DO NOT** evaluate candidate 002 without a **NEW** single-use `EVAL` authority and a
+  freshly re-derived evaluation plan. S3K created none and authorises none.
+- **DO NOT** promote, activate, register or merge candidate 002 before a held-out
+  eligibility evaluation exists. `CANDIDATE_STATUS` is `TRAINED_UNEVALUATED`.
+- **DO NOT** loosen any S3G §6 gate now that a second candidate exists. `e5003319…`
+  reproduced in S3K with zero drift and a test pins it; QG-2 stays absolute.
+- **DO NOT** quote the S3K plan hash `a07f9249…` as durable. It binds `output_root_id`,
+  runtime and hardware evidence (§14.66). Re-derive on the evaluating host.
+- **DO NOT** read the plan hash moving from `738b187f…` as drift or as a defect. Every
+  substantive binding reproduced; the mover is `hardware_report_hash`, whose identity
+  carries RAM/disk **categories** and deliberately excludes the raw volatile figures.
+- **DO NOT** remove the closing `trainer.evaluate()` on the grounds that S3K's cadence
+  happened to fire exactly twice and the closing pass returned the same loss as step 40.
+  S3H fired three times at 2.897 epochs and S3K twice at exactly 2.0; the cadence's
+  behaviour at the final boundary is a property of the corpus arithmetic and the installed
+  build, and the closing pass is what makes the end-of-run number unconditional.
+- **DO NOT** re-run the S3K tokenizer or corpus verification to confirm it. Chat template
+  `a55ee1b1…` exact, 0 truncations of 166, both exports re-hashed from the bytes, masking
+  verified on both splits. Re-measure only if a corpus row, the template or the tokenizer
+  revision changes (§14.57).
+- **DO NOT** install anything into `.venv-m62-train-linux` or `.venv-m62-eval-linux`, and
+  do not "upgrade the training stack". S3K ran on the exact qualified profile and changed
+  nothing.
+- **DO NOT** re-run the full suite to "confirm" S3K. No tracked source changed; S3J.1's
+  818-test focused and adjacent run at `4ec4b36` is the authoritative measurement of this
+  tree.
 
 **S3I LIVE is spent, sealed and verified. It is never re-run.**
 
@@ -3201,7 +3473,79 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3K, the second candidate's single live training run
+## 19 — NEXT: M62 S3L, the second candidate's held-out eligibility evaluation
+
+> **S3K is spent and closed. The second candidate EXISTS and is TRAINED.** The one-run
+> `TRAIN` authority was consumed exactly once, the adapter is verified, and **no retry,
+> resume or retrain is authorised**. Doc:
+> **`jarvis/docs/V69_M62_S3K_SECOND_QUALITY_LIVE_TRAINING.md`** — read it first for
+> anything about candidate 002.
+
+**Where the second candidate stands**
+
+```
+SECOND_CANDIDATE:      qwen3-06b-lora-quality-live-002
+CANDIDATE_STATUS:      TRAINED_UNEVALUATED     (quality UNKNOWN, not estimated)
+ADAPTER_SHA256:        319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409
+ADAPTER_MANIFEST:      11897e16…      ARTIFACT_TREE: 220350ef…
+TRAINED_ON:            m62-defensive-quality-train v2  24ceb1e0…  (154 TRAIN / 12 VALIDATION)
+CONSUMED_PLAN:         a07f9249…      TRAIN_AUTHORITY: CONSUMED, one attempt, no retry
+RESULT:                40/40 steps · exactly 2.0 epochs · 15m32s · CPU/fp32
+                       train loss 3.277057 · final validation loss 3.018860 (12 rows,
+                       DIAGNOSTIC, not eligibility evidence)
+VERIFICATION:          verify_completed_run -> 0 problems; 392 LoRA tensors, all finite,
+                       0 all-zero, 0 non-LoRA, no base dump, no checkpoint
+FROZEN_HOLDOUT:        m62-defensive-eval v3   7c948236…  (parent 82b60bfd…, pack 28d2f7d0…)
+                       36 tasks · 12/12/12 · 12/9/9/6 · FROZEN_UNSEEN
+EVAL_TOKEN:            NOT CREATED
+S3L_READY:             YES     (preconditions only — NOT an authorisation)
+```
+
+**What remains is authority, not engineering.**
+
+**M62 S3L — SECOND QUALITY-CANDIDATE HELD-OUT ELIGIBILITY EVALUATION**, against the gates
+S3G §6 predeclared **before any of it ran** and which S3K re-verified as unmoved:
+
+```
+BIND     m62-defensive-eval v3, manifest 7c948236…, parent 82b60bfd…, pack 28d2f7d0…;
+         Qwen/Qwen3-0.6B @ c1899de2…;
+         candidate qwen3-06b-lora-quality-live-002, adapter 319c2524…;
+         GATE POLICY e5003319… UNCHANGED (QG-2 absolute; FG-1/FG-2 baseline-relative);
+         reasoning_policy DISABLED (ruling H6a, via eligibility_generation_policy());
+         max_new_tokens 512; timeout_s 300 stated EXPLICITLY (default 120 s; D33 means
+         declared and NOT enforced); isolated_loads / PER_REQUEST, 36 + 36 = 72 loads.
+
+RUN IN   .venv-m62-eval-linux — the qualified EVALUATION runtime, NOT the training venv.
+         Offline: HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, HF_HUB_DISABLE_TELEMETRY=1,
+         local_files_only, trust_remote_code false. The reviewed local cache is the only
+         model source.
+
+DERIVE   the evaluation plan again in that session. Require 0 blockers. Never paste a
+         previous plan hash in (619be971…, dc8723b0…, a07f9249… are all REFERENCE ONLY)
+         and never force one.
+
+SPEND    One EVAL: token, once. No retry. Then: no promotion, no activation, no registry
+         mutation, no merge, no tag, no release, no version bump.
+```
+
+**Two things the S3L report must say, and cannot be allowed to omit.**
+`tool_call_validity_rate` is `VACUOUS` (D28) and `timeout_rate` is `VACUOUS` (D33). Both
+are metrics whose transport does not exist, and both would otherwise read as clean passes.
+
+**Cost warning, from measured history.** The evaluation strategy reloads the model per
+request, so 36 tasks × 2 arms = 72 model loads; S3I took **24m22s** on this host class.
+Budget for it, and never trade away the two-distinct-backend-objects isolation rule.
+
+**Limitations that travel into the run:** D28, D29 (phrase-list refusal detection), D33,
+the 36-task single-author holdout, the 182-row single-author training corpus, lexical-only
+leakage evidence (§14.53), and the fact that the Kali runtime is not claimed bytewise
+equivalent to the Windows runtime that produced candidate 001's adapter.
+
+**S3L must not begin automatically.** Nothing in S3J, S3J.1 *or S3K* authorises evaluation,
+promotion, activation, registry mutation, merge, tag or a version bump. **A trained adapter
+is not an eligible one.**
+
+### Superseded — the pre-S3K framing (resolved by the live training run)
 
 > **S3J and S3J.1 are both closed. The second candidate is designed, its runtime is
 > qualified, and it is still untrained.** Docs:
@@ -3554,6 +3898,11 @@ identity** — never a mutation of run-004.
 ### Read first
 
 1. **`PROGRESS.md`** (this file)
+1α. **`jarvis/docs/V69_M62_S3K_SECOND_QUALITY_LIVE_TRAINING.md`** — **the run of record
+   for the SECOND quality candidate.** The consumed authority, the re-derived live plan,
+   the measured losses, the validation cadence as it actually behaved, the verified
+   adapter and its digests, and what the run does *not* establish. **Read this first for
+   anything about candidate 002.**
 1a. **`jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md`** — **the current
    technical basis for anything about the SECOND candidate**: training-corpus v2, the
    fresh eval-v3 holdout, D35, D36, the predeclared gates re-verified by digest, the
