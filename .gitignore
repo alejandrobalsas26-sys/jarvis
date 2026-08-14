@@ -15,6 +15,12 @@ env/
 # LoRA smoke needs would otherwise be an untracked file the next `git add -A` commits.
 .venv-training-smoke/
 .venv-training*/
+# V69 M62 S3I.1 — the Linux-native evaluation runtime. `python -m venv` writes its own
+# `.gitignore` inside the tree, but that is the environment protecting the repository
+# from itself; the repository states the policy here so it survives a venv built any
+# other way.
+.venv-m62-eval-linux/
+.venv-m62-eval*/
 
 # Python cache
 __pycache__/
