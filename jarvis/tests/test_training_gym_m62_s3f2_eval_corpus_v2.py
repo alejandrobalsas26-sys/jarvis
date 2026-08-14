@@ -29,9 +29,32 @@ from scripts import build_evaluation_corpus as _BUILDER  # noqa: E402
 #: Recorded when this milestone built each version. A rebuild that does not reproduce
 #: these exactly is a determinism failure, not a new baseline to write down.
 V1_MANIFEST_HASH = "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b"
-V2_MANIFEST_HASH = "10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0"
+#: **Updated by S3I.1 under operator decision D34, and the corpus did not change.**
+#:
+#: This constant read ``10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0``
+#: when S3F.2 wrote it, because this file builds each version into its own fresh root and
+#: the builder used to *discover* ``v2``'s parent from the destination root — finding
+#: nothing, and promoting ``v2`` as a genesis. That digest is the honest output of that
+#: build and is retained as history in
+#: ``jarvis/docs/V69_M62_S3I1_KALI_RUNTIME_AND_CANONICAL_LINEAGE.md``; it is not corrupt
+#: and it is not being erased. D34 rules that ``v2`` derives from ``v1`` and must bind it
+#: explicitly, so the canonical digest is now the parented one. The three task shards are
+#: byte-identical across both lineages — see the D34 regression file.
+V2_MANIFEST_HASH = "82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60"
+#: The pre-D34 genesis-lineage digest. Kept so the distinction stays testable.
+V2_HISTORICAL_GENESIS_MANIFEST_HASH = (
+    "10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0")
 V1_PACK_HASH = "d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0"
-V2_PACK_HASH = "b4f9d6b1f81ff13cc45d72e612a717b126bfcb64cccf326c2dc9b4b58abade11"
+#: **Updated by S3I.1 with the manifest hash above, and for the same reason.** A task
+#: record carries ``source_dataset_manifest_hash`` as its provenance, so the pack's
+#: identity follows the dataset version's identity. Across the two lineages that field is
+#: the *only* one of the 22 task-record fields that moves: ``user_prompt``,
+#: ``system_prompt``, ``task_hash``, ``expected_output_schema``, ``tool_schemas``,
+#: ``grader_ids``, ``refusal_expected``, ``kind``, ``split``, ``task_family`` and
+#: ``source_shard_hash`` are byte-identical in all 36. The model sees exactly what it saw.
+#: The pre-D34 value was
+#: ``b4f9d6b1f81ff13cc45d72e612a717b126bfcb64cccf326c2dc9b4b58abade11``.
+V2_PACK_HASH = "3744a22e1866a40b6e5b27ae20e798365dfbf2d3c071018afba14bf611ec2665"
 
 _SPLITS = (DatasetSplit.HIDDEN_EVALUATION, DatasetSplit.SECURITY_REGRESSION,
            DatasetSplit.ADVERSARIAL)
