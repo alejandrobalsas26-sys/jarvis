@@ -127,9 +127,15 @@ def test_the_canonical_lineage_is_declared_not_discovered():
 
 
 def test_a_version_with_no_declared_lineage_is_refused():
-    """Not defaulted to genesis, not guessed from disk — refused."""
+    """Not defaulted to genesis, not guessed from disk — refused.
+
+    ``v3`` was the undeclared version when this was written; S3J declared it (parent
+    ``v2``), so the probe moved to one that still does not exist. The rule under test is
+    unchanged: a buildable version whose lineage nobody declared must refuse.
+    """
+    assert _BUILDER.canonical_parent_for("v3") == ("v2", V2_CANONICAL_MANIFEST)
     with pytest.raises(ValueError, match="declares no canonical lineage"):
-        _BUILDER.canonical_parent_for("v3")
+        _BUILDER.canonical_parent_for("v9")
 
 
 def test_v1_identity_does_not_move(sequential_v2):

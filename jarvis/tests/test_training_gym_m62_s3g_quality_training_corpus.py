@@ -64,9 +64,15 @@ def test_task_ids_and_texts_are_unique():
 
 
 def test_every_category_has_a_recorded_training_rationale():
-    """A category with no rationale is a category that exists to inflate a count."""
-    used = {r[1] for r in ROWS}
-    assert used <= set(QC.CATEGORY_RATIONALE)
+    """A category with no rationale is a category that exists to inflate a count.
+
+    Measured over EVERY version the generator can build, not over ``v1`` alone: S3J adds
+    categories that ``v1`` does not use, and asserting against one version would either
+    forbid the addition or let a stale rationale survive in the other direction.
+    """
+    used = {row[1] for version in QC.CURRICULUM_VERSIONS
+            for row in QC.curriculum_for(version)}
+    assert {r[1] for r in ROWS} <= set(QC.CATEGORY_RATIONALE)
     assert set(QC.CATEGORY_RATIONALE) == used, "an unused rationale is stale"
 
 
