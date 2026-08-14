@@ -339,6 +339,58 @@ def corpus_for(dataset_version: str) -> list[tuple[str, str, str, str, str]]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  The canonical lineage (V69 M62 S3I.1, operator decision D34)
+# ══════════════════════════════════════════════════════════════════════════════
+#: The frozen digest of ``m62-defensive-eval v1``.
+#:
+#: ``v1`` is a legitimate genesis: it is the first version of this lineage and descends
+#: from nothing. This constant is the digest it has always promoted to — S3E.2 drew the
+#: measurement of record from it, S3F.2 rebuilt it unchanged, S3I.0 reproduced it as its
+#: control, and S3I reproduced it again. It is written here so that ``v2`` can *declare*
+#: its parent instead of *discovering* one.
+CANONICAL_V1_MANIFEST = (
+    "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b")
+
+#: ``dataset_version`` -> the version it descends from, or ``None`` for a genesis.
+#:
+#: **Why this map exists (D34).** ``PromotionRequest.parent_manifest_hash`` defaults to
+#: the empty string, and :meth:`PromotionRequest.resolved_parent` then falls back to
+#: ``latest_manifest_hash(root, dataset_id)`` — a *discovery over the destination root*.
+#: This generator never set the field, so ``v2``'s lineage was decided by whatever
+#: happened to be on disk: building it into a root holding ``v1`` produced
+#: ``82b60bfd…`` with ``parent = 0970600c…``, and building it into a clean root produced
+#: ``10ad2308…`` with ``parent = genesis``. Both are honest outputs of the same tracked
+#: generator over byte-identical material; the shards do not differ by one byte and the
+#: only fields that move are ``parent_manifest_hash`` and the ``manifest_hash`` derived
+#: from it. That made the corpus's identity a function of incidental build history rather
+#: than of the corpus, which is the defect recorded as **D34**.
+#:
+#: The operator's D34 ruling is that ``v2`` conceptually derives from ``v1`` and must
+#: therefore bind it explicitly. ``10ad2308…`` is not corrupt and is not being rewritten:
+#: it is the legitimate historical genesis-lineage build, kept as history and disqualified
+#: only for future eligibility-grade authority.
+CANONICAL_LINEAGE: dict[str, tuple[str, str] | None] = {
+    "v1": None,
+    "v2": ("v1", CANONICAL_V1_MANIFEST),
+}
+
+
+def canonical_parent_for(dataset_version: str) -> tuple[str, str] | None:
+    """``(parent_version, parent_manifest_hash)`` for a version, or ``None`` for genesis.
+
+    A version this generator can build but whose lineage nobody declared is refused
+    rather than defaulted: silently promoting it as a genesis is the D34 defect, and
+    guessing a parent for it would be the same mistake wearing a different hat.
+    """
+    if dataset_version not in CANONICAL_LINEAGE:
+        raise ValueError(
+            f"dataset version {dataset_version!r} declares no canonical lineage; add it "
+            f"to CANONICAL_LINEAGE. A version whose parent is decided by whatever is on "
+            f"disk has no stable identity — see D34")
+    return CANONICAL_LINEAGE[dataset_version]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  One record, through every gate
 # ══════════════════════════════════════════════════════════════════════════════
 def make_candidate(entry: tuple[str, str, str, str, str]):
@@ -450,12 +502,49 @@ def make_candidate(entry: tuple[str, str, str, str, str]):
 # ══════════════════════════════════════════════════════════════════════════════
 #  The promotion, which is the only way a version comes into existence
 # ══════════════════════════════════════════════════════════════════════════════
+def _materialize_canonical_parent(root: Path, *, parent_version: str,
+                                  expected_manifest_hash: str) -> str:
+    """Guarantee the declared parent exists in *root* and is the one declared.
+
+    Called before a version that declares a parent is promoted. Three outcomes, and the
+    third is the point of the function:
+
+    * the parent already exists and verifies to the declared digest — nothing to do;
+    * it is absent — it is built here, from this same generator, and then checked;
+    * it exists but is **not** the declared parent — refuse.
+
+    The refusal is the D34 guarantee. A build that cannot establish its declared lineage
+    fails closed; it never falls back to ``genesis`` and never adopts whichever version
+    it happens to find, because either of those silently mints a second identity for
+    byte-identical held-out material.
+    """
+    from training_gym.datasets.manifests import verify_version, version_dir
+
+    if not version_dir(root, DATASET_ID, parent_version).is_dir():
+        build(root, dataset_version=parent_version)
+
+    result = verify_version(root=root, dataset_id=DATASET_ID,
+                            dataset_version=parent_version)
+    if not result.ok or result.manifest is None:
+        raise RuntimeError(
+            f"canonical parent {DATASET_ID}/{parent_version} does not verify "
+            f"({list(result.problems)[:3]}); a lineage whose parent cannot be produced "
+            f"is not a lineage")
+    actual = result.manifest.manifest_hash()
+    if actual != expected_manifest_hash:
+        raise RuntimeError(
+            f"canonical parent {DATASET_ID}/{parent_version} verifies to {actual}, but "
+            f"the declared canonical lineage names {expected_manifest_hash}. Refusing to "
+            f"promote a child onto a parent that is not the one it declares — see D34")
+    return actual
+
+
 def build(root: Path, *, dataset_version: str = DATASET_VERSION) -> dict:
     """Promote the corpus and return the counts. Raises on the first refusal."""
     from training_gym.datasets.candidate import CandidateState, DatasetSplit
     from training_gym.datasets.candidate_store import CandidateStore
     from training_gym.datasets.leakage import LeakageAnalyzer
-    from training_gym.datasets.manifests import RevocationSnapshot
+    from training_gym.datasets.manifests import GENESIS_PARENT, RevocationSnapshot
     from training_gym.datasets.promotion_plan import (
         PromotionRequest,
         plan_promotion,
@@ -468,6 +557,19 @@ def build(root: Path, *, dataset_version: str = DATASET_VERSION) -> dict:
     )
 
     entries = corpus_for(dataset_version)
+
+    # The lineage is settled BEFORE a single candidate is written. A version that cannot
+    # establish its declared parent must cost nothing and leave nothing behind, and
+    # materialising the parent first is also what puts this build in the same state the
+    # canonical v1 -> v2 sequence produces.
+    lineage = canonical_parent_for(dataset_version)
+    if lineage is None:
+        parent_manifest_hash = GENESIS_PARENT
+    else:
+        parent_version, declared = lineage
+        parent_manifest_hash = _materialize_canonical_parent(
+            root, parent_version=parent_version, expected_manifest_hash=declared)
+
     store = CandidateStore(root)
     candidates = []
     forced: dict[str, DatasetSplit] = {}
@@ -499,6 +601,9 @@ def build(root: Path, *, dataset_version: str = DATASET_VERSION) -> dict:
         root=root, dataset_id=DATASET_ID, proposed_dataset_version=dataset_version,
         candidates=tuple(candidates), split_plan=plan, leakage_report=leakage,
         revocation=RevocationSnapshot(), created_at_utc=NOW, actor=ACTOR,
+        # Declared, never discovered. Leaving this at its default would hand the identity
+        # of the corpus to whatever else happens to be in the destination root — D34.
+        parent_manifest_hash=parent_manifest_hash,
         # TRAIN is empty by construction: this corpus may never contribute to one.
         allow_empty_splits=(DatasetSplit.TRAIN, DatasetSplit.VALIDATION))
     promotion_plan = plan_promotion(request)
@@ -524,6 +629,7 @@ def build(root: Path, *, dataset_version: str = DATASET_VERSION) -> dict:
         "leakage_report_hash": leakage.report_hash(),
         "split_policy_hash": policy.policy_hash(),
         "promotion_plan_hash": promotion_plan.plan_hash(),
+        "parent_manifest_hash": parent_manifest_hash,
         "manifest_hash": result.written.manifest.manifest_hash(),
         "promoted_records": len(result.promoted),
         **counts,
