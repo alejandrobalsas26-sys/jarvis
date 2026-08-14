@@ -21,6 +21,12 @@ env/
 # other way.
 .venv-m62-eval-linux/
 .venv-m62-eval*/
+# V69 M62 S3J.1 — the Linux-native TRAINING runtime, deliberately SEPARATE from the
+# evaluation one above. The evaluation venv is the runtime the S3I measurement of record
+# was taken in and must stay immutable; the training profile additionally needs
+# `datasets` and `trl`, so it gets its own tree rather than an upgrade of that one.
+.venv-m62-train-linux/
+.venv-m62-train*/
 
 # Python cache
 __pycache__/
