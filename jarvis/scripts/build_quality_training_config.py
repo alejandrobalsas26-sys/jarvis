@@ -60,6 +60,34 @@ BASE_MODEL_PARAMETERS_B = 0.6
 TRAINING_DATASET_ID = "m62-defensive-quality-train"
 TRAINING_DATASET_VERSION = "v1"
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M62 S3J — the SECOND quality candidate
+# ══════════════════════════════════════════════════════════════════════════════
+#  Candidate 001 is `EVALUATED_NOT_ELIGIBLE` and is now history: its run id, its corpus
+#  version, its options and its config hash are frozen below and are not touched. This
+#  section adds a second, independent candidate identity. Nothing here retrains,
+#  resumes, reuses or relabels 001, and no adapter exists for 002.
+RUN_ID_002 = "qwen3-06b-lora-quality-live-002"
+EXPERIMENT_NAME_002 = "m62-s3j-defensive-quality-002"
+TRAINING_DATASET_VERSION_002 = "v2"
+
+#: ``candidate`` -> the identity and material it trains on. A candidate this map does
+#: not name cannot be configured, so a typo is a refusal rather than a run under an
+#: authoritative-looking id.
+#: ``notes`` is one of the fields ``TrainingConfig.config_hash()`` covers, so candidate
+#: 001's string is reproduced here BYTE FOR BYTE. Rewording it to read more naturally
+#: alongside the second candidate would silently re-identify the configuration S3H
+#: actually trained under, which is the one thing this file may never do.
+CANDIDATES: dict[str, dict] = {
+    "001": {"run_id": RUN_ID, "experiment_name": EXPERIMENT_NAME,
+            "dataset_version": TRAINING_DATASET_VERSION, "milestone": "S3G",
+            "notes_prefix": "M62 S3G first quality candidate"},
+    "002": {"run_id": RUN_ID_002, "experiment_name": EXPERIMENT_NAME_002,
+            "dataset_version": TRAINING_DATASET_VERSION_002, "milestone": "S3J",
+            "notes_prefix": "M62 S3J second quality candidate"},
+}
+DEFAULT_CANDIDATE = "001"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  The three options
@@ -140,9 +168,40 @@ OPTIONS: dict[str, dict] = {
         "signal_expectation":
             "largest movement, least trustworthy attribution",
     },
+    # ── V69 M62 S3J: the second candidate's option ────────────────────────────
+    "S3J": {
+        "label": "gentler, wider curriculum",
+        "rationale":
+            "Option B is held constant everywhere it can be, because comparability "
+            "between the two candidates is worth more than a speculative improvement: "
+            "same rank 16, same alpha 32, same dropout 0.05, same seven projections, "
+            "same fp32/CPU, same seed 42, same batch 1 x 8. Two things move, and only "
+            "two. (1) The learning rate halves, 2e-4 -> 1e-4. Candidate 001 proved the "
+            "corpus can move behaviour at 2e-4 -- required refusal went 1/12 -> 9/12 -- "
+            "and it also drifted far enough to break a structured-output contract the "
+            "BASE model already satisfied 9/9. A smaller step is the least speculative "
+            "way to keep the first effect while reducing the second. (2) Passes fall "
+            "from ~3 to exactly 2, because the corpus grew from 107 to 154 TRAIN rows: "
+            "the model now sees MORE distinct examples in FEWER passes, which is the "
+            "shape that trades memorisation for coverage. Optimizer steps land at 40, "
+            "the same bounded budget S3H actually ran, so the compute class is known "
+            "rather than estimated.",
+        "lora_rank": 16, "lora_alpha": 32, "lora_dropout": 0.05,
+        "learning_rate": 1e-4, "weight_decay": 0.0, "warmup_ratio": 0.1,
+        "epochs": 2, "max_steps": 40, "gradient_accumulation_steps": 8,
+        "overfitting_risk":
+            "lower than 001: 44% more rows, one third fewer passes, half the step size",
+        "signal_expectation":
+            "the over-refusal and structured-output gates are the ones this is aimed "
+            "at; the security vetoes are conditions to HOLD, never targets to move",
+    },
 }
 
 RECOMMENDED_OPTION = "B"
+
+#: The option each candidate uses. Kept separate from :data:`RECOMMENDED_OPTION` so the
+#: S3G recommendation is not silently restated as the S3J one.
+CANDIDATE_OPTION: dict[str, str] = {"001": "B", "002": "S3J"}
 
 #: Measured on this host in S3G, from the promoted corpus:
 #: 107 TRAIN rows, mean sequence ~470 characters (~105-135 estimated tokens plus the
@@ -180,7 +239,18 @@ def compute_budget(option: str, train_rows: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #  The dataset reference, re-derived from the promoted artefacts
 # ══════════════════════════════════════════════════════════════════════════════
-def dataset_reference(root: Path):
+def candidate_spec(candidate: str) -> dict:
+    """The identity block for one candidate, or a refusal naming the ones that exist."""
+    try:
+        return CANDIDATES[candidate]
+    except KeyError:
+        raise ValueError(
+            f"unknown candidate {candidate!r}; this generator configures "
+            f"{sorted(CANDIDATES)}. A new candidate needs a new identity and its own "
+            f"corpus version, not a new label on an existing run") from None
+
+
+def dataset_reference(root: Path, dataset_version: str = TRAINING_DATASET_VERSION):
     """Fill every digest from the artefacts on disk. Nothing here is hand-copied.
 
     ``load_manifest`` is the only loader used: it re-hashes every shard from disk,
@@ -198,9 +268,9 @@ def dataset_reference(root: Path):
     )
 
     manifest = load_manifest(root=root, dataset_id=TRAINING_DATASET_ID,
-                            dataset_version=TRAINING_DATASET_VERSION)
+                            dataset_version=dataset_version)
     export = verify_sft_export(out_root=root, dataset_id=TRAINING_DATASET_ID,
-                               dataset_version=TRAINING_DATASET_VERSION)
+                               dataset_version=dataset_version)
     if not export.ok or export.manifest is None:
         raise RuntimeError(f"the SFT export does not verify: {export.to_dict()}")
 
@@ -215,7 +285,7 @@ def dataset_reference(root: Path):
             raise RuntimeError(f"the promoted version declares no {name} shard")
 
     return TrainingDatasetReference(
-        dataset_id=TRAINING_DATASET_ID, dataset_version=TRAINING_DATASET_VERSION,
+        dataset_id=TRAINING_DATASET_ID, dataset_version=dataset_version,
         dataset_manifest_hash=manifest.manifest_hash(),
         export_format=ExportFormat.SFT_JSONL,
         export_manifest_hash=export.manifest.export_hash(),
@@ -229,7 +299,8 @@ def dataset_reference(root: Path):
         dataset_schema_version=manifest.dataset_manifest_version)
 
 
-def validation_export(root: Path):
+def validation_export(root: Path,
+                      dataset_version: str = TRAINING_DATASET_VERSION):
     """The verified VALIDATION export's manifest, or a refusal.
 
     Checked here because the configuration this script emits sets
@@ -242,7 +313,7 @@ def validation_export(root: Path):
 
     verified = verify_sft_validation_export(
         out_root=root, dataset_id=TRAINING_DATASET_ID,
-        dataset_version=TRAINING_DATASET_VERSION)
+        dataset_version=dataset_version)
     if not verified.ok or verified.manifest is None:
         raise RuntimeError(
             f"the validation export does not verify: {verified.to_dict()}. Rebuild the "
@@ -251,8 +322,14 @@ def validation_export(root: Path):
     return verified.manifest
 
 
-def build_config(option: str, *, dataset_root: Path, output_root: Path):
-    """One complete, strictly-validated :class:`TrainingConfig`."""
+def build_config(option: str, *, dataset_root: Path, output_root: Path,
+                 candidate: str = DEFAULT_CANDIDATE):
+    """One complete, strictly-validated :class:`TrainingConfig`.
+
+    *candidate* selects the identity and the corpus version. It defaults to ``001`` so
+    every S3G/S3G.1/S3G.2 caller keeps the exact configuration — and the exact
+    ``config_hash`` — it had before the second candidate existed.
+    """
     from training_gym.training.config import (
         CheckpointStrategy,
         DependencyProfile,
@@ -270,13 +347,15 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path):
     from training_gym.training.plan import output_root_id
 
     spec = OPTIONS[option]
+    identity = candidate_spec(candidate)
     return TrainingConfig(
-        run_id=RUN_ID, experiment_name=EXPERIMENT_NAME,
+        run_id=identity["run_id"], experiment_name=identity["experiment_name"],
         method=TrainingMethod.SFT_LORA,
         base_model_id=BASE_MODEL_ID, base_model_revision=BASE_MODEL_REVISION,
         base_model_parameters_b=BASE_MODEL_PARAMETERS_B,
         tokenizer_id=BASE_MODEL_ID, tokenizer_revision=BASE_MODEL_REVISION,
-        dataset_reference=dataset_reference(dataset_root),
+        dataset_reference=dataset_reference(dataset_root,
+                                            identity["dataset_version"]),
         output_root_id=output_root_id(output_root),
         created_at_utc=NOW,
         seed=42,
@@ -316,17 +395,18 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path):
         dependency_profile=DependencyProfile.TRAINING,
         trust_remote_code=False,
         base_model_family="qwen3",
-        notes=(f"M62 S3G first quality candidate, option {option} "
+        notes=(f"{identity['notes_prefix']}, option {option} "
                f"({spec['label']}). RUN_INTENT={RUN_INTENT}. Not run-004; nothing is "
                f"resumed, continued or promoted."))
 
 
 def plan_for(option: str, *, dataset_root: Path, output_root: Path,
-             model_cache_root: Path | None):
+             model_cache_root: Path | None, candidate: str = DEFAULT_CANDIDATE):
     """The dry run. Creates nothing, imports no training framework, spends nothing."""
     from training_gym.training.planner import plan_training
 
-    config = build_config(option, dataset_root=dataset_root, output_root=output_root)
+    config = build_config(option, dataset_root=dataset_root, output_root=output_root,
+                          candidate=candidate)
     return config, plan_training(config, dataset_root=dataset_root,
                                  output_root=output_root,
                                  model_cache_root=model_cache_root,
@@ -335,8 +415,8 @@ def plan_for(option: str, *, dataset_root: Path, output_root: Path,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build the M62 S3G quality candidate's training configuration and "
-                    "its dry-run plan. Never trains and never spends a token.")
+        description="Build an M62 quality candidate's training configuration and its "
+                    "dry-run plan. Never trains and never spends a token.")
     parser.add_argument("--dataset-root", required=True,
                         help="root holding the promoted training corpus and its export")
     parser.add_argument("--output-root", required=True,
@@ -344,8 +424,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-cache-root", default="",
                         help="the reviewed model cache; omitted means the plan reports "
                              "the weights as unverified rather than guessing a location")
-    parser.add_argument("--option", default=RECOMMENDED_OPTION, choices=sorted(OPTIONS),
-                        help=f"default {RECOMMENDED_OPTION}, the recommended option")
+    parser.add_argument("--candidate", default=DEFAULT_CANDIDATE,
+                        choices=sorted(CANDIDATES),
+                        help="001 is the frozen S3G candidate (corpus v1); 002 is the "
+                             "S3J candidate (corpus v2). Defaults to 001 so every "
+                             "existing caller is unchanged")
+    parser.add_argument("--option", default="", choices=["", *sorted(OPTIONS)],
+                        help="defaults to the option the chosen candidate declares: "
+                             f"{CANDIDATE_OPTION}")
     parser.add_argument("--all-options", action="store_true",
                         help="summarise every option's hyperparameters and budget")
     parser.add_argument("--emit", default="",
@@ -359,17 +445,22 @@ def main(argv: list[str] | None = None) -> int:
         dataset_root = Path(args.dataset_root)
         output_root = Path(args.output_root)
         cache_root = Path(args.model_cache_root) if args.model_cache_root else None
+        identity = candidate_spec(args.candidate)
+        dataset_version = identity["dataset_version"]
+        option = args.option or CANDIDATE_OPTION[args.candidate]
 
         if args.all_options:
-            reference = dataset_reference(dataset_root)
+            reference = dataset_reference(dataset_root, dataset_version)
             train_rows = 0
             from training_gym.datasets.candidate import DatasetSplit
             from training_gym.datasets.manifests import load_manifest
             manifest = load_manifest(root=dataset_root, dataset_id=TRAINING_DATASET_ID,
-                                     dataset_version=TRAINING_DATASET_VERSION)
+                                     dataset_version=dataset_version)
             train_rows = manifest.counts().get(DatasetSplit.TRAIN.value, 0)
             payload = {
-                "recommended_option": RECOMMENDED_OPTION,
+                "candidate": args.candidate,
+                "dataset_version": dataset_version,
+                "recommended_option": CANDIDATE_OPTION[args.candidate],
                 "train_rows": train_rows,
                 "hard_runtime_ceiling_hours": HARD_RUNTIME_CEILING_HOURS,
                 "dataset_reference_hash": reference.reference_hash(),
@@ -377,17 +468,21 @@ def main(argv: list[str] | None = None) -> int:
                     name: {**{k: v for k, v in spec.items()},
                            "config_hash": build_config(
                                name, dataset_root=dataset_root,
-                               output_root=output_root).config_hash(),
+                               output_root=output_root,
+                               candidate=args.candidate).config_hash(),
                            "budget": compute_budget(name, train_rows)}
                     for name, spec in sorted(OPTIONS.items())},
             }
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 0
 
-        config = build_config(args.option, dataset_root=dataset_root,
-                              output_root=output_root)
+        config = build_config(option, dataset_root=dataset_root,
+                              output_root=output_root, candidate=args.candidate)
         payload: dict = {
-            "option": args.option, "run_id": RUN_ID, "run_intent": RUN_INTENT,
+            "candidate": args.candidate, "option": option,
+            "run_id": identity["run_id"],
+            "training_dataset_version": dataset_version,
+            "run_intent": RUN_INTENT,
             "config_hash": config.config_hash(),
             "dataset_reference_hash": config.dataset_reference.reference_hash(),
             "effective_batch_size": config.effective_batch_size,
@@ -400,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
             "trained_anything": False, "wrote_adapter": False,
         }
         if config.train_time_validation_enabled:
-            manifest = validation_export(dataset_root)
+            manifest = validation_export(dataset_root, dataset_version)
             payload.update({
                 "validation_export_rows": manifest.record_count,
                 "validation_export_hash": manifest.export_hash(),
@@ -417,9 +512,10 @@ def main(argv: list[str] | None = None) -> int:
             payload["config_written"] = destination.name
 
         if args.plan:
-            _config, result = plan_for(args.option, dataset_root=dataset_root,
+            _config, result = plan_for(option, dataset_root=dataset_root,
                                        output_root=output_root,
-                                       model_cache_root=cache_root)
+                                       model_cache_root=cache_root,
+                                       candidate=args.candidate)
             plan = result.plan
             payload.update({
                 "plan_hash": plan.plan_hash(),
