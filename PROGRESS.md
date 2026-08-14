@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-13T23:40Z (S3I.0) |
+| **Last updated** | 2026-08-13 (S3I — BLOCKED, nothing generated) |
 | **Milestone** | V69 M62 — Training Gym |
 | **Branch** | `jarvis-v69-m62-training-gym` |
 | **Last S3E.2 state-bearing commit** | `56d9060d6cf8c103155420a429e342392a7062fb` — the anchor §2–§16 describe |
 | **HEAD** | the S3F / S3F.1 / S3F.2 / S3G / S3G.1 / S3G.2 / S3H commits on top of it — check with `git rev-parse HEAD` |
 | **Master** | `3705114228edef2f665be349c5c4429b7b16777a` |
-| **Current phase** | **M62 S3I.0 CLOSED (held-out evaluation runtime qualification)** — model loading measured at **2.2–2.8 % of a median request**, so the per-request load strategy is **deliberately kept**; no production source changed. Two defects found while preparing the evaluation: **D32** (the recorded eval-v2 manifest digest does not reproduce) and **D33** (the declared generation timeout is not enforced). **Nothing was generated.** Previously: **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
-| **Next phase** | **M62 S3I** (first quality-candidate held-out eligibility evaluation) — *not authorised*, **not started**. It needs explicit operator authorisation, a fresh `EVAL` plan and single-use token, and ratification of the two S3I.0 conditions (D32's corrected corpus digest, D33's explicit `timeout_s`) — §19. |
+| **Current phase** | **M62 S3I BLOCKED before EVAL authority creation** — the operator authorised one held-out eligibility evaluation and ratified D32/D33. It **did not run**: the pre-token gate failed on two independent blockers. **B1** — the generation runtime is absent on this host: `torch`/`transformers`/`peft` are not installed, and both venvs (`.venv`, `.venv-training-smoke`) are **Windows** environments that cannot execute here. **B2 / D34** — rebuilding `m62-defensive-eval v2` from the tracked generator into a fresh root yields **`10ad2308…`**, not the ratified `82b60bfd…`; the difference is `parent_manifest_hash`, which binds `v1` only when `v1` is already present in the target root. Both digests are reproducible and the corpus material is byte-identical, so the corpus identity depends on build lineage — **D32 must be reopened**. **No EVAL token was created or consumed; 0 tokens generated; candidate unchanged at `TRAINED_UNEVALUATED`.** Doc: `jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`. Previously: **M62 S3I.0 CLOSED (held-out evaluation runtime qualification)** — model loading measured at **2.2–2.8 % of a median request**, so the per-request load strategy is **deliberately kept**; no production source changed. Two defects found while preparing the evaluation: **D32** (the recorded eval-v2 manifest digest does not reproduce) and **D33** (the declared generation timeout is not enforced). **Nothing was generated.** Previously: **M62 S3H CLOSED (first quality-oriented live training run)** — the operator authorised exactly one attempt, the single-use `TRAIN:` token was consumed once, and `qwen3-06b-lora-quality-live-001` **trained to completion**: 40/40 steps, 2.897 epochs, 27m47s on CPU/fp32, train loss 2.991393, final validation loss 3.125407, a verified 392-tensor LoRA-only adapter. **The candidate is `TRAINED_UNEVALUATED`** — no held-out evaluation, no promotion. S3G, S3G.1 and S3G.2 remain closed and unrevised. |
+| **Next phase** | **M62 S3I retry** — still authorised (the one-run authority is **unspent**), still blocked. Needs two operator decisions: resolve **D34 / reopen D32** (which lineage is v2's canonical identity), and supply an execution host — either the Windows host where the runtime and cache already exist, or explicit authorisation to provision an equivalent isolated environment here. Superseded description: It needs explicit operator authorisation, a fresh `EVAL` plan and single-use token, and ratification of the two S3I.0 conditions (D32's corrected corpus digest, D33's explicit `timeout_s`) — §19. |
 
 **What M62 is.** The Training Gym: an end-to-end, offline-first, human-gated pipeline that can
 (a) collect and grade defensive task episodes, (b) build immutable, leakage-checked datasets,
@@ -389,6 +389,61 @@ LIVE_HELDOUT_EVALUATION:          NOT_RUN
 MODEL_PROMOTION:                  NOT_AUTHORIZED
 MODEL_REGISTRY_MUTATED:           NO
 S3I_READY:                        YES — conditional on ratifying D32 and D33
+```
+
+### S3I outcome statuses (2026-08-13, this milestone)
+
+**Nothing above is revised by these.** S3I.0 closed `S3I_READY: YES` conditional on ratifying
+D32 and D33. The operator ratified both and authorised one run. The run was **not reached**.
+
+```
+S3I_LIVE_EVALUATION:              BLOCKED
+S3I_PRETOKEN_GATE:                BLOCKED
+PLAN_BLOCKER_COUNT:               2
+EVALUATION_PLAN_HASH:             NOT_DERIVED   (blocked before plan construction)
+EVAL_TOKEN_CREATED:               NO
+EVAL_TOKEN_CONSUMED:              NO
+EVAL_ATTEMPTS:                    0
+TOKENS_GENERATED:                 0
+HELDOUT_TASKS_EXECUTED:           0
+MODEL_FORWARD_PASSES_FOR_EVAL:    0
+SOURCE_CHANGED:                   NO
+
+BLOCKER_B1_GENERATION_RUNTIME:    ABSENT — no torch/transformers/peft on the system
+                                  interpreter; `.venv` and `.venv-training-smoke` are
+                                  **Windows** venvs (Scripts/*.exe, Lib/, c10.dll) built for
+                                  Python312 and cannot run on this Linux host. The S3H
+                                  adapter manifest records the runtime that made it:
+                                  torch 2.13.0+cpu / transformers 5.14.1 / peft 0.20.0
+BLOCKER_B2_D34_CORPUS_LINEAGE:    v2 digest depends on build lineage, not content
+
+D34_V2_FRESH_ROOT:                10ad2308391567eeaa043001835b0c77a02473b26d2f83c0fb54a32d885b9df0
+                                  (parent_manifest_hash = genesis; reproduced twice)
+D34_V2_AFTER_V1_SAME_ROOT:        82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60
+                                  (parent_manifest_hash = 0970600c… = v1)
+D34_V1_CONTROL:                   0970600c… reproduced exactly (matches record and S3I.0)
+D34_SHARD_BYTES_IDENTICAL:        YES — all three shards identical across both lineages;
+                                  only manifest.json differs, only parent_manifest_hash
+D32_STATUS:                       MUST_BE_REOPENED — its premise ("10ad2308… reproduces under
+                                  no code version and no root") is falsified
+
+CANDIDATE_VERIFIED:               YES — verify_completed_run -> 0 problems
+ADAPTER_SHA256:                   43213035…ac858  (matches; adapter not mutated)
+ADAPTER_MANIFEST_HASH:            1f76ccfb…  ARTIFACT_TREE_HASH: 00aa57bb…
+BASE_REVISION:                    c1899de2… — only revision in the reviewed cache
+CORPUS_CONTENT:                   VERIFIED INTACT (36 records, 12/12/12, 12/9/9/6, clean)
+ACCEPTANCE_GATES_UNCHANGED:       YES — S3G §6 read and reproduced, not modified
+SCORING_UNCHANGED:                YES
+D33_TIMEOUT:                      ratified at 300 s; no plan existed to bind it; enforcement
+                                  untouched; timeout_rate still VACUOUS
+WORKTREE:                         183 files differ by **line endings only** (CRLF worktree vs
+                                  LF index); `git diff --ignore-all-space` is empty
+
+ALL_S3G_GATES:                    NOT_EVALUATED  (SV-1..9, QG-1..4, FG-1..4, OG-1..7)
+CANDIDATE_STATUS:                 TRAINED_UNEVALUATED  (unchanged)
+CANDIDATE_ELIGIBILITY:            NOT_ESTABLISHED
+MODEL_PROMOTION:                  NOT_AUTHORIZED
+MODEL_REGISTRY_MUTATED:           NO
 ```
 
 **The acceptance gates were predeclared, before any training.** They are counts over
@@ -1041,6 +1096,39 @@ second variable to the first reasoning-disabled measurement.
 **Real training/eval:** none. **Enabled:** an S3I whose two remaining conditions are decisions
 rather than engineering.
 
+### M62 S3I — First quality-candidate held-out eligibility evaluation (BLOCKED)
+**Purpose:** consume one single-use `EVAL:` authority and run 36 + 36 = 72 real held-out
+generations against the predeclared S3G §6 gates. **Nothing was generated; no authority was
+created or spent.**
+**Status:** **BLOCKED at the pre-token gate.** **Doc:**
+`jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`.
+**Two independent blockers, neither worked around.**
+**B1 — the generation runtime does not exist on this host.** The system interpreter has no
+`torch`, `transformers` or `peft`, and both `.venv` and `.venv-training-smoke` are **Windows**
+virtual environments (`Scripts/*.exe`, `Lib/`, `c10.dll`, `home = C:\…\Python312`). The
+repository is a copy of the Windows host M62 ran on; the cache named by the brief's Windows
+path is absent, though the same reviewed cache is present at the host-equivalent root with
+`c1899de2…` as its only revision. Installing torch was refused: PROGRESS §3 forbids
+dependency installation as an invariant, §19 lists it as needing new operator authorisation,
+and it would have replaced the very runtime S3I.0 qualified.
+**B2 — D34, and it reopens D32.** The brief requires reproducing the corpus before the plan
+exists. Rebuilding `m62-defensive-eval v2` from the tracked generator into a **fresh** root
+yields `10ad2308…` — the digest S3I.0 declared reproduces nowhere — deterministically, twice.
+Rebuilding it into a root that **already contains v1** yields `82b60bfd…`. The v1 control
+reproduces `0970600c…` in both. The difference is one field: `parent_manifest_hash`, which
+resolves to v1's digest when v1 is present and to `genesis` when it is not. All three shard
+files are byte-identical across both lineages; `diff -r` reports only `manifest.json`.
+**So the corpus identity is not a function of the corpus alone**, both recorded digests are
+legitimate generator outputs, and S3F.2 was most likely never wrong — it simply built v2
+standalone, while S3I.0 rebuilt v1 first as its control and formed the parent link. That is
+the D22 / D30 / D32 wasted-authority shape arriving a fourth way, caught before a token existed.
+**Verified and holding:** the S3H adapter (`verify_completed_run` → 0 problems, sha256
+`43213035…`, manifest `1f76ccfb…`, tree `00aa57bb…`, all bindings reproduce), the base
+revision, the reviewed cache, the corpus **content**, the unchanged S3G gates and the
+unchanged scorer.
+**Real training/eval:** none. **Enabled:** an S3I whose two remaining conditions are, again,
+operator decisions rather than engineering.
+
 ### Commit index
 
 All 52 M62 commits in chronological order (`3705114..HEAD`).
@@ -1526,6 +1614,7 @@ rule is a structural guarantee, not a performance knob.
 
 | D32 | **The recorded `m62-defensive-eval v2` manifest digest does not reproduce.** PROGRESS §7, the S3F.2 doc, S3G §12, S3G.2 §5 and the S3H doc all bind the held-out corpus by `10ad2308…`. Rebuilding v2 from the tracked generator produces `82b60bfd…` | a future S3I would bind the corpus by a digest nothing produces, and would meet an unexplained mismatch at exactly the moment a fresh single-use `EVAL` token was about to be spent — the D22 / D30 wasted-authority shape arriving a third way | **the corpus was NOT changed.** v1 rebuilt as a control reproduces `0970600c…` exactly, so the generator and the authority chain are sound; the generator has not changed since `68ba078` (the commit that created v2) and a temporary worktree at that commit also yields `82b60bfd…` — three roots, two code versions, one answer. Content is unchanged (36/36, splits 12/12/12, families 12/9/9/6, leakage clean, parent = v1). PROGRESS is corrected to `82b60bfd…`; the historical milestone docs keep their text per the supersession convention. **Why S3F.2 recorded the other value is not established** | S3I.0 | corpus rebuild reproduced across 3 roots and 2 code versions | **FIXED (documentation)** |
 | D33 | **The declared per-task generation timeout is not enforced.** `GenerationPolicy.timeout_s` is validated, serialised and travels inside `policy_hash` → `parity_hash`; there is a `TIMEOUT` error category, an `ArmScore.timed_out` field, a `timeout_rate` metric and a `max_timeout_rate_increase` gate — and the production `transformers_peft` evaluation backend contains no reference to it at all. The only consumer is the fake backend | a runaway generation has no automatic bound, and `timeout_rate` is **structurally vacuous** over a production run, so the gate above it decides nothing — D28's shape exactly. S3E.2 declared `timeout_s=300`, observed p95 latencies of 596.5 s and 704.4 s, and reported **0 timeouts**; those three facts reconcile only if it was never applied | **not fixed.** Enforcement would change run behaviour — tasks that previously completed could be cut off — and would put a second variable into the first reasoning-disabled measurement, the trade S3F.2 refused over `max_new_tokens` and S3G refused over D29. The S3I report must record `timeout_rate` as `VACUOUS` alongside `tool_call_validity_rate` | S3I.0 | searched across the whole evaluation package | **OPEN (§14.44)** |
+| D34 | **The `m62-defensive-eval v2` manifest digest depends on build lineage, not on content.** `v2`'s manifest binds `parent_manifest_hash`, which resolves to `v1`'s digest when `v1` is materialised in the target dataset root and to `genesis` when it is not. Built into a fresh root `v2` is `10ad2308…`; built into a root already holding `v1` it is `82b60bfd…`. Both are deterministic and reproduce on repeat. The v1 control is `0970600c…` either way | two evaluations binding "`m62-defensive-eval v2`" can carry different manifest hashes for **byte-identical** held-out material — all three shards hash the same across both lineages and `diff -r` reports only `manifest.json`. A plan bound to one digest meets a mismatch it cannot explain when re-derived against a root in the other state, at exactly the moment a single-use `EVAL` token is spent (the D22 / D30 / D32 shape, a fourth time). It also **falsifies D32's premise**: `10ad2308…` reproduces, so S3F.2's recorded value was most likely never wrong — it built v2 standalone, while S3I.0 rebuilt v1 first as its control | **not fixed.** Choosing the canonical lineage is a decision about dataset identity, not an engineering detail, and it moves the digest every artefact in the record binds | S3I | reproduced on this host: 2 fresh-root builds, 1 shared-root build, 1 v1 control | **OPEN (§14.46)** |
 
 **Generation 2 is the honest record of D23.** It reached `completed` with `measured_pairs: 0`,
 `empirical_status: insufficient_evidence`, `eligibility: needs_more_evidence`. It reported *no*
@@ -1736,6 +1825,22 @@ result rather than a false one — which is the behaviour that made the defect d
    none, and that the corpus content is exactly what S3F.2 described. The historical
    milestone docs still carry the superseded digest by convention — **PROGRESS §7 is the
    authoritative value.**
+46. **D34 — the v2 corpus digest is lineage-dependent, and D32 must be reopened.**
+   `82b60bfd…` and `10ad2308…` are *both* reproducible outputs of the unmodified tracked
+   generator; which one appears depends only on whether `v1` exists in the target dataset
+   root when `v2` is built. The corpus material is byte-identical in both. Until an
+   operator decides which lineage is canonical, **no plan may bind either digest**, and
+   §14.45's "`10ad2308…` reproduces under none" is superseded by measurement.
+47. **The generation runtime does not exist on this host.** `torch`, `transformers` and
+   `peft` are absent from the system interpreter, and `.venv` / `.venv-training-smoke`
+   are **Windows** virtual environments. Every live M62 run happened on that Windows
+   host. No held-out evaluation, and no other work needing real weights, can run here
+   until an execution host is supplied or provisioning is explicitly authorised — which
+   PROGRESS §3 makes an invariant and §19 makes an operator decision.
+48. **The working tree differs from the index in 183 files by line endings alone**
+   (CRLF worktree, LF index; `git diff --ignore-all-space` is empty). It is a copy
+   artefact, not an edit. It was **not** reset, restored, cleaned or stashed. Only the
+   two documentation files S3I legitimately writes were normalised to LF.
 20. **No third live evaluation of this adapter is currently authorized.** The completed S3E.2
    session authorised nothing further. A future run requires **explicit new operator
    authorization** plus a fresh generation, a fresh plan and a fresh single-use token.
@@ -2166,6 +2271,29 @@ hand-written and no hash is invented.
 - **DO NOT** generate "just one task" to sanity-check the evaluation path. S3I.0 held a
   hard zero-generation rule and S3I needs its own authorisation and a fresh token.
 
+
+- **DO NOT** re-run the S3I corpus reproduction expecting one answer. **D34**: `v2` is
+  `10ad2308…` into a fresh root and `82b60bfd…` into a root already holding `v1`, both
+  deterministic, with byte-identical shards. Reproduce **both** or neither; do not report
+  one as "the" digest.
+- **DO NOT** treat D32 as closed. Its ruling rests on "`10ad2308…` reproduces under no code
+  version and no root", which S3I measured to be false. Reopen it together with D34.
+- **DO NOT** "fix" D34 by editing the corpus, deleting a root, or forcing a parent link to
+  make one digest appear. The material is correct and identical; only its lineage binding
+  differs, and choosing one is an operator decision that re-identifies existing artefacts.
+- **DO NOT** install torch, transformers or peft to make S3I runnable. It is forbidden by
+  the §3 invariant, listed in §19 as needing new operator authorisation, and it would
+  replace the runtime S3I.0 qualified — a second and far larger variable in the first
+  reasoning-disabled measurement.
+- **DO NOT** read S3I's `BLOCKED` as a failed evaluation. Nothing was generated, no `EVAL`
+  authority was created or consumed, and **the one-run authorisation is unspent**. The
+  candidate is `TRAINED_UNEVALUATED`, not `NOT_ELIGIBLE`.
+- **DO NOT** infer any S3G gate outcome from S3I. All of SV-1…SV-9, QG-1…QG-4, FG-1…FG-4
+  and OG-1…OG-7 are `NOT_EVALUATED`; none is a pass and none is a failure.
+- **DO NOT** "clean up" the 183-file CRLF difference with `git checkout`, `restore`,
+  `reset` or `clean`. It is a copy artefact over unrelated files and discarding it is
+  explicitly out of scope.
+
 **Instead:**
 
 ```
@@ -2175,7 +2303,38 @@ requested next step
 
 ---
 
-## 19 — NEXT: M62 S3I (not authorised)
+## 19 — NEXT: M62 S3I retry (authorised, unspent, blocked)
+
+> **S3I was authorised and did not run.** The operator ratified D32 and D33 and authorised
+> exactly one held-out eligibility evaluation. The pre-token gate failed on two independent
+> blockers, so **no plan was built, no `EVAL:` authority was created, nothing was generated,
+> and the one-run authorisation remains unspent.** Doc:
+> **`jarvis/docs/V69_M62_S3I_FIRST_QUALITY_HELDOUT_EVALUATION.md`**.
+
+**The two blockers, both operator decisions rather than engineering**
+
+```
+B1  EXECUTION HOST      no torch/transformers/peft here; both venvs are Windows trees.
+                        Either run S3I on the Windows host where the runtime, the reviewed
+                        cache and S3I.0's load measurement already apply, or explicitly
+                        authorise provisioning an equivalent isolated environment here and
+                        accept that a changed runtime is a changed measurement.
+
+B2  D34 / REOPEN D32    m62-defensive-eval v2 is 10ad2308… built standalone and 82b60bfd…
+                        built after v1 into the same root. Both reproduce; the shards are
+                        byte-identical. Decide which lineage is canonical — and whether the
+                        corpus identity should bind a parent link at all — before any plan
+                        binds a digest.
+```
+
+**Everything else is ready and was verified this session:** the adapter
+(`verify_completed_run` → 0 problems, `43213035…`, manifest `1f76ccfb…`, tree `00aa57bb…`),
+the base revision `c1899de2…`, the reviewed cache, the corpus **content**, the unchanged S3G
+§6 gates, the unchanged scorer, `reasoning_policy = DISABLED`, `max_new_tokens = 512`,
+`timeout_s = 300` (unenforced, D33), and `isolated_loads` / 72 loads.
+
+### Superseded — the pre-S3I framing (S3I.0 close)
+
 
 > **S3G is COMPLETE as a design milestone, S3G.1 as a qualification milestone, S3G.2 as the
 > wiring milestone, and S3H as the first live training run.** The candidate now **exists**:
