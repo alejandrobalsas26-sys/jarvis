@@ -35,6 +35,7 @@ from ..schemas import (
     require_str_tuple,
     sha256_obj,
 )
+from ..training.chat_render import ReasoningPolicy
 from ..training.config import DevicePolicy, PrecisionPolicy
 
 #: Bumped when the policy's shape changes, invalidating outstanding confirmations.
@@ -71,30 +72,15 @@ class GenerationMode(str, Enum):
         return self is GenerationMode.GREEDY_DETERMINISTIC
 
 
-class ReasoningPolicy(str, Enum):
-    """Whether the chat template is asked to let the model think before answering.
-
-    S3E.2 passed nothing, so the template's own default decided — and for a reasoning
-    model that default is "think", which put a ``<think>`` block in front of every one
-    of the 72 responses. That is a setting that changes every output, and a setting that
-    changes every output belongs in the digest both arms are compared under, not in a
-    kwarg the backend happens to omit.
-    """
-
-    #: Pass nothing; the chat template decides. What S3E.2 actually did, and therefore
-    #: the default, so no existing configuration silently changes behaviour.
-    MODEL_DEFAULT = "model_default"
-    #: Ask the template for ``enable_thinking=False``.
-    DISABLED = "disabled"
-    #: Ask the template for ``enable_thinking=True``.
-    ENABLED = "enabled"
-
-    @property
-    def template_kwarg(self) -> bool | None:
-        """The value to pass, or ``None`` to pass nothing at all."""
-        if self is ReasoningPolicy.MODEL_DEFAULT:
-            return None
-        return self is ReasoningPolicy.ENABLED
+# ``ReasoningPolicy`` is imported from :mod:`training_gym.training.chat_render` and
+# re-exported here unchanged. It was defined in this module until S3M.1 (defect D37),
+# when the training side had to interpret the same closed set: the package dependency
+# runs evaluation -> training, so the shared vocabulary belongs on the training side,
+# exactly as ``DevicePolicy`` and ``PrecisionPolicy`` already do. The member VALUES did
+# not move, so ``GenerationPolicy.to_dict()`` and therefore ``policy_hash()`` — and
+# therefore the sealed ``generation_policy_hash c6b0b682…`` both live runs carry — are
+# byte-identical. This module's public surface is unchanged; nothing that imported
+# ``ReasoningPolicy`` from here needs to know.
 
 
 class TruncationSide(str, Enum):

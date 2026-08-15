@@ -664,6 +664,11 @@ def _build_manifest(*, config: TrainingConfig, planning, record: RunRecord,
         tokenizer_identity_hash=identity.tokenizer_identity_hash(),
         tokenizer_chat_template_hash=str(
             result.evidence.get("tokenizer_chat_template_hash", "")),
+        # Empty when the backend bound no reasoning policy, which is what every run up to
+        # and including candidate 002 did; the manifest then omits the key entirely and
+        # hashes exactly as it always did (defect D37, S3M.1).
+        chat_render_policy_hash=str(
+            result.evidence.get("chat_render_policy_hash", "")),
         dataset_id=reference.dataset_id, dataset_version=reference.dataset_version,
         dataset_reference_hash=reference.reference_hash(),
         dataset_manifest_hash=reference.dataset_manifest_hash,

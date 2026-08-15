@@ -49,6 +49,7 @@ from ..schemas import (
     sha256_obj,
 )
 from ..task_spec import require_timestamp
+from .chat_render import ChatRenderPolicy, ReasoningPolicy
 from .dataset_reference import (
     PLACEHOLDER_PREFIX,
     TrainingDatasetReference,
@@ -715,6 +716,14 @@ class TrainingConfig:
     training_split: DatasetSplit = DatasetSplit.TRAIN
     validation_split: DatasetSplit = DatasetSplit.VALIDATION
     validation_strategy: ValidationStrategy = ValidationStrategy.NO
+    #: How the chat template is CALLED when this run renders its rows (defect D37).
+    #: ``MODEL_DEFAULT`` is the legacy semantic state — pass nothing, let the template
+    #: decide — and it is what candidate 001 and candidate 002 were fitted under. It is
+    #: the default so that no configuration written before S3M.1 is re-described or
+    #: re-identified. A run whose future eligibility evaluation binds
+    #: ``reasoning_policy=DISABLED`` should name ``DISABLED`` here, so it is fitted after
+    #: the same generation prefix it will be evaluated after.
+    reasoning_policy: ReasoningPolicy = ReasoningPolicy.MODEL_DEFAULT
     hidden_evaluation_reference: DatasetSplit = DatasetSplit.HIDDEN_EVALUATION
     security_regression_reference: DatasetSplit = DatasetSplit.SECURITY_REGRESSION
     trust_remote_code: bool = False
@@ -728,7 +737,7 @@ class TrainingConfig:
         "base_model_revision", "base_model_parameters_b", "base_model_family",
         "tokenizer_id", "tokenizer_revision", "trust_remote_code", "dataset_reference",
         "training_split", "validation_split", "validation_strategy",
-        "hidden_evaluation_reference",
+        "reasoning_policy", "hidden_evaluation_reference",
         "security_regression_reference", "output_root_id", "seed", "epochs",
         "max_steps", "batch_size", "gradient_accumulation_steps", "learning_rate",
         "weight_decay", "warmup_ratio", "max_sequence_length",
@@ -821,6 +830,9 @@ class TrainingConfig:
                 f"per optimizer step and charges its cost to every one of them; the "
                 f"movement it produces is sampling noise, not learning. A cadence that "
                 f"expensive needs its own evidence rather than a default")
+        setattr_(self, "reasoning_policy",
+                 require_enum(self.reasoning_policy, ReasoningPolicy,
+                              "reasoning_policy"))
         if self.hidden_evaluation_reference in _TRAIN_SIDE:
             raise TrainingConfigError(
                 "hidden_evaluation_reference: names a train-side split; a hidden "
@@ -955,6 +967,24 @@ class TrainingConfig:
         """
         return self.validation_strategy is not ValidationStrategy.NO
 
+    def chat_render_policy(self, *, chat_template_hash: str,
+                           add_generation_prompt: bool = True,
+                           tokenize: bool = True) -> ChatRenderPolicy:
+        """The identity of one chat-template CALL this configuration would make.
+
+        Built here rather than in the backend so the same object is available to a test,
+        a plan reader and the run itself, and so the *only* place that decides how this
+        config renders is the config. ``chat_template_hash`` is supplied by the caller
+        because it comes from a loaded tokenizer, and this module loads none.
+        """
+        return ChatRenderPolicy(
+            tokenizer_id=self.tokenizer_id,
+            tokenizer_revision=self.tokenizer_revision,
+            chat_template_hash=chat_template_hash,
+            reasoning_policy=self.reasoning_policy,
+            add_generation_prompt=add_generation_prompt,
+            tokenize=tokenize)
+
     @property
     def has_immutable_revision(self) -> bool:
         return is_immutable_revision(self.base_model_revision)
@@ -978,11 +1008,22 @@ class TrainingConfig:
         emits a system turn only for a candidate that has one, for the same reason: an
         always-present key whose value means "absent" makes two different things look
         like one.
+
+        ``reasoning_policy`` is gated the same way and for the same reason (S3M.1, defect
+        D37). ``MODEL_DEFAULT`` is what every training configuration written before the
+        field existed meant — pass no ``enable_thinking`` and let the chat template
+        decide — so a config that defers hashes to exactly what it always hashed to and
+        candidate 001's and candidate 002's identities are untouched. A config that binds
+        ``DISABLED`` renders a different generation prefix, and it can never share an
+        identity with one that does not.
         """
         strategy = ({"validation_strategy": self.validation_strategy.value}
                     if self.validation_strategy is not ValidationStrategy.NO else {})
+        reasoning = ({"reasoning_policy": self.reasoning_policy.value}
+                     if self.reasoning_policy.is_explicit else {})
         return {
             **strategy,
+            **reasoning,
             "schema_version": self.schema_version,
             "run_id": self.run_id,
             "experiment_name": self.experiment_name,
@@ -1075,6 +1116,13 @@ class TrainingConfig:
             # `reject_unknown_fields` rather than silently losing the setting.
             validation_strategy=known.get("validation_strategy",
                                           defaults.validation_strategy),  # type: ignore[arg-type]
+            # Absent means MODEL_DEFAULT, which is the LEGACY IMPLICIT TEMPLATE DEFAULT
+            # and is the honest reading of every config written before S3M.1: the
+            # training backend passed no `enable_thinking` at all. It is deliberately
+            # NOT read as DISABLED -- that would retroactively claim candidate 001 and
+            # candidate 002 were fitted under a prefix they never saw.
+            reasoning_policy=known.get("reasoning_policy",
+                                       defaults.reasoning_policy),  # type: ignore[arg-type]
             hidden_evaluation_reference=known.get(
                 "hidden_evaluation_reference", defaults.hidden_evaluation_reference),  # type: ignore[arg-type]
             security_regression_reference=known.get(
@@ -1211,9 +1259,11 @@ __all__ = [
     "MAX_LORA_RANK", "MAX_NOTES_CHARS", "PLACEHOLDER_PREFIX", "PLANNER_VERSION",
     "REQUIRED_REVISION_PLACEHOLDER", "RESOURCE_POLICY_VERSION",
     "S3A_REACHABLE_STATES", "SUPPORTED_CHECKPOINT_STRATEGIES",
-    "SUPPORTED_VALIDATION_STRATEGIES", "TRAINING_SCHEMA_VERSION", "CheckpointStrategy",
+    "SUPPORTED_VALIDATION_STRATEGIES", "TRAINING_SCHEMA_VERSION",
+    "ChatRenderPolicy", "CheckpointStrategy",
     "DependencyProfile", "DevicePolicy", "LoRABias", "LoRAConfig",
     "LoRATargetPolicy", "LoggingTarget", "ModelDownloadPolicy", "PrecisionPolicy",
+    "ReasoningPolicy",
     "TrainingConfig", "TrainingConfigError", "TrainingMethod",
     "TrainingResourcePolicy", "TrainingRunState", "TrainingTransitionError",
     "ValidationStrategy",

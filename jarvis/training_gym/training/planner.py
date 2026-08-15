@@ -208,6 +208,14 @@ def plan_training(
             **({"validation_strategy": config.validation_strategy.value,
                 "validation_split": config.validation_split.value}
                if config.train_time_validation_enabled else {}),
+            # Value-gated on the same rule, for the same reason (defect D37, S3M.1). The
+            # plan hash already moves with `training_config_hash`; this key is here so a
+            # reader of `plan.to_record()` can see WHICH generation prefix the run would
+            # be fitted after without opening a config document. A run that renders under
+            # the template default keeps the hyperparameter block it has always had, so
+            # no historical plan is re-identified.
+            **({"reasoning_policy": config.reasoning_policy.value}
+               if config.reasoning_policy.is_explicit else {}),
         },
         lora=config.lora.to_dict(),
         resource_policy_version=config.resource_policy.policy_version,

@@ -374,7 +374,8 @@ _MANIFEST_FIELDS: tuple[str, ...] = (
     "training_config_hash", "method", "backend_id", "backend_version",
     "base_model_id", "base_model_revision", "base_model_identity_hash",
     "tokenizer_id", "tokenizer_revision", "tokenizer_identity_hash",
-    "tokenizer_chat_template_hash", "dataset_id", "dataset_version",
+    "tokenizer_chat_template_hash", "chat_render_policy_hash",
+    "dataset_id", "dataset_version",
     "dataset_reference_hash", "dataset_manifest_hash", "train_shard_hash",
     "validation_shard_hash", "hidden_evaluation_hash", "security_regression_hash",
     "export_manifest_hash", "split_algorithm_version", "seed", "lora",
@@ -440,6 +441,12 @@ class AdapterManifest:
     interrupted: bool = False
     completed: bool = True
     known_limitations: tuple[str, ...] = ()
+    #: The digest of the chat-template CALL this run rendered its prompts under (defect
+    #: D37, S3M.1). Empty means the run bound no reasoning policy and rendered under the
+    #: template's own default — which is what candidate 001 and candidate 002 did — and
+    #: an empty value is omitted from the canonical body entirely, so their manifests
+    #: (``1f76ccfb…`` and ``11897e16…``) still hash and verify exactly as written.
+    chat_render_policy_hash: str = ""
     manifest_version: str = ADAPTER_MANIFEST_VERSION
 
     def __post_init__(self) -> None:
@@ -479,12 +486,30 @@ class AdapterManifest:
             setattr_(self, name, value)
         if self.duration_seconds < 0:
             raise AdapterArtifactError("adapter manifest: duration_seconds is negative")
+        render = str(self.chat_render_policy_hash or "").strip().lower()
+        if render and len(render) != 64:
+            raise AdapterArtifactError(
+                f"adapter manifest: chat_render_policy_hash is {len(render)} characters, "
+                f"not a 64-character digest; a truncated identity compares equal to "
+                f"nothing and unequal to everything")
+        setattr_(self, "chat_render_policy_hash", render)
         setattr_(self, "files", tuple(sorted(self.files, key=lambda f: f.name)))
         setattr_(self, "known_limitations", tuple(self.known_limitations))
 
     def to_dict(self) -> dict:
-        """The canonical body. Excludes ``manifest_hash`` — that is computed over it."""
+        """The canonical body. Excludes ``manifest_hash`` — that is computed over it.
+
+        ``chat_render_policy_hash`` is value-gated, on the same rule
+        :meth:`training_gym.training.config.TrainingConfig.to_dict` applies to
+        ``validation_strategy`` and ``reasoning_policy``: a run that rendered under the
+        template's own default produces the manifest body it always produced, so no
+        historical adapter is re-identified and ``ADAPTER_MANIFEST_VERSION`` does not
+        move. A run that bound a policy carries the digest that proves which call it made.
+        """
+        render = ({"chat_render_policy_hash": self.chat_render_policy_hash}
+                  if self.chat_render_policy_hash else {})
         return {
+            **render,
             SCHEMA_KEY: SCHEMA_VERSION,
             "manifest_version": self.manifest_version,
             "run_id": self.run_id, "run_state": self.run_state,

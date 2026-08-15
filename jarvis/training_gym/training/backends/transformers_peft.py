@@ -59,6 +59,11 @@ from ..backend import (
     ExecutionRequest,
     InterruptionRequested,
 )
+from ..chat_render import (
+    ReasoningPolicy,
+    reasoning_template_kwargs,
+    template_honours_reasoning_policy,
+)
 from ..config import LoRATargetPolicy, TrainingMethod
 from ..dataset_conversion import (
     DatasetConversionError,
@@ -74,6 +79,12 @@ BACKEND_VERSION = "m62.transformers_peft.1"
 
 #: The packages this backend needs at runtime. Reported, never installed.
 RUNTIME_PACKAGES = ("torch", "transformers", "peft")
+
+#: One neutral message used only to ask whether the chat template implements the
+#: requested reasoning policy. It carries no corpus row, so the check cannot depend on
+#: which dataset is being trained on, and it is never tokenized into a training example.
+_HONOUR_PROBE_MESSAGES: tuple[dict, ...] = (
+    {"role": "user", "content": "reasoning policy probe"},)
 
 #: Passed to every ``from_pretrained``. Not a default that could be overridden: enabling
 #: remote code executes Python fetched from a model repository inside this process, and
@@ -347,10 +358,34 @@ class TransformersPeftBackend:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # A reasoning policy this template does not implement is a setting that would be
+        # RECORDED as applied and would have changed nothing -- the exact failure the
+        # evaluation backend already refuses, arriving on the training side. Refused
+        # here, before a single optimizer step, using the same shared check rather than a
+        # second opinion about what "honours" means (defect D37, S3M.1).
+        if config.reasoning_policy.is_explicit and not template_honours_reasoning_policy(
+                tokenizer, list(_HONOUR_PROBE_MESSAGES)):
+            return self._failed(
+                request, "tokenizer",
+                f"the training configuration binds "
+                f"reasoning_policy={config.reasoning_policy.value} and "
+                f"{config.tokenizer_id}'s chat template renders identically with "
+                f"enable_thinking on and off, or refuses the keyword. The run would "
+                f"record a rendering policy it did not apply, and the adapter would be "
+                f"fitted under a prefix nobody chose", started)
+
+        render_policy = config.chat_render_policy(
+            chat_template_hash=chat_template_hash(template),
+            add_generation_prompt=True)
+        full_render_policy = config.chat_render_policy(
+            chat_template_hash=chat_template_hash(template),
+            add_generation_prompt=False)
+
         dataset = convert_sft_export(request.train_file,
                                      max_sequence_length=config.max_sequence_length)
         rows, truncated = self._encode(dataset, tokenizer=tokenizer,
-                                       max_length=config.max_sequence_length)
+                                       max_length=config.max_sequence_length,
+                                       reasoning_policy=config.reasoning_policy)
         masking = self._masking_self_test(rows)
         if not masking.verified:
             return self._failed(
@@ -373,7 +408,8 @@ class TransformersPeftBackend:
                 max_sequence_length=config.max_sequence_length)
             eval_rows, eval_truncated = self._encode(
                 validation, tokenizer=tokenizer,
-                max_length=config.max_sequence_length)
+                max_length=config.max_sequence_length,
+                reasoning_policy=config.reasoning_policy)
             eval_masking = self._masking_self_test(eval_rows)
             if not eval_masking.verified:
                 return self._failed(
@@ -525,6 +561,16 @@ class TransformersPeftBackend:
                 "train_time_validation": validation_evidence,
                 "tokenizer_chat_template_hash": chat_template_hash(
                     getattr(tokenizer, "chat_template", None)),
+                # The template SOURCE digest above cannot distinguish two different
+                # calls into the same template, which is precisely how D37 went
+                # unrecorded through S3H, S3K, S3I and S3L. These three bind the CALL.
+                # `chat_render_policy_hash` is the prompt-prefix policy: the generation
+                # prefix the adapter is fitted after, and the one an eligibility
+                # evaluation must match.
+                "chat_render_policy": render_policy.to_dict(),
+                "chat_render_policy_hash": render_policy.render_policy_hash(),
+                "full_sequence_render_policy_hash":
+                    full_render_policy.render_policy_hash(),
                 "trainable_parameters": trainable,
                 "total_parameters": total,
                 "trust_remote_code": False,
@@ -533,20 +579,37 @@ class TransformersPeftBackend:
             })
 
     # ── encoding ──────────────────────────────────────────────────────────────
-    def _encode(self, dataset, *, tokenizer, max_length: int):
-        """Tokenize each record and mask the prompt span. Truncation is counted."""
+    def _encode(self, dataset, *, tokenizer, max_length: int,
+                reasoning_policy: ReasoningPolicy = ReasoningPolicy.MODEL_DEFAULT):
+        """Tokenize each record and mask the prompt span. Truncation is counted.
+
+        ``reasoning_policy`` decides how the chat template is CALLED (defect D37, closed
+        in S3M.1). ``MODEL_DEFAULT`` adds no keyword and reproduces the historical
+        rendering exactly, which is what candidate 001 and candidate 002 were fitted
+        under. ``DISABLED`` adds ``enable_thinking=False``, which is what an
+        eligibility-grade evaluation renders under, so a run that binds it is fitted
+        after the same generation prefix it will later be evaluated after.
+
+        The kwarg goes to BOTH calls rather than only the prompt one. On the reviewed
+        Qwen3 template the full-sequence render is invariant to it — measured, not
+        assumed — but ``build_labels`` refuses unless the prompt tokenizes as a true
+        prefix of the full sequence, and rendering the two halves of that comparison
+        under different policies is how a boundary silently shifts. One policy, one
+        rendering, both calls.
+        """
         rows: list[dict] = []
         truncated = 0
+        template_kwargs = reasoning_template_kwargs(reasoning_policy)
         for record in dataset.records:
             prompt_ids = _token_ids(
                 tokenizer.apply_chat_template(
                     list(record.prompt_messages), tokenize=True,
-                    add_generation_prompt=True),
+                    add_generation_prompt=True, **template_kwargs),
                 label=f"row {record.row_index} prompt")
             full_ids = _token_ids(
                 tokenizer.apply_chat_template(
                     list(record.messages), tokenize=True,
-                    add_generation_prompt=False),
+                    add_generation_prompt=False, **template_kwargs),
                 label=f"row {record.row_index} full sequence")
             labels = build_labels(list(prompt_ids), list(full_ids))
             if len(full_ids) > max_length:

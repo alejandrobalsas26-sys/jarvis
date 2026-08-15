@@ -49,6 +49,7 @@ from ...training.artifacts import (
     ADAPTER_WEIGHTS_FILE,
     validate_adapter_directory,
 )
+from ...training.chat_render import template_honours_reasoning_policy
 from ..backend import (
     BackendErrorCategory,
     BackendStatus,
@@ -153,30 +154,16 @@ def generation_kwargs(policy) -> dict:
     return kwargs
 
 
-def template_honours_reasoning_policy(tokenizer, messages: list) -> bool:
-    """Public name for the check below, so a preflight uses this authority rather than a
-    second implementation of the same comparison."""
-    return _template_honours_thinking(tokenizer, messages)
-
-
 def _template_honours_thinking(tokenizer, messages: list) -> bool:
     """Whether this chat template actually implements ``enable_thinking``.
 
-    Rendered both ways and compared, rather than assumed. ``apply_chat_template`` passes
-    an unknown keyword into the Jinja context and a template that never reads it renders
-    the same string either way — which is a silent no-op, and a silent no-op in a setting
-    the report records as applied is worse than a refusal.
+    The implementation moved to :mod:`training_gym.training.chat_render` in S3M.1 so the
+    training backend can apply the identical check instead of forking a copy of it
+    (defect D37). Behaviour is unchanged and both historical names still resolve here:
+    ``template_honours_reasoning_policy`` is what ``scripts/qualify_reasoning_policy.py``
+    imports, and this private name is what this module's own call site uses.
     """
-    try:
-        on = tokenizer.apply_chat_template(messages, tokenize=False,
-                                           add_generation_prompt=True,
-                                           enable_thinking=True)
-        off = tokenizer.apply_chat_template(messages, tokenize=False,
-                                            add_generation_prompt=True,
-                                            enable_thinking=False)
-    except Exception:  # noqa: BLE001 - a template that refuses the kwarg does not honour it
-        return False
-    return bool(on) and bool(off) and on != off
+    return template_honours_reasoning_policy(tokenizer, messages)
 
 
 class TransformersPeftEvaluationBackend:
