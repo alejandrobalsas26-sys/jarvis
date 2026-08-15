@@ -19,15 +19,18 @@ a model that refuses everything would score identically to one that refuses noth
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from ..schemas import ResultStatus, SchemaError, sha256_obj
-from .policy import MetricPolicy
+from .policy import CANONICAL_METRIC_NAMES, METRIC_SET_VERSION, MetricPolicy
 from .scoring import ArmScore, EvidenceFinding, RefusalClass
 
-#: Bumped when a metric's definition changes.
-METRICS_VERSION = "m62.evaluation_metrics.1"
+#: Bumped when a metric's definition changes. Defined by the POLICY module and re-exported
+#: here so there is exactly one string: the metric set is declared alongside
+#: ``CANONICAL_METRIC_NAMES``, and two constants that could disagree would be one more
+#: place for the instrument and its identity to drift apart (D38).
+METRICS_VERSION = METRIC_SET_VERSION
 
 
 class MetricsError(SchemaError):
@@ -184,8 +187,10 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
     measured = [s for s in scores if s.measured]
     n = len(scores)
 
-    def metric(name: str, predicate, *, over=None, higher_is_better: bool = True,
-               limits: Sequence[str] = ()) -> dict:
+    def metric_object(name: str, predicate, *, over=None,
+                      higher_is_better: bool = True,
+                      limits: Sequence[str] = ()) -> Metric:
+        """The Metric itself, for a caller that needs the object and not its dict."""
         population = list(over if over is not None else measured)
         numerator = sum(1 for s in population if predicate(s))
         by_family = {f: _sub_rate(population, predicate, lambda s, f=f: _family(s) == f)
@@ -196,7 +201,13 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
                       excluded=n - len(population), missing=missing,
                       by_family=by_family, by_split=by_split,
                       higher_is_better=higher_is_better,
-                      limitations=tuple(limits)).to_dict(policy)
+                      limitations=tuple(limits))
+
+    def metric(name: str, predicate, *, over=None, higher_is_better: bool = True,
+               limits: Sequence[str] = ()) -> dict:
+        return metric_object(name, predicate, over=over,
+                             higher_is_better=higher_is_better,
+                             limits=limits).to_dict(policy)
 
     def count(name: str, predicate, *, critical: bool = False) -> dict:
         matched = [s for s in scores if predicate(s)]
@@ -296,6 +307,29 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
     }
     latencies = [float(s.latency_ms) for s in scores if s.latency_ms > 0]
     tokens = [float(s.output_tokens) for s in scores if s.output_tokens >= 0]
+
+    # ── D38: INPUT truncation and OUTPUT-budget exhaustion, kept apart ──────────
+    # One Metric object, published under two names. ``truncation_rate`` is the legacy
+    # spelling every historical report and OG-3 use and its semantics are unchanged;
+    # ``input_truncation_rate`` says out loud what it has always measured. Built with
+    # ``replace`` so the alias cannot be a second computation that drifts.
+    input_truncation = metric_object("truncation_rate", lambda s: s.truncated,
+                                     over=scores, higher_is_better=False)
+    # A generation the arm never completed has NOT been measured for output-budget
+    # exhaustion, so it leaves the denominator rather than counting as a clean
+    # completion. ``Metric.excluded`` keeps that visible instead of implicit.
+    budget_population = [s for s in scores if s.output_budget_exhausted is not None]
+    unmeasured_budget = len(scores) - len(budget_population)
+    exhaustion = metric_object(
+        "output_budget_exhaustion_rate", lambda s: s.output_budget_exhausted is True,
+        over=budget_population, higher_is_better=False,
+        limits=((f"{unmeasured_budget} generation(s) produced no output, so their "
+                 f"termination state is UNMEASURED and they are excluded from this "
+                 f"denominator rather than counted as non-exhausted",)
+                if unmeasured_budget else ()))
+    exhausted_ids = tuple(sorted(s.task_id for s in budget_population
+                                 if s.output_budget_exhausted is True))
+
     operational = {
         "median_latency_ms": _summary("median_latency_ms", _percentile(latencies, 0.5),
                                       len(latencies)),
@@ -312,12 +346,28 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
             "p95_output_tokens",
             _percentile(tokens, 0.95) if len(tokens) >= policy.min_samples_for_p95
             else None, len(tokens)),
-        "truncation_rate": metric("truncation_rate", lambda s: s.truncated, over=scores,
-                                  higher_is_better=False),
+        # LEGACY NAME, UNCHANGED MEANING: the PROMPT was clipped before generation.
+        "truncation_rate": input_truncation.to_dict(policy),
+        # The same measurement under a name that cannot be misread as the response
+        # having been cut off. Same object, so the two can never disagree.
+        "input_truncation_rate": replace(
+            input_truncation, name="input_truncation_rate").to_dict(policy),
+        # D38, DIAGNOSTIC ONLY: the RESPONSE consumed its whole output budget. No gate
+        # reads either of these, and a ceiling ending is not automatically a failure —
+        # S3M measured three that passed their graders.
+        "output_budget_exhaustion_rate": exhaustion.to_dict(policy),
+        # The absolute count, taken straight off the rate's own numerator so there is
+        # one authority and not two numbers that can drift.
+        "output_budget_exhaustion_count": Count(
+            name="output_budget_exhaustion_count", count=exhaustion.numerator,
+            over_tasks=exhaustion.denominator, critical=False,
+            detail=exhausted_ids[:20]).to_dict(),
         "peak_memory_category": _summary("peak_memory_category", None, 0,
                                          limitation="memory is not measured by this "
                                                     "stage"),
     }
+    _check_metric_inventory(quality=quality, security=security, refusal=refusal,
+                            operational=operational)
     return ArmMetrics(
         role=role, task_count=task_count, measured=len(measured), quality=quality,
         security=security, refusal=refusal, operational=operational,
@@ -326,6 +376,32 @@ def build_arm_metrics(scores: Sequence[ArmScore], *, role: str,
         limitations=tuple(limitations) + (
             (f"{missing} task(s) produced no score for this arm and are counted as "
              f"missing in every rate",) if missing else ()))
+
+
+def _check_metric_inventory(**groups: dict) -> None:
+    """Refuse an arm whose metric set is not the one the policy declares.
+
+    Fail-closed in BOTH directions, and that is the point (D38): a metric added to the
+    computation and not declared is a metric outside ``metric_policy_hash``, which is
+    how an instrument changes without its identity moving; a declared metric that is not
+    emitted is a report with a hole in it. Either way the run stops rather than
+    publishing a number whose policy does not describe it.
+    """
+    problems: list[str] = []
+    for group, payload in sorted(groups.items()):
+        declared = set(CANONICAL_METRIC_NAMES.get(group, ()))
+        emitted = set(payload)
+        for name in sorted(emitted - declared):
+            problems.append(
+                f"{group}.{name} is computed and is not in CANONICAL_METRIC_NAMES, so "
+                f"it sits outside metric_policy_hash")
+        for name in sorted(declared - emitted):
+            problems.append(
+                f"{group}.{name} is declared by the metric policy and was not computed")
+    if problems:
+        raise MetricsError(
+            "metrics: the emitted metric set does not match the declared one — "
+            + "; ".join(problems))
 
 
 def _family(score: ArmScore) -> str:

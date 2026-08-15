@@ -31,7 +31,11 @@ from ..schemas import (
     sha256_obj,
 )
 from . import EVALUATION_SCHEMA_VERSION, EVALUATOR_VERSION
-from .comparison import ComparisonSummary, refusal_counts
+from .comparison import (
+    ComparisonSummary,
+    output_budget_exhaustion_matrix,
+    refusal_counts,
+)
 from .config import EvaluationRunState
 from .gates import GateReport
 from .plan import EvaluationPlan
@@ -335,6 +339,14 @@ class EvaluationReport:
             "operational_summary": {
                 "baseline": self.summary.baseline_metrics.to_dict()["operational"],
                 "candidate": self.summary.candidate_metrics.to_dict()["operational"]},
+            # D38. The per-arm counts, rates and per-family breakdown already travel in
+            # ``operational_summary`` beside every other operational metric, under
+            # ``output_budget_exhaustion_rate`` / ``_count``; duplicating them into a
+            # second block of a hash-bound document would create two numbers to keep in
+            # step. What is genuinely new is the PAIRED view, so that alone is added.
+            # Diagnostic: no gate reads it and it carries no verdict.
+            "output_budget_exhaustion_paired": output_budget_exhaustion_matrix(
+                self.summary.comparisons),
             "family_summaries": [f.to_dict() for f in self.summary.family_summaries],
             "split_summaries": [s.to_dict() for s in self.summary.split_summaries],
             "overall_delta": self.summary.overall_delta,

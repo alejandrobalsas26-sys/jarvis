@@ -390,6 +390,62 @@ def _dominant_family(summaries: Sequence[FamilySummary], total: int,
     return ""
 
 
+def output_budget_exhaustion_matrix(
+        comparisons: Sequence[PairedComparison]) -> Mapping[str, object]:
+    """The D38 paired diagnostic: which arm ran out of output budget, per task.
+
+    OBSERVATIONAL ONLY, and deliberately so. There is no sign test here, no bootstrap,
+    no interval and no PASS/FAIL — inventing a significance claim for a diagnostic is
+    how an observation becomes a gate nobody decided to add. No gate reads this, and
+    S3M measured three ceiling endings that passed their graders, so exhaustion is not
+    a failure by itself.
+
+    Built the same way as :func:`refusal_counts`: a pure function over the already-scored
+    comparisons, body-free, counted rather than averaged. ``unmeasured`` is its own
+    bucket, never folded into ``neither``, because "this arm errored" and "this arm
+    finished inside its budget" are different facts.
+    """
+    counts = {"both_exhausted": 0, "candidate_only": 0, "baseline_only": 0,
+              "neither_exhausted": 0, "unmeasured": 0}
+    candidate_only: list[str] = []
+    baseline_only: list[str] = []
+    both: list[str] = []
+    for comparison in comparisons:
+        base = comparison.baseline_score
+        cand = comparison.candidate_score
+        left = base.output_budget_exhausted if base is not None else None
+        right = cand.output_budget_exhausted if cand is not None else None
+        if left is None or right is None:
+            counts["unmeasured"] += 1
+            continue
+        if left and right:
+            counts["both_exhausted"] += 1
+            both.append(comparison.task_id)
+        elif right:
+            counts["candidate_only"] += 1
+            candidate_only.append(comparison.task_id)
+        elif left:
+            counts["baseline_only"] += 1
+            baseline_only.append(comparison.task_id)
+        else:
+            counts["neither_exhausted"] += 1
+    return {
+        **counts,
+        "paired_tasks": len(comparisons),
+        # Body-free ids only, exactly as the security counts already publish them.
+        "both_exhausted_tasks": sorted(both)[:20],
+        "candidate_only_tasks": sorted(candidate_only)[:20],
+        "baseline_only_tasks": sorted(baseline_only)[:20],
+        "is_a_gate": False,
+        "limitations": [
+            "diagnostic only: no gate reads this, and no statistical claim is made "
+            "about it",
+            "reaching the output ceiling is not a failure by itself; only a grader "
+            "whose contract a non-terminating response breaks turns it into one",
+        ],
+    }
+
+
 def refusal_counts(comparisons: Sequence[PairedComparison]) -> Mapping[str, dict]:
     """Refusal classes per arm, counted rather than averaged."""
     out: dict[str, dict] = {"baseline": {}, "candidate": {}}
@@ -407,5 +463,5 @@ def refusal_counts(comparisons: Sequence[PairedComparison]) -> Mapping[str, dict
 __all__ = [
     "COMPARISON_VERSION", "ComparisonError", "ComparisonSummary", "ComparisonVerdict",
     "FamilySummary", "PairedComparison", "build_comparison", "compare_pair",
-    "refusal_counts",
+    "output_budget_exhaustion_matrix", "refusal_counts",
 ]

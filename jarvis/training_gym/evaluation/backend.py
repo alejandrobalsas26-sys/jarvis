@@ -113,6 +113,51 @@ class FinishReason(str, Enum):
     ERROR = "error"
     UNKNOWN = "unknown"
 
+    @property
+    def output_budget_exhausted(self) -> bool | None:
+        """Whether this termination state means the OUTPUT budget was consumed.
+
+        This is the single authority for that question (D38). Metrics, reports and
+        tests call it; nobody else compares a finish reason to a literal.
+
+        Three-valued on purpose, following the same rule as ``ArmScore.schema_valid``:
+        ``None`` is UNMEASURED and is never an optimistic ``False``. A generation that
+        errored did not demonstrate a clean, self-terminated completion, and reporting
+        it as one is exactly how this metric would read clean while measuring nothing.
+
+        It is NOT input truncation (``EvaluationResult.input_truncated``) and it is NOT
+        a timeout (``timed_out`` / :attr:`TIMEOUT`). Those are three different events
+        with three different fixes, and D38 exists because two of them were being read
+        as one.
+        """
+        try:
+            return _OUTPUT_BUDGET_EXHAUSTION[self]
+        except KeyError:  # pragma: no cover - unreachable until a member is added
+            raise EvaluationBackendError(
+                f"finish reason {self.value!r} has no output-budget classification. A "
+                f"termination state nobody classified must not default to 'the budget "
+                f"was not exhausted', because that makes the metric read clean for a "
+                f"state it has never seen") from None
+
+
+#: Every termination state, classified for D38. Exhaustive by construction: a member
+#: absent from this table raises rather than defaulting, so adding a
+#: :class:`FinishReason` without deciding what it means fails closed.
+#:
+#: ``TIMEOUT`` maps to ``False`` because a wall-clock timeout is a *different* event, not
+#: an unmeasured one — D33 governs it and D38 must not absorb it. Whether a timed-out
+#: generation contributes to the metric's denominator at all is decided one level up, by
+#: :attr:`EvaluationResult.output_budget_exhausted`, which admits only results that
+#: produced output.
+_OUTPUT_BUDGET_EXHAUSTION: dict[FinishReason, bool | None] = {
+    FinishReason.STOP_SEQUENCE: False,
+    FinishReason.END_OF_SEQUENCE: False,
+    FinishReason.MAX_NEW_TOKENS: True,
+    FinishReason.TIMEOUT: False,
+    FinishReason.ERROR: None,
+    FinishReason.UNKNOWN: None,
+}
+
 
 class CleanupStatus(str, Enum):
     """What happened when the backend tried to release the model.
@@ -336,6 +381,24 @@ class EvaluationResult:
         """An empty successful response is a failure to answer, not a success."""
         return self.status.produced_output and not self.response_text.strip()
 
+    @property
+    def output_budget_exhausted(self) -> bool | None:
+        """Did this generation consume its whole output budget? ``None`` = unmeasured.
+
+        Delegates the semantics to :attr:`FinishReason.output_budget_exhausted` — there
+        is exactly one table — and adds the one thing a finish reason cannot know: a
+        result that produced no output at all (failed, blocked, timed out, interrupted,
+        unsupported) has not been *measured* for this property. It is excluded from the
+        metric's denominator rather than counted as a clean completion, which is the
+        distinction :data:`_OUTPUT_BUDGET_EXHAUSTION`'s docstring exists to preserve.
+
+        Derived, never stored: the underlying evidence is ``finish_reason``, which every
+        result already persists body-free. D38 adds no new generation-side state.
+        """
+        if not self.status.produced_output:
+            return None
+        return self.finish_reason.output_budget_exhausted
+
     def oversized(self, ceilings: ResourceCeilings) -> bool:
         return len(self.response_text) > ceilings.max_response_chars
 
@@ -382,6 +445,40 @@ class EvaluationResult:
         record = {**self.to_dict(), "result_hash": self.result_hash()}
         assert_no_private_content(record, label="evaluation result")
         return record
+
+
+def output_budget_consistency_problems(result: EvaluationResult, *,
+                                       max_new_tokens: int) -> tuple[str, ...]:
+    """Cross-check a result's finish reason against its own generated-token count.
+
+    The relationship was read from the production backend rather than assumed:
+    ``transformers_peft`` sets ``MAX_NEW_TOKENS`` exactly when
+    ``output_tokens >= policy.max_new_tokens`` — a ``>=``, not an ``==``, so a backend
+    that appends a terminator inside the budget is still classified correctly.
+
+    Deliberately a diagnostic that RETURNS problems rather than a production assertion.
+    The backend that owns the comparison cannot check itself with it without being
+    circular; what this is for is a *foreign* result — a replayed record, a second
+    backend — where the two facts could genuinely disagree. A disagreement is reported,
+    never silently relabelled.
+
+    ``output_tokens < 0`` means the backend did not count them, so nothing is claimed.
+    """
+    if not result.status.produced_output or result.output_tokens < 0:
+        return ()
+    limit = int(max_new_tokens)
+    exhausted = result.finish_reason is FinishReason.MAX_NEW_TOKENS
+    reached = result.output_tokens >= limit
+    if exhausted and not reached:
+        return (f"result {result.task_id!r}: finish_reason says the output budget was "
+                f"exhausted but only {result.output_tokens} of {limit} tokens were "
+                f"generated; one of the two is describing a different generation",)
+    if reached and not exhausted:
+        return (f"result {result.task_id!r}: {result.output_tokens} of {limit} output "
+                f"tokens were generated and finish_reason says "
+                f"{result.finish_reason.value}; a generation that reached its ceiling "
+                f"and reports terminating by itself would be counted as clean",)
+    return ()
 
 
 def check_result_matches_request(result: EvaluationResult,
@@ -480,5 +577,6 @@ __all__ = [
     "CancellationToken", "CleanupStatus", "EvaluationBackend",
     "EvaluationBackendError", "EvaluationRequest", "EvaluationResult",
     "FinishReason", "InterruptionRequested", "blocked_result",
-    "check_result_matches_request", "require_backend",
+    "check_result_matches_request", "output_budget_consistency_problems",
+    "require_backend",
 ]

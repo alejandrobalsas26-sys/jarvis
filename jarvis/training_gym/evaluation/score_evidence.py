@@ -53,8 +53,11 @@ from ..schemas import (
 from .comparison import PairedComparison
 from .scoring import NOTE_CODES, ArmScore
 
-#: Bumped when the evidence record's shape changes.
-SCORE_EVIDENCE_VERSION = "m62.evaluation_score_evidence.1"
+#: Bumped when the evidence record's shape changes. ``.2`` adds
+#: ``output_budget_exhausted`` (D38). Records written under ``.1`` still read: the field
+#: list is an ALLOWLIST, so a record that omits the new key is accepted and a record that
+#: carries an undeclared one is refused — historical evidence verifies unchanged.
+SCORE_EVIDENCE_VERSION = "m62.evaluation_score_evidence.2"
 
 #: The file each arm's evidence is written to.
 BASELINE_SCORES_FILE = "baseline-scores.jsonl"
@@ -76,8 +79,8 @@ SCORE_EVIDENCE_FIELDS: tuple[str, ...] = (
     "schema_valid", "json_parseable", "evidence_findings", "tool_call_valid",
     "tool_call_critical", "tool_call_problem_count", "security_findings",
     "hygiene_findings", "grader_statuses", "missing_graders", "blocking", "severity",
-    "latency_ms", "output_tokens", "truncated", "timed_out", "empty", "note_codes",
-    "response_sha256", "score_hash",
+    "latency_ms", "output_tokens", "truncated", "output_budget_exhausted", "timed_out",
+    "empty", "note_codes", "response_sha256", "score_hash",
 )
 
 
@@ -127,7 +130,13 @@ def score_evidence_record(score: ArmScore, *, evaluation_id: str, generation: in
         "severity": score.severity.value,
         "latency_ms": int(score.latency_ms),
         "output_tokens": int(score.output_tokens),
+        # INPUT truncation. Kept exactly as it was; D38 adds a sibling rather than
+        # re-pointing this one at the response.
         "truncated": bool(score.truncated),
+        # OUTPUT-budget exhaustion (D38). Tri-state, so it is NOT coerced with bool():
+        # None means the arm produced no output and the termination state is unmeasured,
+        # and bool(None) would publish that as a clean, non-exhausted completion.
+        "output_budget_exhausted": score.output_budget_exhausted,
         "timed_out": bool(score.timed_out),
         "empty": bool(score.empty),
         "note_codes": list(score.note_codes),

@@ -42,7 +42,7 @@ from .policy import GraderPolicy
 from .task_pack import EvaluationTask, EvaluationTaskKind, HiddenTarget
 
 #: Bumped when a verdict's meaning changes.
-SCORING_VERSION = "m62.evaluation_scoring.4"
+SCORING_VERSION = "m62.evaluation_scoring.5"
 
 #: The closed vocabulary behind :attr:`ArmScore.note_codes`.
 #:
@@ -475,7 +475,22 @@ class ArmScore:
     severity: Severity = Severity.INFO
     latency_ms: int = 0
     output_tokens: int = -1
+    #: INPUT/prompt truncation — the prompt was clipped before generation ever started.
+    #: This has meant exactly that since S3C and it is NOT being redefined: ``truncation_
+    #: rate`` and OG-3 are computed over it, and re-pointing it at the response would
+    #: silently rewrite what every historical report says. See :attr:`output_budget_
+    #: exhausted` for the other thing (D38).
     truncated: bool = False
+    #: OUTPUT-budget exhaustion — generation ended because it consumed ``max_new_tokens``
+    #: (D38). Derived from the already-persisted ``finish_reason`` via the one authority
+    #: in ``backend.FinishReason.output_budget_exhausted``; nothing new is generated or
+    #: measured to produce it. ``None`` where the arm produced no output at all, so an
+    #: error is never counted as a clean, self-terminated completion.
+    #:
+    #: DIAGNOSTIC ONLY. No security, quality, format or operational gate reads it, and
+    #: reaching the ceiling is not a failure — S3M measured three ceiling endings that
+    #: passed their graders.
+    output_budget_exhausted: bool | None = None
     timed_out: bool = False
     empty: bool = False
     #: Prose for a person. May quote the response — a schema-violation message embeds the
@@ -494,6 +509,14 @@ class ArmScore:
             raise ScoringError(
                 f"arm score {self.task_id!r}: unknown note code(s) {unknown}; the "
                 f"vocabulary is closed so the review evidence stays body-free")
+        # Three-valued and checked, because a truthy string here would aggregate as an
+        # exhausted generation and a falsy one as a clean completion.
+        if self.output_budget_exhausted is not None and \
+                not isinstance(self.output_budget_exhausted, bool):
+            raise ScoringError(
+                f"arm score {self.task_id!r}: output_budget_exhausted must be True, "
+                f"False or None (unmeasured); {self.output_budget_exhausted!r} is not "
+                f"one of those, and a value nobody classified must not be counted")
 
     @property
     def measured(self) -> bool:
@@ -521,7 +544,9 @@ class ArmScore:
             "missing_graders": list(self.missing_graders),
             "blocking": self.blocking, "severity": self.severity.value,
             "latency_ms": self.latency_ms, "output_tokens": self.output_tokens,
-            "truncated": self.truncated, "timed_out": self.timed_out,
+            "truncated": self.truncated,
+            "output_budget_exhausted": self.output_budget_exhausted,
+            "timed_out": self.timed_out,
             "empty": self.empty, "notes": list(self.notes),
             "note_codes": list(self.note_codes),
         }
@@ -596,7 +621,9 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
                              for g in requested},
             missing_graders=tuple(sorted(mandatory)), blocking=False,
             latency_ms=result.latency_ms, output_tokens=result.output_tokens,
-            truncated=result.input_truncated, timed_out=result.timed_out,
+            truncated=result.input_truncated,
+            output_budget_exhausted=result.output_budget_exhausted,
+            timed_out=result.timed_out,
             empty=True, notes=(f"the arm did not produce a response "
                                f"({result.error_category.value})",),
             note_codes=("arm_produced_no_response",))
@@ -774,6 +801,7 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         grader_statuses=grader_statuses, missing_graders=missing, blocking=blocking,
         severity=severity, latency_ms=result.latency_ms,
         output_tokens=result.output_tokens, truncated=result.input_truncated,
+        output_budget_exhausted=result.output_budget_exhausted,
         timed_out=result.timed_out, empty=empty, notes=tuple(notes),
         note_codes=tuple(dict.fromkeys(codes)))
 

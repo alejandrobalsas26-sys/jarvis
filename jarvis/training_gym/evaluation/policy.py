@@ -54,6 +54,43 @@ SECURITY_GRADER_IDS: frozenset[str] = frozenset({
 MAX_BOOTSTRAP_ITERATIONS = 20_000
 MIN_BOOTSTRAP_ITERATIONS = 200
 
+#: Bumped whenever :data:`CANONICAL_METRIC_NAMES` changes. ``.2`` adds the D38
+#: output-budget metrics and the ``input_truncation_rate`` alias.
+METRIC_SET_VERSION = "m62.evaluation_metrics.2"
+
+#: The complete metric set an evaluation reports, declared by POLICY rather than
+#: discovered from whatever the computation happened to emit.
+#:
+#: Why it lives here and is inside ``metric_policy_hash`` (D38): before this, the metric
+#: policy bound only *how* a number may be reported — the denominator rules and the p95
+#: sample floor — and nothing at all about *which* numbers exist. So an instrument could
+#: gain or lose a canonical metric while its policy identity stayed byte-identical, and
+#: two reports claiming one ``metric_policy_hash`` could be measuring different things.
+#: An identity that does not describe the instrument is worse than no identity.
+#:
+#: ``metrics.build_arm_metrics`` asserts that what it emits equals this declaration
+#: exactly, in both directions, so the two cannot drift: a metric added to the
+#: computation and not declared here is refused, and vice versa.
+CANONICAL_METRIC_NAMES: dict[str, tuple[str, ...]] = {
+    "quality": (
+        "average_normalized_reward", "deterministic_pass_rate", "empty_response_rate",
+        "error_rate", "evidence_validity_rate", "json_parseable_rate",
+        "schema_validity_rate", "task_success_rate", "timeout_rate",
+        "tool_call_validity_rate", "unsupported_claim_rate"),
+    "security": (
+        "critical_safety_violations", "fabricated_evidence",
+        "held_out_answer_exposures", "private_path_leaks", "prompt_injection_failures",
+        "secret_leaks", "unsafe_tool_proposals"),
+    "refusal": (
+        "ambiguous_rate", "required_refusal_success_rate", "safe_task_completion_rate",
+        "unnecessary_refusal_rate", "unsafe_acceptance_rate"),
+    "operational": (
+        "input_truncation_rate", "median_latency_ms", "median_output_tokens",
+        "output_budget_exhaustion_count", "output_budget_exhaustion_rate",
+        "p95_latency_ms", "p95_output_tokens", "peak_memory_category",
+        "truncation_rate"),
+}
+
 
 class EvaluationPolicyError(SchemaError):
     """A policy that would produce an unsupportable claim."""
@@ -191,7 +228,14 @@ class MetricPolicy:
                 "score; nothing measured is not everything passed")
 
     def to_dict(self) -> dict:
+        # The metric SET is part of the metric policy, not an implementation detail of
+        # whatever computed it (D38). It is emitted unconditionally rather than
+        # value-gated: there is no "absent means the historical set" reading to preserve,
+        # because the historical set was never recorded at all.
         return {"policy_version": self.policy_version,
+                "metric_set_version": METRIC_SET_VERSION,
+                "canonical_metrics": {group: list(names) for group, names
+                                      in sorted(CANONICAL_METRIC_NAMES.items())},
                 "min_denominator_for_rate": self.min_denominator_for_rate,
                 "min_samples_for_p95": self.min_samples_for_p95,
                 "require_denominator": self.require_denominator,
@@ -442,7 +486,8 @@ class EvaluationPolicySet:
 
 
 __all__ = [
-    "EVALUATION_POLICY_VERSION", "MAX_BOOTSTRAP_ITERATIONS",
+    "CANONICAL_METRIC_NAMES", "EVALUATION_POLICY_VERSION",
+    "MAX_BOOTSTRAP_ITERATIONS", "METRIC_SET_VERSION",
     "MIN_BOOTSTRAP_ITERATIONS", "SECURITY_GRADER_IDS", "ErrorAccounting",
     "EvaluationPolicyError", "EvaluationPolicySet", "GatePolicy", "GraderPolicy",
     "MetricPolicy", "ResourceCeilings", "StatisticalMethod", "StatisticalPolicy",
