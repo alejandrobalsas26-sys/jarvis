@@ -148,29 +148,45 @@ def test_the_public_request_description_names_the_policy_digest():
 # ══════════════════════════════════════════════════════════════════════════════
 #  5 — the backend reads the policy instead of deciding on its own
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_backend_passes_the_policy_it_was_given_and_never_hard_codes_thinking():
+def _thinking_literals(source_text: str) -> list[object]:
     import ast
-    import pathlib
 
-    source = pathlib.Path(
-        "jarvis/training_gym/evaluation/backends/transformers_peft.py")
-    if not source.is_file():  # pragma: no cover - layout shim
-        source = pathlib.Path(__file__).resolve().parents[1] / (
-            "training_gym/evaluation/backends/transformers_peft.py")
-    tree = ast.parse(source.read_text(encoding="utf-8"))
     literals: list[object] = []
-    for node in ast.walk(tree):
+    for node in ast.walk(ast.parse(source_text)):
         if not isinstance(node, ast.Call):
             continue
         for keyword in node.keywords:
             if keyword.arg == "enable_thinking" and isinstance(keyword.value,
                                                                ast.Constant):
                 literals.append(keyword.value.value)
-    # The only literal True/False pair permitted is inside the honour check, which
-    # renders both ways precisely in order to compare them.
-    assert sorted(set(literals), key=str) == [False, True]
-    assert "policy.reasoning_policy.template_kwarg" in source.read_text(
-        encoding="utf-8")
+    return literals
+
+
+def test_the_backend_passes_the_policy_it_was_given_and_never_hard_codes_thinking():
+    """The property is unchanged; S3M.1 moved where half of it is checked.
+
+    Until S3M.1 the honour check lived in this backend, so the only literal
+    ``enable_thinking`` pair in the file was its deliberate render-both-ways comparison.
+    S3M.1 (defect D37) moved that check to ``training_gym.training.chat_render`` so the
+    TRAINING backend applies the identical one instead of forking a copy — the shared
+    module is imported by both. So the assertion splits in two and gets stricter on this
+    side: the evaluation backend must now hard-code **no** ``enable_thinking`` literal at
+    all, and the only literal pair anywhere is still the honour check's.
+    """
+    import pathlib
+
+    root = pathlib.Path("jarvis")
+    if not (root / "training_gym").is_dir():  # pragma: no cover - layout shim
+        root = pathlib.Path(__file__).resolve().parents[1]
+    backend = (root / "training_gym/evaluation/backends/transformers_peft.py"
+               ).read_text(encoding="utf-8")
+    shared = (root / "training_gym/training/chat_render.py").read_text(encoding="utf-8")
+
+    assert _thinking_literals(backend) == [], (
+        "the evaluation backend hard-codes an enable_thinking literal again; it must "
+        "read the plan-bound policy and nothing else")
+    assert sorted(set(_thinking_literals(shared)), key=str) == [False, True]
+    assert "policy.reasoning_policy.template_kwarg" in backend
 
 
 # ══════════════════════════════════════════════════════════════════════════════

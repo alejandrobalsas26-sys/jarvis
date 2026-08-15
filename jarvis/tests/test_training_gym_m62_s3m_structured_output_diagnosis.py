@@ -292,24 +292,32 @@ def test_the_evaluation_backend_binds_a_reasoning_policy_into_the_template_call(
     assert "add_generation_prompt=True" in source
 
 
-def test_the_training_backend_binds_no_reasoning_policy_at_all():
-    """The asymmetry, pinned so that closing it is a deliberate act.
+def test_the_training_backend_now_binds_a_reasoning_policy():
+    """SUPERSEDED BY S3M.1 — and superseded exactly the way it was written to be.
 
-    The training backend renders with ``apply_chat_template`` and passes no
-    ``enable_thinking``, so the template's own default applies. The evaluation backend
-    passes one. Against the real pinned tokenizer the two renderings were measured to
-    differ, so the LoRA is fitted under one generation prefix and evaluated under
-    another. Nothing in the training config, plan, adapter manifest or chat-template
-    digest records which rendering was used.
+    S3M pinned the *asymmetry*: the training backend named neither ``enable_thinking``
+    nor ``reasoning_policy``, so it rendered under the chat template's own default while
+    the evaluation backend rendered under the plan-bound eligibility policy. The
+    assertion was inverted on purpose — *"if a future milestone binds a reasoning policy
+    on the training side, this test fails, which is the point"* — so that closing D37
+    could not happen quietly.
 
-    If a future milestone binds a reasoning policy on the training side, this test
-    fails — which is the point. It should fail loudly and be updated deliberately.
+    S3M.1 closed D37 as its own operator-authorised milestone, so the test now pins the
+    other direction: the training backend must go on binding a policy. S3M's diagnosis
+    is **not** revised by this. It correctly recorded the state of the repository at
+    ``06480cb``, and candidate 001 and candidate 002 were both fitted under the template
+    default — which is still what a configuration that names no policy means.
+
+    The full parity proof lives in
+    ``tests/test_training_gym_m62_s3m1_d37_template_parity.py``.
     """
     source = inspect.getsource(train_backend)
-    assert "enable_thinking" not in source, (
-        "the training backend now names enable_thinking; the S3M train/eval rendering "
-        "asymmetry has changed and the diagnosis must be re-read")
-    assert "reasoning_policy" not in source
+    assert "reasoning_policy" in source, (
+        "the training backend no longer binds a reasoning policy; D37 has been "
+        "reopened and train/eval rendering parity is lost again")
+    assert "reasoning_template_kwargs" in source, (
+        "the training backend no longer maps its reasoning policy into the template "
+        "call, so the policy it records would not be the policy it applied")
 
 
 def test_the_chat_template_digest_cannot_distinguish_the_two_renderings():
