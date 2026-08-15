@@ -123,12 +123,13 @@ def test_the_generator_names_exactly_the_versions_it_can_build():
     """The version list moves when a version is added; ``v2`` never stops existing.
 
     V69 M62 S3J added ``v3``, the fresh eligibility holdout for the second quality
-    candidate, and moved the "which version does an eligibility run bind" pointer onto
-    it. ``v2`` remains buildable and remains the corpus of record for the S3I LIVE
+    candidate, and V69 M62 S3N added ``v4``, the one frozen before any third candidate
+    exists — each moving the "which version does an eligibility run bind" pointer onto
+    itself. ``v2`` remains buildable and remains the corpus of record for the S3I LIVE
     measurement — every other assertion in this file still measures it.
     """
-    assert sorted(_BUILDER.CORPUS_VERSIONS) == ["v1", "v2", "v3"]
-    assert _BUILDER.LATEST_DATASET_VERSION == "v3"
+    assert sorted(_BUILDER.CORPUS_VERSIONS) == ["v1", "v2", "v3", "v4"]
+    assert _BUILDER.LATEST_DATASET_VERSION == "v4"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
