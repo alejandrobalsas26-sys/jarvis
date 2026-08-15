@@ -338,10 +338,17 @@ def test_the_chat_template_digest_cannot_distinguish_the_two_renderings():
 def test_arm_score_truncated_reports_INPUT_truncation_not_output_budget():
     """OG-3's ``truncation 0/9`` is about the PROMPT, not about the response.
 
-    A response that ran to ``max_new_tokens`` is recorded only in ``finish_reason``.
     Reading OG-3's zero as "no response was cut off" is the misreading this pins
     against: in S3L the candidate reached the ceiling on 5 of 36 tasks while OG-3
     correctly reported 0/9 truncation.
+
+    **This assertion is unchanged by S3M.2 and must stay that way.** D38 was closed by
+    ADDING ``ArmScore.output_budget_exhausted`` beside this field, never by re-pointing
+    this one at the response — that would silently rewrite what every historical report
+    means. What S3M wrote as "recorded only in ``finish_reason``" is now also carried by
+    a first-class diagnostic metric (``output_budget_exhaustion_rate``), and it is still
+    read by **no gate**. See
+    ``tests/test_training_gym_m62_s3m2_d38_output_budget.py``.
     """
     from training_gym.evaluation import scoring
 
