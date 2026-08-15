@@ -1,0 +1,45 @@
+{
+  "$id": "m62-current.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A deterministic pointer to the latest verified state snapshot. It carries no prose, no history, no task material and no authority. It cannot grant TRAIN, EVAL, promotion, registry mutation or release.",
+  "properties": {
+    "latest_snapshot_path": {
+      "maxLength": 200,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+      "type": "string"
+    },
+    "latest_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "m62.control_plane.1"
+    },
+    "state_generation": {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "subject_state_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "verify_command": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "latest_snapshot_path",
+    "latest_snapshot_sha256",
+    "schema_version",
+    "state_generation",
+    "subject_state_commit",
+    "verify_command"
+  ],
+  "title": "M62 control-plane current pointer",
+  "type": "object"
+}

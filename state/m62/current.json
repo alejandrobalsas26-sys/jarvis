@@ -1,0 +1,8 @@
+{
+  "latest_snapshot_path": "state/m62/snapshots/0001-m62-control-plane-v2-genesis.json",
+  "latest_snapshot_sha256": "a2659d1fb1031726329394f0593478eb57b273048bc0d94faf12c89225dcf2c3",
+  "schema_version": "m62.control_plane.1",
+  "state_generation": 1,
+  "subject_state_commit": "ec446e348995acb0c23a69b0c3efd574f821b1a0",
+  "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
+}

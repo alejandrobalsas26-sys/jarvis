@@ -1,0 +1,700 @@
+{
+  "$id": "m62-snapshot.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An append-only, hash-chained cache of CURRENT M62 facts. It is a CLAIM, not an authority: every field with an independent source is cross-checked by scripts/verify_m62_control_plane.py. It cannot grant TRAIN, EVAL, promotion, registry mutation or release, and it holds no task material.",
+  "properties": {
+    "archive": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "immutable": {
+          "const": true
+        },
+        "lines": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bytes",
+        "immutable",
+        "lines",
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "authority_observation": {
+      "additionalProperties": false,
+      "properties": {
+        "control_plane_can_grant_authority": {
+          "const": false
+        },
+        "eval": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        },
+        "note": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "promotion": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        },
+        "train": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "control_plane_can_grant_authority",
+        "eval",
+        "note",
+        "promotion",
+        "train"
+      ],
+      "type": "object"
+    },
+    "base_model": {
+      "additionalProperties": false,
+      "properties": {
+        "chat_template_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "revision_kind": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "training_precision": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chat_template_digest",
+        "evidence",
+        "model_id",
+        "revision",
+        "revision_kind",
+        "training_precision"
+      ],
+      "type": "object"
+    },
+    "candidates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_manifest_hash": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            ]
+          },
+          "adapter_sha256": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            ]
+          },
+          "base_model_revision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              }
+            ]
+          },
+          "candidate_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evaluation_corpus": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "evidence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "type": "string"
+              }
+            ]
+          },
+          "ordinal": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "NOT_CREATED",
+              "DESIGNED_UNTRAINED",
+              "TRAINED_UNEVALUATED",
+              "EVALUATED_NOT_ELIGIBLE",
+              "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
+              "EVALUATED_NEEDS_MORE_EVIDENCE",
+              "EVALUATED_QUARANTINED",
+              "PROMOTED"
+            ]
+          },
+          "training_corpus": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "adapter_manifest_hash",
+          "adapter_sha256",
+          "base_model_revision",
+          "candidate_id",
+          "evaluation_corpus",
+          "evidence",
+          "ordinal",
+          "status",
+          "training_corpus"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "control_plane_note": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    },
+    "datasets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+            "type": "string"
+          },
+          "manifest_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "pack_hash": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            ]
+          },
+          "parent_manifest_hash": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            ]
+          },
+          "role": {
+            "enum": [
+              "TRAINING_CORPUS",
+              "EVALUATION_HOLDOUT"
+            ]
+          },
+          "spent_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "FROZEN_UNUSED",
+              "USED_IMMUTABLE"
+            ]
+          },
+          "task_count": {
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "pattern": "^v[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "evidence",
+          "manifest_hash",
+          "pack_hash",
+          "parent_manifest_hash",
+          "role",
+          "spent_by",
+          "status",
+          "task_count",
+          "version"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "defects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "type": "string"
+              }
+            ]
+          },
+          "id": {
+            "pattern": "^D[0-9]{1,3}$",
+            "type": "string"
+          },
+          "is_gate": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "OPEN",
+              "FIXED",
+              "FIXED_OBSERVABILITY_ONLY",
+              "ACCEPTED_KNOWN_LIMITATION",
+              "NOT_QUALIFIED",
+              "SUPERSEDED",
+              "OPERATOR_RULING"
+            ]
+          },
+          "summary": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence",
+          "id",
+          "is_gate",
+          "status",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "frozen_invariants": {
+      "items": {
+        "maxLength": 320,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "generation_label": {
+      "pattern": "^[A-Z0-9_]{3,64}$",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 320,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "next_milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_required": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "evaluation_holdout": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "holdout_access": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "lora_scope": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "primary_axis": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "requires_new_session": {
+          "type": "boolean"
+        },
+        "ruled_out": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "training_corpus": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_required",
+        "evaluation_holdout",
+        "holdout_access",
+        "lora_scope",
+        "name",
+        "primary_axis",
+        "requires_new_session",
+        "ruled_out",
+        "training_corpus"
+      ],
+      "type": "object"
+    },
+    "parent_snapshot_sha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "policy_identities": {
+      "additionalProperties": false,
+      "properties": {
+        "gate_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation_policy_constructor_default_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "max_new_tokens": {
+          "maximum": 8192,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "metric_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reasoning_policy": {
+          "enum": [
+            "DISABLED",
+            "ENABLED",
+            "MODEL_DEFAULT"
+          ]
+        }
+      },
+      "required": [
+        "gate_policy_hash",
+        "generation_policy_constructor_default_hash",
+        "generation_policy_hash",
+        "max_new_tokens",
+        "metric_policy_hash",
+        "note",
+        "reasoning_policy"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "master_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "merged_into_master": {
+          "const": false
+        },
+        "milestone": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "released": {
+          "const": false
+        },
+        "tagged": {
+          "const": false
+        }
+      },
+      "required": [
+        "branch",
+        "master_commit",
+        "merged_into_master",
+        "milestone",
+        "released",
+        "tagged"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "m62.control_plane.1"
+    },
+    "state_generation": {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "subject_state_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "subject_state_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "test_baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "failed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "invocation": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "known_invocation_artifact": {
+          "additionalProperties": false,
+          "properties": {
+            "failing_tests": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "file": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "invocation": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "is_a_regression": {
+              "const": false
+            },
+            "is_defect_d39": {
+              "const": false
+            },
+            "note": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "failing_tests",
+            "file",
+            "invocation",
+            "is_a_regression",
+            "is_defect_d39",
+            "note"
+          ],
+          "type": "object"
+        },
+        "milestone": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "passed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "working_directory": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "failed",
+        "invocation",
+        "known_invocation_artifact",
+        "milestone",
+        "passed",
+        "skipped",
+        "working_directory"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "archive",
+    "authority_observation",
+    "base_model",
+    "candidates",
+    "control_plane_note",
+    "datasets",
+    "defects",
+    "frozen_invariants",
+    "generation_label",
+    "limitations",
+    "next_milestone",
+    "parent_snapshot_sha256",
+    "policy_identities",
+    "project",
+    "schema_version",
+    "state_generation",
+    "subject_state_commit",
+    "subject_state_milestone",
+    "test_baseline"
+  ],
+  "title": "M62 control-plane state snapshot",
+  "type": "object"
+}

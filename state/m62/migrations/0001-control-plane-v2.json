@@ -1,0 +1,413 @@
+{
+  "archive_bytes": 516784,
+  "archive_bytes_equal_source": true,
+  "archive_immutable": true,
+  "archive_path": "jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md",
+  "archive_sha256": "e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf",
+  "classification_summary": {
+    "classes_used": [
+      "ACTIVE_NEXT",
+      "AUTHORITY_HISTORY",
+      "CURRENT_CONTROL_STATE",
+      "CURRENT_KNOWN_LIMITATION",
+      "DEEP_EVIDENCE_POINTER",
+      "DEFECT_LEDGER",
+      "FROZEN_INVARIANT",
+      "HISTORICAL_EVENT",
+      "SUPERSEDED_HISTORY",
+      "TEST_BASELINE"
+    ],
+    "old_sections_classified": 22,
+    "orphan_sections": 0,
+    "rule": "every classified section is represented in current state, in the snapshot, through a deep-authority pointer, or byte-for-byte in the archive"
+  },
+  "coverage": [
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE",
+        "SUPERSEDED_HISTORY"
+      ],
+      "new_location": [
+        "PROGRESS.md sections 1-2 and 12",
+        "snapshot",
+        "archive"
+      ],
+      "note": "The current-phase cell also carried every superseded milestone summary; those are history and stay in the archive.",
+      "preserved": true,
+      "section": "header",
+      "title": "Header table, current phase and next phase",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE"
+      ],
+      "new_location": [
+        "PROGRESS.md section 1",
+        "snapshot.project",
+        "archive"
+      ],
+      "note": "The anchor moved from the S3E.2 commit to subject_state_commit, which the verifier checks HEAD descends from.",
+      "preserved": true,
+      "section": "1",
+      "title": "Current checkpoint",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE",
+        "HISTORICAL_EVENT",
+        "SUPERSEDED_HISTORY"
+      ],
+      "new_location": [
+        "snapshot",
+        "PROGRESS.md sections 2, 4, 5, 6, 7",
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "Current facts became typed state; the per-milestone blocks are history.",
+      "preserved": true,
+      "section": "2",
+      "title": "Current status matrix",
+      "verified": true
+    },
+    {
+      "classification": [
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 8",
+        "snapshot.frozen_invariants",
+        "archive"
+      ],
+      "note": "Carried forward in full, plus the new PROSE_CANNOT_GRANT_AUTHORITY and ONE-WRITER invariants.",
+      "preserved": true,
+      "section": "3",
+      "title": "Non-negotiable safety / repository invariants",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT",
+        "AUTHORITY_HISTORY"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "One index row per milestone with its deep document and commit range; no content duplicated.",
+      "preserved": true,
+      "section": "4",
+      "title": "M62 milestone timeline and commit index",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE",
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 3",
+        "snapshot.base_model",
+        "archive"
+      ],
+      "note": "The canonical-vs-legacy identity discussion is history and stays archived.",
+      "preserved": true,
+      "section": "5",
+      "title": "Authoritative model",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT",
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "Operator ruling H5 keeps run-004 a smoke reference excluded from quality promotion; the ruling is indexed, the run detail is archived.",
+      "preserved": true,
+      "section": "6",
+      "title": "Authoritative training run (run-004 smoke)",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE"
+      ],
+      "new_location": [
+        "PROGRESS.md section 5",
+        "snapshot.datasets",
+        "archive"
+      ],
+      "note": "Every version identity is now typed state with a closed status vocabulary.",
+      "preserved": true,
+      "section": "7",
+      "title": "Held-out evaluation corpus",
+      "verified": true
+    },
+    {
+      "classification": [
+        "FROZEN_INVARIANT",
+        "DEEP_EVIDENCE_POINTER"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive",
+        "snapshot.datasets[].pack_hash"
+      ],
+      "note": "Pack digests are state; the builder's enforced properties and the two-digests distinction are deep authority.",
+      "preserved": true,
+      "section": "8",
+      "title": "Task pack",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "preserved": true,
+      "section": "9",
+      "title": "Real live evaluation (S3E.2)",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "preserved": true,
+      "section": "10",
+      "title": "Empirical results (S3E.2)",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT",
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "Rulings H1 and H2 preserved the findings permanently; the finding table is historical evidence and is never rewritten.",
+      "preserved": true,
+      "section": "11",
+      "title": "Security findings requiring human review",
+      "verified": true
+    },
+    {
+      "classification": [
+        "HISTORICAL_EVENT",
+        "CURRENT_KNOWN_LIMITATION"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive",
+        "snapshot.limitations"
+      ],
+      "note": "KEEP_EXISTING_LOADING_STRATEGY and the 72-load cost survive as a limitation; the benchmark itself is history.",
+      "preserved": true,
+      "section": "12",
+      "title": "Performance observations",
+      "verified": true
+    },
+    {
+      "classification": [
+        "DEFECT_LEDGER"
+      ],
+      "new_location": [
+        "PROGRESS.md section 7",
+        "snapshot.defects",
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "Thirteen defects still bind operation and are typed state; D1-D27 are indexed to their archive section.",
+      "preserved": true,
+      "section": "13",
+      "title": "Defects found and fixed (D1-D39)",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_KNOWN_LIMITATION",
+        "SUPERSEDED_HISTORY"
+      ],
+      "new_location": [
+        "PROGRESS.md section 7",
+        "snapshot.limitations",
+        "archive"
+      ],
+      "note": "Sixteen live limitations carried forward; struck-through superseded items stay in the archive exactly as written.",
+      "preserved": true,
+      "section": "14",
+      "title": "Known open issues / limitations",
+      "verified": true
+    },
+    {
+      "classification": [
+        "TEST_BASELINE",
+        "HISTORICAL_EVENT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 10",
+        "snapshot.test_baseline",
+        "archive"
+      ],
+      "note": "The authoritative invocation plus the root-invocation caveat are state; the per-milestone history is archived.",
+      "preserved": true,
+      "section": "15",
+      "title": "Test / quality baselines",
+      "verified": true
+    },
+    {
+      "classification": [
+        "AUTHORITY_HISTORY"
+      ],
+      "new_location": [
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "preserved": true,
+      "section": "16",
+      "title": "Important Git checkpoints",
+      "verified": true
+    },
+    {
+      "classification": [
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 8",
+        "verifier RUNTIME_ARTIFACT_ROOTS",
+        "archive"
+      ],
+      "preserved": true,
+      "section": "17",
+      "title": "Runtime artifact policy",
+      "verified": true
+    },
+    {
+      "classification": [
+        "FROZEN_INVARIANT",
+        "SUPERSEDED_HISTORY"
+      ],
+      "new_location": [
+        "PROGRESS.md sections 7, 8, 12",
+        "HISTORY_INDEX.md",
+        "archive"
+      ],
+      "note": "Rules that still bind became invariants, defect notes or NEXT constraints; the per-milestone lists are archived.",
+      "preserved": true,
+      "section": "18",
+      "title": "What future sessions must NOT redo",
+      "verified": true
+    },
+    {
+      "classification": [
+        "ACTIVE_NEXT",
+        "SUPERSEDED_HISTORY"
+      ],
+      "new_location": [
+        "PROGRESS.md section 12",
+        "snapshot.next_milestone",
+        "archive"
+      ],
+      "note": "The current NEXT is state; all superseded framings stay archived.",
+      "preserved": true,
+      "section": "19",
+      "title": "NEXT",
+      "verified": true
+    },
+    {
+      "classification": [
+        "CURRENT_CONTROL_STATE",
+        "ACTIVE_NEXT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 11",
+        "archive"
+      ],
+      "note": "Replaced by the five-level bootstrap contract, which excludes the archive by default. The old read order is archived.",
+      "preserved": true,
+      "section": "20",
+      "title": "Fast start for the next Claude session",
+      "verified": true
+    },
+    {
+      "classification": [
+        "FROZEN_INVARIANT"
+      ],
+      "new_location": [
+        "PROGRESS.md section 15",
+        "archive"
+      ],
+      "note": "Rewritten for V2: a milestone close updates state and adds one index row instead of appending a report.",
+      "preserved": true,
+      "section": "21",
+      "title": "Update protocol",
+      "verified": true
+    }
+  ],
+  "critical_invariants_migrated": [
+    "PROSE_CANNOT_GRANT_AUTHORITY (new in V2, enforced by the verifier)",
+    "ONE WRITER PER CONTROL-PLANE GENERATION (new in V2, enforced by the verifier)",
+    "eval-v4 is FROZEN_UNUSED and eval-v3 is USED_IMMUTABLE",
+    "the holdout body firewall: body-free identity only for candidate-003 design",
+    "candidate 001 and candidate 002 are EVALUATED_NOT_ELIGIBLE and terminal",
+    "candidate 003 does not exist and has no adapter identity",
+    "gate, metric and generation policy identities, re-derived not quoted",
+    "D37 FIXED, D38 FIXED observability-only with no gate, D39 OPEN",
+    "the preregistered candidate-003 axis and ATTENTION_AND_MLP scope",
+    "train-v2 unchanged; no train-v3",
+    "the authoritative focused-M62 baseline and the root-invocation caveat",
+    "security is a veto; plan tokens are single-use; master stays untouched"
+  ],
+  "current_schema_path": "state/m62/schema/m62-current.schema.json",
+  "current_state_path": "state/m62/current.json",
+  "evidence_not_authority": "This manifest records what the migration did. It grants nothing and it is not a source of truth for current state; the snapshot is, and the verifier checks it.",
+  "history_index_path": "jarvis/docs/m62/HISTORY_INDEX.md",
+  "migration_document_path": "jarvis/docs/V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md",
+  "migration_id": "m62-control-plane-v2",
+  "migration_tests": "jarvis/tests/test_training_gym_m62_s3n1_control_plane.py",
+  "milestone": "V69 M62 S3N.1",
+  "new_progress_bytes": 27013,
+  "new_progress_lines": 510,
+  "new_progress_path": "PROGRESS.md",
+  "new_progress_sha256": "add5e199acc523b0a58604f36e0047bf25092208b0e8820c48c4c574e31de492",
+  "not_authorised_by_this_migration": [
+    "candidate 003 design, configuration or planning",
+    "train-v3",
+    "TRAIN authority",
+    "EVAL authority",
+    "model loading, generation or optimizer steps",
+    "any change to D37, D38 or D39",
+    "reading eval-v4 task bodies",
+    "promotion, registry mutation, merge, tag, release or version bump"
+  ],
+  "parent_snapshot_sha256": null,
+  "reduction": {
+    "measurement": "deterministic local byte and line counts, not tokens",
+    "progress_byte_reduction_percent": 94.77,
+    "progress_line_reduction_percent": 91.62
+  },
+  "schema_version": "m62.control_plane.1",
+  "snapshot_path": "state/m62/snapshots/0001-m62-control-plane-v2-genesis.json",
+  "snapshot_schema_path": "state/m62/schema/m62-snapshot.schema.json",
+  "snapshot_sha256": "a2659d1fb1031726329394f0593478eb57b273048bc0d94faf12c89225dcf2c3",
+  "source_progress_bytes": 516784,
+  "source_progress_lines": 6089,
+  "source_progress_path": "PROGRESS.md",
+  "source_progress_sha256": "e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf",
+  "state_generation": 1,
+  "subject_state_commit": "ec446e348995acb0c23a69b0c3efd574f821b1a0",
+  "verifier_path": "jarvis/scripts/verify_m62_control_plane.py"
+}
