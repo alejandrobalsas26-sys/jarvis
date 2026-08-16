@@ -71,6 +71,37 @@ RUN_ID_002 = "qwen3-06b-lora-quality-live-002"
 EXPERIMENT_NAME_002 = "m62-s3j-defensive-quality-002"
 TRAINING_DATASET_VERSION_002 = "v2"
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M62 S3O — the THIRD quality candidate, a controlled single-axis experiment
+# ══════════════════════════════════════════════════════════════════════════════
+#  Candidates 001 and 002 are both `EVALUATED_NOT_ELIGIBLE`, terminal, and untouched
+#  here. Candidate 003 is a NEW identity, never a relabelling or a resume of either.
+#
+#  It exists to answer ONE preregistered question (S3N §0), and it is built so that the
+#  question cannot be confounded:
+#
+#      candidate 002 trains rendered as MODEL_DEFAULT   (the legacy implicit template
+#                                                        default -- NOT "thinking off")
+#      candidate 003 trains rendered as DISABLED        (the SAME representation
+#                                                        evaluation has always generated
+#                                                        under -- defect D37)
+#
+#  Everything else is held: the same corpus version `v2`, the same option `S3J`, and so
+#  the same rank, alpha, dropout, learning rate, epochs, max_steps, warmup, batch,
+#  gradient accumulation, seed, sequence length, device, precision and validation
+#  cadence. The dials are shared by REFERENCE (`CANDIDATE_OPTION["003"] is the same
+#  string as ["002"]`), not restated as a second copy that could drift.
+#
+#  What S3O does NOT claim: that DISABLED will restore 9/9 structured output, repair
+#  stopping, or change any measured behaviour at all. D37's historical causality is
+#  NOT_ESTABLISHED. This is a controlled experiment, not a predicted fix.
+RUN_ID_003 = "qwen3-06b-lora-quality-live-003"
+EXPERIMENT_NAME_003 = "m62-s3o-defensive-quality-003"
+#: Unchanged from candidate 002 ON PURPOSE. `m62-defensive-quality-train v2`, the same
+#: 182 promoted records, the same 154 TRAIN and 12 VALIDATION rows. There is no
+#: `train-v3` and S3O creates none: a corpus change would be a second axis.
+TRAINING_DATASET_VERSION_003 = TRAINING_DATASET_VERSION_002
+
 #: ``candidate`` -> the identity and material it trains on. A candidate this map does
 #: not name cannot be configured, so a typo is a refusal rather than a run under an
 #: authoritative-looking id.
@@ -85,8 +116,32 @@ CANDIDATES: dict[str, dict] = {
     "002": {"run_id": RUN_ID_002, "experiment_name": EXPERIMENT_NAME_002,
             "dataset_version": TRAINING_DATASET_VERSION_002, "milestone": "S3J",
             "notes_prefix": "M62 S3J second quality candidate"},
+    "003": {"run_id": RUN_ID_003, "experiment_name": EXPERIMENT_NAME_003,
+            "dataset_version": TRAINING_DATASET_VERSION_003, "milestone": "S3O",
+            "notes_prefix": "M62 S3O third quality candidate"},
 }
 DEFAULT_CANDIDATE = "001"
+
+#: ``candidate`` -> how TRAINING renders the reasoning representation (defect D37).
+#:
+#: The values are SYMBOLIC because this module keeps every ``training_gym`` import
+#: inside a function; :func:`candidate_reasoning_policy` resolves them against the
+#: production enum.
+#:
+#: ``LEGACY_MODEL_DEFAULT`` is what candidates 001 and 002 ACTUALLY trained under, and
+#: it is not a statement that thinking was off -- it is the implicit template default,
+#: whatever the reviewed Jinja does when the keyword is not passed at all. Naming it
+#: here re-identifies nothing: ``MODEL_DEFAULT`` is value-gated out of the canonical
+#: config body, so both candidates keep the exact ``config_hash`` S3H and S3K sealed.
+#:
+#: ``TRAIN_EVAL_PARITY`` resolves to the SHARED production constant rather than to a
+#: literal ``ReasoningPolicy.DISABLED``, so candidate 003's training representation
+#: cannot drift away from the one evaluation generates under. They are the same object.
+CANDIDATE_REASONING: dict[str, str] = {
+    "001": "LEGACY_MODEL_DEFAULT",
+    "002": "LEGACY_MODEL_DEFAULT",
+    "003": "TRAIN_EVAL_PARITY",
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -201,7 +256,13 @@ RECOMMENDED_OPTION = "B"
 
 #: The option each candidate uses. Kept separate from :data:`RECOMMENDED_OPTION` so the
 #: S3G recommendation is not silently restated as the S3J one.
-CANDIDATE_OPTION: dict[str, str] = {"001": "B", "002": "S3J"}
+#:
+#: Candidate 003 REUSES candidate 002's option verbatim. That is the whole controlled
+#: design: it is not a new option whose numbers happen to match, because a copy is a
+#: thing that can drift. Sharing the key makes "every hyperparameter is identical" a
+#: structural property one equality can assert, rather than eight comparisons that
+#: could each be edited independently.
+CANDIDATE_OPTION: dict[str, str] = {"001": "B", "002": "S3J", "003": "S3J"}
 
 #: Measured on this host in S3G, from the promoted corpus:
 #: 107 TRAIN rows, mean sequence ~470 characters (~105-135 estimated tokens plus the
@@ -248,6 +309,31 @@ def candidate_spec(candidate: str) -> dict:
             f"unknown candidate {candidate!r}; this generator configures "
             f"{sorted(CANDIDATES)}. A new candidate needs a new identity and its own "
             f"corpus version, not a new label on an existing run") from None
+
+
+def candidate_reasoning_policy(candidate: str):
+    """The reasoning representation TRAINING renders under, for one candidate (D37).
+
+    Resolved against the production enum rather than stored as one, so this module
+    keeps its lazy-import discipline. An unrecognised symbol is a refusal: a candidate
+    whose render policy cannot be resolved must not fall back to a default, because the
+    default is precisely the legacy behaviour candidate 003 exists to move away from.
+    """
+    from training_gym.training.chat_render import (
+        TRAIN_EVAL_PARITY_REASONING_POLICY,
+        ReasoningPolicy,
+    )
+
+    symbol = CANDIDATE_REASONING[candidate]
+    if symbol == "TRAIN_EVAL_PARITY":
+        return TRAIN_EVAL_PARITY_REASONING_POLICY
+    if symbol == "LEGACY_MODEL_DEFAULT":
+        return ReasoningPolicy.MODEL_DEFAULT
+    raise ValueError(
+        f"candidate {candidate!r} names reasoning symbol {symbol!r}, which this "
+        f"generator cannot resolve. Refusing rather than defaulting: silently falling "
+        f"back to MODEL_DEFAULT would train the legacy representation under a "
+        f"configuration that claims otherwise")
 
 
 def dataset_reference(root: Path, dataset_version: str = TRAINING_DATASET_VERSION):
@@ -395,6 +481,11 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path,
         dependency_profile=DependencyProfile.TRAINING,
         trust_remote_code=False,
         base_model_family="qwen3",
+        # D37. The ONE primary experimental axis between candidate 002 and candidate
+        # 003, and the only field that separates them behaviourally. It is value-gated
+        # out of the canonical body when it is MODEL_DEFAULT, so passing it explicitly
+        # here leaves candidates 001 and 002 hashing exactly as they always did.
+        reasoning_policy=candidate_reasoning_policy(candidate),
         notes=(f"{identity['notes_prefix']}, option {option} "
                f"({spec['label']}). RUN_INTENT={RUN_INTENT}. Not run-004; nothing is "
                f"resumed, continued or promoted."))
@@ -427,7 +518,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate", default=DEFAULT_CANDIDATE,
                         choices=sorted(CANDIDATES),
                         help="001 is the frozen S3G candidate (corpus v1); 002 is the "
-                             "S3J candidate (corpus v2). Defaults to 001 so every "
+                             "S3J candidate (corpus v2); 003 is the S3O candidate "
+                             "(corpus v2, same option as 002, reasoning policy DISABLED "
+                             "-- the single controlled axis). Defaults to 001 so every "
                              "existing caller is unchanged")
     parser.add_argument("--option", default="", choices=["", *sorted(OPTIONS)],
                         help="defaults to the option the chosen candidate declares: "
