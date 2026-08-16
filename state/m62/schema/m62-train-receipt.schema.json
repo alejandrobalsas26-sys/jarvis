@@ -1,0 +1,664 @@
+{
+  "$id": "m62-train-receipt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root-independent, tracked evidence that one candidate completed one authorised training run. It is EVIDENCE, not an authority: it cannot grant TRAIN, EVAL, promotion, registry mutation or release, it holds no token literal, and it holds no task material. A future clean clone uses it to establish the training history without the gitignored runtime tree.",
+  "properties": {
+    "adapter": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_parameter_count": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "artifact_set_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "bytes": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dtypes": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "file_names": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "lora_a_tensors": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lora_alpha": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lora_b_tensors": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lora_dropout": {
+          "type": "number"
+        },
+        "lora_rank": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lora_tensor_count": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "non_lora_tensors": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "target_modules": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "total_bytes": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_parameters": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "trainable_parameters": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "adapter_parameter_count",
+        "artifact_set_hash",
+        "bytes",
+        "dtypes",
+        "file_names",
+        "lora_a_tensors",
+        "lora_alpha",
+        "lora_b_tensors",
+        "lora_dropout",
+        "lora_rank",
+        "lora_tensor_count",
+        "manifest_hash",
+        "non_lora_tensors",
+        "sha256",
+        "target_modules",
+        "total_bytes",
+        "total_parameters",
+        "trainable_parameters"
+      ],
+      "type": "object"
+    },
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "consumptions": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "creations": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "form": {
+          "const": "TRAIN:<plan-hash>"
+        },
+        "retry_authorized": {
+          "const": false
+        },
+        "token_literal_recorded": {
+          "const": false
+        }
+      },
+      "required": [
+        "bound_plan_hash",
+        "consumptions",
+        "creations",
+        "form",
+        "retry_authorized",
+        "token_literal_recorded"
+      ],
+      "type": "object"
+    },
+    "base_model": {
+      "additionalProperties": false,
+      "properties": {
+        "chat_template_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "tokenizer_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tokenizer_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chat_template_digest",
+        "identity_hash",
+        "model_id",
+        "revision",
+        "tokenizer_id",
+        "tokenizer_revision"
+      ],
+      "type": "object"
+    },
+    "candidate_id": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    },
+    "design_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "design_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "execution": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_status": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "backend_warnings": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "converted_records": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "early_stopping": {
+          "const": false
+        },
+        "epochs_completed": {
+          "type": "number"
+        },
+        "epochs_configured": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error_category": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "final_validation_loss": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "final_validation_present": {
+          "type": "boolean"
+        },
+        "generation_performed": {
+          "const": false
+        },
+        "interrupted": {
+          "type": "boolean"
+        },
+        "load_best_model_at_end": {
+          "const": false
+        },
+        "optimizer_steps_completed": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "optimizer_steps_planned": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "optimizer_steps_requested": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_state": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "seed": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_status": {
+          "pattern": "^[A-Z_]{3,32}$",
+          "type": "string"
+        },
+        "train_loss": {
+          "type": "number"
+        },
+        "truncated_records": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "validation_contributes_gradients": {
+          "const": false
+        },
+        "validation_evaluations": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "validation_is_held_out_eligibility_evidence": {
+          "const": false
+        },
+        "validation_losses": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "validation_rows": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend_status",
+        "backend_warnings",
+        "completed",
+        "converted_records",
+        "early_stopping",
+        "epochs_completed",
+        "epochs_configured",
+        "error_category",
+        "final_validation_loss",
+        "final_validation_present",
+        "generation_performed",
+        "interrupted",
+        "load_best_model_at_end",
+        "optimizer_steps_completed",
+        "optimizer_steps_planned",
+        "optimizer_steps_requested",
+        "run_state",
+        "seed",
+        "terminal_status",
+        "train_loss",
+        "truncated_records",
+        "validation_contributes_gradients",
+        "validation_evaluations",
+        "validation_is_held_out_eligibility_evidence",
+        "validation_losses",
+        "validation_rows"
+      ],
+      "type": "object"
+    },
+    "holdout": {
+      "additionalProperties": false,
+      "properties": {
+        "eval_authority_created": {
+          "const": false
+        },
+        "evaluation_corpus": {
+          "type": "null"
+        },
+        "held_out_evaluation_runs": {
+          "const": 0
+        },
+        "model_response_tokens_generated": {
+          "const": 0
+        }
+      },
+      "required": [
+        "eval_authority_created",
+        "evaluation_corpus",
+        "held_out_evaluation_runs",
+        "model_response_tokens_generated"
+      ],
+      "type": "object"
+    },
+    "ledger": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "object"
+        },
+        "plan_hashes": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "events",
+        "plan_hashes"
+      ],
+      "type": "object"
+    },
+    "model_cache_evidence": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "plan_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "representation": {
+      "additionalProperties": false,
+      "properties": {
+        "assistant_only_loss": {
+          "const": true
+        },
+        "chat_render_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "full_sequence_render_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "masking_strategy": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reasoning_policy": {
+          "enum": [
+            "disabled",
+            "enabled",
+            "model_default"
+          ]
+        }
+      },
+      "required": [
+        "assistant_only_loss",
+        "chat_render_policy_hash",
+        "full_sequence_render_policy_hash",
+        "masking_strategy",
+        "reasoning_policy"
+      ],
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "deterministic_reproduction_claimed": {
+          "type": "boolean"
+        },
+        "device_category": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "local_files_only": {
+          "const": true
+        },
+        "package_versions": {
+          "type": "object"
+        },
+        "precision": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "trust_remote_code": {
+          "const": false
+        }
+      },
+      "required": [
+        "deterministic_reproduction_claimed",
+        "device_category",
+        "local_files_only",
+        "package_versions",
+        "precision",
+        "trust_remote_code"
+      ],
+      "type": "object"
+    },
+    "runtime_evidence_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "m62.train_receipt.1"
+    },
+    "training_config_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "training_config_hash_is_root_bound": {
+      "const": true
+    },
+    "training_dataset": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "export_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "hidden_evaluation_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "reference_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "security_regression_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "train_shard_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "validation_shard_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^v[0-9]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "export_manifest_hash",
+        "hidden_evaluation_hash",
+        "manifest_hash",
+        "reference_hash",
+        "security_regression_hash",
+        "train_shard_hash",
+        "validation_shard_hash",
+        "version"
+      ],
+      "type": "object"
+    },
+    "training_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "training_source_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "verification": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_problems": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "adapter_verifier": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "checkpoint_directories": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "completed_run_problems": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "completed_run_verifier": {
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "nested_directories": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "symlinks": {
+          "maximum": 10000000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "adapter_problems",
+        "adapter_verifier",
+        "checkpoint_directories",
+        "completed_run_problems",
+        "completed_run_verifier",
+        "nested_directories",
+        "symlinks"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "adapter",
+    "authority",
+    "base_model",
+    "candidate_id",
+    "design_commit",
+    "design_milestone",
+    "execution",
+    "holdout",
+    "ledger",
+    "model_cache_evidence",
+    "plan_hash",
+    "representation",
+    "runtime",
+    "runtime_evidence_digest",
+    "schema_version",
+    "training_config_hash",
+    "training_config_hash_is_root_bound",
+    "training_dataset",
+    "training_milestone",
+    "training_source_commit",
+    "verification"
+  ],
+  "title": "M62 portable training receipt",
+  "type": "object"
+}

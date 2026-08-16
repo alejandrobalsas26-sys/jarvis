@@ -62,6 +62,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess  # nosec B404 - read-only git plumbing only; argv is a fixed list
@@ -78,12 +79,20 @@ REPO_ROOT = _PACKAGE_ROOT.parent                    # repository root
 
 CONTROL_PLANE_SCHEMA_VERSION = "m62.control_plane.1"
 
+#: S3P. The schema of the portable, tracked, root-independent receipt that a
+#: ``TRAINED_UNEVALUATED`` claim must be backed by. It is a SEPARATE contract from the
+#: snapshot on purpose: the snapshot records that a candidate is trained, and the receipt
+#: is the independent evidence that it actually is.
+TRAIN_RECEIPT_SCHEMA_VERSION = "m62.train_receipt.1"
+
 STATE_DIR = "state/m62"
 CURRENT_PATH = f"{STATE_DIR}/current.json"
 SNAPSHOT_DIR = f"{STATE_DIR}/snapshots"
 SCHEMA_DIR = f"{STATE_DIR}/schema"
 CURRENT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-current.schema.json"
 SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
+TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
+RECEIPT_DIR = f"{STATE_DIR}/receipts"
 MIGRATION_DIR = f"{STATE_DIR}/migrations"
 MIGRATION_MANIFEST_PATH = f"{MIGRATION_DIR}/0001-control-plane-v2.json"
 
@@ -263,13 +272,18 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-002": (
         "EVALUATED_NOT_ELIGIBLE",
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"),
-    # S3O made the candidate-design decision S3N.1 was forbidden to make: it named
-    # candidate 003 and moved it to DESIGNED_UNTRAINED. The adapter stays None because a
-    # DESIGNED_UNTRAINED candidate has no weights -- it has a configuration and nothing
-    # else. This pair is NOT the evidence for that state: `check_candidate_design`
-    # re-derives the design from the production generator, and a snapshot agreeing with
-    # this constant while the generator disagrees is a FAILURE, not a pass.
-    "qwen3-06b-lora-quality-live-003": ("DESIGNED_UNTRAINED", None),
+    # S3O named candidate 003 and moved it to DESIGNED_UNTRAINED; S3P spent the one
+    # authorised TRAIN capability on it and it is now TRAINED_UNEVALUATED, with real
+    # weights and a real adapter digest.
+    #
+    # This pair is NOT the evidence for that state, and it is deliberately not enough on
+    # its own: `check_candidate_design` re-derives the design from the production
+    # generator, and `check_training_receipt` refuses the trained claim outright unless a
+    # tracked, root-independent receipt establishes it. A snapshot agreeing with this
+    # constant while either of those disagrees is a FAILURE, not a pass.
+    "qwen3-06b-lora-quality-live-003": (
+        "TRAINED_UNEVALUATED",
+        "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6"),
 }
 
 #: The placeholder identity generation 1 carried, and what S3O resolved it to.
@@ -292,6 +306,33 @@ CANDIDATE_003_KEY = "003"
 CANDIDATE_CONTROL_KEY = "002"
 CANDIDATE_003_EVIDENCE = "jarvis/docs/V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md"
 CANDIDATE_003_LORA_SCOPE = "attention_and_mlp"
+
+#: S3P. The portable receipt that backs candidate 003's TRAINED_UNEVALUATED claim.
+CANDIDATE_003_TRAIN_RECEIPT = (
+    f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-003.train.json")
+
+#: The STRUCTURE a candidate-002-architecture adapter must have, quoted from the sealed
+#: S3K live-training record (§10.3) — the milestone that measured it on real weights.
+#:
+#: Candidates 002 and 003 share rank 16 over the same seven projections across the same
+#: 28 layers, so their adapters must be structurally IDENTICAL: 28 x 7 x 2 = 392 tensors,
+#: half ``lora_A`` and half ``lora_B``, over the same parameter counts. Learned VALUES
+#: differ, and must -- that is the experiment. STRUCTURE differing would mean the run did
+#: not adapt what the design said it would, and is refused rather than reinterpreted.
+STRUCTURAL_ADAPTER_CONTROL: dict[str, int] = {
+    "lora_tensor_count": 392,
+    "lora_a_tensors": 196,
+    "lora_b_tensors": 196,
+    "non_lora_tensors": 0,
+    "trainable_parameters": 10_092_544,
+    "total_parameters": 606_142_464,
+}
+
+#: The seven Qwen3 linear projections ``ATTENTION_AND_MLP`` resolves to, ordered as the
+#: production LoRA policy emits them. Compared as a SET against the receipt, because the
+#: adapter records the modules it was asked to adapt, not a canonical ordering.
+STRUCTURAL_ADAPTER_TARGET_MODULES = (
+    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
 #: ``defect id -> status``, as the milestone that closed or opened it recorded.
 FROZEN_DEFECT_STATUSES: dict[str, str] = {
@@ -492,6 +533,11 @@ def _type_ok(expected: str, value: object) -> bool:
         return isinstance(value, str)
     if expected == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        # S3P. A loss is a float and an epoch count can be either. JSON Schema's
+        # `number` admits both, and excludes `bool` for the same reason `integer` does:
+        # `True` is an int in Python and is not a measurement anywhere.
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected == "boolean":
         return isinstance(value, bool)
     if expected == "null":
@@ -500,7 +546,7 @@ def _type_ok(expected: str, value: object) -> bool:
 
 
 def _type_name(value: object) -> str:
-    for name in ("null", "boolean", "integer", "string", "array", "object"):
+    for name in ("null", "boolean", "integer", "number", "string", "array", "object"):
         if _type_ok(name, value):
             return name
     return type(value).__name__
@@ -544,6 +590,149 @@ def current_schema() -> dict:
     }
 
 
+def train_receipt_schema() -> dict:
+    """S3P — the portable training receipt's contract.
+
+    Strict and closed, like the other two. What it may NOT contain matters as much as
+    what it must: no token literal, no absolute path, no dataset row, no model output and
+    no ``eval-v4`` material. Those are enforced by :func:`check_training_receipt`
+    scanning the bytes, because a schema can require a field to be absent but cannot see
+    a secret smuggled inside a permitted string.
+
+    It carries **no timestamp and no self-referential digest**. The receipt's identity is
+    its bytes; the snapshot that points at it is what records the digest, so the two can
+    never agree with each other by construction.
+    """
+    counted = {"type": "integer", "minimum": 0, "maximum": 10_000_000_000}
+    loss = {"type": "number"}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "m62-train-receipt.schema.json",
+        "title": "M62 portable training receipt",
+        "description": (
+            "Root-independent, tracked evidence that one candidate completed one "
+            "authorised training run. It is EVIDENCE, not an authority: it cannot grant "
+            "TRAIN, EVAL, promotion, registry mutation or release, it holds no token "
+            "literal, and it holds no task material. A future clean clone uses it to "
+            "establish the training history without the gitignored runtime tree."),
+        **_obj({
+            "schema_version": {"const": TRAIN_RECEIPT_SCHEMA_VERSION},
+            "candidate_id": _SHORT,
+            "design_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "training_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "design_commit": _COMMIT,
+            "training_source_commit": _COMMIT,
+            "plan_hash": _SHA256,
+            "training_config_hash": _SHA256,
+            "training_config_hash_is_root_bound": {"const": True},
+            "base_model": _obj({
+                "model_id": _SHORT, "revision": _COMMIT,
+                "identity_hash": _SHA256,
+                "tokenizer_id": _SHORT, "tokenizer_revision": _COMMIT,
+                "chat_template_digest": _SHA256,
+            }),
+            "training_dataset": _obj({
+                "dataset_id": _SHORT,
+                "version": {"type": "string", "pattern": "^v[0-9]+$"},
+                "manifest_hash": _SHA256, "reference_hash": _SHA256,
+                "export_manifest_hash": _SHA256,
+                "train_shard_hash": _SHA256, "validation_shard_hash": _SHA256,
+                "hidden_evaluation_hash": _SHA256, "security_regression_hash": _SHA256,
+            }),
+            "representation": _obj({
+                "reasoning_policy": {"enum": ["disabled", "enabled", "model_default"]},
+                "chat_render_policy_hash": _SHA256,
+                "full_sequence_render_policy_hash": _SHA256,
+                "assistant_only_loss": {"const": True},
+                "masking_strategy": _SHORT,
+            }),
+            "authority": _obj({
+                # The FORM, never an instance. A receipt that carried a spendable string
+                # would be handing a reader the capability instead of the evidence.
+                "form": {"const": "TRAIN:<plan-hash>"},
+                "bound_plan_hash": _SHA256,
+                "creations": counted, "consumptions": counted,
+                "token_literal_recorded": {"const": False},
+                "retry_authorized": {"const": False},
+            }),
+            "execution": _obj({
+                "terminal_status": {"type": "string", "pattern": "^[A-Z_]{3,32}$"},
+                "run_state": _SHORT, "backend_status": _SHORT,
+                "completed": {"type": "boolean"},
+                "interrupted": {"type": "boolean"},
+                "error_category": _SHORT,
+                "optimizer_steps_planned": counted,
+                "optimizer_steps_requested": counted,
+                "optimizer_steps_completed": counted,
+                "epochs_configured": counted,
+                "epochs_completed": {"type": "number"},
+                "seed": counted,
+                "converted_records": counted, "truncated_records": counted,
+                "train_loss": loss,
+                "validation_evaluations": counted,
+                "validation_losses": {"type": "array", "maxItems": 64, "items": loss},
+                "final_validation_loss": {"oneOf": [{"type": "null"}, loss]},
+                "final_validation_present": {"type": "boolean"},
+                "validation_rows": counted,
+                "validation_contributes_gradients": {"const": False},
+                "validation_is_held_out_eligibility_evidence": {"const": False},
+                "early_stopping": {"const": False},
+                "load_best_model_at_end": {"const": False},
+                "generation_performed": {"const": False},
+                "backend_warnings": {"type": "array", "maxItems": 32, "items": _SHORT},
+            }),
+            "adapter": _obj({
+                "sha256": _SHA256, "manifest_hash": _SHA256,
+                "artifact_set_hash": _SHA256,
+                "bytes": counted, "total_bytes": counted,
+                "file_names": {"type": "array", "minItems": 1, "maxItems": 32,
+                               "items": _SHORT},
+                "lora_tensor_count": counted,
+                "lora_a_tensors": counted, "lora_b_tensors": counted,
+                "non_lora_tensors": counted,
+                "adapter_parameter_count": counted,
+                "trainable_parameters": counted, "total_parameters": counted,
+                "target_modules": {"type": "array", "minItems": 1, "maxItems": 32,
+                                   "items": _SHORT},
+                "lora_rank": counted, "lora_alpha": counted,
+                "lora_dropout": {"type": "number"},
+                "dtypes": {"type": "array", "minItems": 1, "maxItems": 8,
+                           "items": _SHORT},
+            }),
+            "verification": _obj({
+                "completed_run_verifier": {"enum": ["PASS", "FAIL"]},
+                "completed_run_problems": {"type": "array", "maxItems": 64,
+                                           "items": _SHORT},
+                "adapter_verifier": _SHORT,
+                "adapter_problems": {"type": "array", "maxItems": 64, "items": _SHORT},
+                "checkpoint_directories": counted,
+                "nested_directories": counted,
+                "symlinks": counted,
+            }),
+            "runtime": _obj({
+                "device_category": _SHORT, "precision": _SHORT,
+                "package_versions": {"type": "object"},
+                "local_files_only": {"const": True},
+                "trust_remote_code": {"const": False},
+                "deterministic_reproduction_claimed": {"type": "boolean"},
+            }),
+            "runtime_evidence_digest": _SHA256,
+            "model_cache_evidence": _SHA256,
+            "ledger": _obj({
+                "events": {"type": "object"},
+                "plan_hashes": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "items": _SHA256},
+            }),
+            "holdout": _obj({
+                "evaluation_corpus": {"type": "null"},
+                "held_out_evaluation_runs": {"const": 0},
+                "eval_authority_created": {"const": False},
+                "model_response_tokens_generated": {"const": 0},
+            }),
+        }),
+    }
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -568,6 +757,12 @@ def snapshot_schema() -> dict:
         "training_corpus": {"oneOf": [{"type": "null"}, _SHORT]},
         "evaluation_corpus": {"oneOf": [{"type": "null"}, _SHORT]},
         "evidence": {"oneOf": [{"type": "null"}, _REPO_PATH]},
+        # S3P. A pointer to the tracked, root-independent receipt that establishes the
+        # candidate really completed its one authorised training run. `null` until a
+        # candidate is trained; REQUIRED from TRAINED_UNEVALUATED onward, because a
+        # trained claim the control plane cannot back is exactly the claim it must not
+        # be able to make.
+        "training_receipt": {"oneOf": [{"type": "null"}, _REPO_PATH]},
     })
     defect = _obj({
         "id": {"type": "string", "pattern": "^D[0-9]{1,3}$"},
@@ -671,8 +866,9 @@ def snapshot_schema() -> dict:
 # ── Problem reporting ────────────────────────────────────────────────────────────────
 CATEGORIES = (
     "SCHEMA", "CURRENT_POINTER", "SNAPSHOT_CHAIN", "ARCHIVE_INTEGRITY", "GIT_AUTHORITY",
-    "DATASET_STATE", "CANDIDATE_STATE", "POLICY_IDENTITIES", "AUTHORITY_SEPARATION",
-    "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE", "CONTROL_PLANE_BUDGET",
+    "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "POLICY_IDENTITIES",
+    "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
+    "CONTROL_PLANE_BUDGET",
 )
 
 
@@ -782,7 +978,8 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
     # The published schema files must be the ones this verifier enforces. Two writable
     # copies of one contract is how they drift.
     for rel, builder in ((CURRENT_SCHEMA_PATH, current_schema),
-                         (SNAPSHOT_SCHEMA_PATH, snapshot_schema)):
+                         (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
+                         (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema)):
         path = REPO_ROOT / rel
         if not path.is_file():
             report.fail("SCHEMA", f"{rel} is missing")
@@ -1187,6 +1384,25 @@ def check_candidate_state(cp: ControlPlane, report: Report) -> None:
                     report.fail("CANDIDATE_STATE",
                                 f"{cid}: DESIGNED_UNTRAINED without {field_name}; the "
                                 f"state claims a design, so the design must be nameable")
+        if status == "TRAINED_UNEVALUATED":
+            # Trained means: weights exist, and a measurement does NOT. The adapter
+            # digests and the receipt are required because they are what the state
+            # asserts has happened; the evaluation corpus is refused because it is what
+            # the state asserts has NOT. A candidate that carries an exam has taken one.
+            for field_name in ("adapter_sha256", "adapter_manifest_hash",
+                               "training_corpus", "base_model_revision", "evidence",
+                               "training_receipt"):
+                if not entry.get(field_name):
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: TRAINED_UNEVALUATED without {field_name}; a "
+                                f"trained candidate has weights and evidence that it "
+                                f"earned them")
+            if entry.get("evaluation_corpus"):
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: TRAINED_UNEVALUATED yet names an evaluation "
+                            f"corpus; the state's whole content is that no held-out "
+                            f"material has been spent on it")
+
         if status.startswith("EVALUATED_"):
             if not entry.get("evaluation_corpus"):
                 report.fail("CANDIDATE_STATE",
@@ -1281,8 +1497,11 @@ def check_candidate_design(cp: ControlPlane, report: Report) -> None:
     takes the template digest as a STRING, so the render identity that IS candidate 003's
     experimental axis re-derives from the snapshot's own recorded digest.
     """
+    # S3P widened this from DESIGNED_UNTRAINED to "has a design that must still hold".
+    # Training does not retire the single-axis claim; it is the moment the claim starts
+    # to describe real weights, so the re-derivation must survive the transition.
     designed = [c for c in cp.snapshot.get("candidates", [])
-                if c.get("status") == "DESIGNED_UNTRAINED"]
+                if c.get("status") in ("DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED")]
     if not designed:
         return
 
@@ -1406,21 +1625,348 @@ def check_candidate_design(cp: ControlPlane, report: Report) -> None:
 
         # DESIGNED means no weights and no completed run. Both are gitignored runtime
         # artefacts, so their absence is checked on disk and the limit is stated.
-        for runtime_dir in (REPO_ROOT / "jarvis" / "training_runs" / "runs" / cid,
-                            REPO_ROOT / "jarvis" / "training_adapters" / cid):
-            if runtime_dir.exists():
+        #
+        # These three checks are the ONLY ones in this function that are specific to
+        # DESIGNED_UNTRAINED. Everything above -- the corpus, the base model, the axis,
+        # the control, the single-option guard, the render identity and the tracked deep
+        # evidence -- re-derives the DESIGN, which a trained candidate still has and must
+        # still satisfy. A candidate that trained and then quietly grew a second axis
+        # would otherwise stop being checked at the moment it started to matter.
+        if entry.get("status") == "DESIGNED_UNTRAINED":
+            for runtime_dir in (REPO_ROOT / "jarvis" / "training_runs" / "runs" / cid,
+                                REPO_ROOT / "jarvis" / "training_adapters" / cid):
+                if runtime_dir.exists():
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: DESIGNED_UNTRAINED, but {runtime_dir.name} "
+                                f"exists as a runtime artefact; a designed candidate "
+                                f"has no run")
+            ledger = REPO_ROOT / "jarvis" / "training_runs" / "training_runs.jsonl"
+            if ledger.is_file() and cid in ledger.read_text(encoding="utf-8"):
                 report.fail("CANDIDATE_STATE",
-                            f"{cid}: DESIGNED_UNTRAINED, but {runtime_dir.name} exists "
-                            f"as a runtime artefact; a designed candidate has no run")
-        ledger = REPO_ROOT / "jarvis" / "training_runs" / "training_runs.jsonl"
-        if ledger.is_file() and cid in ledger.read_text(encoding="utf-8"):
-            report.fail("CANDIDATE_STATE",
-                        f"{cid}: DESIGNED_UNTRAINED, but the run ledger already names "
-                        f"it; a plan was consumed for this identity")
-        report.note(f"{cid}: DESIGNED_UNTRAINED re-derived from the production generator "
-                    f"(option {generator.CANDIDATE_OPTION.get(key)}, corpus "
+                            f"{cid}: DESIGNED_UNTRAINED, but the run ledger already "
+                            f"names it; a plan was consumed for this identity")
+        report.note(f"{cid}: {entry.get('status')} design re-derived from the production "
+                    f"generator (option {generator.CANDIDATE_OPTION.get(key)}, corpus "
                     f"{spec['dataset_version']}, reasoning {policy.value}); runtime "
-                    f"absence is host-local and inherits the PARTIAL stale-state limit")
+                    f"presence is host-local and inherits the PARTIAL stale-state limit")
+
+
+def check_training_receipt(cp: ControlPlane, report: Report) -> None:
+    """S3P — a TRAINED_UNEVALUATED claim is backed by portable evidence, or refused.
+
+    THE FAILURE THIS EXISTS TO PREVENT
+    ----------------------------------
+    The snapshot says ``TRAINED_UNEVALUATED``. A constant in this file says
+    ``TRAINED_UNEVALUATED``. They agree, the verifier prints PASS, and **nothing has
+    been verified** — two writable surfaces agreeing is not evidence, it is a rumour
+    with a checksum. So the trained claim is refused outright unless a tracked,
+    root-independent receipt independently establishes it, and the receipt must agree
+    with the snapshot, with the production generator and with the sealed structural
+    control.
+
+    WHY A RECEIPT AND NOT THE RUN DIRECTORY
+    ---------------------------------------
+    The adapter, its manifest and the run ledger are gitignored runtime artefacts. They
+    are the right home for weights and the wrong home for history: a fresh clone has
+    none of them, so a control plane resting on them could never be audited anywhere
+    else. The receipt is the part that travels (S3P §49). Runtime presence is therefore
+    reported as an observation and is deliberately NOT required — a trained candidate
+    stays trained after its runtime tree is deleted.
+
+    This check loads no model, no tokenizer and no weights: the render identity that IS
+    candidate 003's experimental axis re-derives from strings.
+    """
+    trained = [c for c in cp.snapshot.get("candidates", [])
+               if c.get("status") == "TRAINED_UNEVALUATED"]
+    if not trained:
+        return
+
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from scripts import build_quality_training_config as generator
+        from training_gym.training.chat_render import ChatRenderPolicy, ReasoningPolicy
+    except Exception as exc:
+        report.fail("TRAINING_RECEIPT",
+                    f"the production generator could not be imported ({exc}); a "
+                    f"TRAINED_UNEVALUATED candidate is therefore UNVERIFIED, which is a "
+                    f"failure and not a pass")
+        return
+
+    for entry in trained:
+        cid = entry.get("candidate_id")
+        pointer = str(entry.get("training_receipt") or "")
+        if not pointer:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: TRAINED_UNEVALUATED with no receipt pointer. The state "
+                        f"claims a completed training run and offers nothing a reader "
+                        f"could check it against")
+            continue
+        path = REPO_ROOT / pointer
+        if path.is_symlink() or not path.is_file():
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: training receipt {pointer!r} is not a regular file")
+            continue
+        code, tracked = _git("ls-files", "--error-unmatch", "--", pointer)
+        if code != 0 or not tracked:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: training receipt {pointer} is untracked; evidence Git "
+                        f"does not carry has no history and no second witness")
+
+        raw = path.read_bytes()
+        try:
+            receipt = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            report.fail("TRAINING_RECEIPT", f"{cid}: receipt is unreadable ({exc})")
+            continue
+        for problem in validate_against_schema(train_receipt_schema(), receipt):
+            report.fail("TRAINING_RECEIPT", f"{cid}: receipt {problem}")
+
+        # The receipt is held to the same content rules as every other control-plane
+        # surface: no token literal, no private path, no task material, ASCII only.
+        text = raw.decode("utf-8", errors="replace")
+        if TOKEN_LITERAL_RE.search(text):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt carries something shaped like a spendable "
+                        f"plan token. A receipt proves an authority was spent; it never "
+                        f"reproduces one")
+        for match in PRIVATE_PATH_RE.findall(text):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt carries a private host path {match!r}")
+        for symbol in FORBIDDEN_BODY_SYMBOLS:
+            if symbol in text:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt references {symbol!r}, the eval-v4 body "
+                            f"source")
+        named = sorted({tid for tid in EVAL_V4_TASK_IDS if tid in text})
+        if named:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt names eval-v4 task(s) {named[:4]}")
+        try:
+            text.encode("ascii")
+        except UnicodeEncodeError:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt is not ASCII, so its canonical bytes depend "
+                        f"on an encoding choice")
+
+        # ── the receipt must describe THIS candidate, not merely a trained one ──
+        if receipt.get("candidate_id") != cid:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt describes "
+                        f"{receipt.get('candidate_id')!r}. A receipt for another run is "
+                        f"not evidence about this one")
+            continue
+
+        key = next((k for k, spec in generator.CANDIDATES.items()
+                    if spec.get("run_id") == cid), "")
+        if not key:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: no candidate in the production generator carries that "
+                        f"run id, so the trained claim describes a candidate this "
+                        f"repository cannot re-derive")
+            continue
+        option = generator.OPTIONS[generator.CANDIDATE_OPTION[key]]
+
+        base = cp.snapshot.get("base_model", {})
+        receipt_base = receipt.get("base_model", {})
+        for label, mine, theirs in (
+                ("base model", receipt_base.get("model_id"), base.get("model_id")),
+                ("base revision", receipt_base.get("revision"),
+                 entry.get("base_model_revision")),
+                ("chat template digest", receipt_base.get("chat_template_digest"),
+                 base.get("chat_template_digest"))):
+            if mine != theirs:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt's {label} {mine!r} is not the "
+                            f"snapshot's {theirs!r}")
+        if receipt_base.get("model_id") != generator.BASE_MODEL_ID:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt trained on {receipt_base.get('model_id')!r},"
+                        f" the generator builds on {generator.BASE_MODEL_ID!r}")
+        if receipt_base.get("revision") != generator.BASE_MODEL_REVISION:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt's revision is not the generator's pinned "
+                        f"{generator.BASE_MODEL_REVISION}")
+
+        # ── the corpus: the receipt, the snapshot and the frozen identity ──────
+        dataset = receipt.get("training_dataset", {})
+        declared = f"{dataset.get('dataset_id')} {dataset.get('version')}"
+        if declared != str(entry.get("training_corpus") or ""):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt trained on {declared!r}, the snapshot "
+                        f"records {entry.get('training_corpus')!r}")
+        frozen = FROZEN_DATASETS.get(declared)
+        if frozen is None:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: {declared!r} is not a dataset this control plane holds "
+                        f"a sealed identity for")
+        elif dataset.get("manifest_hash") != frozen[1]:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt's corpus manifest "
+                        f"{dataset.get('manifest_hash')} is not the sealed {frozen[1]}")
+        if dataset.get("version") != generator.CANDIDATES[key]["dataset_version"]:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the generator trains it on "
+                        f"{generator.CANDIDATES[key]['dataset_version']}, the receipt "
+                        f"records {dataset.get('version')}")
+
+        # ── THE AXIS, re-derived and required to still be the only one ─────────
+        policy = generator.candidate_reasoning_policy(key)
+        representation = receipt.get("representation", {})
+        if representation.get("reasoning_policy") != policy.value:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: it trained under "
+                        f"{representation.get('reasoning_policy')!r}, the generator "
+                        f"designs it as {policy.value!r}")
+        if policy is not ReasoningPolicy.DISABLED:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the generator renders it under {policy}, not DISABLED")
+        try:
+            rendered = ChatRenderPolicy(
+                tokenizer_id=base.get("model_id", ""),
+                tokenizer_revision=base.get("revision", ""),
+                chat_template_hash=base.get("chat_template_digest", ""),
+                reasoning_policy=policy,
+                add_generation_prompt=True, tokenize=True).render_policy_hash()
+        except Exception as exc:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the render identity could not be re-derived ({exc})")
+        else:
+            if representation.get("chat_render_policy_hash") != rendered:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: it trained under render identity "
+                            f"{representation.get('chat_render_policy_hash')}, which is "
+                            f"not the {rendered} the design re-derives. The run did not "
+                            f"execute the designed representation")
+
+        # ── the authority: created once, consumed once, never reproduced ───────
+        authority = receipt.get("authority", {})
+        if authority.get("creations") != 1:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt records {authority.get('creations')} "
+                        f"authority creation(s); exactly one was authorised")
+        if authority.get("consumptions") != 1:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt records {authority.get('consumptions')} "
+                        f"consumption(s); a single-use capability is spent exactly once")
+        if authority.get("bound_plan_hash") != receipt.get("plan_hash"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the authority is bound to a different plan than the run "
+                        f"executed")
+        if receipt.get("plan_hash") not in receipt.get("ledger", {}).get(
+                "plan_hashes", []):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the ledger does not name the plan the run executed")
+
+        # ── the execution: complete, terminal, and to the preregistered budget ──
+        execution = receipt.get("execution", {})
+        if execution.get("terminal_status") != "SUCCESS":
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the run's terminal status is "
+                        f"{execution.get('terminal_status')!r}. A candidate is not "
+                        f"trained by an attempt that did not succeed")
+        if execution.get("interrupted") or not execution.get("completed"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the run did not complete uninterrupted")
+        planned = option["max_steps"]
+        if execution.get("optimizer_steps_planned") != planned:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt plans "
+                        f"{execution.get('optimizer_steps_planned')} optimizer steps, "
+                        f"the design declares {planned}")
+        if execution.get("optimizer_steps_completed") != planned:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: {execution.get('optimizer_steps_completed')} of "
+                        f"{planned} optimizer steps completed. A short run is a "
+                        f"different experiment, not this one")
+        if execution.get("epochs_configured") != option["epochs"]:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt configures "
+                        f"{execution.get('epochs_configured')} epochs, the design "
+                        f"declares {option['epochs']}")
+        if not execution.get("final_validation_present"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: no closing validation pass is recorded (D31)")
+        losses = list(execution.get("validation_losses") or [])
+        if len(losses) != execution.get("validation_evaluations"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: {len(losses)} validation losses against "
+                        f"{execution.get('validation_evaluations')} evaluations")
+        for value in [*losses, execution.get("train_loss"),
+                      execution.get("final_validation_loss")]:
+            if value is None or not math.isfinite(float(value)):
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: a recorded metric is not finite; a run whose "
+                            f"numbers are not numbers did not train anything")
+
+        # ── the adapter: identities present, and STRUCTURALLY the control's ────
+        adapter = receipt.get("adapter", {})
+        for field_name, snapshot_field in (("sha256", "adapter_sha256"),
+                                           ("manifest_hash", "adapter_manifest_hash")):
+            if not adapter.get(field_name):
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt records no adapter {field_name}")
+            elif adapter.get(field_name) != entry.get(snapshot_field):
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt's adapter {field_name} "
+                            f"{adapter.get(field_name)} is not the snapshot's "
+                            f"{entry.get(snapshot_field)}")
+        if not adapter.get("artifact_set_hash"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt records no artifact-set hash")
+        for field_name, expected in STRUCTURAL_ADAPTER_CONTROL.items():
+            if adapter.get(field_name) != expected:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: adapter {field_name} is "
+                            f"{adapter.get(field_name)}, the sealed structural control "
+                            f"for this architecture is {expected}. Learned values "
+                            f"differ between candidates; STRUCTURE does not")
+        if set(adapter.get("target_modules") or ()) != set(
+                STRUCTURAL_ADAPTER_TARGET_MODULES):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: it adapted {sorted(adapter.get('target_modules') or ())},"
+                        f" not the {CANDIDATE_003_LORA_SCOPE} projection set")
+
+        # ── the verifiers the run was actually put through ─────────────────────
+        verification = receipt.get("verification", {})
+        if verification.get("completed_run_verifier") != "PASS":
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the completed-run verifier did not pass")
+        if verification.get("adapter_verifier") != "valid":
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the adapter verifier returned "
+                        f"{verification.get('adapter_verifier')!r}")
+        if verification.get("checkpoint_directories"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the run wrote checkpoint directories, which the adapter "
+                        f"artefact policy refuses (D16)")
+
+        # ── still unevaluated, and the holdout still unspent ───────────────────
+        holdout = receipt.get("holdout", {})
+        if holdout.get("held_out_evaluation_runs") or holdout.get(
+                "eval_authority_created") or holdout.get("evaluation_corpus"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the receipt records held-out evaluation, but the state "
+                        f"is TRAINED_UNEVALUATED")
+
+        # ── the commits this run stands on ────────────────────────────────────
+        for label, commit in (("training_source_commit",
+                               receipt.get("training_source_commit")),
+                              ("design_commit", receipt.get("design_commit"))):
+            code, kind = _git("cat-file", "-t", str(commit))
+            if code != 0 or kind != "commit":
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: receipt {label} {commit} is not a commit in this "
+                            f"repository")
+
+        runtime_tree = REPO_ROOT / "jarvis" / "training_runs" / "runs" / cid
+        report.note(
+            f"{cid}: TRAINED_UNEVALUATED backed by {pointer} — one authority created, "
+            f"one consumed, {execution.get('optimizer_steps_completed')}/"
+            f"{planned} optimizer steps, adapter {str(adapter.get('sha256'))[:8]}...; "
+            f"runtime adapter present locally: "
+            f"{'YES' if runtime_tree.is_dir() else 'NO'} (historical training is sealed "
+            f"by the receipt and does not depend on it)")
 
 
 def transition_problems(before: str, after: str, table: dict, label: str) -> list[str]:
@@ -1763,6 +2309,7 @@ def run() -> Report:
     check_dataset_state(cp, report)
     check_candidate_state(cp, report)
     check_candidate_design(cp, report)
+    check_training_receipt(cp, report)
     check_policy_identities(cp, report)
     check_authority_separation(cp, report)
     check_holdout_firewall(cp, report)
@@ -1788,10 +2335,9 @@ def main(argv: "list[str] | None" = None) -> int:
 
     print()
     print(f"M62_CONTROL_PLANE_VERIFY:\n{'PASS' if report.ok else 'FAIL'}")
-    for category in ("SCHEMA", "CURRENT_POINTER", "SNAPSHOT_CHAIN", "ARCHIVE_INTEGRITY",
-                     "GIT_AUTHORITY", "DATASET_STATE", "CANDIDATE_STATE",
-                     "POLICY_IDENTITIES", "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL",
-                     "PATH_INTEGRITY", "STALE_STATE", "CONTROL_PLANE_BUDGET"):
+    # Iterated from CATEGORIES rather than restated: a second literal list is how the
+    # machine-readable block silently stops reporting a category somebody added.
+    for category in CATEGORIES:
         print(f"{category}:\n{report.status(category)}")
     print(f"PROBLEMS:\n{len(report.problems)}")
     return 0 if report.ok else 1
