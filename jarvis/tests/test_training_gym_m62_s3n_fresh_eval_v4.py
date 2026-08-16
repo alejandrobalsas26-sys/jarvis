@@ -629,8 +629,22 @@ def test_s3n_changed_no_evaluation_policy_grader_or_gate_source():
 # ══════════════════════════════════════════════════════════════════════════════
 #  45-49. No candidate 003, no train-v3, no authority
 # ══════════════════════════════════════════════════════════════════════════════
-def test_no_candidate_003_configuration_plan_or_adapter_identity_exists():
-    """S3N freezes the exam. Building the student is the NEXT session's work, not this one."""
+#: S3P added exactly one tracked path naming candidate 003: its portable training
+#: receipt. That is evidence a run happened, not a configuration, a plan, an adapter or
+#: a token — none of which may ever be tracked.
+CANDIDATE_003_TRACKED_ALLOWLIST = frozenset({
+    "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json",
+})
+
+
+def test_no_candidate_003_configuration_plan_or_adapter_identity_is_tracked():
+    """S3N froze the exam and S3O built the student; S3P trained it.
+
+    What this test owns is unchanged: no configuration document, no plan, no adapter and
+    no token for candidate 003 lives in Git. The single allowlisted receipt is the
+    deliberate exception S3P introduced so the training history outlives the gitignored
+    runtime tree, and it is required to be exactly that one path.
+    """
     import subprocess
     from pathlib import Path
 
@@ -644,7 +658,8 @@ def test_no_candidate_003_configuration_plan_or_adapter_identity_exists():
         pytest.skip("this checkout is not a git repository")
     names = [p for p in tracked.stdout.split()
              if not p.endswith(".md") and "docs/" not in p]
-    assert [p for p in names if "quality-live-003" in p] == []
+    assert {p for p in names
+            if "quality-live-003" in p} == CANDIDATE_003_TRACKED_ALLOWLIST
     assert [p for p in names if "candidate_003" in p or "candidate-003" in p] == []
 
 

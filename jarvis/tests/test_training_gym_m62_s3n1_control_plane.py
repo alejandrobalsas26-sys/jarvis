@@ -550,32 +550,49 @@ def test_candidate_002_is_evaluated_not_eligible(snapshot):
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"
 
 
-def test_candidate_003_is_designed_but_has_no_weights_and_no_measurement(snapshot):
-    """S3O moved ordinal 3 NOT_CREATED -> DESIGNED_UNTRAINED.
+def test_candidate_003_is_trained_but_has_no_measurement(snapshot):
+    """S3O moved ordinal 3 NOT_CREATED -> DESIGNED_UNTRAINED; S3P moved it on to
+    TRAINED_UNEVALUATED.
 
-    What this test owns is unchanged and is the part that matters: candidate 003 has no
-    adapter and no evaluation. Only the state name and the corpus moved, because a
-    designed candidate names the corpus it WOULD train on.
+    **What this test owns is unchanged and is the part that matters: candidate 003 has
+    no evaluation.** The adapter fields moved because a training run produced real
+    weights, which is exactly what the second half of the state name says. The half that
+    decides anything -- ``UNEVALUATED`` -- is asserted here as strictly as before, and
+    the new receipt pointer is required because a trained claim the control plane cannot
+    back is the claim it must not be able to make.
     """
     entry = next(c for c in snapshot["candidates"] if c["ordinal"] == 3)
-    assert entry["status"] == "DESIGNED_UNTRAINED"
-    assert entry["adapter_sha256"] is None
-    assert entry["adapter_manifest_hash"] is None
+    assert entry["status"] == "TRAINED_UNEVALUATED"
+    assert entry["adapter_sha256"] is not None
+    assert entry["adapter_manifest_hash"] is not None
+    assert entry["training_receipt"] is not None
     assert entry["evaluation_corpus"] is None
     assert "v2" in entry["training_corpus"]
     assert entry["candidate_id"] == "qwen3-06b-lora-quality-live-003"
 
 
-def test_claiming_candidate_003_is_trained_fails_verification(sandbox):
+def test_claiming_candidate_003_is_trained_without_evidence_fails_verification(sandbox):
+    """The property this owns survives S3P intact, and matters more now than before.
+
+    Candidate 003 really is trained, so the mutation can no longer be "flip the status
+    word" -- it is "keep the word and take the evidence away". A state that a snapshot
+    can assert on its own is a state the control plane cannot be trusted about, whether
+    or not the assertion happens to be true today.
+    """
     plane = _plane_from(sandbox)
     mutated = copy.deepcopy(plane.snapshot)
     entry = next(c for c in mutated["candidates"] if c["ordinal"] == 3)
     entry["status"] = "TRAINED_UNEVALUATED"
+    entry["adapter_sha256"] = None
+    entry["adapter_manifest_hash"] = None
+    entry["training_receipt"] = None
     _rewrite(sandbox, plane.current["latest_snapshot_path"], mutated)
     _repoint(sandbox)
     report = V.Report()
     V.check_candidate_state(_plane_from(sandbox), report)
     assert "CANDIDATE_STATE" in _categories(report)
+    V.check_training_receipt(_plane_from(sandbox), report)
+    assert "TRAINING_RECEIPT" in _categories(report)
 
 
 def test_a_promoted_candidate_is_refused_outright(sandbox):

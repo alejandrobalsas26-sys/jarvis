@@ -215,6 +215,19 @@
                 "type": "string"
               }
             ]
+          },
+          "training_receipt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "type": "string"
+              }
+            ]
           }
         },
         "required": [
@@ -226,7 +239,8 @@
           "evidence",
           "ordinal",
           "status",
-          "training_corpus"
+          "training_corpus",
+          "training_receipt"
         ],
         "type": "object"
       },

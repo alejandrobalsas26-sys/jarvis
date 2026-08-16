@@ -62,6 +62,7 @@ resolve with `git log --oneline <range>`.
 | **S3N** | PASS | `V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md` | `4c669fa`…`ec446e3` | **eval-v4 `FROZEN_UNUSED`**, the preregistration, and the holdout body firewall (§17) |
 | **S3N.1** | PASS | `V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md` | `ec446e3`…`d8462f5` | **this architecture** — the archive, the snapshot chain, the verifier, the threat model |
 | **S3O** | PASS | `V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md` | `d8462f5`… | **candidate 003 `DESIGNED_UNTRAINED`** — the one-axis diff, the per-lineage id derivation, and the two verifier holes a rename and a missing state arm left open |
+| **S3P** | PASS | `V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md` | `bac49c4`…`55e6eaa` | **candidate 003 `TRAINED_UNEVALUATED`** — one TRAIN capability created and consumed once, 40/40 steps, adapter `6ccd8fdc…`; the portable training receipt that lets a clone with no weights still establish the run; the first live training under D37. Nothing evaluated, `eval-v4` still `FROZEN_UNUSED` |
 
 ---
 

@@ -7,11 +7,12 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **2** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **3** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0002-m62-third-candidate-designed-untrained.json` |
-| **Snapshot SHA256** | `cdff52eea78c9763e4a04e3efc4f3d8a536305963f86fb7174e9b4eefef3b621` |
-| **Subject state commit** | `c30c821616ecd890ea1bd4368341b4411a1b8701` (S3O design) |
+| **Latest snapshot** | `state/m62/snapshots/0003-m62-third-candidate-trained-unevaluated.json` |
+| **Snapshot SHA256** | `701d35473687d2a3cd834fc5ea8700490326ff8eaa5e54f1b96c6b58a8414d7c` |
+| **Subject state commit** | `55e6eaae006b8d1e31a9b091bf8c19c14e6bae9b` (S3P training evidence) |
+| **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
 | **History index** | `jarvis/docs/m62/HISTORY_INDEX.md` |
@@ -50,7 +51,8 @@ and the snapshot, and asks Git — not prose — about the branch, the ancestry 
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `c30c821616ecd890ea1bd4368341b4411a1b8701` — the commit the current snapshot describes |
+| Subject state commit | `55e6eaae006b8d1e31a9b091bf8c19c14e6bae9b` — the commit the current snapshot describes |
+| Training source commit | `bac49c4a49194d84fbc7f61656662fdcd54799ca` — the commit candidate 003 actually trained from. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
 | `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62** |
@@ -71,10 +73,11 @@ subject rather than equal it.
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3O** — candidate 003 designed as a single-axis controlled experiment |
-| Last milestone | **S3O** — `V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md`. Design and control plane only: nothing trained, nothing evaluated |
-| Phase | **Between milestones.** The exam is frozen and the student is designed; neither has been used |
-| Live training / evaluation since S3N | none — 0 generations, 0 optimizer steps, no authority created |
+| Last state-bearing milestone | **S3P** — candidate 003 trained under one single-use `TRAIN` authority |
+| Last milestone | **S3P** — `V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md`. One capability created, consumed once, one run, one verified adapter. **Nothing evaluated** |
+| Phase | **Between milestones.** The student has been taught and the exam is still sealed |
+| Live training since S3N | **one run** — candidate 003, 40/40 optimizer steps, `TRAIN` capability spent. **No retry is authorised** |
+| Live evaluation since S3N | none — **0 generations, 0 response tokens, 0 held-out reads, no `EVAL` authority** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that collects and
 grades defensive task episodes, builds immutable leakage-checked datasets, plans and
@@ -116,15 +119,27 @@ template **source**, not the call — read `chat_render_policy_hash` for the cal
 |---|---|---|---|---|---|
 | `qwen3-06b-lora-quality-live-001` | `EVALUATED_NOT_ELIGIBLE` | `43213035…e22ac858` | `train v1` | `eval v2` | `V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md` |
 | `qwen3-06b-lora-quality-live-002` | `EVALUATED_NOT_ELIGIBLE` | `319c2524…f9665409` | `train v2` | `eval v3` | `V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md` |
-| `qwen3-06b-lora-quality-live-003` | **`DESIGNED_UNTRAINED`** | none — not trained | `train v2` | not yet measured | `V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md` |
+| `qwen3-06b-lora-quality-live-003` | **`TRAINED_UNEVALUATED`** | `6ccd8fdc…c76ce4ea6` | `train v2` | **not yet measured** | `V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md` |
 
-**Candidate 003 is DESIGNED, not trained.** S3O named it, configured it and planned it,
-moving **exactly one** primary axis — training render reasoning policy `MODEL_DEFAULT` →
-`DISABLED` — with LoRA scope `ATTENTION_AND_MLP` and `train v2` unchanged. It has **no
-adapter, no run record and no `TRAIN` authority**, and its behaviour is **unknown, not
-estimated**. `config_hash` and `plan_hash` are root-bound: re-derive them, never paste them.
-The design is re-derived from `build_quality_training_config.py` by the verifier, so this
-table is a claim the control plane checks rather than a source of truth.
+**Candidate 003 is TRAINED, not measured.** S3O designed it moving **exactly one** primary
+axis — training render reasoning policy `MODEL_DEFAULT` → `DISABLED` — with LoRA scope
+`ATTENTION_AND_MLP` and `train v2` unchanged. S3P spent its one authorised `TRAIN`
+capability: created once, consumed once, one process, **40/40 optimizer steps at exactly
+2.0 epochs**, `train_loss` 3.408492, two diagnostic validations plus a closing pass
+(3.250574 → 3.178661), one verified 392-tensor LoRA adapter structurally identical to
+candidate 002's and byte-different from it. **It is the first M62 candidate ever fitted
+under the D37 representation.** Its behaviour is **unknown, not estimated**: no gate has
+been evaluated, no grader has run and no response token has been generated.
+
+**The trained claim is not this table's to make.** `check_training_receipt` re-derives it
+from the tracked, root-independent receipt
+`state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json`, and refuses a snapshot
+that agrees with a verifier constant while the receipt is absent or disagrees. The receipt
+also means the training history survives a fresh clone that has **no** runtime adapter.
+`config_hash` and `plan_hash` are root-bound: re-derive them, never paste them.
+
+**No retry exists.** The capability is spent whatever happens next; a change to candidate
+003 is a new identity, never a patch of this one.
 
 **Closed candidate-state vocabulary.** `NOT_CREATED` · `DESIGNED_UNTRAINED` ·
 `TRAINED_UNEVALUATED` · `EVALUATED_NOT_ELIGIBLE` · `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` ·
@@ -234,7 +249,7 @@ are indexed in `jarvis/docs/m62/HISTORY_INDEX.md`.
 | **D34** | FIXED | A dataset parent is **DECLARED**, never discovered from disk. Fails closed rather than degrading to genesis. |
 | **D35** | OPERATOR RULING | A spent holdout becomes development evidence. **Each candidate needs a fresh holdout.** Not a contamination claim. |
 | **D36** | FIXED | The identity redactor matches unless flanked by ASCII letters on both sides. Do not simplify it to a substring match; do not widen it to `\b`. |
-| **D37** | FIXED | Training binds a reasoning policy and `chat_render_policy_hash` binds the *call*. **Historical causality NOT_ESTABLISHED**; closing it is *not* predicted to restore 9/9. |
+| **D37** | FIXED | Training binds a reasoning policy and `chat_render_policy_hash` binds the *call*. **Exercised by one live run** (candidate 003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**; closing it is *not* predicted to restore 9/9, and nothing has measured whether it changed anything. |
 | **D38** | FIXED (observability only) | Output-budget exhaustion is a body-free diagnostic beside the unchanged input-truncation metric. **No gate reads it and none may be added without a separate operator decision.** Reaching the ceiling is not failure. |
 | **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure has ever been affected. **Not to be fixed as a rider.** |
 
@@ -250,9 +265,16 @@ are indexed in `jarvis/docs/m62/HISTORY_INDEX.md`.
   against its **own** simultaneously-measured baseline under identical policy digests.
 - **A candidate fitted under `DISABLED` is not directly comparable to 001 or 002.** Binding
   the policy is itself an experimental axis.
-- **The D37 fix has never been exercised by a live training run.** Whether it changes any
-  measured behaviour is **unknown, not estimated**.
-- **No model has read `eval-v4`.** What it will measure is **unknown, not estimated**.
+- **The D37 fix has been exercised by exactly one live training run** (candidate 003).
+  Whether it changes any *measured* behaviour is still **unknown, not estimated** —
+  nothing has been evaluated.
+- **Candidate 003 is trained and unevaluated.** Its 12-row train-time validation is
+  train-side steering material, appears in no gate, and is **not** comparable with
+  candidate 001's or 002's numbers. Its adapter has never been loaded for inference.
+- **S3P is one host, one seed, one run**, no repeat and no ablation;
+  `deterministic_reproduction_claimed` is `false`.
+- **No model has read `eval-v4`.** Training candidate 003 did **not** spend it. What it
+  will measure is **unknown, not estimated**.
 - No model has been generated under the D38 instrument.
 - Neither Kali runtime is claimed bytewise equivalent to the Windows runtime that produced
   candidate 001's adapter.
@@ -310,6 +332,11 @@ promotion_authority   NONE_OBSERVED_IN_REPOSITORY
 control_plane_can_grant_authority   FALSE
 ```
 
+**One `TRAIN` capability was created and consumed in S3P and is now spent.** No reusable
+capability exists, no replacement may be minted for candidate 003, and the observation
+above is unchanged by that: a spent single-use token is not an authority anyone still
+holds.
+
 **This is an OBSERVATION, never a grant.** Plan tokens live outside the repository by
 invariant, so the observation is *measured* as "no tracked file carries a token literal" —
 the verifier scans for one on every run — and it is **not** proof that none exists
@@ -338,8 +365,13 @@ neither moved, replaced nor weakened that mechanism.
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          3341 passed · 20 skipped · 0 failed        [S3O]
+result          3441 passed · 20 skipped · 0 failed        [S3P]
 ```
+
+S3P added the trained-state suite (`test_training_gym_m62_s3p_trained_state.py`) and
+updated five pre-existing assertions that said candidate 003 was untrained — true before
+S3P and false after it. Each kept the property it owned: no measurement, no tracked
+adapter/config/plan/token, and no trained claim without evidence.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running
 `pytest` from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -386,27 +418,28 @@ state → the milestone document NEXT names → task-specific authority → *onl
 
 ## 12 — EXACT NEXT
 
-> **An explicit HUMAN OPERATOR DECISION: whether to grant a separate, single-use `TRAIN`
-> authority for candidate 003.** Nothing is authorised by S3O. It designed an experiment;
-> it created no capability to run one, trained nothing, evaluated nothing and generated no
-> token.
+> **An explicit HUMAN OPERATOR DECISION: whether to grant a separate, single-use `EVAL`
+> authority for candidate 003 against `eval-v4`.** Nothing is authorised by S3P. It
+> trained a candidate; it measured nothing, generated nothing, created no `EVAL`
+> capability and predicted no result.
 
-**The decision is not implied by readiness.** Candidate 003's plan derives with **0
-blockers** on this host, which is a statement about the *pipeline*, not about whether the
-experiment is worth spending a fresh holdout on. `READY_FOR_TRAIN_AUTHORIZATION: YES` and
-`TRAIN_AUTHORIZED: NO` are different sentences and both are true.
+**The decision is not implied by the candidate being trained.** Spending `eval-v4` is
+irreversible: it becomes `USED_IMMUTABLE` the moment a model reads it, and a fourth
+candidate would then need a fifth holdout (**D35**). "Candidate 003 exists" and
+"candidate 003 should be measured now" are different sentences.
 
 **What is already fixed and must not be reopened:** the candidate identity
-`qwen3-06b-lora-quality-live-003`; the single axis `MODEL_DEFAULT` → `DISABLED`; LoRA scope
-`ATTENTION_AND_MLP`; `train v2` unchanged; and candidate 002's configuration in every other
-respect. The normalized semantic diff between the control and the experiment is **exactly
-one key**, and the verifier re-derives that from the production generator on every run.
+`qwen3-06b-lora-quality-live-003`; its adapter `6ccd8fdc…`; the single axis
+`MODEL_DEFAULT` → `DISABLED`; LoRA scope `ATTENTION_AND_MLP`; `train v2` unchanged. **The
+one authorised training attempt is spent** — no second `TRAIN` token, no retry, no resume,
+no re-seed. A change to candidate 003 is a **new identity**.
 
-**If training is later authorised**, the sequence is: re-derive the plan on the executing
-host (`config_hash` and `plan_hash` are root-bound) → a fresh single-use `TRAIN` token →
-training → `TRAINED_UNEVALUATED` at a **new** control-plane generation → and only then a
-**separate** `EVAL` authority against `eval-v4`, which spends the holdout permanently and
-obliges a fifth one for any fourth candidate (**D35**).
+**If evaluation is later authorised**, the sequence is: derive the evaluation plan on the
+executing host in `.venv-m62-eval-linux` → a fresh single-use `EVAL` token → one paired
+run against `eval-v4` → a new control-plane generation. The only valid primary comparison
+is a **simultaneously measured baseline on `v4`** versus candidate 003 on `v4`, under
+identical generation, metric and gate policy digests. D28, D29 and D33 must be restated in
+that report.
 
 **Comparability, before anyone builds a table.** Candidate 003 is **not** head-to-head
 comparable with 001 or 002: it is fitted under a different training representation *and*
@@ -416,9 +449,12 @@ will be measured on a different exam. The only valid comparison is candidate 003
 **Nothing predicts the outcome.** D37's historical causality is `NOT_ESTABLISHED`. Do not
 record, anywhere, that candidate 003 will fix stopping, restore 9/9 or repair safety.
 
-**Still explicitly ruled out:** a second experimental axis · `ATTENTION_ONLY` · any LR,
-epoch, rank, alpha or dropout change · `train-v3`, added rows or a rebalance · a
-teacher-generated corpus · raising `max_new_tokens` · adding structured rows ·
+**Still explicitly ruled out:** a second `TRAIN` capability for candidate 003 · retraining,
+resuming or re-seeding it · reading `eval-v4` bodies to explain, debug or tune it · turning
+a `v4` failure into a training example · reporting the 12-row validation curve as a quality
+or eligibility result · ranking 001, 002 and 003 in one table · a second experimental axis ·
+`ATTENTION_ONLY` · any LR, epoch, rank, alpha or dropout change · `train-v3`, added rows or
+a rebalance · a teacher-generated corpus · raising `max_new_tokens` · adding structured rows ·
 strengthening the response schema · changing gates, graders, thresholds or the refusal
 detector · creating a D38 gate · fixing **D39** as a rider.
 

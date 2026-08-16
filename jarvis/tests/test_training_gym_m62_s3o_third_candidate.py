@@ -242,8 +242,24 @@ def test_an_unknown_candidate_is_still_a_refusal():
         QCFG.candidate_spec("004")
 
 
+#: The ONE tracked non-document artefact permitted to name candidate 003: the S3P
+#: portable training receipt. It is evidence, not an artefact of the model -- no weights,
+#: no configuration document, no plan, no token. Naming it explicitly is the point: an
+#: unlisted tracked path carrying this identity is still a failure.
+CANDIDATE_003_TRACKED_ALLOWLIST = frozenset({
+    "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json",
+})
+
+
 def test_no_tracked_artefact_is_named_for_the_third_candidate():
-    """DESIGNED means a configuration exists. No adapter, no run, no sealed config."""
+    """No adapter, no run, no sealed config, no plan document -- in Git.
+
+    S3P added exactly one tracked path naming this candidate, and it is deliberately not
+    an artefact OF the model: the portable receipt exists so the training history
+    survives a clone that has no weights. Everything the invariant actually protects --
+    adapters, configuration documents, plans and tokens stay out of Git -- is unchanged
+    and is still asserted for every other path.
+    """
     try:
         tracked = subprocess.run(["git", "-C", str(REPO), "ls-files"],
                                  capture_output=True, text=True, timeout=60, check=False)
@@ -253,7 +269,11 @@ def test_no_tracked_artefact_is_named_for_the_third_candidate():
         pytest.skip("not a git repository")
     names = [p for p in tracked.stdout.split()
              if not p.endswith(".md") and "docs/" not in p]
-    assert [p for p in names if CANDIDATE_003_ID in p] == []
+    named = {p for p in names if CANDIDATE_003_ID in p}
+    assert named == CANDIDATE_003_TRACKED_ALLOWLIST
+    for path in named:
+        assert path.endswith(".json") and "/receipts/" in path
+        assert "adapter" not in path and "config" not in path and "plan" not in path
 
 
 # ══════════════════════════════════════════════════════════════════════════════
