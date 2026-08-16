@@ -62,6 +62,9 @@ PRE_MIGRATION_PROGRESS_SHA256 = (
 PRE_MIGRATION_PROGRESS_BYTES = 516_784
 PRE_MIGRATION_PROGRESS_LINES = 6_089
 
+#: Generation 1, sealed by S3N.1 and never revised.
+GENESIS_SNAPSHOT_SHA256 = (
+    "a2659d1fb1031726329394f0593478eb57b273048bc0d94faf12c89225dcf2c3")
 SUBJECT_STATE_COMMIT = "ec446e348995acb0c23a69b0c3efd574f821b1a0"
 MASTER_COMMIT = "3705114228edef2f665be349c5c4429b7b16777a"
 
@@ -376,9 +379,20 @@ def test_there_is_exactly_one_canonical_serializer():
     assert len(dumps_calls) == 1, "json.dumps is called somewhere other than canonical_json"
 
 
-def test_the_genesis_generation_is_one_with_a_null_parent(snapshot):
-    assert snapshot["state_generation"] == 1
-    assert snapshot["parent_snapshot_sha256"] is None
+def test_the_genesis_generation_is_one_with_a_null_parent():
+    """Generation 1 specifically, read by name.
+
+    Originally written against the CURRENT snapshot, which was generation 1 at the time.
+    A genesis assertion must name the genesis file, or it silently becomes an assertion
+    that the control plane has never advanced.
+    """
+    genesis = next(p for p in sorted((REPO / V.SNAPSHOT_DIR).iterdir())
+                   if p.name.startswith("0001-"))
+    payload = json.loads(genesis.read_text(encoding="utf-8"))
+    assert payload["state_generation"] == 1
+    assert payload["parent_snapshot_sha256"] is None
+    # And it is still byte-for-byte the snapshot S3N.1 sealed.
+    assert V.sha256_bytes(genesis.read_bytes()) == GENESIS_SNAPSHOT_SHA256
 
 
 def test_a_genesis_snapshot_claiming_a_parent_is_refused(sandbox):
@@ -394,11 +408,12 @@ def test_a_genesis_snapshot_claiming_a_parent_is_refused(sandbox):
 def test_a_skipped_generation_is_refused(sandbox):
     """1 -> 3 must not validate."""
     plane = _plane_from(sandbox)
-    third = dict(copy.deepcopy(plane.snapshot), state_generation=3,
+    skipped = plane.snapshot["state_generation"] + 2
+    third = dict(copy.deepcopy(plane.snapshot), state_generation=skipped,
                  parent_snapshot_sha256=V.sha256_bytes(plane.snapshot_bytes))
-    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/0003-skipped.json", third)
-    current = dict(plane.current, state_generation=3,
-                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/0003-skipped.json")
+    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/{skipped:04d}-skipped.json", third)
+    current = dict(plane.current, state_generation=skipped,
+                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/{skipped:04d}-skipped.json")
     _rewrite(sandbox, V.CURRENT_PATH, current)
     _repoint(sandbox)
     report = V.Report()
@@ -409,9 +424,10 @@ def test_a_skipped_generation_is_refused(sandbox):
 
 def test_a_duplicate_generation_is_refused_as_a_two_writer_race(sandbox):
     plane = _plane_from(sandbox)
+    generation = plane.snapshot["state_generation"]
     twin = dict(copy.deepcopy(plane.snapshot),
-                generation_label="M62_CONTROL_PLANE_V2_GENESIS_TWIN")
-    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/0001-twin.json", twin)
+                generation_label="M62_CONTROL_PLANE_GENERATION_TWIN")
+    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/{generation:04d}-twin.json", twin)
     report = V.Report()
     V.check_snapshot_chain(_plane_from(sandbox), report)
     assert any("ONE WRITER PER GENERATION" in m for _, m in report.problems)
@@ -419,11 +435,12 @@ def test_a_duplicate_generation_is_refused_as_a_two_writer_race(sandbox):
 
 def test_a_broken_parent_link_is_refused(sandbox):
     plane = _plane_from(sandbox)
-    second = dict(copy.deepcopy(plane.snapshot), state_generation=2,
+    following = plane.snapshot["state_generation"] + 1
+    second = dict(copy.deepcopy(plane.snapshot), state_generation=following,
                   parent_snapshot_sha256="b" * 64)
-    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/0002-next.json", second)
-    current = dict(plane.current, state_generation=2,
-                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/0002-next.json")
+    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/{following:04d}-next.json", second)
+    current = dict(plane.current, state_generation=following,
+                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/{following:04d}-next.json")
     _rewrite(sandbox, V.CURRENT_PATH, current)
     _repoint(sandbox)
     report = V.Report()
@@ -434,12 +451,13 @@ def test_a_broken_parent_link_is_refused(sandbox):
 def test_a_correct_second_generation_chains_cleanly(sandbox):
     """The chain check must be able to pass, or its failures prove nothing."""
     plane = _plane_from(sandbox)
-    second = dict(copy.deepcopy(plane.snapshot), state_generation=2,
-                  generation_label="M62_SYNTHETIC_SECOND",
+    following = plane.snapshot["state_generation"] + 1
+    second = dict(copy.deepcopy(plane.snapshot), state_generation=following,
+                  generation_label="M62_SYNTHETIC_NEXT",
                   parent_snapshot_sha256=V.sha256_bytes(plane.snapshot_bytes))
-    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/0002-next.json", second)
-    current = dict(plane.current, state_generation=2,
-                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/0002-next.json")
+    _rewrite(sandbox, f"{V.SNAPSHOT_DIR}/{following:04d}-next.json", second)
+    current = dict(plane.current, state_generation=following,
+                   latest_snapshot_path=f"{V.SNAPSHOT_DIR}/{following:04d}-next.json")
     _rewrite(sandbox, V.CURRENT_PATH, current)
     _repoint(sandbox)
     report = V.Report()
@@ -464,8 +482,10 @@ def test_the_subject_commit_exists_and_head_descends_from_it(plane):
 
 
 def test_the_snapshot_names_the_subject_commit_and_master(snapshot, current):
-    assert snapshot["subject_state_commit"] == SUBJECT_STATE_COMMIT
-    assert current["subject_state_commit"] == SUBJECT_STATE_COMMIT
+    # The subject commit MOVES with every state-bearing milestone; what must hold is that
+    # both planes name the SAME one and that Git recognises it as a real ancestor of HEAD.
+    assert snapshot["subject_state_commit"] == current["subject_state_commit"]
+    assert re.fullmatch(r"[0-9a-f]{40}", snapshot["subject_state_commit"])
     assert snapshot["project"]["master_commit"] == MASTER_COMMIT
     assert snapshot["project"]["branch"] == "jarvis-v69-m62-training-gym"
 
@@ -530,13 +550,20 @@ def test_candidate_002_is_evaluated_not_eligible(snapshot):
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"
 
 
-def test_candidate_003_is_not_created_and_has_no_identity(snapshot):
+def test_candidate_003_is_designed_but_has_no_weights_and_no_measurement(snapshot):
+    """S3O moved ordinal 3 NOT_CREATED -> DESIGNED_UNTRAINED.
+
+    What this test owns is unchanged and is the part that matters: candidate 003 has no
+    adapter and no evaluation. Only the state name and the corpus moved, because a
+    designed candidate names the corpus it WOULD train on.
+    """
     entry = next(c for c in snapshot["candidates"] if c["ordinal"] == 3)
-    assert entry["status"] == "NOT_CREATED"
+    assert entry["status"] == "DESIGNED_UNTRAINED"
     assert entry["adapter_sha256"] is None
     assert entry["adapter_manifest_hash"] is None
-    assert entry["training_corpus"] is None
     assert entry["evaluation_corpus"] is None
+    assert "v2" in entry["training_corpus"]
+    assert entry["candidate_id"] == "qwen3-06b-lora-quality-live-003"
 
 
 def test_claiming_candidate_003_is_trained_fails_verification(sandbox):
@@ -1188,10 +1215,14 @@ def test_an_oversized_snapshot_fails_the_budget_check(sandbox, monkeypatch):
 
 # ── 14. the NEXT contract survived intact ────────────────────────────────────────────
 def test_the_preregistered_primary_axis_is_preserved(snapshot):
+    """The axis survived being implemented. S3N preregistered it; S3O bound it into a
+    configuration, so the wording moved from "exactly one axis" to "already bound" -- but
+    the axis itself must still read MODEL_DEFAULT -> DISABLED, unswapped."""
     nxt = snapshot["next_milestone"]
     assert "MODEL_DEFAULT" in nxt["primary_axis"]
     assert "DISABLED" in nxt["primary_axis"]
-    assert "exactly one" in nxt["primary_axis"].lower()
+    assert nxt["primary_axis"].index("MODEL_DEFAULT") < nxt["primary_axis"].index(
+        "DISABLED"), "the axis direction was reversed"
 
 
 def test_the_lora_scope_is_attention_and_mlp(snapshot):
@@ -1210,8 +1241,8 @@ def test_train_v2_is_unchanged_and_there_is_no_train_v3(snapshot):
 def test_the_next_holdout_is_eval_v4_body_free(snapshot):
     nxt = snapshot["next_milestone"]
     assert "m62-defensive-eval v4" in nxt["evaluation_holdout"]
+    assert "FROZEN_UNUSED" in nxt["evaluation_holdout"]
     assert "BODY_FREE_IDENTITY_ONLY" in nxt["holdout_access"]
-    assert "task body" in nxt["holdout_access"]
 
 
 def test_everything_ruled_out_is_still_ruled_out(snapshot):
@@ -1242,11 +1273,13 @@ def test_a_next_that_swapped_the_axis_fails_verification(sandbox):
 # ── 15. the test baseline and its caveat ─────────────────────────────────────────────
 def test_the_authoritative_focused_baseline_is_preserved(snapshot):
     baseline = snapshot["test_baseline"]
-    assert baseline["passed"] == 3076
-    assert baseline["skipped"] == 18
+    # The counts MOVE as tests are added; pinning them here would make every milestone a
+    # two-place edit and would say nothing. What must never move is zero failures and the
+    # authoritative invocation.
     assert baseline["failed"] == 0
+    assert baseline["passed"] >= 3076, "the suite may grow, never shrink silently"
     assert "-k m62" in baseline["invocation"]
-    assert baseline["milestone"] == "S3N"
+    assert "jarvis/" in baseline["working_directory"]
 
 
 def test_the_root_invocation_caveat_is_preserved_and_not_mislabelled(snapshot):

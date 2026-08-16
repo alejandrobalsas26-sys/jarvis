@@ -263,10 +263,35 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-002": (
         "EVALUATED_NOT_ELIGIBLE",
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"),
-    # Candidate 003 has NO adapter identity and no run name. Inventing one here would be
-    # a candidate-design decision, and S3N.1 is forbidden from making it.
-    "candidate-003": ("NOT_CREATED", None),
+    # S3O made the candidate-design decision S3N.1 was forbidden to make: it named
+    # candidate 003 and moved it to DESIGNED_UNTRAINED. The adapter stays None because a
+    # DESIGNED_UNTRAINED candidate has no weights -- it has a configuration and nothing
+    # else. This pair is NOT the evidence for that state: `check_candidate_design`
+    # re-derives the design from the production generator, and a snapshot agreeing with
+    # this constant while the generator disagrees is a FAILURE, not a pass.
+    "qwen3-06b-lora-quality-live-003": ("DESIGNED_UNTRAINED", None),
 }
+
+#: The placeholder identity generation 1 carried, and what S3O resolved it to.
+#:
+#: Generation 1 recorded ordinal 3 as the literal ``candidate-003`` precisely because
+#: naming it was a design decision. Renaming a candidate must not become a way to slip
+#: past the transition table, so the parent lookup in :func:`check_candidate_state`
+#: resolves by ORDINAL rather than by id; this map records the resolution so the rename
+#: is auditable rather than merely tolerated.
+CANDIDATE_IDENTITY_RESOLUTIONS: dict[str, str] = {
+    "candidate-003": "qwen3-06b-lora-quality-live-003",
+}
+
+#: The tracked, root-independent surfaces a DESIGNED_UNTRAINED candidate is re-derived
+#: from. `config_hash` is deliberately absent: it binds `output_root_id`, so it is a
+#: fact about a filesystem path and reproduces in exactly one clone. Pinning it in the
+#: control plane would be pinning this host.
+CANDIDATE_003_ID = "qwen3-06b-lora-quality-live-003"
+CANDIDATE_003_KEY = "003"
+CANDIDATE_CONTROL_KEY = "002"
+CANDIDATE_003_EVIDENCE = "jarvis/docs/V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md"
+CANDIDATE_003_LORA_SCOPE = "attention_and_mlp"
 
 #: ``defect id -> status``, as the milestone that closed or opened it recorded.
 FROZEN_DEFECT_STATUSES: dict[str, str] = {
@@ -1147,6 +1172,21 @@ def check_candidate_state(cp: ControlPlane, report: Report) -> None:
                 if entry.get(field_name):
                     report.fail("CANDIDATE_STATE",
                                 f"{cid}: NOT_CREATED yet carries {field_name}")
+        if status == "DESIGNED_UNTRAINED":
+            # Designed means: a configuration exists and NOTHING ELSE does. The two
+            # adapter fields and the evaluation corpus must be absent, because weights
+            # and a measurement are exactly what this state asserts have not happened.
+            for field_name in ("adapter_sha256", "adapter_manifest_hash",
+                               "evaluation_corpus"):
+                if entry.get(field_name):
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: DESIGNED_UNTRAINED yet carries {field_name}; a "
+                                f"designed candidate has a configuration and no weights")
+            for field_name in ("training_corpus", "base_model_revision", "evidence"):
+                if not entry.get(field_name):
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: DESIGNED_UNTRAINED without {field_name}; the "
+                                f"state claims a design, so the design must be nameable")
         if status.startswith("EVALUATED_"):
             if not entry.get("evaluation_corpus"):
                 report.fail("CANDIDATE_STATE",
@@ -1175,12 +1215,38 @@ def check_candidate_state(cp: ControlPlane, report: Report) -> None:
     # V29 - the transition table, applied against the parent generation when one exists.
     parent = _parent_snapshot(cp)
     if parent is not None:
-        previous = {c.get("candidate_id"): c.get("status")
-                    for c in parent.get("candidates", [])}
+        # Resolved by ORDINAL, not by candidate_id. A candidate may legitimately be
+        # RENAMED once -- generation 1 carried the placeholder `candidate-003` because
+        # naming it was a design decision it was forbidden to make -- and keying this on
+        # the id would make that rename a way to walk past the transition table
+        # unchecked: `previous.get(new_id)` returns None, `before is None` skips, and
+        # NOT_CREATED -> anything would pass silently. The ordinal is the stable lineage.
+        previous_by_ordinal = {c.get("ordinal"): c for c in parent.get("candidates", [])}
         for cid, entry in by_id.items():
-            before = previous.get(cid)
+            ordinal = entry.get("ordinal")
+            before_entry = previous_by_ordinal.get(ordinal)
             after = entry.get("status")
-            if before is None or before == after:
+            if before_entry is None:
+                # A candidate the parent generation never mentioned may only ENTER as
+                # NOT_CREATED. Otherwise a snapshot could mint a fully-trained candidate
+                # at a fresh ordinal and face no transition check at all.
+                if after != "NOT_CREATED":
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: ordinal {ordinal} is absent from the parent "
+                                f"generation and enters at {after}; a candidate the "
+                                f"control plane has never seen may only enter as "
+                                f"NOT_CREATED")
+                continue
+            before_id = before_entry.get("candidate_id")
+            if before_id != cid:
+                # The one legitimate rename is a recorded placeholder resolution.
+                if CANDIDATE_IDENTITY_RESOLUTIONS.get(before_id) != cid:
+                    report.fail("CANDIDATE_STATE",
+                                f"ordinal {ordinal} was renamed {before_id} -> {cid}, "
+                                f"which is not a recorded identity resolution. A "
+                                f"candidate is not renamed to reuse its history")
+            before = before_entry.get("status")
+            if before == after:
                 continue
             for problem in transition_problems(before, after, CANDIDATE_TRANSITIONS,
                                                "candidate"):
@@ -1195,6 +1261,166 @@ def check_candidate_state(cp: ControlPlane, report: Report) -> None:
             for problem in transition_problems(before, after, DATASET_TRANSITIONS,
                                                "dataset"):
                 report.fail("DATASET_STATE", f"{key}: {problem}")
+
+
+def check_candidate_design(cp: ControlPlane, report: Report) -> None:
+    """S3O — a DESIGNED_UNTRAINED claim is re-derived, never taken on the snapshot's word.
+
+    This is the check that stops the control plane becoming self-fulfilling. The failure
+    it exists to prevent is circular verification: the snapshot says
+    ``DESIGNED_UNTRAINED``, a constant in this file says ``DESIGNED_UNTRAINED``, the two
+    agree, and nothing has been verified at all. So the design is re-derived from the
+    tracked production generator, and the snapshot must agree with THAT.
+
+    Deliberately NOT checked here: ``config_hash``. It binds ``output_root_id``, a
+    SHA-256 of a resolved absolute path, so it is a fact about one filesystem. The
+    root-independent surfaces below identify the design everywhere; the root-bound digest
+    is re-derived on the executing host at plan time, which is where it means something.
+
+    No tokenizer, no weights, no network, no training framework: ``ChatRenderPolicy``
+    takes the template digest as a STRING, so the render identity that IS candidate 003's
+    experimental axis re-derives from the snapshot's own recorded digest.
+    """
+    designed = [c for c in cp.snapshot.get("candidates", [])
+                if c.get("status") == "DESIGNED_UNTRAINED"]
+    if not designed:
+        return
+
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        # Imported as the PACKAGE module the rest of the repository imports. Importing
+        # the same file by bare name would create a second module object with its own
+        # copy of every constant, and the verifier would then be checking a generator
+        # nothing else uses.
+        from scripts import build_quality_training_config as generator
+        from training_gym.evaluation.generation import ELIGIBILITY_REASONING_POLICY
+        from training_gym.training.chat_render import ChatRenderPolicy, ReasoningPolicy
+    except Exception as exc:
+        report.fail("CANDIDATE_STATE",
+                    f"the production candidate generator could not be imported ({exc}); "
+                    f"a DESIGNED_UNTRAINED candidate is therefore UNVERIFIED, which is a "
+                    f"failure and not a pass")
+        return
+
+    for entry in designed:
+        cid = entry.get("candidate_id")
+        key = next((k for k, spec in generator.CANDIDATES.items()
+                    if spec.get("run_id") == cid), "")
+        if not key:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: DESIGNED_UNTRAINED, but no candidate in the production "
+                        f"generator carries that run id. The state claims a design the "
+                        f"repository cannot produce")
+            continue
+        spec = generator.CANDIDATES[key]
+
+        # The corpus the design trains on must be the one the snapshot records, and the
+        # snapshot's own dataset table must hold it as a real frozen identity.
+        declared = str(entry.get("training_corpus") or "")
+        if spec["dataset_version"] not in declared:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: the generator trains it on "
+                        f"{spec['dataset_version']}, the snapshot records "
+                        f"{declared!r}")
+        corpora = {f"{d.get('dataset_id')} {d.get('version')}"
+                   for d in cp.snapshot.get("datasets", [])
+                   if d.get("role") == "TRAINING_CORPUS"}
+        if declared not in corpora:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: training corpus {declared!r} is not a training dataset "
+                        f"the snapshot carries an identity for")
+
+        # The base model must be the control's, re-read from the generator constants.
+        if generator.BASE_MODEL_ID != cp.snapshot.get("base_model", {}).get("model_id"):
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: the generator builds on {generator.BASE_MODEL_ID}, the "
+                        f"snapshot records "
+                        f"{cp.snapshot.get('base_model', {}).get('model_id')}")
+        if generator.BASE_MODEL_REVISION != entry.get("base_model_revision"):
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: base revision {entry.get('base_model_revision')} is not "
+                        f"the generator's {generator.BASE_MODEL_REVISION}")
+
+        # THE AXIS. Resolved through the generator, and required to be the very object
+        # evaluation generates under -- not a second enum member that spells the same.
+        policy = generator.candidate_reasoning_policy(key)
+        if policy is not ReasoningPolicy.DISABLED:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: the generator renders it under {policy}, not DISABLED. "
+                        f"The preregistered S3O axis is MODEL_DEFAULT -> DISABLED")
+        if policy is not ELIGIBILITY_REASONING_POLICY:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: its training reasoning policy is not the same object "
+                        f"evaluation generates under; train/eval parity is the point")
+
+        # THE CONTROL must not have moved with it, or there is no experiment.
+        control = generator.candidate_reasoning_policy(CANDIDATE_CONTROL_KEY)
+        if control is not ReasoningPolicy.MODEL_DEFAULT:
+            report.fail("CANDIDATE_STATE",
+                        f"the control candidate {CANDIDATE_CONTROL_KEY} renders under "
+                        f"{control}, not the legacy MODEL_DEFAULT it actually trained "
+                        f"under; the comparison is no longer controlled")
+
+        # ONE AXIS. The dials are shared BY REFERENCE -- the same option key, not a copy
+        # whose numbers currently agree -- so this single equality is the whole
+        # multi-axis guard.
+        if generator.CANDIDATE_OPTION.get(key) != \
+                generator.CANDIDATE_OPTION.get(CANDIDATE_CONTROL_KEY):
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: option {generator.CANDIDATE_OPTION.get(key)!r} is not "
+                        f"the control's {generator.CANDIDATE_OPTION.get(CANDIDATE_CONTROL_KEY)!r}; "
+                        f"a second experimental axis has appeared")
+
+        # The render identity that IS the axis, re-derived from the snapshot's own
+        # template digest. String inputs only: no tokenizer is loaded.
+        base = cp.snapshot.get("base_model", {})
+        def _render(reasoning: object) -> str:
+            return ChatRenderPolicy(
+                tokenizer_id=base.get("model_id", ""),
+                tokenizer_revision=base.get("revision", ""),
+                chat_template_hash=base.get("chat_template_digest", ""),
+                reasoning_policy=reasoning,
+                add_generation_prompt=True, tokenize=True).render_policy_hash()
+        try:
+            if _render(policy) == _render(ReasoningPolicy.MODEL_DEFAULT):
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: its render identity equals the legacy one, so the "
+                            f"axis moved nothing")
+        except Exception as exc:
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: the render identity could not be re-derived ({exc})")
+
+        # The deep evidence must exist and be tracked. A pointer to a file Git does not
+        # carry is a pointer to something a reader cannot audit.
+        pointer = str(entry.get("evidence") or "")
+        evidence_file = REPO_ROOT / pointer
+        if not pointer or not evidence_file.is_file():
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: deep evidence {pointer!r} is not a file in this tree")
+        else:
+            code, out = _git("ls-files", "--error-unmatch", "--", pointer)
+            if code != 0 or not out:
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: deep evidence {pointer} is untracked")
+
+        # DESIGNED means no weights and no completed run. Both are gitignored runtime
+        # artefacts, so their absence is checked on disk and the limit is stated.
+        for runtime_dir in (REPO_ROOT / "jarvis" / "training_runs" / "runs" / cid,
+                            REPO_ROOT / "jarvis" / "training_adapters" / cid):
+            if runtime_dir.exists():
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: DESIGNED_UNTRAINED, but {runtime_dir.name} exists "
+                            f"as a runtime artefact; a designed candidate has no run")
+        ledger = REPO_ROOT / "jarvis" / "training_runs" / "training_runs.jsonl"
+        if ledger.is_file() and cid in ledger.read_text(encoding="utf-8"):
+            report.fail("CANDIDATE_STATE",
+                        f"{cid}: DESIGNED_UNTRAINED, but the run ledger already names "
+                        f"it; a plan was consumed for this identity")
+        report.note(f"{cid}: DESIGNED_UNTRAINED re-derived from the production generator "
+                    f"(option {generator.CANDIDATE_OPTION.get(key)}, corpus "
+                    f"{spec['dataset_version']}, reasoning {policy.value}); runtime "
+                    f"absence is host-local and inherits the PARTIAL stale-state limit")
 
 
 def transition_problems(before: str, after: str, table: dict, label: str) -> list[str]:
@@ -1536,6 +1762,7 @@ def run() -> Report:
     check_stale_state(cp, report)
     check_dataset_state(cp, report)
     check_candidate_state(cp, report)
+    check_candidate_design(cp, report)
     check_policy_identities(cp, report)
     check_authority_separation(cp, report)
     check_holdout_firewall(cp, report)
