@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0004-m62-eval-ceremony-qualified.json",
-  "latest_snapshot_sha256": "f563df9b6cfccc6969ca8685b666f72f5739146aafe834655b7e75c4af5f039c",
+  "latest_snapshot_path": "state/m62/snapshots/0005-m62-portable-eval-evidence-closed.json",
+  "latest_snapshot_sha256": "dc923b6fc437b2b5ec87e3b212d5b721ca55bd0013fc2953b5eee2fdd8eab3d5",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 4,
-  "subject_state_commit": "4f683f788b02c17b043341aa642fb7de68b41ab3",
+  "state_generation": 5,
+  "subject_state_commit": "c47fa1d860e00e07549191de566277080546a620",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

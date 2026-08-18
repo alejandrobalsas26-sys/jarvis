@@ -1,0 +1,375 @@
+{
+  "archive": {
+    "bytes": 516784,
+    "immutable": true,
+    "lines": 6089,
+    "path": "jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md",
+    "sha256": "e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf"
+  },
+  "authority_observation": {
+    "control_plane_can_grant_authority": false,
+    "eval": "NONE_OBSERVED_IN_REPOSITORY",
+    "note": "An OBSERVATION, never a grant. Tokens live outside the repository, so this is measured as 'no tracked file carries one' and is not proof none exists elsewhere. Every authority stays governed by the single-use plan-token mechanism plus an explicit human decision.",
+    "promotion": "NONE_OBSERVED_IN_REPOSITORY",
+    "train": "NONE_OBSERVED_IN_REPOSITORY"
+  },
+  "base_model": {
+    "chat_template_digest": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+    "evidence": "jarvis/scripts/build_quality_training_config.py",
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "revision_kind": "immutable_commit",
+    "training_precision": "FP32 on CPU for S3H and S3K. The S3E.2 evaluation load was observed at bfloat16 because the backend did not force FP32; that history is not rewritten."
+  },
+  "candidates": [
+    {
+      "adapter_manifest_hash": "1f76ccfbb8efc566c293ab6430d041dd24748035ed48aec6552d1e3bac24699f",
+      "adapter_sha256": "43213035c15cd38928d2d6a3bdbd9af96872a954801c6bfd0a9b82a8e22ac858",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-001",
+      "evaluation_corpus": "m62-defensive-eval v2",
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md",
+      "ordinal": 1,
+      "status": "EVALUATED_NOT_ELIGIBLE",
+      "training_corpus": "m62-defensive-quality-train v1",
+      "training_receipt": null
+    },
+    {
+      "adapter_manifest_hash": "11897e16b081cc4df2517f1c0c0904b7b7580ab4daf8fea0157e49ee4e2f6ca8",
+      "adapter_sha256": "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-002",
+      "evaluation_corpus": "m62-defensive-eval v3",
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md",
+      "ordinal": 2,
+      "status": "EVALUATED_NOT_ELIGIBLE",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": null
+    },
+    {
+      "adapter_manifest_hash": "3bf56ff85538a2651341ec45f48281f3a7c7e861d16b6260b3a686fe0fb5249f",
+      "adapter_sha256": "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-003",
+      "evaluation_corpus": null,
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md",
+      "ordinal": 3,
+      "status": "TRAINED_UNEVALUATED",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json"
+    }
+  ],
+  "control_plane_note": "S3Q.0.1 closed the PORTABLE EVALUATION EVIDENCE chain before eval-v4 is spent. m62.eval_receipt.2 requires real adapter identities, roots the candidate in its training receipt, derives its source commit, binds each ledger line by digest under one plan hash, and REDERIVES its EVALUATED_* verdict. Nothing was measured.",
+  "datasets": [
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md",
+      "manifest_hash": "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b",
+      "pack_hash": "d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0",
+      "parent_manifest_hash": null,
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3E.2, run-004 smoke evaluation",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v1"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md",
+      "manifest_hash": "82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60",
+      "pack_hash": "3744a22e1866a40b6e5b27ae20e798365dfbf2d3c071018afba14bf611ec2665",
+      "parent_manifest_hash": "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3I LIVE, candidate 001",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v2"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md",
+      "manifest_hash": "7c948236163198b5de451316e39346a37efcbc1254724f921e116a6c722f75a0",
+      "pack_hash": "28d2f7d0007c0dc410b7743aa93c168899c93b8b822afb3d3379675572c02442",
+      "parent_manifest_hash": "82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3L, candidate 002",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v3"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md",
+      "manifest_hash": "8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5",
+      "pack_hash": "95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7",
+      "parent_manifest_hash": "7c948236163198b5de451316e39346a37efcbc1254724f921e116a6c722f75a0",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": null,
+      "status": "FROZEN_UNUSED",
+      "task_count": 36,
+      "version": "v4"
+    },
+    {
+      "dataset_id": "m62-defensive-quality-train",
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "manifest_hash": "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a",
+      "pack_hash": null,
+      "parent_manifest_hash": null,
+      "role": "TRAINING_CORPUS",
+      "spent_by": "S3H, candidate 001",
+      "status": "USED_IMMUTABLE",
+      "task_count": 128,
+      "version": "v1"
+    },
+    {
+      "dataset_id": "m62-defensive-quality-train",
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "manifest_hash": "24ceb1e0677b14aaccaea2b667e6d7388530e73f2df4d7a463368500d818fc0f",
+      "pack_hash": null,
+      "parent_manifest_hash": "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a",
+      "role": "TRAINING_CORPUS",
+      "spent_by": "S3K, candidate 002",
+      "status": "USED_IMMUTABLE",
+      "task_count": 182,
+      "version": "v2"
+    }
+  ],
+  "defects": [
+    {
+      "evidence": "jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md",
+      "id": "D25",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A persisted report is serialised in run_state 'comparing'; that is the documented serialisation state, not an unfinished run. states_visited ends in completed and it contributes no blocker."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md",
+      "id": "D28",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "The production backend never populates proposed_tool_calls, so tool_call_validity_rate is VACUOUS on both arms and the six tool_call_schema tasks decide nothing. A backend gap, not a corpus one."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "id": "D29",
+      "is_gate": false,
+      "status": "ACCEPTED_KNOWN_LIMITATION",
+      "summary": "looks_like_refusal recognises sixteen literal English phrasings and the held-out JSON refusal targets contain none. It bounds QG-1 and SV-5 in BOTH directions and travels into eval-v4 by design."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "id": "D30",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A plan could report is_executable true with an empty blocker list while its weights were not known to be cached. The cache is now determined before the feasibility report is built."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md",
+      "id": "D31",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "The VALIDATION split reached the trainer as nothing across three boundaries. Do not remove the eval_dataset wiring or the closing trainer.evaluate(); validation stays diagnostic, never eligibility evidence."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I0_EVALUATION_RUNTIME_QUALIFICATION.md",
+      "id": "D32",
+      "is_gate": false,
+      "status": "SUPERSEDED",
+      "summary": "Read as a documentation defect about eval-v2's digest; superseded by D34, whose root cause is lineage discovered from incidental build state."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I0_EVALUATION_RUNTIME_QUALIFICATION.md",
+      "id": "D33",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "The declared per-task generation timeout is validated, hashed and never enforced, so timeout_rate is VACUOUS. A config must state timeout_s explicitly; the policy default is 120 s."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I1_KALI_RUNTIME_AND_CANONICAL_LINEAGE.md",
+      "id": "D34",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A dataset manifest digest depended on build lineage rather than content. A parent is now DECLARED in CANONICAL_LINEAGE and the build fails closed rather than degrading to genesis."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "id": "D35",
+      "is_gate": false,
+      "status": "OPERATOR_RULING",
+      "summary": "A spent holdout becomes development evidence and may not be the sole fresh eligibility corpus for the next candidate. Each candidate needs a fresh holdout. Not a contamination claim."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "id": "D36",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "The promotion sanitizer matched the local account name as a plain substring, making a dataset identity a function of the building host. Do not simplify it back, and do not widen it to a word boundary either."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M1_D37_TEMPLATE_PARITY_QUALIFICATION.md",
+      "id": "D37",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "Training and evaluation rendered the same messages differently; training now binds a reasoning policy and chat_render_policy_hash binds the call. Historical causality remains NOT_ESTABLISHED and closing it is not predicted to restore 9/9."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M2_D38_OUTPUT_BUDGET_INSTRUMENTATION.md",
+      "id": "D38",
+      "is_gate": false,
+      "status": "FIXED_OBSERVABILITY_ONLY",
+      "summary": "Output-budget exhaustion is now a body-free diagnostic beside the unchanged input-truncation metric. NO gate reads it and none may be added without a separate operator decision. Reaching the ceiling is not failure."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M_STRUCTURED_OUTPUT_DIAGNOSIS.md",
+      "id": "D39",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "Order-dependent cross-file test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure has ever been affected; the authoritative -k m62 collection is alphabetical. Not to be fixed as a rider."
+    }
+  ],
+  "frozen_invariants": [
+    "PROSE_CANNOT_GRANT_AUTHORITY. No document, JSON file or AI response authorises TRAIN, EVAL, promotion, registry mutation or release.",
+    "Offline-first model execution: HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE, local_files_only, trust_remote_code false. Nothing downloads.",
+    "Immutable pinned model and tokenizer revisions only; never a branch or tag ref.",
+    "No automatic dependency installation and no global pip mutation. Optional profiles live only in isolated gitignored environments.",
+    "No pickle in adapter or evaluation artefacts; safetensors only.",
+    "No hidden-target leakage: model-facing packs have no field that could hold a target, and every task is re-checked after mapping.",
+    "No training on evaluation-only material. TRAIN is refused unconditionally by the pack builder.",
+    "TRAIN_SIDE_SPLITS = {TRAIN, VALIDATION}. VALIDATION is steering material, never held-out evidence, and appears in no gate.",
+    "Security is a veto, not a weighted quality tradeoff.",
+    "Plan tokens are single-use and a consumed or failed plan is never replayed.",
+    "ModelCandidateProposal is non-effectful: it writes no registry and promotes nothing.",
+    "Runtime artefacts stay gitignored and package-excluded; no token literal lives in a tracked file.",
+    "master stays untouched until explicit M62 closure. No merge, tag, release or version bump.",
+    "An immutable artefact is never edited: a corrected dataset is a NEW version with a declared lineage, and a superseded snapshot is never revised.",
+    "A dataset lineage is DECLARED, never discovered from whatever is on disk (D34).",
+    "Gate policy e5003319 is byte-pinned by test. QG-2 stays absolute and FG-1/FG-2 stay baseline-relative.",
+    "ONE WRITER PER CONTROL-PLANE GENERATION. If the current generation is not the one you expected, stop; there is no last-write-wins and no automatic merge.",
+    "If the control-plane verifier fails, do not write, train, evaluate or promote, and do not repair state automatically.",
+    "PLAN CONSUMED != HOLDOUT SPENT != EVALUATION COMPLETED != PROMOTION AUTHORIZED. Four events, recorded separately because they fail separately.",
+    "A fresh holdout is USED_IMMUTABLE from the durable holdout_model_facing_committed event onward, whatever happens next. RERUN IS FORBIDDEN after it; only operator RECOVERY remains. Prospective from S3Q.0; candidates 001 and 002 are sealed and are not reinterpreted.",
+    "An executable evaluation plan binds the EXACT pack, hidden-target-store and order-assignment identities, and truthfully declares performs_inference. A plan that cannot name its material carries a blocker instead of an approximation of it.",
+    "A completed evaluation whose durable evidence is missing is NOT a clean success. Artefacts are retained, never overwritten, and the answer is recovery, never a rerun.",
+    "A future EVALUATED_* state requires a valid portable evaluation receipt. A snapshot, a verifier constant, prose and a human sentence are each insufficient, in BOTH verdict directions.",
+    "A receipt is EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER. No receipt grants TRAIN, EVAL, retry, promotion, activation, registry mutation, merge or release.",
+    "Token silence is ceremony hygiene, not cryptography. The confirmation string is a pure function of plan_hash and is neither secret nor unpredictable; PRE-GO surfaces simply must not materialise it.",
+    "An EVALUATED_* state is REDERIVED, never read: the portable receipt carries the body-free gate, bootstrap, empirical-status and serialisation-state evidence the decision was made from, and the PRODUCTION decide_eligibility is asked what they conclude. There is exactly one eligibility algorithm."
+  ],
+  "generation_label": "M62_PORTABLE_EVAL_EVIDENCE_CLOSED",
+  "limitations": [
+    "Gate thresholds are uncalibrated: thresholds_are_calibrated is false.",
+    "Every holdout is 36 synthetic tasks authored in one session by one author with no independent review; tool_call_schema has only 6.",
+    "Semantic leakage has never run. Every freshness and leakage result in this repository is exact or lexical, and a pure paraphrase would not be caught.",
+    "config_hash and plan_hash bind output_root_id, runtime and hardware evidence. Re-derive them on the executing host; never paste a recorded value in.",
+    "Candidate 001 was measured on eval-v2 and candidate 002 on eval-v3, with zero shared task instances. The two tables are not a head-to-head ranking.",
+    "The two candidates failed in opposite directions on the same axis and no midpoint is demonstrated: no ablation was run and none may be run against a spent holdout.",
+    "The D37 fix has now been exercised by exactly one live training run (candidate 003, S3P). Whether it changes any MEASURED behaviour is still unknown, not estimated: nothing has been evaluated.",
+    "A candidate fitted under DISABLED is not directly comparable to candidate 001 or 002. What stays comparable is each candidate against its own simultaneously-measured baseline.",
+    "No model has read eval-v4. Training candidate 003 did not spend it. What it will measure is unknown, not estimated, and nothing predicts that candidate 003 will score differently.",
+    "No model has been generated under the D38 instrument; every figure S3M.2 reports is synthetic or a re-reading of sealed metadata.",
+    "Two FinishReason members are unreachable in production, so their classification is a contract rather than a measurement.",
+    "Re-reading a sealed evaluation config now yields a different config_hash because the metric set entered the metric policy. Nothing sealed is affected and this must not be 'fixed' by exempting the metric set from identity.",
+    "The Kali runtimes are not claimed bytewise equivalent to the Windows runtime that produced candidate 001's adapter.",
+    "openai is a declared base dependency absent from the system interpreter; its absence alone fails 62 tests in three files. Environmental, reproduced at pristine HEAD, and never reconciled across interpreters by arithmetic.",
+    "Measurement is one host, CPU, one seed, one run per candidate. No repeat, no second host, no GPU, no dtype control arm.",
+    "Stale-state detection is PARTIAL: gitignored runtime artefacts are outside Git and a training or evaluation run that wrote only those could not be detected by diffing tracked paths.",
+    "Candidate 003 is DESIGNED_UNTRAINED: a configuration and a plan exist, no adapter does. Its behaviour is unknown, not estimated, and nothing predicts it.",
+    "config_hash and plan_hash bind output_root_id, so candidate 003's 6f9f470f and 414ce9e3 are valid for this host's output root only. Re-derive, never paste.",
+    "Train/eval render parity is established by shared enum identity and by test construction; production evaluation records no chat_render_policy_hash to compare.",
+    "The two S3O tokenizer tests skip on the authoritative interpreter, which has no transformers; the training venv has no pytest and installing either is forbidden.",
+    "Candidate 003 is trained and unevaluated: no gate has been evaluated, no grader has run and no response token has been generated. Its quality is unknown, not estimated.",
+    "Candidate 003's train-time validation is 12 rows of train-side steering material. It appears in no gate, is not held-out evidence, and is not comparable with candidate 001's or 002's numbers.",
+    "S3P is one host, one seed, one run, with no repeat and no ablation; deterministic_reproduction_claimed is false.",
+    "Candidate 003's adapter has never been loaded for inference. Its 392 tensors are verified as bytes; no forward pass has run through the adapted model outside the trainer's own teacher-forced evaluation arm.",
+    "STALE_STATE_DETECTION remains PARTIAL. The portable receipt closes the gap for candidate 003's training history specifically; gitignored runtime artefacts are still outside Git and cannot be diffed in general.",
+    "S3Q.0 qualified the ceremony with SYNTHETIC data only. No property here has been exercised against eval-v4, against real weights or against a real model response, and a synthetic qualification is evidence about the machinery and never about a candidate.",
+    "The prospective spend boundary is deliberately EARLIER than proof that a forward pass ran. There is no atomic transaction between a durable local append and an external synchronous call, so a crash in that gap marks a holdout spent that a model may not have read. This is the chosen conservative error.",
+    "The portable evaluation receipt has never described a real evaluation. Its determinism, body-freedom and refusals are proved over synthetic evidence only.",
+    "Candidates 001 and 002 have no portable evaluation receipt and never will. Their sealed milestone documents are their authority; the legacy exemption is closed and must not be widened.",
+    "D33 is unchanged and still OPEN: timeout_s is bound into the generation policy identity and enforced nowhere, so timeout_rate stays VACUOUS. Every S3Q.0 surface that reports the configured 300 s ceiling reports timeout_enforced false beside it.",
+    "expected_grader_executions remains an ESTIMATE (task_count * 6) and was deliberately NOT promoted to an exact identity: the real count depends on per-family grader registries and on how many arms produce scoreable output, neither knowable before the run.",
+    "m62.eval_receipt.2 has never described a real evaluation. Every refusal, the determinism, the atomic write and the verdict rederivation are proved over SYNTHETIC evidence only; no property here has met eval-v4, real weights or a real model response.",
+    "evaluation_source_commit is DERIVED from the repository HEAD at receipt-build time and is bound by S3Q's execution freeze, not by cryptography. It records which commit the receipt was built at; it does not by itself prove which bytes executed, and the receipt says so rather than implying more.",
+    "receipt_hash proves payload integrity relative to the canonical bytes and nothing else: not human identity, not human authorisation, not a commit signature and not who ran the command. Authenticity comes from the receipt being tracked and from the control-plane hash chain.",
+    "The build-time adapter cross-check needs the runtime adapter tree to still exist on the host. Once the receipt is written the three-way snapshot/training-receipt/evaluation-receipt binding carries the history without it, but a receipt cannot be built later from a host whose run directory is gone."
+  ],
+  "next_milestone": {
+    "authority_required": [
+      "a fresh single-use TRAIN authority before any live training of any candidate; candidate 003's one attempt is SPENT and may not be replaced",
+      "a fresh single-use EVAL authority at a new generation before any evaluation",
+      "a separate explicit human decision before any promotion, which no authority in this repository grants",
+      "a portable m62.eval_receipt.2 receipt before any EVALUATED_* state may be recorded for candidate 003; the control plane refuses the claim without one, refuses the superseded .1 form, and rederives the verdict from the receipt's own body-free evidence rather than reading it"
+    ],
+    "evaluation_holdout": "m62-defensive-eval v4 (FROZEN_UNUSED)",
+    "holdout_access": "BODY_FREE_IDENTITY_ONLY until a separate EVAL authority exists. S3Q.0 did not read it semantically or programmatically. It becomes USED_IMMUTABLE at the durable model-facing commit, and a fourth candidate would then need a fifth holdout (D35).",
+    "lora_scope": "ATTENTION_AND_MLP",
+    "name": "An explicit human operator decision on whether to grant a separate single-use EVAL authority for candidate 003 against eval-v4. S3Q.0 qualified the ceremony, S3Q.0.1 closed the evidence it must leave behind, and neither grants anything",
+    "primary_axis": "training render reasoning policy MODEL_DEFAULT -> DISABLED, now bound into real weights: candidate 003 is the first M62 candidate fitted under the D37 representation",
+    "requires_new_session": true,
+    "ruled_out": [
+      "a second TRAIN authority for candidate 003; the one authorised attempt is spent",
+      "retraining, resuming, re-seeding or patching candidate 003 under its own id",
+      "evaluating candidate 003 on the strength of this snapshot or any document",
+      "reading eval-v4 task bodies to explain, debug or tune candidate 003",
+      "turning an eval-v4 failure into a training example",
+      "reporting the 12-row validation curve as a quality or eligibility result",
+      "ranking candidates 001, 002 and 003 in one table",
+      "adding a second experimental axis",
+      "ATTENTION_ONLY, which would move a second variable",
+      "any learning-rate, epoch, rank, alpha or dropout change",
+      "creating train-v3, adding rows or rebalancing train-v2",
+      "a Kimi- or Claude-generated teacher corpus",
+      "raising max_new_tokens",
+      "adding structured rows or strengthening the response schema",
+      "changing gates, graders, thresholds or the refusal detector",
+      "creating a D38 gate",
+      "fixing D39 as a rider",
+      "promotion, activation, registry mutation, merge, tag, release or version bump",
+      "re-running a spent evaluation for any reason, including a crash, a failed artefact write or a lost terminal ledger line",
+      "fabricating a portable evaluation receipt for candidate 001 or candidate 002",
+      "claiming any EVALUATED_* state from a snapshot, a verifier constant or prose alone"
+    ],
+    "training_corpus": "m62-defensive-quality-train v2, unchanged and now spent on candidate 003. No train-v3."
+  },
+  "parent_snapshot_sha256": "f563df9b6cfccc6969ca8685b666f72f5739146aafe834655b7e75c4af5f039c",
+  "policy_identities": {
+    "gate_policy_hash": "e50033194afeb7680815b1f11268cce4e0fe1549c4334c8257883603ea8f73c5",
+    "generation_policy_constructor_default_hash": "1b4696d6cc278f7a778f5c3917f015635efb076d81e5143235778ca8f8de2fc9",
+    "generation_policy_hash": "c6b0b682805898971618ae738bce3b0843484b541a66c67efc0c55aa6f37a2d7",
+    "max_new_tokens": 512,
+    "metric_policy_hash": "e07dd133419978396d7ada706bab20b35b6250982c21a0ea7933750e9cd72e1a",
+    "note": "generation_policy_hash is the CONFIGURED policy the sealed S3I and S3L config documents declare (timeout_s 300, seed 11, cpu, fp32). The constructor default carries library defaults and hashes differently. Both are correct; they are different objects. Do not read the difference as drift.",
+    "reasoning_policy": "DISABLED"
+  },
+  "project": {
+    "branch": "jarvis-v69-m62-training-gym",
+    "master_commit": "3705114228edef2f665be349c5c4429b7b16777a",
+    "merged_into_master": false,
+    "milestone": "V69 M62 - Training Gym",
+    "released": false,
+    "tagged": false
+  },
+  "schema_version": "m62.control_plane.1",
+  "state_generation": 5,
+  "subject_state_commit": "c47fa1d860e00e07549191de566277080546a620",
+  "subject_state_milestone": "S3Q.0.1",
+  "test_baseline": {
+    "failed": 0,
+    "invocation": "pytest -k m62 --ignore=tests/test_live_brain_v61.py",
+    "known_invocation_artifact": {
+      "failing_tests": 8,
+      "file": "jarvis/tests/test_training_gym_m62_s3g2_validation_wiring.py",
+      "invocation": "pytest run from the repository root instead of jarvis/",
+      "is_a_regression": false,
+      "is_defect_d39": false,
+      "note": "Cause measured in S3N.1: those tests read production source by a path relative to the working directory, so they resolve only from jarvis/. The file is unchanged since the subject commit. DISTINCT from D39, which fails four tests in the dataset-exports file. Not a rider fix."
+    },
+    "milestone": "S3Q.0.1",
+    "passed": 3765,
+    "skipped": 20,
+    "working_directory": "jarvis/ (repository system interpreter)"
+  }
+}
