@@ -607,6 +607,24 @@ def test_d38_remains_diagnostic_and_no_gate_reads_it():
         assert name not in gates, name
 
 
+#: S3N's own commit range: the commit it started from, and the commit it closed at.
+#:
+#: V69 M62 S3Q.0 pinned the second endpoint. It was open — the diff ran against the
+#: WORKING TREE — which meant this test silently asserted that no LATER milestone had
+#: touched ``training_gym`` either. That happened to hold through S3N.1, S3O and S3P
+#: because none of them changed production evaluation source, and it stopped holding
+#: when S3Q.0 hardened the plan binding and the ledger under an explicit authority to do
+#: so. Reading that as an S3N regression would have been wrong twice over: S3N is sealed
+#: and cannot regress, and a later milestone's authorised change is not evidence about
+#: an earlier one's discipline.
+#:
+#: The property this test owns is unchanged and still measured exactly: *S3N* touched no
+#: evaluation policy, grader or gate source. What a LATER milestone may touch is that
+#: milestone's own scope question, guarded by its own suite.
+S3N_STARTING_COMMIT = "4c669fad8a4f576a87b30c919296e316518800fb"
+S3N_CLOSING_COMMIT = "ec446e3"
+
+
 def test_s3n_changed_no_evaluation_policy_grader_or_gate_source():
     """The only production files S3N may touch are the two corpus generators."""
     import subprocess
@@ -615,12 +633,12 @@ def test_s3n_changed_no_evaluation_policy_grader_or_gate_source():
     root = Path(__file__).resolve().parents[2]
     try:
         changed = subprocess.run(
-            ["git", "diff", "--name-only", "4c669fad8a4f576a87b30c919296e316518800fb"],
+            ["git", "diff", "--name-only", S3N_STARTING_COMMIT, S3N_CLOSING_COMMIT],
             cwd=root, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git here
         pytest.skip("git is not available to compare against the S3N starting commit")
     if changed.returncode != 0:  # pragma: no cover - shallow clone or missing commit
-        pytest.skip("the S3N starting commit is not reachable in this checkout")
+        pytest.skip("the S3N commit range is not reachable in this checkout")
     forbidden = [p for p in changed.stdout.split()
                  if p.startswith("jarvis/training_gym/")]
     assert forbidden == [], forbidden

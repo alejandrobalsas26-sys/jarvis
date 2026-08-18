@@ -15,16 +15,27 @@ plan recomputed from the CURRENT state of the world. On a host where any of thos
 missing it says which, and stops. There is no production flag that selects the fake
 backend: tests inject it directly, which is the only way it is reachable.
 
+PRE-GO AND GO ARE DIFFERENT COMMANDS — V69 M62 S3Q.0
+-----------------------------------------------------
+``--live-preflight`` reports the exact plan identity, its blockers and what execution
+would do, and does NOT materialise ``EVAL:<plan-hash>``. ``--dry-run`` and ``--print-plan``
+both DO materialise it, which makes them GO surfaces however read-only they are: the
+string they print is the one that authorises the run. A ceremony that wants to decide
+before it authorises uses the preflight.
+
+This is hygiene, not cryptography. The token is a pure function of ``plan_hash``, which
+the preflight prints. Nothing here makes it secret, unpredictable or authenticating.
+
 OUTPUT DISCIPLINE
 -----------------
 Bounded, scrubbed of host paths, no credentials, no tracebacks unless asked. A non-zero
 exit is a refusal with a categorised code, so a wrapper can tell "the config is wrong"
-from "the weights are not here".
+from "the weights are not here" — and, since S3Q.0, "the measurement is valid but its
+durable evidence is missing" from either.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -50,6 +61,10 @@ EXIT_BACKEND = 18
 EXIT_ARTIFACT = 19
 EXIT_REPORT = 20
 EXIT_INTERNAL = 21
+#: V69 M62 S3Q.0. The measurement happened and its durable evidence did not. Distinct
+#: from EXIT_BACKEND, which means the run failed: here the artefacts are valid, the
+#: holdout is spent, and the required action is operator RECOVERY and never a rerun.
+EXIT_DURABILITY = 22
 
 DEFAULT_OUTPUT_ROOT = os.path.join(_ROOT, "evaluation")
 DEFAULT_DATASET_ROOT = os.path.join(_ROOT, "training_gym_datasets")
@@ -286,6 +301,31 @@ def _plan(args):
                                       config.evaluation_generation))
     if not task_count:
         blockers.append("the selected splits contribute no task")
+
+    # V69 M62 S3Q.0 — the exact identities, derived ONCE by the shared preparation
+    # primitive and consumed by planning, execution and receipt verification alike.
+    # Building the pack here reads held-out material body-opaquely: bytes are hashed,
+    # counts are counted, and a PackIdentity that has no field for a prompt or a target
+    # is what comes back. Nothing below this line can print one.
+    from training_gym.evaluation.preflight import prepare_pack_identity
+    identity = None
+    try:
+        identity = prepare_pack_identity(
+            root=args.dataset_root, dataset_id=config.dataset.dataset_id,
+            dataset_version=config.dataset.dataset_version,
+            splits=config.splits.splits, generation=config.evaluation_generation,
+            seed=config.seed)
+    except Exception as exc:  # noqa: BLE001 — an unbuildable pack is a blocker
+        # NOT a crash and NOT a silent proxy. A plan that cannot name the material it
+        # would authorise carries a blocker saying so, is refused by `is_executable`,
+        # and can never be confirmed.
+        blockers.append(
+            f"the exact task pack could not be prepared, so this plan cannot bind the "
+            f"material it would authorise ({type(exc).__name__}: {exc})")
+
+    # The count comes from the pack that would actually run when one could be built, and
+    # from the manifest only as a fallback for a plan that is already blocked.
+    exact_tasks = identity.task_count if identity else max(1, task_count)
     # A missing runtime package is a blocker, not a warning. `--execute` cannot load a
     # model without one, so a plan that reports itself executable on a host that lacks
     # it is describing a run that would refuse a moment later.
@@ -303,14 +343,13 @@ def _plan(args):
         baseline_reference_hash=baseline.reference_hash(),
         candidate_adapter_reference_hash=adapter.reference_hash(),
         tokenizer_identity_hash=baseline.tokenizer_identity_hash,
-        # The pack and the store are built at execution time from the verified shards;
-        # the plan binds the shard digests they would be derived from.
-        task_pack_hash=hashlib.sha256(
-            json.dumps({"dataset": manifest.manifest_hash(),
-                        "counts": {k.value: v for k, v in counts.items()}},
-                       sort_keys=True).encode("utf-8")).hexdigest(),
-        hidden_target_store_hash=hashlib.sha256(
-            manifest.manifest_hash().encode("utf-8")).hexdigest(),
+        # The EXACT identities of the pack and the answer key that would be measured —
+        # `EvaluationTaskPack.pack_hash()` and `HiddenTargetStore.store_hash()`, asked of
+        # the objects that own them. Until S3Q.0 these were a digest of the dataset
+        # manifest plus the split counts, so a confirmation approved "whatever the
+        # builder makes from this manifest" rather than the pack itself.
+        task_pack_hash=identity.pack_hash if identity else "",
+        hidden_target_store_hash=identity.hidden_target_store_hash if identity else "",
         validation_manifest_hash=shard("validation"),
         hidden_evaluation_manifest_hash=shard("hidden_evaluation"),
         security_regression_manifest_hash=shard("security_regression"),
@@ -326,23 +365,54 @@ def _plan(args):
         dependency_report_hash=dependencies.report_hash(),
         hardware_report_hash=hardware.report_hash(),
         order_policy=ORDER_POLICY_BALANCED,
-        order_assignment_hash=hashlib.sha256(
-            f"{ORDER_POLICY_BALANCED}:{config.seed}".encode()).hexdigest(),
+        # The runner's own per-task assignment digest, not a digest of the policy name
+        # and the seed. The runner derives which arm answers first from every task hash;
+        # binding anything less approved an ordering nobody had computed.
+        order_assignment_hash=identity.order_assignment_hash if identity else "",
         expected_output_root_id=output_root_id(args.output_root),
-        expected_task_count=max(1, task_count),
-        expected_baseline_generations=max(1, task_count),
-        expected_candidate_generations=max(1, task_count),
-        expected_grader_executions=max(1, task_count) * 6,
+        expected_task_count=exact_tasks,
+        expected_baseline_generations=exact_tasks,
+        expected_candidate_generations=exact_tasks,
+        expected_grader_executions=exact_tasks * 6,
         expected_files=EXPECTED_EVALUATION_FILES,
         expected_state_transitions=plan_state_sequence(awaiting_confirmation=True),
         backend_id=BACKEND_ID, created_at_utc=config.created_at_utc,
+        # The one flag that may legitimately be true, and it is true here. This exact
+        # object is what `--execute` hands to `execute_evaluation`, which loads weights
+        # and generates. A plan an operator approves has to describe what approving it
+        # permits, whatever the command that printed it happened to do.
+        performs_inference=True,
         warnings=tuple(dict.fromkeys(warnings)), blockers=tuple(dict.fromkeys(blockers)))
-    return config, baseline, adapter, plan
+    return config, baseline, adapter, plan, identity
+
+
+def _live_preflight(args) -> int:
+    """PRE-GO. Everything needed to decide, and nothing that authorises.
+
+    Publishes ``plan_hash`` and the exact bound identities, and deliberately withholds
+    ``EVAL:<plan-hash>``. That withholding is hygiene, not secrecy: the string is
+    derivable from the digest printed right there. What it buys is that the command an
+    operator runs while DECIDING cannot leave the string that AUTHORISES in a scrollback
+    or a ticket, and that the two are separate deliberate acts.
+    """
+    from training_gym.evaluation.preflight import preflight_report
+
+    try:
+        config, baseline, _adapter, plan, identity = _plan(args)
+        dependencies = _dependency_report()
+        payload = preflight_report(
+            plan=plan, identity=identity, dependency_ready=dependencies.ready,
+            live_blockers=baseline.live_blockers(),
+            generation_policy=config.generation)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(str(exc), as_json=args.json, code=EXIT_CONFIG)
+    _emit(payload, as_json=args.json)
+    return EXIT_OK if plan.is_executable else EXIT_REFUSED
 
 
 def _dry_run(args) -> int:
     try:
-        config, baseline, adapter, plan = _plan(args)
+        config, baseline, adapter, plan, _identity = _plan(args)
     except Exception as exc:  # noqa: BLE001
         return _fail(str(exc), as_json=args.json, code=EXIT_CONFIG)
     _emit({
@@ -364,7 +434,7 @@ def _dry_run(args) -> int:
 
 def _print_plan(args) -> int:
     try:
-        _, _, _, plan = _plan(args)
+        _, _, _, plan, _identity = _plan(args)
     except Exception as exc:  # noqa: BLE001
         return _fail(str(exc), as_json=args.json, code=EXIT_CONFIG)
     _emit(plan.to_record(), as_json=args.json)
@@ -389,7 +459,7 @@ def _execute(args) -> int:
     from training_gym.evaluation.store import is_plan_consumed
 
     try:
-        config, baseline, adapter, plan = _plan(args)
+        config, baseline, adapter, plan, _identity = _plan(args)
     except Exception as exc:  # noqa: BLE001
         return _fail(str(exc), as_json=args.json, code=EXIT_CONFIG)
 
@@ -452,9 +522,29 @@ def _execute(args) -> int:
     if outcome.ok:
         _emit(payload, as_json=args.json)
         return EXIT_OK
+
+    # A measurement that happened but cannot be reported as clean. The old code path
+    # returned zero here whenever the state was COMPLETED, so a run whose terminal
+    # ledger line never landed looked exactly like a run whose did.
+    if outcome.recovery_required:
+        _emit({**payload, "status": "recovery_required"}, as_json=args.json)
+        return _fail(
+            "the evaluation produced valid artefacts and did NOT record durable "
+            "evidence of how it ended: "
+            + "; ".join(outcome.durability_problems[:3])
+            + ". The plan is spent"
+            + (" and the holdout is spent" if outcome.holdout_committed else "")
+            + ". DO NOT re-run this evaluation: re-running would measure again on "
+              "material a model has already read. The artefacts on disk must be "
+              "retained, not overwritten, and recovery is an operator decision",
+            as_json=args.json, code=EXIT_DURABILITY)
+
     return _fail(
         f"the evaluation ended in {outcome.state.value}: "
-        + "; ".join((outcome.problems or outcome.blockers or ("no reason recorded",))[:5]),
+        + "; ".join((outcome.problems or outcome.blockers or ("no reason recorded",))[:5])
+        + ("; the holdout was durably committed to the model, so it is SPENT and no "
+           "retry is authorised" if outcome.holdout_committed else
+           "; no held-out task reached a model"),
         as_json=args.json, code=EXIT_BACKEND)
 
 
@@ -535,6 +625,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true",
                       help="build and summarise the plan (the default)")
+    mode.add_argument("--live-preflight", action="store_true",
+                      help="PRE-GO: the exact plan identity and its blockers, WITHOUT "
+                           "materialising the confirmation string")
     mode.add_argument("--print-plan", action="store_true",
                       help="print the full plan record and its confirmation token")
     mode.add_argument("--check-references", action="store_true",
@@ -591,6 +684,8 @@ def main(argv: list[str] | None = None) -> int:
             return _check_hardware(args)
         if args.execute:
             return _execute(args)
+        if args.live_preflight:
+            return _live_preflight(args)
         if args.print_plan:
             return _print_plan(args)
         return _dry_run(args)

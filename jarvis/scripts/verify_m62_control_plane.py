@@ -85,6 +85,26 @@ CONTROL_PLANE_SCHEMA_VERSION = "m62.control_plane.1"
 #: is the independent evidence that it actually is.
 TRAIN_RECEIPT_SCHEMA_VERSION = "m62.train_receipt.1"
 
+#: S3Q.0. The portable EVALUATION receipt's version. A candidate may claim an
+#: ``EVALUATED_*`` state only when one of these independently establishes it — for the
+#: same reason the training receipt exists, one milestone later and one door further in.
+EVAL_RECEIPT_SCHEMA_VERSION = "m62.eval_receipt.1"
+
+#: Candidates whose evaluated state predates the portable evaluation receipt.
+#:
+#: S3I measured candidate 001 and S3L measured candidate 002, both before this evidence
+#: form existed. Their deep milestone documents and sealed artefacts are their authority
+#: and they are NOT retrofitted: inventing a receipt for a run that never emitted one
+#: would be manufacturing evidence, which is worse than having none. Every candidate
+#: outside this set is a MODERN-RECEIPT candidate and must produce one.
+#:
+#: The set is closed by construction. Nothing may be added to it, because a candidate
+#: evaluated after S3Q.0 has the machinery available by definition.
+LEGACY_EVALUATION_CANDIDATES: frozenset[str] = frozenset({
+    "qwen3-06b-lora-quality-live-001",
+    "qwen3-06b-lora-quality-live-002",
+})
+
 STATE_DIR = "state/m62"
 CURRENT_PATH = f"{STATE_DIR}/current.json"
 SNAPSHOT_DIR = f"{STATE_DIR}/snapshots"
@@ -92,6 +112,7 @@ SCHEMA_DIR = f"{STATE_DIR}/schema"
 CURRENT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-current.schema.json"
 SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
 TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
+EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
 RECEIPT_DIR = f"{STATE_DIR}/receipts"
 MIGRATION_DIR = f"{STATE_DIR}/migrations"
 MIGRATION_MANIFEST_PATH = f"{MIGRATION_DIR}/0001-control-plane-v2.json"
@@ -218,6 +239,12 @@ CANDIDATE_TRANSITIONS: dict[str, dict[str, str]] = {
 #: promoted candidate is therefore recording something no repository artefact can
 #: witness, and is refused.
 UNWITNESSABLE_CANDIDATE_STATES = ("PROMOTED",)
+
+#: Every state whose whole content is "a held-out corpus was spent on this candidate".
+#: Derived from the vocabulary rather than restated, so a state added to CANDIDATE_STATES
+#: cannot quietly escape the evidence requirement by not appearing in a second list.
+EVALUATED_CANDIDATE_STATES: frozenset[str] = frozenset(
+    s for s in CANDIDATE_STATES if s.startswith("EVALUATED_"))
 
 #: Two states, and the distinction between them is a scientific property, not a label.
 #: ``FROZEN_UNUSED`` means no model has ever read it; ``USED_IMMUTABLE`` means it is
@@ -733,6 +760,148 @@ def train_receipt_schema() -> dict:
     }
 
 
+def eval_receipt_schema() -> dict:
+    """S3Q.0 — the portable EVALUATION receipt's contract. Strict and closed.
+
+    What it may NOT contain matters as much as what it must: no held-out prompt, no
+    target, no model response, no confirmation literal and no absolute path. A schema can
+    require a field to be absent but cannot see material smuggled inside a permitted
+    string, so :func:`check_evaluation_receipt` scans the bytes as well.
+
+    ``receipt_hash`` is the digest of the payload with that one field removed. Self-
+    checking without being self-referential: it can be re-derived by anyone holding the
+    bytes, and it moves the moment any bound fact does.
+    """
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "m62-eval-receipt.schema.json",
+        "title": "M62 portable evaluation receipt",
+        "description": (
+            "Root-independent, tracked evidence that ONE candidate completed ONE held-out "
+            "evaluation under ONE spent single-use authority. It is EVIDENCE OF AN "
+            "OPERATION and never AUTHORITY FOR ANOTHER: it grants no retry, no second "
+            "evaluation, no promotion, no activation, no registry mutation and no "
+            "release. It carries no task body, no target, no model response and no "
+            "confirmation literal."),
+        **_obj({
+            "schema_version": {"const": EVAL_RECEIPT_SCHEMA_VERSION},
+            "receipt_version": {"const": EVAL_RECEIPT_SCHEMA_VERSION},
+            "receipt_hash": _SHA256,
+            "evaluation_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "evaluation_source_commit": _COMMIT,
+            "evaluation_id": _SHORT,
+            "evaluation_generation": {"type": "integer", "minimum": 1,
+                                      "maximum": 100_000},
+            "candidate": _obj({
+                "candidate_id": _SHORT,
+                "status_claim": {"enum": sorted(EVALUATED_CANDIDATE_STATES)},
+                "adapter_reference_hash": _SHA256,
+                "adapter_sha256": {"oneOf": [{"const": ""}, _SHA256]},
+                "adapter_manifest_hash": {"oneOf": [{"const": ""}, _SHA256]},
+            }),
+            "baseline": _obj({
+                "reference_hash": _SHA256,
+                "tokenizer_identity_hash": _SHA256,
+            }),
+            "holdout": _obj({
+                "dataset_id": _SHORT,
+                "dataset_version": {"type": "string", "pattern": "^v[0-9]+$"},
+                "dataset_manifest_hash": _SHA256,
+                "task_pack_hash": _SHA256,
+                "hidden_target_store_hash": _SHA256,
+                "pack_manifest_shard_hashes": {"type": "object"},
+                "split_manifest_hashes": {"type": "object"},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "counts_by_split": {"type": "object"},
+                "counts_by_family": {"type": "object"},
+                "counts_by_kind": {"type": "object"},
+                "spent_by_this_evaluation": {"const": True},
+            }),
+            "plan": _obj({
+                "plan_hash": _SHA256,
+                "plan_schema_version": _SHORT,
+                "evaluator_version": _SHORT,
+                "order_policy": _SHORT,
+                "order_assignment_hash": _SHA256,
+                "performs_inference": {"type": "boolean"},
+                "binds_exact_pack_identity": {"const": True},
+            }),
+            "policies": _obj({
+                "generation_policy_hash": _SHA256,
+                "grader_policy_hash": _SHA256,
+                "metric_policy_hash": _SHA256,
+                "statistical_policy_hash": _SHA256,
+                "gate_policy_hash": _SHA256,
+                "family_policy_hash": _SHA256,
+                "dependency_report_hash": _SHA256,
+                "hardware_report_hash": _SHA256,
+            }),
+            "authority": _obj({
+                "form": {"const": "EVAL:<plan-hash>"},
+                "bound_plan_hash": _SHA256,
+                "creations": {"type": "integer", "minimum": 1, "maximum": 1},
+                "consumptions": {"type": "integer", "minimum": 1, "maximum": 1},
+                "token_literal_recorded": {"const": False},
+                "retry_authorized": {"const": False},
+                "grants_no_further_authority": {"const": True},
+            }),
+            "ledger": _obj({
+                "plan_started_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_event": _SHORT,
+                "events": {"type": "object"},
+                "plan_hashes": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "items": _SHA256},
+            }),
+            "holdout_commit": _obj({
+                "commit_schema_version": _SHORT,
+                "pack_identity_hash": _SHA256,
+                "order_assignment_hash": _SHA256,
+                "first_task_id": _SHORT,
+                "first_task_hash": _SHA256,
+                "first_arm": {"enum": ["baseline", "candidate"]},
+                "first_request_parity_hash": _SHA256,
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "backend_id": _SHORT,
+            }),
+            "execution": _obj({
+                "run_state": _SHORT,
+                "empirical_status": _SHORT,
+                "backend_ids": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "items": _SHORT},
+                "backend_version": {"type": "string", "maxLength": 200},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "measured_pairs": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "missing_pairs": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "wins": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "ties": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "losses": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "artifact_verification": {"const": "PASS"},
+                "artifact_problems": {"type": "array", "maxItems": 0},
+            }),
+            "evidence": _obj({
+                "report_hash": _SHA256,
+                "evaluation_manifest_hash": _SHA256,
+                "artifact_tree_hash": _SHA256,
+                "comparison_manifest_hash": _SHA256,
+                "metrics_summary_hash": _SHA256,
+                "pack_manifest_hash": _SHA256,
+                "files": {"type": "object"},
+            }),
+            "outcome": _obj({
+                "eligibility": _SHORT,
+                "human_review_required": {"type": "boolean"},
+                "promotes_model": {"const": False},
+                "activates_model": {"const": False},
+                "mutates_model_registry": {"const": False},
+                "gate_blockers": {"type": "array", "maxItems": 64, "items": _SHORT},
+                "limitations": {"type": "array", "maxItems": 64, "items": _SHORT},
+            }),
+        }),
+    }
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -763,7 +932,23 @@ def snapshot_schema() -> dict:
         # trained claim the control plane cannot back is exactly the claim it must not
         # be able to make.
         "training_receipt": {"oneOf": [{"type": "null"}, _REPO_PATH]},
-    })
+        # S3Q.0. A pointer to the tracked, root-independent receipt that establishes the
+        # candidate really completed one held-out evaluation.
+        #
+        # OPTIONAL BY SHAPE, MANDATORY BY SEMANTICS. It is absent from the `required`
+        # list below so that snapshots written before S3Q.0 stay structurally valid --
+        # they describe a world in which no candidate had been evaluated under this
+        # evidence form, and rewriting a superseded snapshot to add a field is exactly
+        # the immutability violation this control plane forbids.
+        #
+        # Absence is NOT permission. `check_evaluation_receipt` refuses any EVALUATED_*
+        # candidate outside LEGACY_EVALUATION_CANDIDATES that does not carry one, so a
+        # missing pointer fails closed rather than reading as "no receipt required".
+        # MISSING is not FALSE.
+        "evaluation_receipt": {"oneOf": [{"type": "null"}, _REPO_PATH]},
+    }, required=["candidate_id", "ordinal", "status", "base_model_revision",
+                 "adapter_sha256", "adapter_manifest_hash", "training_corpus",
+                 "evaluation_corpus", "evidence", "training_receipt"])
     defect = _obj({
         "id": {"type": "string", "pattern": "^D[0-9]{1,3}$"},
         "status": {"enum": list(DEFECT_STATES)},
@@ -866,7 +1051,8 @@ def snapshot_schema() -> dict:
 # ── Problem reporting ────────────────────────────────────────────────────────────────
 CATEGORIES = (
     "SCHEMA", "CURRENT_POINTER", "SNAPSHOT_CHAIN", "ARCHIVE_INTEGRITY", "GIT_AUTHORITY",
-    "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "POLICY_IDENTITIES",
+    "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "EVALUATION_RECEIPT",
+    "POLICY_IDENTITIES",
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
     "CONTROL_PLANE_BUDGET",
 )
@@ -979,7 +1165,8 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
     # copies of one contract is how they drift.
     for rel, builder in ((CURRENT_SCHEMA_PATH, current_schema),
                          (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
-                         (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema)):
+                         (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema),
+                         (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema)):
         path = REPO_ROOT / rel
         if not path.is_file():
             report.fail("SCHEMA", f"{rel} is missing")
@@ -1969,6 +2156,199 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
             f"by the receipt and does not depend on it)")
 
 
+def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
+    """S3Q.0 — an EVALUATED_* claim is backed by portable evidence, or refused.
+
+    THE FAILURE THIS EXISTS TO PREVENT
+    ----------------------------------
+    Exactly the one ``check_training_receipt`` prevents, one door further in. The
+    snapshot says ``EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW``; a constant in this file agrees;
+    the verifier prints PASS; and nothing has been verified. Two writable surfaces
+    agreeing is a rumour with a checksum, and here the rumour would be about the one
+    irreversible act in the whole milestone — a fresh holdout having been spent.
+
+    So a modern candidate's evaluated state is refused outright unless a tracked,
+    root-independent receipt independently establishes it, and the receipt must bind the
+    plan that was approved, the pack that was measured, the durable commit that spent the
+    holdout, the terminal event, and an eligibility that AGREES with the state claimed.
+
+    WHY CANDIDATES 001 AND 002 ARE EXEMPT
+    -------------------------------------
+    They were measured before this evidence form existed. Their sealed milestone
+    documents are their authority. Synthesising a receipt for a run that never emitted
+    one would be manufacturing evidence, which is strictly worse than declaring the gap —
+    so the gap is declared, the set is closed, and nothing may be added to it.
+
+    This check loads no model, opens no socket and reads no held-out material.
+    """
+    for entry in cp.snapshot.get("candidates", []):
+        cid = str(entry.get("candidate_id") or "")
+        status = str(entry.get("status") or "")
+        pointer = str(entry.get("evaluation_receipt") or "")
+
+        if status not in EVALUATED_CANDIDATE_STATES:
+            # A candidate that has NOT been evaluated may not carry evaluation evidence:
+            # a receipt beside TRAINED_UNEVALUATED would be evidence of the very thing
+            # the state asserts has not happened.
+            if pointer:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: {status or 'no status'} yet carries an evaluation "
+                            f"receipt. A candidate that has not been measured has no "
+                            f"measurement to show")
+            continue
+
+        if cid in LEGACY_EVALUATION_CANDIDATES:
+            report.note(
+                f"{cid}: {status} predates the portable evaluation receipt (S3Q.0). Its "
+                f"authority is its sealed milestone document; it is NOT retrofitted, and "
+                f"the legacy set is closed")
+            continue
+
+        if not pointer:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: {status} with no evaluation receipt pointer. The state "
+                        f"claims a fresh holdout was spent on this candidate and offers "
+                        f"nothing a reader could check it against")
+            continue
+
+        path = REPO_ROOT / pointer
+        if path.is_symlink() or not path.is_file():
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: evaluation receipt {pointer!r} is not a regular file")
+            continue
+        code, tracked = _git("ls-files", "--error-unmatch", "--", pointer)
+        if code != 0 or not tracked:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: evaluation receipt {pointer} is untracked; evidence Git "
+                        f"does not carry has no history and no second witness")
+
+        raw = path.read_bytes()
+        try:
+            receipt = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            report.fail("EVALUATION_RECEIPT", f"{cid}: receipt is unreadable ({exc})")
+            continue
+        for problem in validate_against_schema(eval_receipt_schema(), receipt):
+            report.fail("EVALUATION_RECEIPT", f"{cid}: receipt {problem}")
+
+        # Held to every content rule the other control-plane surfaces are: no token
+        # literal, no private path, no held-out material, ASCII only.
+        text = raw.decode("utf-8", errors="replace")
+        if TOKEN_LITERAL_RE.search(text):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt carries something shaped like a spendable "
+                        f"plan token. A receipt proves an authority was spent; it never "
+                        f"reproduces one")
+        for match in PRIVATE_PATH_RE.findall(text):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt carries a private host path {match!r}")
+        for symbol in FORBIDDEN_BODY_SYMBOLS:
+            if symbol in text:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt references {symbol!r}, the eval-v4 body "
+                            f"source")
+        named = sorted({tid for tid in EVAL_V4_TASK_IDS if tid in text})
+        if named:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt names eval-v4 task(s) {named[:4]}")
+        try:
+            text.encode("ascii")
+        except UnicodeEncodeError:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt is not ASCII, so its canonical bytes depend "
+                        f"on an encoding choice")
+
+        # ── the receipt must describe THIS candidate and THIS state ──────────
+        candidate = receipt.get("candidate", {})
+        if candidate.get("candidate_id") != cid:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt describes "
+                        f"{candidate.get('candidate_id')!r}. A receipt for another run "
+                        f"is not evidence about this one")
+            continue
+        if candidate.get("status_claim") != status:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the snapshot claims {status} and the receipt's "
+                        f"eligibility supports {candidate.get('status_claim')!r}. The "
+                        f"receipt decides, not the snapshot")
+
+        # ── the digest, re-derived from the bytes rather than trusted ────────
+        body = {k: v for k, v in receipt.items() if k != "receipt_hash"}
+        actual = sha256_bytes(canonical_bytes(body))
+        if receipt.get("receipt_hash") != actual:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: receipt_hash does not match the bytes; a receipt that "
+                        f"can be edited without its digest moving can be edited to say "
+                        f"anything")
+
+        # ── the three durable events, each counted ───────────────────────────
+        ledger = receipt.get("ledger", {})
+        for field, label in (("plan_started_count", "plan-start"),
+                             ("holdout_commit_count", "model-facing commit"),
+                             ("terminal_count", "terminal")):
+            if ledger.get(field) != 1:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt binds {ledger.get(field)!r} {label} "
+                            f"event(s); exactly one is what a single-use ceremony means")
+
+        # ── the plan bound what was measured, and said it would run a model ──
+        plan = receipt.get("plan", {})
+        if not plan.get("binds_exact_pack_identity"):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the approved plan did not bind the exact pack identity "
+                        f"that was measured")
+        if not plan.get("performs_inference"):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt describes a live evaluation under a plan "
+                        f"that declared it would run no model")
+        commit = receipt.get("holdout_commit", {})
+        if commit.get("order_assignment_hash") != plan.get("order_assignment_hash"):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the model-facing commit and the approved plan disagree "
+                        f"about the execution order")
+
+        # ── the holdout named here must be the one the datasets section spent ─
+        holdout = receipt.get("holdout", {})
+        key = f"{holdout.get('dataset_id')} {holdout.get('dataset_version')}"
+        spent = {f"{d.get('dataset_id')} {d.get('version')}": d
+                 for d in cp.snapshot.get("datasets", [])}
+        dataset = spent.get(key)
+        if dataset is None:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt names holdout {key!r}, which the control "
+                        f"plane does not list")
+        else:
+            if dataset.get("status") != "USED_IMMUTABLE":
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt records that {key} was spent on this "
+                            f"candidate while the control plane still calls it "
+                            f"{dataset.get('status')!r}")
+            if dataset.get("manifest_hash") != holdout.get("dataset_manifest_hash"):
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt and the control plane disagree about "
+                            f"{key}'s manifest digest")
+            if entry.get("evaluation_corpus") and \
+                    holdout.get("dataset_id") not in str(entry.get("evaluation_corpus")):
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the snapshot names evaluation corpus "
+                            f"{entry.get('evaluation_corpus')!r} and the receipt "
+                            f"measured {key}")
+
+        # ── a receipt grants nothing ────────────────────────────────────────
+        authority = receipt.get("authority", {})
+        if authority.get("retry_authorized") or authority.get("token_literal_recorded") \
+                or not authority.get("grants_no_further_authority"):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt asserts an authority. Evidence of an "
+                        f"operation never authorises another one")
+        outcome = receipt.get("outcome", {})
+        for flag in ("promotes_model", "activates_model", "mutates_model_registry"):
+            if outcome.get(flag):
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt claims {flag}; no mechanism in this "
+                            f"repository could have performed it")
+
+
 def transition_problems(before: str, after: str, table: dict, label: str) -> list[str]:
     """Return why ``before -> after`` is refused. Empty means the table permits it."""
     if before not in table:
@@ -2310,6 +2690,7 @@ def run() -> Report:
     check_candidate_state(cp, report)
     check_candidate_design(cp, report)
     check_training_receipt(cp, report)
+    check_evaluation_receipt(cp, report)
     check_policy_identities(cp, report)
     check_authority_separation(cp, report)
     check_holdout_firewall(cp, report)

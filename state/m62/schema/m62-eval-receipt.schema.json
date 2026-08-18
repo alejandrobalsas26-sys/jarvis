@@ -1,0 +1,603 @@
+{
+  "$id": "m62-eval-receipt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root-independent, tracked evidence that ONE candidate completed ONE held-out evaluation under ONE spent single-use authority. It is EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER: it grants no retry, no second evaluation, no promotion, no activation, no registry mutation and no release. It carries no task body, no target, no model response and no confirmation literal.",
+  "properties": {
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "consumptions": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "creations": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "form": {
+          "const": "EVAL:<plan-hash>"
+        },
+        "grants_no_further_authority": {
+          "const": true
+        },
+        "retry_authorized": {
+          "const": false
+        },
+        "token_literal_recorded": {
+          "const": false
+        }
+      },
+      "required": [
+        "bound_plan_hash",
+        "consumptions",
+        "creations",
+        "form",
+        "grants_no_further_authority",
+        "retry_authorized",
+        "token_literal_recorded"
+      ],
+      "type": "object"
+    },
+    "baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "reference_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "tokenizer_identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference_hash",
+        "tokenizer_identity_hash"
+      ],
+      "type": "object"
+    },
+    "candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_manifest_hash": {
+          "oneOf": [
+            {
+              "const": ""
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ]
+        },
+        "adapter_reference_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "adapter_sha256": {
+          "oneOf": [
+            {
+              "const": ""
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ]
+        },
+        "candidate_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status_claim": {
+          "enum": [
+            "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
+            "EVALUATED_NEEDS_MORE_EVIDENCE",
+            "EVALUATED_NOT_ELIGIBLE",
+            "EVALUATED_QUARANTINED"
+          ]
+        }
+      },
+      "required": [
+        "adapter_manifest_hash",
+        "adapter_reference_hash",
+        "adapter_sha256",
+        "candidate_id",
+        "status_claim"
+      ],
+      "type": "object"
+    },
+    "evaluation_generation": {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "evaluation_id": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    },
+    "evaluation_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "evaluation_source_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_tree_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "comparison_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evaluation_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "files": {
+          "type": "object"
+        },
+        "metrics_summary_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_tree_hash",
+        "comparison_manifest_hash",
+        "evaluation_manifest_hash",
+        "files",
+        "metrics_summary_hash",
+        "pack_manifest_hash",
+        "report_hash"
+      ],
+      "type": "object"
+    },
+    "execution": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_problems": {
+          "maxItems": 0,
+          "type": "array"
+        },
+        "artifact_verification": {
+          "const": "PASS"
+        },
+        "backend_ids": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "backend_version": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "empirical_status": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "losses": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measured_pairs": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "missing_pairs": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_state": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ties": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wins": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "artifact_problems",
+        "artifact_verification",
+        "backend_ids",
+        "backend_version",
+        "empirical_status",
+        "losses",
+        "measured_pairs",
+        "missing_pairs",
+        "run_state",
+        "task_count",
+        "ties",
+        "wins"
+      ],
+      "type": "object"
+    },
+    "holdout": {
+      "additionalProperties": false,
+      "properties": {
+        "counts_by_family": {
+          "type": "object"
+        },
+        "counts_by_kind": {
+          "type": "object"
+        },
+        "counts_by_split": {
+          "type": "object"
+        },
+        "dataset_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "dataset_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "dataset_version": {
+          "pattern": "^v[0-9]+$",
+          "type": "string"
+        },
+        "hidden_target_store_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_manifest_shard_hashes": {
+          "type": "object"
+        },
+        "spent_by_this_evaluation": {
+          "const": true
+        },
+        "split_manifest_hashes": {
+          "type": "object"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "task_pack_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "counts_by_family",
+        "counts_by_kind",
+        "counts_by_split",
+        "dataset_id",
+        "dataset_manifest_hash",
+        "dataset_version",
+        "hidden_target_store_hash",
+        "pack_manifest_shard_hashes",
+        "spent_by_this_evaluation",
+        "split_manifest_hashes",
+        "task_count",
+        "task_pack_hash"
+      ],
+      "type": "object"
+    },
+    "holdout_commit": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "commit_schema_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "first_arm": {
+          "enum": [
+            "baseline",
+            "candidate"
+          ]
+        },
+        "first_request_parity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "first_task_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "first_task_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "order_assignment_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend_id",
+        "commit_schema_version",
+        "first_arm",
+        "first_request_parity_hash",
+        "first_task_hash",
+        "first_task_id",
+        "order_assignment_hash",
+        "pack_identity_hash",
+        "task_count"
+      ],
+      "type": "object"
+    },
+    "ledger": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "object"
+        },
+        "holdout_commit_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "plan_hashes": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "plan_started_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "terminal_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "terminal_event": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "events",
+        "holdout_commit_count",
+        "plan_hashes",
+        "plan_started_count",
+        "terminal_count",
+        "terminal_event"
+      ],
+      "type": "object"
+    },
+    "outcome": {
+      "additionalProperties": false,
+      "properties": {
+        "activates_model": {
+          "const": false
+        },
+        "eligibility": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gate_blockers": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "human_review_required": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "mutates_model_registry": {
+          "const": false
+        },
+        "promotes_model": {
+          "const": false
+        }
+      },
+      "required": [
+        "activates_model",
+        "eligibility",
+        "gate_blockers",
+        "human_review_required",
+        "limitations",
+        "mutates_model_registry",
+        "promotes_model"
+      ],
+      "type": "object"
+    },
+    "plan": {
+      "additionalProperties": false,
+      "properties": {
+        "binds_exact_pack_identity": {
+          "const": true
+        },
+        "evaluator_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "order_assignment_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "order_policy": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "performs_inference": {
+          "type": "boolean"
+        },
+        "plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "plan_schema_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "binds_exact_pack_identity",
+        "evaluator_version",
+        "order_assignment_hash",
+        "order_policy",
+        "performs_inference",
+        "plan_hash",
+        "plan_schema_version"
+      ],
+      "type": "object"
+    },
+    "policies": {
+      "additionalProperties": false,
+      "properties": {
+        "dependency_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "family_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "gate_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "grader_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "hardware_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "metric_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "statistical_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dependency_report_hash",
+        "family_policy_hash",
+        "gate_policy_hash",
+        "generation_policy_hash",
+        "grader_policy_hash",
+        "hardware_report_hash",
+        "metric_policy_hash",
+        "statistical_policy_hash"
+      ],
+      "type": "object"
+    },
+    "receipt_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "receipt_version": {
+      "const": "m62.eval_receipt.1"
+    },
+    "schema_version": {
+      "const": "m62.eval_receipt.1"
+    }
+  },
+  "required": [
+    "authority",
+    "baseline",
+    "candidate",
+    "evaluation_generation",
+    "evaluation_id",
+    "evaluation_milestone",
+    "evaluation_source_commit",
+    "evidence",
+    "execution",
+    "holdout",
+    "holdout_commit",
+    "ledger",
+    "outcome",
+    "plan",
+    "policies",
+    "receipt_hash",
+    "receipt_version",
+    "schema_version"
+  ],
+  "title": "M62 portable evaluation receipt",
+  "type": "object"
+}

@@ -22,10 +22,23 @@ A task whose arm timed out, errored or returned nothing is recorded with a paire
 that says so, and it stays in the denominator. There is no code path here that drops a
 task because it went badly — that is the mechanism by which a model that fails every hard
 task reports a perfect score on the easy ones.
+
+THE MODEL-FACING BOUNDARY — V69 M62 S3Q.0
+-----------------------------------------
+``before_first_model_facing_invoke`` is called exactly once per run, after the first
+task's two requests exist and their parity has been proved, and immediately before the
+first :func:`_invoke`. It is the seam a caller uses to make a durable record that a
+held-out corpus is about to be spent.
+
+It is execution infrastructure and is deliberately kept out of the measurement: it is not
+in ``parity_hash``, not in the model input, and not in any policy digest, so wiring it
+changes no recorded figure. If it raises, the exception propagates and NO backend is
+called — a holdout that could not be recorded as spent is not spent, and the safe
+direction is to stop.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -298,12 +311,18 @@ def run_paired_evaluation(
         resources: ResourceCeilings | None = None,
         adapter_directory: Path | None = None,
         model_cache_root: Path | None = None,
-        cancellation: CancellationToken | None = None) -> PairedRun:
+        cancellation: CancellationToken | None = None,
+        before_first_model_facing_invoke: "Callable[[dict], None] | None" = None
+        ) -> PairedRun:
     """Answer every task with both arms, proving parity per task.
 
     ``baseline_backend`` and ``candidate_backend`` are separate objects on purpose: it is
     the only arrangement under which "the baseline had no adapter attached" is a
     structural fact rather than a claim about what a shared object was toggled to.
+
+    ``before_first_model_facing_invoke`` fires once, after the first task's parity is
+    proved and before the first backend call. It receives body-free facts about that
+    first crossing and must succeed for the run to continue.
     """
     baseline_backend = require_backend(baseline_backend)
     candidate_backend = require_backend(candidate_backend)
@@ -330,6 +349,7 @@ def run_paired_evaluation(
     generations: list[PairedGeneration] = []
     warnings: list[str] = []
     interrupted = False
+    committed = False
 
     for task in pack.tasks:
         order = execution_order(task, seed=seed)
@@ -353,6 +373,29 @@ def run_paired_evaluation(
                 f"the two arms ({short(parity)} vs "
                 f"{short(cand_request.parity_hash())}); a comparison between two "
                 f"different questions measures nothing")
+
+        # ── the model-facing boundary ────────────────────────────────────────
+        # Both requests exist, they have been proved identical, and the execution order
+        # is known. The next statement hands held-out material to a model. Anything a
+        # caller needs durable about that crossing has to be durable HERE: a record
+        # written after the call is a record of a call that may already have happened
+        # without it.
+        if before_first_model_facing_invoke is not None and not committed:
+            before_first_model_facing_invoke({
+                "task_id": task.task_id,
+                "task_hash": task.task_hash,
+                "first_arm": (EvaluationRole.BASELINE.value
+                              if order is ExecutionOrder.BASELINE_FIRST
+                              else EvaluationRole.CANDIDATE.value),
+                "order": order.value,
+                "parity_hash": parity,
+                "task_count": len(pack),
+                "order_policy": ORDER_POLICY_BALANCED,
+                "order_assignment_hash": order_assignment_hash(pack, seed=seed),
+            })
+            # Set only after the callback RETURNED. One that raised leaves this false,
+            # and the exception has already stopped the run before any backend call.
+            committed = True
 
         try:
             if order is ExecutionOrder.BASELINE_FIRST:

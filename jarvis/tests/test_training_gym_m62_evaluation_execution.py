@@ -101,7 +101,58 @@ def make_adapter(baseline, **overrides):
     return R.AdapterEvaluationReference(**fields)
 
 
-def make_plan(config, baseline, adapter, *, blockers=(), task_count=36):
+def pack_identity(dataset_root, config):
+    """The exact identities a plan must bind, derived by the production primitive.
+
+    V69 M62 S3Q.0. Before it, these plans carried placeholder digests and execution
+    never compared them to anything — which was the defect, not a test convenience. A
+    plan that does not name the pack it authorises is now refused at execution, so the
+    qualification plans name theirs.
+    """
+    from training_gym.evaluation.preflight import prepare_pack_identity
+    return prepare_pack_identity(
+        root=dataset_root, dataset_id=config.dataset.dataset_id,
+        dataset_version=config.dataset.dataset_version,
+        splits=config.splits.splits, generation=config.evaluation_generation,
+        seed=config.seed)
+
+
+def make_plan(config, baseline, adapter, *, blockers=(), task_count=36,
+              dataset_root=None, identity=None):
+    if identity is None and dataset_root is not None:
+        identity = pack_identity(dataset_root, config)
+    if identity is not None:
+        return EvaluationPlan(
+            evaluation_id=config.evaluation_id, generation=config.evaluation_generation,
+            evaluation_config_hash=config.config_hash(),
+            baseline_reference_hash=baseline.reference_hash(),
+            candidate_adapter_reference_hash=adapter.reference_hash(),
+            tokenizer_identity_hash=baseline.tokenizer_identity_hash,
+            task_pack_hash=identity.pack_hash,
+            hidden_target_store_hash=identity.hidden_target_store_hash,
+            validation_manifest_hash="",
+            hidden_evaluation_manifest_hash="f" * 64,
+            security_regression_manifest_hash="0" * 64,
+            adversarial_manifest_hash="1" * 64,
+            dataset_manifest_hash=identity.dataset_manifest_hash,
+            generation_policy_hash=config.generation.policy_hash(),
+            grader_policy_hash=config.policies.graders.policy_hash(),
+            metric_policy_hash=config.policies.metrics.policy_hash(),
+            statistical_policy_hash=config.policies.statistics.policy_hash(),
+            gate_policy_hash=config.policies.gates.policy_hash(),
+            family_policy_hash=config.policies.families.policy_hash(),
+            resource_policy_hash=config.policies.resources.policy_hash(),
+            dependency_report_hash="3" * 64, hardware_report_hash="4" * 64,
+            order_policy=identity.order_policy,
+            order_assignment_hash=identity.order_assignment_hash,
+            expected_output_root_id="qualification",
+            expected_task_count=identity.task_count,
+            expected_baseline_generations=identity.task_count,
+            expected_candidate_generations=identity.task_count,
+            expected_grader_executions=identity.task_count * 6,
+            expected_files=EXPECTED_EVALUATION_FILES,
+            expected_state_transitions=(), backend_id="transformers_peft",
+            created_at_utc=NOW, blockers=tuple(blockers))
     return EvaluationPlan(
         evaluation_id=config.evaluation_id, generation=config.evaluation_generation,
         evaluation_config_hash=config.config_hash(),
@@ -136,7 +187,8 @@ def run(dataset_root, output_root, *, mode=FakeMode.IDENTICAL, config=None,
     config = config or make_config()
     baseline = make_baseline()
     adapter = make_adapter(baseline)
-    plan = plan if plan is not None else make_plan(config, baseline, adapter)
+    plan = plan if plan is not None else make_plan(config, baseline, adapter,
+                                                   dataset_root=dataset_root)
 
     def default_factory(_role):
         return FakeEvaluationBackend(mode)
@@ -488,7 +540,7 @@ def test_a_failure_still_spends_the_plan(dataset_root, tmp_path):
     config = make_config()
     baseline = make_baseline()
     adapter = make_adapter(baseline)
-    plan = make_plan(config, baseline, adapter)
+    plan = make_plan(config, baseline, adapter, dataset_root=dataset_root)
     outcome = run(root.parent / "data-unused" if False else dataset_root, root,
                   config=config, plan=plan, factory=exploding)
     assert outcome.state is EvaluationRunState.FAILED

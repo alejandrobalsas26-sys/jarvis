@@ -41,6 +41,15 @@ from __future__ import annotations
 EVALUATION_SCHEMA_VERSION = "m62.evaluation.1"
 
 #: The implementation's own version, recorded so a verdict is attributable to code.
-EVALUATOR_VERSION = "m62.s3c.1"
+#:
+#: V69 M62 S3Q.0 moved it from ``m62.s3c.1``. The measurement did not change — scoring,
+#: metrics, statistics, gates and the generation policy are untouched and their digests
+#: are unmoved — but the code that PRODUCES a verdict did: a plan now binds the exact
+#: pack, answer key and execution order it authorises, a held-out corpus is durably
+#: committed before the first model-facing call, and a completed run whose terminal
+#: evidence failed to persist no longer reports success. A verdict attributable to the
+#: earlier implementation carried none of those guarantees, so it is not the same
+#: implementation.
+EVALUATOR_VERSION = "m62.s3q0.1"
 
 __all__ = ["EVALUATION_SCHEMA_VERSION", "EVALUATOR_VERSION"]

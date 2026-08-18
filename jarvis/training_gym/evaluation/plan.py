@@ -20,7 +20,27 @@ WHAT THIS STAGE DECLARES ABOUT ITSELF
 and ``activates_model`` are ``false`` — not as a promise, but as a description of a
 subsystem that contains no code capable of any of them. ``performs_inference`` is the one
 flag that may legitimately be true, and only for a plan that a future live evaluation
-would act on; every plan produced in this milestone's tests has it false.
+would act on.
+
+``performs_inference`` DESCRIBES THE PLAN, NOT THE COMMAND — V69 M62 S3Q.0
+--------------------------------------------------------------------------
+It answers "would executing this plan run a model?", never "did the command that printed
+it run one?". The production planner sets it TRUE, because the object it returns is the
+one ``--execute`` hands to :func:`execute_evaluation`, and a plan an operator approves
+must describe what approving it permits. That a ``--dry-run`` performed no inference is a
+fact about the dry run; the plan it previewed still authorises inference, and until
+S3Q.0 that plan said ``performs_inference: false`` while execution loaded weights.
+
+Plans built against deterministic doubles keep it ``false``: nothing they authorise runs
+a model, and a fake run claiming otherwise would describe something that did not happen.
+
+WHAT AN EXECUTABLE PLAN MUST BE ABLE TO NAME — V69 M62 S3Q.0
+-------------------------------------------------------------
+``task_pack_hash``, ``hidden_target_store_hash`` and ``order_assignment_hash`` are exact
+runtime identities: ``EvaluationTaskPack.pack_hash()``,
+``HiddenTargetStore.store_hash()`` and ``runner.order_assignment_hash``. A plan with no
+blocker is refused at construction unless all three are real digests, so an approval can
+no longer bind a proxy for the material it authorises.
 """
 from __future__ import annotations
 
@@ -40,7 +60,15 @@ from . import EVALUATION_SCHEMA_VERSION, EVALUATOR_VERSION
 from .config import EvaluationRunState
 
 #: Bumped when the plan's shape changes, invalidating every outstanding confirmation.
-EVALUATION_PLAN_SCHEMA_VERSION = "m62.evaluation_plan.1"
+#:
+#: V69 M62 S3Q.0 moved it from ``m62.evaluation_plan.1``. The FIELD LIST is unchanged;
+#: what changed is what three of the fields mean. Under version 1 ``task_pack_hash``,
+#: ``hidden_target_store_hash`` and ``order_assignment_hash`` carried proxies derived
+#: from the dataset manifest and the seed. Under version 2 they carry the exact runtime
+#: identities. A confirmation issued against a version-1 plan approved a manifest digest
+#: and must not be honoured for material it never named, which is exactly what this
+#: version exists to prevent.
+EVALUATION_PLAN_SCHEMA_VERSION = "m62.evaluation_plan.2"
 
 #: The one legal confirmation shape. Exact case, full digest, no separator variants, and
 #: deliberately distinct from S3A's ``TRAIN:``.
@@ -203,6 +231,24 @@ class EvaluationPlan:
             raise EvaluationPlanError(
                 f"evaluation plan: expected_files names {unexpected}, which is not in "
                 f"the allowlist of artefacts this subsystem writes")
+        # V69 M62 S3Q.0. A plan with no blocker is a plan a confirmation can authorise,
+        # and the three fields below name exact runtime identities. Until S3Q.0 they
+        # carried proxies — a manifest digest and a seed — so a token approved "the
+        # dataset this pack would be built from" and execution measured whatever the
+        # builder produced on the day. An executable plan that cannot state the pack,
+        # the answer key and the execution order it authorises is refused at
+        # construction, which is a shape rather than a rule somebody has to remember.
+        if not self.blockers:
+            for name in ("task_pack_hash", "hidden_target_store_hash",
+                         "order_assignment_hash"):
+                value = str(getattr(self, name) or "")
+                if len(value) != 64 or any(c not in "0123456789abcdefABCDEF"
+                                           for c in value):
+                    raise EvaluationPlanError(
+                        f"evaluation plan: {name} is {value!r}, which is not a 64-hex "
+                        f"digest. An executable plan binds the EXACT material it "
+                        f"authorises; a plan that cannot name it must carry a blocker "
+                        f"saying why, not an approximation of it")
 
     # -- derived ---------------------------------------------------------------
     @property

@@ -17,6 +17,23 @@ A preflight failure does not spend it — nothing ran. Starting live inference d
 stays spent afterwards whatever happened: a failed run read the data, an interrupted run
 may have written bytes, and deleting the output directory does not un-read either. A
 rerun needs a new generation and therefore a new plan and a new token.
+
+PLAN CONSUMED IS NOT HOLDOUT SPENT — V69 M62 S3Q.0
+--------------------------------------------------
+The ``started`` line records that one approval began one run. It does NOT record that a
+held-out task ever crossed the model-facing boundary: a run can consume its plan and then
+fail while building the pack, and no model has read anything.
+
+So this ledger carries a THIRD event, ``holdout_model_facing_committed``, appended once
+per run immediately before the first :meth:`backend.generate`. It is the prospective
+scientific spend boundary: once it is durable the holdout is ``USED_IMMUTABLE``, even if
+the very next instruction crashes. The boundary is deliberately a shade earlier than
+proof that a forward pass ran, because there is no atomic transaction between a local
+append and an external synchronous call, and the fail-closed side of that gap is to
+assume the holdout was read.
+
+It applies PROSPECTIVELY. The S3I and S3L evaluations predate the event, their ledgers
+carry only ``started`` and a terminal line, and nothing here synthesises one for them.
 """
 from __future__ import annotations
 
@@ -37,6 +54,21 @@ from .plan import EVALUATION_LEDGER_FILE, MAX_EVALUATION_LEDGER_LINES
 
 #: Bumped when a ledger entry's shape changes.
 LEDGER_RECORD_VERSION = "m62.evaluation_run.1"
+
+#: S3Q.0. The prospective model-facing commit line carries strictly more fields than a
+#: start or terminal line, so it declares its own record version rather than widening
+#: theirs. Historical ``m62.evaluation_run.1`` lines stay valid, unedited and readable by
+#: every existing reader, which is what makes this an extension and not a migration.
+HOLDOUT_COMMIT_RECORD_VERSION = "m62.evaluation_holdout_commit.1"
+
+#: The event name. NOT ``model_read`` — this record cannot prove a forward pass already
+#: happened. NOT ``holdout_exposed`` — nothing was exposed to a human or to an
+#: orchestrator. It means exactly: the first held-out request passed parity and the
+#: evaluator durably committed to hand it to the production backend.
+HOLDOUT_COMMIT_EVENT = "holdout_model_facing_committed"
+
+#: The two events that were legal before S3Q.0 and stay legal unchanged.
+LEGACY_LEDGER_EVENTS: frozenset[str] = frozenset({"started"})
 
 #: Where a run that failed artifact validation is moved, so it cannot be mistaken for
 #: a completed one and cannot be silently overwritten.
@@ -108,6 +140,105 @@ def consume_plan(root: str | Path, *, plan_hash: str, evaluation_id: str,
             f"obtain a new token")
     _append(root, entry)
     return entry
+
+
+class HoldoutAlreadyCommitted(EvaluationStoreError):
+    """This run already crossed the model-facing boundary. There is no second crossing."""
+
+
+def holdout_commit_entries(root: str | Path) -> list[dict]:
+    """Every model-facing commit line. Empty for every evaluation that predates S3Q.0."""
+    return [entry for entry in evaluation_entries(root)
+            if str(entry.get("event", "")) == HOLDOUT_COMMIT_EVENT]
+
+
+def is_holdout_committed(root: str | Path, plan_hash: str) -> bool:
+    """True once this plan durably committed a held-out task to the model.
+
+    Distinct from :func:`is_plan_consumed` on purpose. ``consumed and not committed`` is
+    a real state — an approval was spent and no model read anything — and collapsing the
+    two would either re-spend a holdout or write off one that was never read.
+    """
+    digest = str(plan_hash).strip().lower()
+    if len(digest) != 64:
+        raise EvaluationStoreError("evaluation ledger: a plan hash is 64 hex characters")
+    return any(str(entry.get("plan_hash", "")) == digest
+               for entry in holdout_commit_entries(root))
+
+
+def record_holdout_commit(root: str | Path, *, plan_hash: str, evaluation_id: str,
+                          generation: int, actor: str, at: str,
+                          commit: dict) -> dict:
+    """Durably commit the holdout to the model. Appended once, before the first call.
+
+    Refuses BEFORE it appends when the run has no ``started`` line, when a commit
+    already exists for this run, or when an existing commit for this evaluation and
+    generation names a different plan. Every one of those means the caller's idea of
+    what is running disagrees with the ledger's, and the fail-closed answer to that is
+    to leave the holdout unspent rather than to guess.
+    """
+    if not isinstance(commit, dict):
+        raise EvaluationStoreError(
+            "evaluation ledger: the holdout commit body must be a mapping")
+    entry = _entry(plan_hash=plan_hash, evaluation_id=evaluation_id,
+                   generation=generation, actor=actor, at=at,
+                   event=HOLDOUT_COMMIT_EVENT)
+    entry["record_version"] = HOLDOUT_COMMIT_RECORD_VERSION
+    digest = entry["plan_hash"]
+
+    if not is_plan_consumed(root, digest):
+        raise EvaluationStoreError(
+            f"evaluation: plan {short(digest)} has no start line, so a model-facing "
+            f"commit would record a holdout being spent by a run nobody recorded "
+            f"starting. Refusing before the model is called")
+    for existing in holdout_commit_entries(root):
+        same_run = (str(existing.get("evaluation_id")) == entry["evaluation_id"]
+                    and existing.get("generation") == entry["generation"])
+        if str(existing.get("plan_hash")) == digest:
+            raise HoldoutAlreadyCommitted(
+                f"evaluation: plan {short(digest)} has already committed a held-out "
+                f"task to the model. The holdout is spent and there is no second "
+                f"crossing; a rerun would measure again on material no model may read "
+                f"twice")
+        if same_run:
+            raise HoldoutAlreadyCommitted(
+                f"evaluation: generation {entry['generation']} of "
+                f"{entry['evaluation_id']!r} already committed a holdout under plan "
+                f"{short(str(existing.get('plan_hash')))}, not {short(digest)}")
+
+    entry["commit"] = _commit_body(commit)
+    _append(root, entry)
+    return entry
+
+
+#: Everything the commit body may carry. Closed, and every member is a digest, a count,
+#: an identifier or a policy name. A field that could hold a prompt, a target, a rubric
+#: or a response is absent by construction, so a body-free event is a shape rather than
+#: a promise.
+HOLDOUT_COMMIT_FIELDS: tuple[str, ...] = (
+    "commit_schema_version", "dataset_id", "dataset_version", "dataset_manifest_hash",
+    "task_pack_hash", "hidden_target_store_hash", "pack_identity_hash",
+    "order_policy", "order_assignment_hash", "task_count", "target_count",
+    "first_task_id", "first_task_hash", "first_arm", "first_request_parity_hash",
+    "baseline_reference_hash", "candidate_adapter_reference_hash",
+    "generation_policy_hash", "backend_id", "performs_inference",
+)
+
+
+def _commit_body(commit: dict) -> dict:
+    """Refuse anything outside the closed field list, then canonicalise."""
+    unknown = sorted(set(commit) - set(HOLDOUT_COMMIT_FIELDS))
+    if unknown:
+        raise EvaluationStoreError(
+            f"evaluation ledger: the holdout commit body names {unknown}, which is not "
+            f"in the closed body-free field list; a widened event is how held-out "
+            f"material reaches an append-only file nobody can retract")
+    missing = sorted(set(HOLDOUT_COMMIT_FIELDS) - set(commit))
+    if missing:
+        raise EvaluationStoreError(
+            f"evaluation ledger: the holdout commit body omits {missing}; a commit that "
+            f"does not say what was committed is not evidence")
+    return dict(sorted(commit.items()))
 
 
 def record_terminal(root: str | Path, *, plan_hash: str, evaluation_id: str,
@@ -199,8 +330,11 @@ def quarantine_generation(root: str | Path, directory: Path, *, evaluation_id: s
 
 
 __all__ = [
-    "LEDGER_RECORD_VERSION", "QUARANTINE_DIR", "EvaluationStoreError",
-    "PlanAlreadyConsumed", "consume_plan", "create_generation_directory",
-    "evaluation_entries", "evaluation_ledger_path", "is_plan_consumed",
-    "quarantine_generation", "record_terminal",
+    "HOLDOUT_COMMIT_EVENT", "HOLDOUT_COMMIT_FIELDS", "HOLDOUT_COMMIT_RECORD_VERSION",
+    "LEDGER_RECORD_VERSION", "LEGACY_LEDGER_EVENTS", "QUARANTINE_DIR",
+    "EvaluationStoreError", "HoldoutAlreadyCommitted", "PlanAlreadyConsumed",
+    "consume_plan", "create_generation_directory", "evaluation_entries",
+    "evaluation_ledger_path", "holdout_commit_entries", "is_holdout_committed",
+    "is_plan_consumed", "quarantine_generation", "record_holdout_commit",
+    "record_terminal",
 ]

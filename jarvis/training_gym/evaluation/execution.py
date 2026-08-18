@@ -13,6 +13,23 @@ module that already owns it. What it adds is *order*, and the guarantees that co
 order: a generation directory created before a plan is spent, a plan spent before a model
 is loaded, and a report written only after the artefacts it describes verified on reload.
 
+THE FOUR EVENTS, WHICH ARE NOT SYNONYMS — V69 M62 S3Q.0
+-------------------------------------------------------
+    PLAN_CONSUMED                     one approval began one run
+    HOLDOUT_MODEL_FACING_COMMITTED    a held-out task is about to reach a model
+    EVALUATION_COMPLETED              artefacts exist and re-verify from disk
+    TERMINAL_LEDGER_RECORDED          how it ended is durable
+
+Each is recorded separately on :class:`ExecutionOutcome` because each fails separately.
+A run can spend its plan and read nothing; it can spend the holdout and crash; it can
+measure perfectly and lose the record of having done so. Collapsing any pair of them is
+how a spent holdout gets re-spent or a completed measurement gets reported as clean when
+its evidence is missing.
+
+Between the rebuild and the commit sits the TOCTOU check: the pack, the store, the order
+assignment, both references and the generation policy are re-derived and compared against
+the confirmed plan. A mismatch stops the run while the holdout is still unread.
+
 WHY THE BACKENDS ARE PASSED IN
 ------------------------------
 ``backend_factory`` is a parameter so the qualification suite can drive this exact code
@@ -42,14 +59,20 @@ from .references import EvaluationRole
 from .reports import build_report
 from .runner import result_records, results_by_role, run_paired_evaluation
 from .score_evidence import build_score_evidence, response_digests
+from .preflight import derive_pack_identity, execution_binding_mismatches
 from .store import (
     consume_plan,
     create_generation_directory,
     is_plan_consumed,
     quarantine_generation,
+    record_holdout_commit,
     record_terminal,
 )
 from .task_pack import EvaluationTaskKind
+
+#: S3Q.0. The commit body's own version, carried inside the ledger line so a reader can
+#: tell which set of body-free facts a given crossing recorded.
+HOLDOUT_COMMIT_SCHEMA_VERSION = "m62.evaluation_holdout_commit_body.1"
 
 
 class EvaluationExecutionError(SchemaError):
@@ -82,9 +105,48 @@ class ExecutionOutcome:
     states_visited: tuple[str, ...] = ()
     interrupted: bool = False
 
+    # ── S3Q.0 durability facts, each recorded separately ────────────────────
+    #: Whether the approval was spent. Says nothing about whether a model read anything.
+    plan_consumed: bool = False
+    #: Whether a held-out task durably crossed the model-facing boundary. Once true the
+    #: holdout is USED_IMMUTABLE whatever happened next, and no rerun is permitted.
+    holdout_committed: bool = False
+    #: Whether the terminal ledger line is on disk. A completed measurement whose outcome
+    #: was never recorded is not a clean success.
+    terminal_recorded: bool = False
+    #: Obligations that failed and that no amount of valid measurement compensates for.
+    #: Kept apart from ``problems`` so a diagnostic warning cannot be mistaken for one
+    #: and a lost durability guarantee cannot be buried among them.
+    durability_problems: tuple[str, ...] = ()
+
     @property
     def ok(self) -> bool:
-        return self.state is EvaluationRunState.COMPLETED
+        """Success requires the measurement AND every durability obligation it owes.
+
+        ``state is COMPLETED`` alone used to be the whole test, which meant a run whose
+        terminal ledger append failed reported clean success and exited zero. A one-shot
+        evaluation whose durable evidence is missing is precisely the case an operator
+        must be told about, so it is a failure here and a recovery condition at the CLI.
+        """
+        return (self.state is EvaluationRunState.COMPLETED
+                and self.holdout_committed
+                and self.terminal_recorded
+                and not self.durability_problems)
+
+    @property
+    def recovery_required(self) -> bool:
+        """A measurement that happened but cannot be reported as clean.
+
+        Distinct from a failed run: the artefacts are valid, the holdout is spent, and
+        the answer is operator recovery — never a rerun.
+        """
+        return bool(self.durability_problems) or (
+            self.state is EvaluationRunState.COMPLETED and not self.terminal_recorded)
+
+    @property
+    def rerun_permitted(self) -> bool:
+        """False the moment a held-out task crossed the model-facing boundary."""
+        return not self.holdout_committed
 
     def to_dict(self) -> dict:
         return {
@@ -101,6 +163,13 @@ class ExecutionOutcome:
             "states_visited": list(self.states_visited),
             "interrupted": self.interrupted,
             "quarantined": self.quarantine_path is not None,
+            "plan_consumed": self.plan_consumed,
+            "holdout_model_facing_committed": self.holdout_committed,
+            "holdout_scientifically_spent": self.holdout_committed,
+            "terminal_ledger_recorded": self.terminal_recorded,
+            "durability_problems": list(self.durability_problems),
+            "recovery_required": self.recovery_required,
+            "rerun_permitted": self.rerun_permitted,
         }
 
 
@@ -188,10 +257,26 @@ def execute_evaluation(request: ExecutionRequest) -> ExecutionOutcome:
                       problems=(f"{type(exc).__name__}: {exc}",))
     outcome.directory = directory
 
-    consume_plan(request.output_root, plan_hash=plan_hash,
-                 evaluation_id=config.evaluation_id,
-                 generation=config.evaluation_generation,
-                 actor=request.actor, at=request.at)
+    # A ledger append that fails here used to escape as a bare exception AFTER the
+    # filesystem had been mutated: the caller saw an internal error, the plan was still
+    # unspent, and the directory left behind then refused every later attempt at the same
+    # generation. The failure is now structured, and the empty directory this invocation
+    # created a moment ago is withdrawn.
+    try:
+        consume_plan(request.output_root, plan_hash=plan_hash,
+                     evaluation_id=config.evaluation_id,
+                     generation=config.evaluation_generation,
+                     actor=request.actor, at=request.at)
+    except Exception as exc:  # noqa: BLE001 — an unrecorded start is a refusal
+        rollback = _withdraw_empty_directory(directory)
+        outcome.directory = None if rollback == "removed" else directory
+        return finish(EvaluationRunState.FAILED, problems=(
+            f"the plan could not be spent ({type(exc).__name__}: {exc}); no model was "
+            f"called and no held-out task was read",
+            f"the generation directory this attempt created was {rollback}",
+            "the plan is UNSPENT: no start line was appended, so its confirmation still "
+            "authorises one run. Nothing here retries automatically"))
+    outcome.plan_consumed = True
 
     machine.to(EvaluationRunState.STARTING)
     try:
@@ -225,6 +310,23 @@ def _run(request: ExecutionRequest, machine: _Machine, outcome: ExecutionOutcome
         splits=config.splits.splits, generation=config.evaluation_generation)
     outcome.task_count = len(built.pack)
 
+    # ── TOCTOU: the pack that was approved must be the pack that runs ────────
+    # The plan was hashed against identities derived from the material as it stood when
+    # an operator looked at it. This rebuild is the material as it stands now. If the two
+    # disagree, the confirmation authorised something else — a different pack, a
+    # different answer key, a different execution order, a different adapter or a
+    # different decoding policy — and the run stops here, with the plan spent and the
+    # holdout still unread.
+    identity = derive_pack_identity(built, seed=config.seed)
+    drift = execution_binding_mismatches(
+        plan=plan, identity=identity, baseline=baseline, adapter=adapter,
+        generation_policy=config.generation)
+    if drift:
+        raise EvaluationExecutionError(
+            "execution: the approved plan does not describe the material about to be "
+            "measured, so the confirmation authorises a different run. No model was "
+            "called and the holdout was not committed. " + "; ".join(drift[:4]))
+
     blockers = list(request.extra_blockers)
     blockers.extend(pack_blockers(
         built, min_tasks=config.policies.statistics.min_pairs_for_claim,
@@ -248,7 +350,10 @@ def _run(request: ExecutionRequest, machine: _Machine, outcome: ExecutionOutcome
         adapter_reference=adapter, generation=config.generation, seed=config.seed,
         resources=config.policies.resources,
         adapter_directory=request.adapter_directory,
-        model_cache_root=request.model_cache_root)
+        model_cache_root=request.model_cache_root,
+        before_first_model_facing_invoke=_holdout_commit_callback(
+            request, outcome, identity=identity,
+            backend_id=str(getattr(candidate_backend, "backend_id", ""))))
 
     machine.to(EvaluationRunState.SCORING)
     summary = build_comparison(run, pack=built.pack, targets=built.targets,
@@ -350,6 +455,73 @@ def _run(request: ExecutionRequest, machine: _Machine, outcome: ExecutionOutcome
     return outcome
 
 
+def _holdout_commit_callback(request: ExecutionRequest, outcome: ExecutionOutcome, *,
+                             identity: object, backend_id: str):
+    """The one-shot durable commit the runner fires before the first backend call.
+
+    Execution owns the ledger, so execution owns this callback; the runner knows only
+    that something must succeed at that seam. The body is assembled from the plan, the
+    re-derived pack identity and the runner's body-free facts about the first crossing —
+    never from a task, a target or a response, none of which this closure can reach.
+    """
+    plan, config = request.plan, request.config
+
+    def commit(first: dict) -> None:
+        record_holdout_commit(
+            request.output_root, plan_hash=outcome.plan_hash,
+            evaluation_id=outcome.evaluation_id, generation=outcome.generation,
+            actor=request.actor, at=request.at,
+            commit={
+                "commit_schema_version": HOLDOUT_COMMIT_SCHEMA_VERSION,
+                "dataset_id": identity.dataset_id,
+                "dataset_version": identity.dataset_version,
+                "dataset_manifest_hash": identity.dataset_manifest_hash,
+                "task_pack_hash": identity.pack_hash,
+                "hidden_target_store_hash": identity.hidden_target_store_hash,
+                "pack_identity_hash": identity.identity_hash(),
+                "order_policy": str(first["order_policy"]),
+                "order_assignment_hash": str(first["order_assignment_hash"]),
+                "task_count": int(first["task_count"]),
+                "target_count": int(identity.target_count),
+                "first_task_id": str(first["task_id"]),
+                "first_task_hash": str(first["task_hash"]),
+                "first_arm": str(first["first_arm"]),
+                "first_request_parity_hash": str(first["parity_hash"]),
+                "baseline_reference_hash": request.baseline.reference_hash(),
+                "candidate_adapter_reference_hash": request.adapter.reference_hash(),
+                "generation_policy_hash": config.generation.policy_hash(),
+                "backend_id": backend_id or str(getattr(plan, "backend_id", "")),
+                "performs_inference": bool(getattr(plan, "performs_inference", False)),
+            })
+        # Reached only when the append returned. From this instant the holdout is
+        # USED_IMMUTABLE and no rerun is permitted, whatever the next statement does.
+        outcome.holdout_committed = True
+
+    return commit
+
+
+def _withdraw_empty_directory(directory: Path) -> str:
+    """Remove the generation directory THIS invocation created, if it is still empty.
+
+    Deliberately ``rmdir`` and never a recursive delete. The only thing safe to withdraw
+    is a directory that was created moments ago and into which nothing has been written;
+    anything with a file in it might be somebody else's evidence, and an evaluation
+    subsystem that can delete trees is one bad path join away from deleting a completed
+    generation. A directory that cannot be withdrawn is left exactly where it is and
+    reported, because a stuck generation an operator can see beats one that vanished.
+    """
+    try:
+        if directory.is_symlink() or not directory.is_dir():
+            return "left in place (not a plain directory)"
+        if any(directory.iterdir()):
+            return ("left in place because it is not empty; it must be inspected before "
+                    "this generation is attempted again")
+        directory.rmdir()
+    except OSError as exc:
+        return f"left in place ({exc.strerror})"
+    return "removed"
+
+
 def _quarantine(request: ExecutionRequest, outcome: ExecutionOutcome,
                 directory: Path, *, reason: str) -> None:
     """Move a generation aside. A failure here is recorded, never raised over the cause."""
@@ -364,7 +536,15 @@ def _quarantine(request: ExecutionRequest, outcome: ExecutionOutcome,
 
 
 def _record(request: ExecutionRequest, outcome: ExecutionOutcome) -> None:
-    """Append the terminal ledger line. Every outcome gets one, including the bad ones."""
+    """Append the terminal ledger line. Every outcome gets one, including the bad ones.
+
+    A failure here is DURABILITY-CRITICAL, not a diagnostic. The measurement may be
+    perfectly valid and its artefacts may verify, and the run still has no durable record
+    of how it ended — which is exactly the evidence a one-shot ceremony is judged on. It
+    is recorded as such so ``ok`` refuses and the CLI reports recovery rather than
+    success. The artefacts are NOT discarded and the run is NOT repeated: the holdout is
+    already spent.
+    """
     if not outcome.state.is_terminal:
         return
     try:
@@ -373,8 +553,16 @@ def _record(request: ExecutionRequest, outcome: ExecutionOutcome) -> None:
                         generation=outcome.generation, actor=request.actor,
                         at=request.at, state=outcome.state)
     except Exception as exc:  # noqa: BLE001
-        outcome.problems += (f"terminal ledger write failed "
-                             f"({type(exc).__name__}: {exc})",)
+        outcome.durability_problems += (
+            f"the terminal ledger line could not be appended "
+            f"({type(exc).__name__}: {exc}); this run has no durable record of how it "
+            f"ended",)
+        outcome.problems += (
+            "RECOVERY REQUIRED, NOT A RERUN: the artefacts on disk are retained and must "
+            "not be overwritten, the plan stays spent, and the holdout stays spent if it "
+            "was committed. Re-running this evaluation is forbidden",)
+        return
+    outcome.terminal_recorded = True
 
 
 def production_backend_factory(backend_id: str) -> Callable[[str], object]:
@@ -388,6 +576,7 @@ def production_backend_factory(backend_id: str) -> Callable[[str], object]:
 
 
 __all__ = [
-    "EvaluationExecutionError", "EvaluationTaskKind", "ExecutionOutcome",
-    "ExecutionRequest", "execute_evaluation", "production_backend_factory",
+    "HOLDOUT_COMMIT_SCHEMA_VERSION", "EvaluationExecutionError", "EvaluationTaskKind",
+    "ExecutionOutcome", "ExecutionRequest", "execute_evaluation",
+    "production_backend_factory",
 ]
