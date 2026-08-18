@@ -1010,5 +1010,16 @@ def test_the_legacy_version_is_untouched():
 
 
 def test_only_the_modern_version_is_accepted_from_a_modern_candidate():
-    assert MODERN_EVAL_RECEIPT_VERSIONS == {RECEIPT_V2_SCHEMA_VERSION}
+    """RESCOPED at S3Q.0.2, and not a regression.
+
+    This asserted the modern set was EXACTLY `{.2}`, which was true while `.2` was the
+    only modern contract. S3Q.0.2 added `.3` after `.2` refused the real S3Q measurement
+    three times, so the set is now `{.2, .3}` and `.2` stays in it -- it is a real
+    contract that real evidence can satisfy, and dropping it would retroactively
+    invalidate documents written honestly against it.
+
+    The substance of the test is unchanged and is what the second assertion always was:
+    `.1` is NOT modern. A candidate measured after S3Q.0.1 may not present one.
+    """
+    assert RECEIPT_V2_SCHEMA_VERSION in MODERN_EVAL_RECEIPT_VERSIONS
     assert RECEIPT_SCHEMA_VERSION not in MODERN_EVAL_RECEIPT_VERSIONS

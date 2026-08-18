@@ -102,11 +102,62 @@ EVAL_RECEIPT_SCHEMA_VERSION = "m62.eval_receipt.1"
 #: eval-v4 receipt exists, so nothing is migrated.
 EVAL_RECEIPT_V2_SCHEMA_VERSION = "m62.eval_receipt.2"
 
-#: The receipt versions a MODERN (non-legacy) EVALUATED_* candidate may present. Only
-#: `.2`: a `.1` receipt for a run measured after S3Q.0.1 would be evidence deliberately
-#: written to a weaker contract, and accepting one would make the upgrade optional.
+#: S3Q.0.2. `.2` was qualified against SYNTHETIC evidence and refused the REAL S3Q
+#: measurement for three reasons, each reproduced against the live artefacts before a
+#: line was written:
+#:
+#:   * it modelled the paired outcome as an exhaustive three-way `wins/ties/losses`
+#:     partition, and production classifies FOUR comparable verdicts -- the fourth,
+#:     `security_improvement`, is deliberately not a "win". 11 + 12 + 10 != 36;
+#:   * it required the canonical receipt text to encode as ASCII, and a legitimate
+#:     production gate message carries U+2212 MINUS SIGN. The report is valid; `.2`
+#:     refused its representation;
+#:   * it derived `evaluation_source_commit` from the repository HEAD at RECEIPT-BUILD
+#:     time, which is only the evaluation source while sealing happens at the unchanged
+#:     evaluation commit. After a repair commit that field would name the REPAIR.
+#:
+#: `.2` is not mutated: it is a tracked, qualified contract whose synthetic receipts
+#: already hash against it. The version moves instead.
+EVAL_RECEIPT_V3_SCHEMA_VERSION = "m62.eval_receipt.3"
+
+#: The receipt versions a MODERN (non-legacy) EVALUATED_* candidate may present. `.2` is
+#: still accepted -- it is a real contract that real evidence can satisfy, and removing it
+#: would retroactively invalidate documents written honestly against it. `.1` is not: a
+#: `.1` receipt for a run measured after S3Q.0.1 would be evidence deliberately written to
+#: a weaker contract, and accepting one would make the upgrade optional.
 MODERN_EVAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
-    EVAL_RECEIPT_V2_SCHEMA_VERSION})
+    EVAL_RECEIPT_V2_SCHEMA_VERSION, EVAL_RECEIPT_V3_SCHEMA_VERSION})
+
+#: The receipt versions whose canonical bytes are DEFINED as canonical JSON encoded
+#: UTF-8, so non-ASCII production decision text is preserved exactly rather than refused.
+#: `.1` and `.2` keep their ASCII-only rule: that rule is part of the contract their
+#: existing receipts were hashed under, and relaxing it in place would change what those
+#: documents mean.
+UTF8_CANONICAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
+    EVAL_RECEIPT_V3_SCHEMA_VERSION})
+
+#: How `.3` states its own encoding, so no "encoding choice" is left open. The digest is
+#: SHA-256 over exactly these bytes.
+CANONICAL_RECEIPT_ENCODING = (
+    "canonical JSON (scripts.verify_m62_control_plane.canonical_json) encoded UTF-8")
+
+#: The production paired-comparison vocabulary, restated here because the schema must
+#: build on a host where `training_gym` will not import, and RE-DERIVED from
+#: `ComparisonVerdict` by `_check_modern_evaluation_receipt`. A literal nobody re-derives
+#: is the second writable copy of a contract.
+#:
+#: FOUR of these are comparable outcomes of a measured pair. `security_improvement` is
+#: its own verdict and is deliberately NOT folded into `improved`: the baseline had a
+#: blocking finding the candidate fixed, which is reported and never rewarded as a win.
+COMPARISON_VERDICTS: tuple[str, ...] = (
+    "security_regression", "security_improvement", "improved", "unchanged",
+    "regressed", "not_comparable")
+
+#: The measurement witness `.3` binds its EVALUATION source through. Written before the
+#: repair commit, while the repository was still at the evaluated commit; see
+#: `check_measurement_witness`.
+MEASUREMENT_WITNESS_SCHEMA_VERSION = "m62.measurement_witness.1"
+WITNESS_DIR = "state/m62/witnesses"
 
 #: The closed terminal vocabulary, restated here and RE-DERIVED from
 #: `EvaluationRunState.is_terminal` by `check_evaluation_receipt`. Restated because the
@@ -144,6 +195,8 @@ SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
 TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
 EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
 EVAL_RECEIPT_V2_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v2.schema.json"
+EVAL_RECEIPT_V3_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v3.schema.json"
+MEASUREMENT_WITNESS_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-measurement-witness.schema.json"
 RECEIPT_DIR = f"{STATE_DIR}/receipts"
 MIGRATION_DIR = f"{STATE_DIR}/migrations"
 MIGRATION_MANIFEST_PATH = f"{MIGRATION_DIR}/0001-control-plane-v2.json"
@@ -1289,6 +1342,532 @@ def eval_receipt_v2_schema() -> dict:
     }
 
 
+def eval_receipt_v3_schema() -> dict:
+    """S3Q.0.2 -- the POST-LIVE SEAL RECOVERY contract.
+
+    `.3` exists because `.2` met real evidence for the first time and refused it three
+    times. Every one of those refusals was `.2` being wrong about production, never
+    production being wrong. Nothing in the measurement was edited to satisfy a receipt:
+    the repair moved the CONTRACT to the evidence.
+
+    WHAT `.3` CHANGES, AND WHY EACH IS A CONTRACT CHANGE RATHER THAN A PATCH
+    ------------------------------------------------------------------------
+    * THE VERDICT PARTITION IS THE PRODUCTION ONE. `.2` required
+      `wins + ties + losses == measured_pairs`. `comparison.py` classifies FOUR
+      comparable verdicts, and the fourth -- `security_improvement`, the baseline having
+      had a blocking finding the candidate fixed -- is deliberately not a win. On the
+      real S3Q run the three-way sum is 33 against 36 measured pairs, so `.2` called a
+      correct measurement inconsistent. `.3` carries `verdict_counts` over the exact
+      production vocabulary, requires it to sum to `measured_pairs`, and keeps
+      `wins/ties/losses` only as the aliases they are -- cross-checked against
+      `improved/unchanged/regressed`, never summed against the total.
+    * THE NUMERIC PARTITION IS SEPARATE AND SAYS SO. The sign of the reward delta is a
+      DIFFERENT partition of the same pairs (13/13/10 where the verdicts are 11/12/10/3).
+      `.3` carries it under its own name and verifies it on its own. The two are never
+      compared bucket for bucket; only their totals must agree.
+    * THE CANONICAL BYTES ARE DEFINED, NOT CONSTRAINED. `.2` refused any receipt whose
+      canonical text was not ASCII, on the reasoning that otherwise the bytes depend on
+      an encoding choice. The reasoning was right and the remedy was backwards: it
+      removed the ambiguity by removing legitimate evidence. A production gate message
+      reads `schema validity fell from 1.0000 to 0.8889 (U+2212 0.1111)` and that minus
+      sign is the report's, correctly typeset by `gates.py`. `.3` closes the ambiguity
+      the other way -- the canonical bytes ARE canonical JSON encoded UTF-8, stated in
+      the receipt itself, and `receipt_hash` is SHA-256 over exactly those bytes. No
+      choice remains, and no evidence is normalised away to reach that. The token,
+      private-path, body-symbol and task-id scanners are untouched: Unicode is permitted,
+      not privileged.
+    * TWO SOURCES, BECAUSE THERE HONESTLY ARE TWO. `.2` had one `source` block whose
+      `evaluation_source_commit` was the repository HEAD when the RECEIPT was built. That
+      is the evaluation source only while sealing happens at the unchanged evaluated
+      commit -- true until sealing failed. `.3` separates `evaluation_source`, bound
+      through the pre-repair measurement witness, from `seal_implementation_source`, the
+      commit that carries this code. In a recovery they DIFFER, and a contract that
+      cannot express that is a contract that forces a receipt to lie about one of them.
+
+    WHAT `.3` DOES NOT WEAKEN
+    -------------------------
+    Every `.2` guarantee is carried forward unchanged: mandatory non-empty adapter
+    identity, the training receipt as the candidate's identity root, exact holdout and
+    pack identity, the policy digests with the generation policy re-derivable from the
+    values beside it, one plan consumption, one model-facing commit, one recognised
+    terminal event each bound by its own digest, a single plan hash, the result counts,
+    the artefact digests, and an eligibility REDERIVED by the production decision
+    algorithm rather than copied from the report.
+
+    WHAT IT STILL NEVER CARRIES
+    ---------------------------
+    No prompt, no held-out target, no rubric prose, no model response, no individual task
+    id, no `EVAL:` confirmation literal, no absolute path and no home directory.
+
+    WHAT THE SOURCE BINDING PROVES, AND WHAT IT DOES NOT
+    ----------------------------------------------------
+    The witness, its Git first parent and the immutable report digests establish
+    REPOSITORY PROVENANCE: which tracked source state the measurement belongs to, fixed
+    before the repair could move HEAD. They do NOT prove CPU-level execution
+    authenticity, and nothing here is signed. No PKI is invented and none is implied.
+    """
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "m62-eval-receipt-v3.schema.json",
+        "title": "M62 portable evaluation receipt v3",
+        "description": (
+            "Root-independent, tracked evidence that ONE identified candidate, built from "
+            "ONE identified training receipt and ONE identified adapter, completed ONE "
+            "held-out evaluation against ONE identified baseline under ONE spent "
+            "single-use authority, and that its EVALUATED_* status claim is REDERIVABLE "
+            "from the body-free decision evidence it carries rather than asserted by it. "
+            "v3 seals an EXISTING measurement after the fact: it binds the evaluation "
+            "source through a pre-repair measurement witness and names the seal "
+            "implementation source separately, because after a post-live repair they are "
+            "legitimately different commits. Its canonical bytes are canonical JSON "
+            "encoded UTF-8, so production decision text is preserved exactly. It is "
+            "EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER: it grants no "
+            "retry, no second evaluation, no promotion, no activation, no registry "
+            "mutation and no release. receipt_hash proves payload integrity only -- not "
+            "human authorisation, not execution authenticity, not who ran the command."),
+        **_obj({
+            "schema_version": {"const": EVAL_RECEIPT_V3_SCHEMA_VERSION},
+            "receipt_version": {"const": EVAL_RECEIPT_V3_SCHEMA_VERSION},
+            "receipt_hash": _SHA256,
+            "canonical_encoding": {"const": CANONICAL_RECEIPT_ENCODING},
+            "evaluation_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "seal_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "evaluation_id": _SHORT,
+            "evaluation_generation": {"type": "integer", "minimum": 1,
+                                      "maximum": 100_000},
+
+            # ── the code that MEASURED, bound through the pre-repair witness ──
+            "evaluation_source": _obj({
+                "evaluation_source_commit": _COMMIT,
+                "evaluation_source_tree_oid": _COMMIT,
+                "evaluation_source_digest": _SHA256,
+                # NOT `derived_from_repository_head`. That is precisely the conflation
+                # `.3` exists to remove.
+                "derived_from": {"const": "measurement_witness"},
+                "evidence_level": {
+                    "const": "the measurement witness was written in a clean worktree at "
+                             "this commit, before the repair moved HEAD, and its Git "
+                             "first parent is this commit; that is repository "
+                             "provenance and not proof of which bytes executed"},
+            }),
+
+            # ── the code that SEALED. A different commit, and honestly named ──
+            "seal_implementation_source": _obj({
+                "seal_implementation_source_commit": _COMMIT,
+                "seal_implementation_tree_oid": _COMMIT,
+                "derived_from_repository_head": {"const": True},
+                "worktree_clean_at_build": {"const": True},
+                "differs_from_evaluation_source": {"type": "boolean"},
+                "evidence_level": {
+                    "const": "this is the tracked code that BUILT the receipt; it did not "
+                             "measure, and recording it as the evaluation source is the "
+                             "defect m62.eval_receipt.3 exists to fix"},
+            }),
+
+            # ── the bridge between them ──────────────────────────────────────
+            "measurement_witness": _obj({
+                "path": _REPO_PATH,
+                "measurement_witness_sha256": _SHA256,
+                "measurement_witness_hash": _SHA256,
+                "measurement_witness_commit": _COMMIT,
+                "witness_schema_version": {"const": MEASUREMENT_WITNESS_SCHEMA_VERSION},
+                "witness_first_parent_is_evaluation_source": {"const": True},
+                "grants_no_authority": {"const": True},
+            }),
+
+            # ── who was measured ─────────────────────────────────────────────
+            "candidate": _obj({
+                "candidate_id": _SHORT,
+                "status_claim": {"enum": sorted(EVALUATED_CANDIDATE_STATES)},
+                "identity_source": {"const": "training_receipt"},
+                "adapter_reference_hash": _SHA256,
+                "adapter_sha256": _SHA256,
+                "adapter_manifest_hash": _SHA256,
+                "adapter_artifact_set_hash": _SHA256,
+            }),
+            "training_receipt": _obj({
+                "path": _REPO_PATH,
+                "training_receipt_sha256": _SHA256,
+                "schema_version": _SHORT,
+                "candidate_id": _SHORT,
+                "training_plan_hash": _SHA256,
+                "training_source_commit": _COMMIT,
+                "training_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            }),
+            "baseline": _obj({
+                "model_id": _SHORT,
+                "revision": _COMMIT,
+                "reference_hash": _SHA256,
+                "tokenizer_identity_hash": _SHA256,
+                "base_model_identity_hash": _SHA256,
+            }),
+
+            # ── what it was measured on ──────────────────────────────────────
+            "holdout": _obj({
+                "dataset_id": _SHORT,
+                "dataset_version": {"type": "string", "pattern": "^v[0-9]+$"},
+                "dataset_manifest_hash": _SHA256,
+                "task_pack_hash": _SHA256,
+                "hidden_target_store_hash": _SHA256,
+                "pack_manifest_shard_hashes": {"type": "object"},
+                "split_manifest_hashes": {"type": "object"},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "counts_by_split": {"type": "object"},
+                "counts_by_family": {"type": "object"},
+                "counts_by_kind": {"type": "object"},
+            }),
+            "plan": _obj({
+                "plan_hash": _SHA256,
+                "plan_schema_version": _SHORT,
+                "evaluator_version": _SHORT,
+                "evaluation_config_hash": _SHA256,
+                "order_policy": _SHORT,
+                "order_assignment_hash": _SHA256,
+                "performs_inference": {"type": "boolean"},
+                "binds_exact_pack_identity": {"const": True},
+                "expected_task_count": {"type": "integer", "minimum": 1,
+                                        "maximum": 100_000},
+            }),
+            "policies": _obj({
+                "generation_policy_hash": _SHA256,
+                "grader_policy_hash": _SHA256,
+                "metric_policy_hash": _SHA256,
+                "statistical_policy_hash": _SHA256,
+                "gate_policy_hash": _SHA256,
+                "family_policy_hash": _SHA256,
+                "dependency_report_hash": _SHA256,
+                "hardware_report_hash": _SHA256,
+                # D33, unchanged. The CONFIGURED value and whether anything enforced it
+                # are two different facts.
+                "configured_timeout_s": {"type": "integer", "minimum": 0,
+                                         "maximum": 100_000},
+                "timeout_enforced": {"const": False},
+                "generation_policy": _obj({
+                    "policy_version": _SHORT,
+                    "mode": _SHORT,
+                    "max_new_tokens": {"type": "integer", "minimum": 1,
+                                       "maximum": 1_000_000},
+                    "max_input_tokens": {"type": "integer", "minimum": 1,
+                                         "maximum": 10_000_000},
+                    "do_sample": {"type": "boolean"},
+                    "temperature": {"type": "number"},
+                    "top_p": {"type": "number"},
+                    "top_k": {"type": "integer", "minimum": 0, "maximum": 1_000_000},
+                    "repetition_penalty": {"type": "number"},
+                    "stop_sequences": {"type": "array", "maxItems": 32, "items": _SHORT},
+                    "seed": {"type": "integer", "minimum": 0, "maximum": 2**32 - 1},
+                    "timeout_s": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                    "batch_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+                    "truncation_side": _SHORT,
+                    "reasoning_policy": _SHORT,
+                    "device_policy": _SHORT,
+                    "precision_policy": _SHORT,
+                }),
+            }),
+
+            # ── the single-use authority, described as the ledger can witness it ──
+            "authority": _obj({
+                "form": {"const": "EVAL:<plan-hash>"},
+                "bound_plan_hash": _SHA256,
+                "plan_consumption_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "token_literal_recorded": {"const": False},
+                "retry_authorized": {"const": False},
+                "grants_no_further_authority": {"const": True},
+                "human_authorization": {"const": "external_milestone_authority"},
+                # S3Q.0.2. Sealing an EXISTING measurement consumes nothing: the
+                # authority was spent by the run this receipt describes, long before the
+                # receipt existed. Saying so is what stops a re-seal reading as a re-run.
+                "spent_by_the_run_this_receipt_describes": {"const": True},
+                "seal_consumed_no_authority": {"const": True},
+            }),
+            "ledger": _obj({
+                "plan_started_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_event": {"enum": list(TERMINAL_EVALUATION_EVENTS)},
+                "terminal_state": {"enum": list(TERMINAL_EVALUATION_EVENTS)},
+                "terminal_is_successful": {"type": "boolean"},
+                "events": {"type": "object"},
+                "unrecognised_events": {"type": "array", "maxItems": 16, "items": _SHORT},
+                "plan_hash": _SHA256,
+                "unique_plan_hashes": {"type": "integer", "minimum": 1, "maximum": 1},
+                "plan_started_event_hash": _SHA256,
+                "holdout_commit_event_hash": _SHA256,
+                "terminal_event_hash": _SHA256,
+            }),
+            "holdout_commit": _obj({
+                "commit_schema_version": _SHORT,
+                "pack_identity_hash": _SHA256,
+                "order_assignment_hash": _SHA256,
+                # `first_task_id` remains DELIBERATELY ABSENT.
+                "first_task_hash": _SHA256,
+                "first_arm": {"enum": ["baseline", "candidate"]},
+                "first_request_parity_hash": _SHA256,
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "target_count": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "backend_id": _SHORT,
+                "performs_inference": {"type": "boolean"},
+            }),
+
+            # ── what happened ────────────────────────────────────────────────
+            "execution": _obj({
+                "report_serialization_state": _SHORT,
+                "empirical_status": _SHORT,
+                "backend_ids": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "items": _SHORT},
+                "backend_version": {"type": "string", "maxLength": 200},
+                "artifact_verification": {"const": "PASS"},
+                "artifact_problems": {"type": "array", "maxItems": 0},
+                # S3Q.0.2. Nothing here re-ran, re-scored or re-generated anything.
+                "sealed_from_existing_measurement": {"const": True},
+                "model_loads_during_seal": {"const": 0},
+                "model_generations_during_seal": {"const": 0},
+            }),
+            "results": _obj({
+                "expected_task_count": {"type": "integer", "minimum": 1,
+                                        "maximum": 100_000},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "baseline_result_count": _COUNT,
+                "candidate_result_count": _COUNT,
+                "paired_result_count": _COUNT,
+                "baseline_score_count": _COUNT,
+                "candidate_score_count": _COUNT,
+                "total_model_result_count": _COUNT,
+                "measured_pairs": _COUNT,
+                "missing_pairs": _COUNT,
+                # The production partition. Exhaustive, and the one that must sum.
+                "verdict_counts": _verdict_counts_schema(),
+                "verdict_vocabulary": {"type": "array", "minItems": 1, "maxItems": 16,
+                                       "items": _SHORT, "uniqueItems": True},
+                # A DIFFERENT partition of the same pairs. Verified separately.
+                "numeric_delta_counts": _numeric_delta_counts_schema(),
+                # Aliases for three of the four verdicts, kept because the report
+                # publishes them and a disagreement between the two surfaces is worth
+                # catching. NEVER summed against `measured_pairs`.
+                "wins": _COUNT, "ties": _COUNT, "losses": _COUNT,
+                "wins_ties_losses_are_a_partial_partition": {"const": True},
+            }),
+            "evidence": _obj({
+                "report_hash": _SHA256,
+                "evaluation_manifest_hash": _SHA256,
+                "evaluation_artifact_tree_hash": _SHA256,
+                "comparison_manifest_hash": _SHA256,
+                "metrics_summary_hash": _SHA256,
+                "pack_manifest_hash": _SHA256,
+                "gate_report_hash": _SHA256,
+                "bootstrap_report_hash": _SHA256,
+                "files": {"type": "object"},
+            }),
+
+            # ── why the status claim follows ─────────────────────────────────
+            "decision_evidence": _obj({
+                "empirical_status": _SHORT,
+                "report_serialization_state": _SHORT,
+                "gate_report": _gate_evidence_schema(),
+                "bootstrap": _bootstrap_evidence_schema(),
+                "canonical_decision": _obj({
+                    "eligibility": _SHORT,
+                    "empirical_status": _SHORT,
+                    "human_review_required": {"type": "boolean"},
+                    "blockers": {"type": "array", "maxItems": 128,
+                                 "items": _DECISION_TEXT},
+                    "warnings": {"type": "array", "maxItems": 128,
+                                 "items": _DECISION_TEXT},
+                    "rationale": _DECISION_TEXT,
+                    "promotes_model": {"const": False},
+                    "activates_model": {"const": False},
+                }),
+                "decision_hash": _SHA256,
+                "rederived_by": {
+                    "const": "training_gym.evaluation.reports.decision_from_evidence"},
+                # S3Q.0.2. The receipt states whether the production decision text it
+                # carries is pure ASCII, so a reader knows the UTF-8 definition is doing
+                # work here rather than being a dormant clause.
+                "carries_non_ascii_decision_text": {"type": "boolean"},
+                "non_ascii_codepoints": {"type": "array", "maxItems": 32,
+                                         "items": {"type": "string", "minLength": 1,
+                                                   "maxLength": 16},
+                                         "uniqueItems": True},
+            }),
+            "outcome": _obj({
+                "eligibility": _SHORT,
+                "human_review_required": {"type": "boolean"},
+                "promotes_model": {"const": False},
+                "activates_model": {"const": False},
+                "mutates_model_registry": {"const": False},
+                "gate_blockers": {"type": "array", "maxItems": 128,
+                                  "items": _DECISION_TEXT},
+                "gate_warnings": {"type": "array", "maxItems": 128,
+                                  "items": _DECISION_TEXT},
+                "limitations": {"type": "array", "maxItems": 64, "items": _DECISION_TEXT},
+                "security_blocking_count": _COUNT,
+            }),
+        }),
+    }
+
+
+def measurement_witness_schema() -> dict:
+    """S3Q.0.2 -- the pre-repair measurement witness.
+
+    WHY A SECOND EVIDENCE FORM EXISTS AT ALL
+    ----------------------------------------
+    A portable receipt is written AFTER the irreversible act, and until S3Q.0.2 the code
+    that wrote it also had to BE the code that measured -- because the only thing naming
+    the evaluation source was the repository HEAD at receipt-build time. That holds
+    exactly as long as sealing succeeds on the first attempt. It did not. Repairing the
+    receipt requires a commit, a commit moves HEAD, and after it there is nothing left in
+    the repository that can say which source state measured.
+
+    So this document is written FIRST, alone, while HEAD is still the evaluated commit,
+    and its Git first parent IS that commit. It is the bridge across the repair.
+
+    WHAT IT IS NOT
+    --------------
+    Not a receipt. It grants no candidate state, authorises no retry, promotes nothing and
+    claims no eligibility ON BEHALF of anything -- it RECORDS the eligibility the
+    production algorithm rederives from the report's own body-free evidence. A reader who
+    holds only this document knows what was measured and is permitted to do nothing.
+
+    WHAT IT NEVER CARRIES
+    ---------------------
+    No prompt, no held-out target, no model response, no individual task id, no
+    confirmation literal, no absolute path.
+    """
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "m62-measurement-witness.schema.json",
+        "title": "M62 pre-repair measurement witness",
+        "description": (
+            "Body-free evidence, written while the repository was still at the evaluation "
+            "source commit, recording which existing runtime measurement belongs to that "
+            "unchanged source state. It is a BRIDGE across a post-live repair commit and "
+            "never an authority: it grants no candidate state, no retry, no second "
+            "evaluation, no promotion, no activation and no registry mutation."),
+        **_obj({
+            "schema_version": {"const": MEASUREMENT_WITNESS_SCHEMA_VERSION},
+            "witness_version": {"const": MEASUREMENT_WITNESS_SCHEMA_VERSION},
+            "witness_kind": {"const": "pre_repair_measurement_witness"},
+            "witness_hash": _SHA256,
+            "milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "purpose": _DECISION_TEXT,
+            "grants": _obj({
+                "candidate_state": {"const": False},
+                "promotion": {"const": False},
+                "activation": {"const": False},
+                "registry_mutation": {"const": False},
+                "retry_or_rerun": {"const": False},
+                "is_an_evaluation_receipt": {"const": False},
+                "note": _SHORT,
+            }),
+            "evaluation_id": _SHORT,
+            "evaluation_generation": {"type": "integer", "minimum": 1,
+                                      "maximum": 100_000},
+            "candidate_id": _SHORT,
+            "evaluation_source": _obj({
+                "evaluation_source_commit": _COMMIT,
+                "evaluation_source_tree_oid": _COMMIT,
+                "evaluation_source_digest": _SHA256,
+                "evaluation_source_digest_method": _DECISION_TEXT,
+                "evaluation_source_file_count": {"type": "integer", "minimum": 1,
+                                                 "maximum": 100_000},
+                "worktree_clean_at_witness": {"const": True},
+                "derived_from_repository_head": {"const": True},
+                "evidence_level": _DECISION_TEXT,
+            }),
+            "eval_corpus": _obj({
+                "dataset_id": _SHORT,
+                "dataset_version": {"type": "string", "pattern": "^v[0-9]+$"},
+                "dataset_manifest_hash": _SHA256,
+                "task_pack_hash": _SHA256,
+                "hidden_target_store_hash": _SHA256,
+                "pack_manifest_hash": _SHA256,
+                "status_claim": {"const": "USED_IMMUTABLE"},
+                "spent_once": {"const": True},
+            }),
+            "plan": _obj({
+                "plan_hash": _SHA256,
+                "plan_schema_version": _SHORT,
+                "evaluation_config_hash": _SHA256,
+                "order_assignment_hash": _SHA256,
+                "expected_task_count": {"type": "integer", "minimum": 1,
+                                        "maximum": 100_000},
+                "performs_inference": {"type": "boolean"},
+            }),
+            "evidence": _obj({
+                "report_hash": _SHA256,
+                "evaluation_manifest_hash": _SHA256,
+                "evaluation_artifact_tree_hash": _SHA256,
+                "comparison_manifest_hash": _SHA256,
+                "metrics_summary_hash": _SHA256,
+                "gate_report_hash": _SHA256,
+                "bootstrap_report_hash": _SHA256,
+                "files": {"type": "object"},
+            }),
+            "ledger": _obj({
+                "plan_started_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_event": {"enum": list(TERMINAL_EVALUATION_EVENTS)},
+                "unique_plan_hashes": {"type": "integer", "minimum": 1, "maximum": 1},
+                "plan_hash": _SHA256,
+                "unrecognised_events": {"type": "array", "maxItems": 16, "items": _SHORT},
+                "plan_started_event_hash": _SHA256,
+                "holdout_commit_event_hash": _SHA256,
+                "terminal_event_hash": _SHA256,
+            }),
+            "results": _obj({
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "measured_pairs": _COUNT,
+                "missing_pairs": _COUNT,
+                "baseline_result_count": _COUNT,
+                "candidate_result_count": _COUNT,
+                "paired_result_count": _COUNT,
+                "baseline_score_count": _COUNT,
+                "candidate_score_count": _COUNT,
+                "total_model_result_count": _COUNT,
+                "verdict_counts": _verdict_counts_schema(required=False),
+                "numeric_delta_counts": _numeric_delta_counts_schema(),
+            }),
+            "outcome": _obj({
+                "canonical_eligibility": _SHORT,
+                "decision_hash": _SHA256,
+                "human_review_required": {"type": "boolean"},
+                "rederived_by": {
+                    "const": "training_gym.evaluation.reports.decision_from_evidence"},
+                "promotes_model": {"const": False},
+                "activates_model": {"const": False},
+                "mutates_model_registry": {"const": False},
+            }),
+            "receipt_v2_seal_failure_classes": {
+                "type": "array", "minItems": 1, "maxItems": 16, "items": _SHORT},
+        }),
+    }
+
+
+def _verdict_counts_schema(*, required: bool = True) -> dict:
+    """The canonical paired verdict partition, one key per PRODUCTION verdict.
+
+    Exhaustive by construction when *required*: a receipt states `security_regression: 0`
+    rather than omitting it, because "there were none" is a positive claim about the one
+    verdict that is a veto, and an absent key is not one. The witness predates that rule
+    and carries only the verdicts it observed, so it asks for the looser form.
+    """
+    return _obj({verdict: _COUNT for verdict in COMPARISON_VERDICTS},
+                required=list(COMPARISON_VERDICTS) if required else [])
+
+
+def _numeric_delta_counts_schema() -> dict:
+    """The sign of the reward delta, per measured pair.
+
+    A DIFFERENT partition from the verdicts and never asserted equal to it bucket for
+    bucket: a pair can improve numerically and still be classified `security_improvement`,
+    and one can be `unchanged` on the verdict while carrying a delta that is not zero.
+    Only the TOTALS have to agree, and only because both partitions cover the same pairs.
+    """
+    return _obj({"positive": _COUNT, "zero": _COUNT, "negative": _COUNT})
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -1554,7 +2133,10 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
                          (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
                          (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema),
                          (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema),
-                         (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema)):
+                         (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema),
+                         (EVAL_RECEIPT_V3_SCHEMA_PATH, eval_receipt_v3_schema),
+                         (MEASUREMENT_WITNESS_SCHEMA_PATH,
+                          measurement_witness_schema)):
         path = REPO_ROOT / rel
         if not path.is_file():
             report.fail("SCHEMA", f"{rel} is missing")
@@ -2628,7 +3210,13 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
                         f"{sorted(MODERN_EVAL_RECEIPT_VERSIONS)}; every candidate "
                         f"measured after S3Q.0.1 produces one")
             continue
-        for problem in validate_against_schema(eval_receipt_v2_schema(), receipt):
+        # The VERSION decides the contract. `.2` and `.3` are both real, both tracked
+        # and both satisfiable; validating a `.3` against `.2`'s shape would report the
+        # repair as a violation.
+        schema = (eval_receipt_v3_schema()
+                  if version == EVAL_RECEIPT_V3_SCHEMA_VERSION
+                  else eval_receipt_v2_schema())
+        for problem in validate_against_schema(schema, receipt):
             report.fail("EVALUATION_RECEIPT", f"{cid}: receipt {problem}")
 
         # Held to every content rule the other control-plane surfaces are: no token
@@ -2651,12 +3239,28 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
         if named:
             report.fail("EVALUATION_RECEIPT",
                         f"{cid}: the receipt names eval-v4 task(s) {named[:4]}")
-        try:
-            text.encode("ascii")
-        except UnicodeEncodeError:
-            report.fail("EVALUATION_RECEIPT",
-                        f"{cid}: the receipt is not ASCII, so its canonical bytes depend "
-                        f"on an encoding choice")
+        # S3Q.0.2. `.1` and `.2` refuse non-ASCII, because that is the contract their
+        # documents were written and hashed under. `.3` DEFINES its canonical bytes as
+        # canonical JSON encoded UTF-8 instead, which closes the same ambiguity without
+        # discarding legitimate production decision text -- a gate message correctly
+        # typeset with U+2212 is the report's own evidence, not a formatting accident.
+        if version in UTF8_CANONICAL_RECEIPT_VERSIONS:
+            if receipt.get("canonical_encoding") != CANONICAL_RECEIPT_ENCODING:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt does not state its canonical encoding, "
+                            f"so its bytes depend on an unstated choice after all")
+            if raw != canonical_bytes(receipt):
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the bytes on disk are not the canonical bytes of "
+                            f"the document they parse to; the file and the digest "
+                            f"describe different receipts")
+        else:
+            try:
+                text.encode("ascii")
+            except UnicodeEncodeError:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt is not ASCII, so its canonical bytes "
+                            f"depend on an encoding choice")
 
         # ── the receipt must describe THIS candidate and THIS state ──────────
         candidate = receipt.get("candidate", {})
@@ -2866,7 +3470,10 @@ def _check_modern_evaluation_receipt(cp: ControlPlane, report: Report, *, entry:
                         f"control plane names {theirs!r}")
 
     # -- the source the code came from is in this branch's history --------------
-    commit = str(receipt.get("source", {}).get("evaluation_source_commit", ""))
+    # `.2` keeps one `source` block; `.3` splits it, and the EVALUATION source is the
+    # one that has to be in this history -- the seal source is checked separately below.
+    source = receipt.get("evaluation_source") or receipt.get("source", {})
+    commit = str(source.get("evaluation_source_commit", ""))
     code, _ = _git("cat-file", "-e", f"{commit}^{{commit}}")
     if code != 0:
         report.fail("EVALUATION_RECEIPT",
@@ -2909,12 +3516,267 @@ def _check_modern_evaluation_receipt(cp: ControlPlane, report: Report, *, entry:
         report.fail("EVALUATION_RECEIPT",
                     f"{cid}: the receipt's recorded decision is not the one its evidence "
                     f"produces")
+    if str(receipt.get("schema_version", "")) == EVAL_RECEIPT_V3_SCHEMA_VERSION:
+        _check_seal_recovery_receipt(report, receipt=receipt, cid=cid)
+
     report.note(
         f"{cid}: evaluation receipt {receipt.get('receipt_version')} verified - adapter "
         f"{str(candidate.get('adapter_sha256'))[:12]} rooted in training receipt "
         f"{str(bound_training.get('training_receipt_sha256'))[:12]}, verdict "
         f"{decision.eligibility.value} REDERIVED from body-free evidence rather than "
         f"read from the claim")
+
+
+def _check_seal_recovery_receipt(report: Report, *, receipt: dict, cid: str) -> None:
+    """S3Q.0.2 - the three bindings only a `.3` receipt can be held to.
+
+    All three reach OUTSIDE the receipt, which is the point: everything a document says
+    about itself it can be edited to say.
+
+      1. THE WITNESS IS REAL AND IS THE ONE BOUND. The tracked pre-repair witness is
+         re-read, re-hashed and required to agree with the receipt about the evaluation
+         source, the plan, the report, the three ledger event digests and the artefact
+         identities. A receipt that binds a witness nobody can produce binds nothing.
+      2. THE GIT TOPOLOGY IS THE ONE CLAIMED. The witness commit's FIRST PARENT must be
+         the evaluation source commit. That single fact is what survives the repair: it
+         was fixed before HEAD could move, and it cannot be re-created afterwards.
+      3. THE VERDICT VOCABULARY IS PRODUCTION'S. Re-derived from `ComparisonVerdict`
+         rather than read from the restated tuple, for the same reason the terminal
+         vocabulary is: a literal nobody re-derives is a second writable copy.
+
+    Loads no model, opens no socket, reads no held-out material and does not need the
+    gitignored evaluation tree.
+    """
+    bound = receipt.get("measurement_witness", {})
+    source = receipt.get("evaluation_source", {})
+    seal = receipt.get("seal_implementation_source", {})
+    results = receipt.get("results", {})
+
+    # -- 3. the vocabulary, RE-DERIVED from production ------------------------
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from training_gym.evaluation.comparison import ComparisonVerdict
+    except Exception as exc:  # pragma: no cover - environment failure, reported not hidden
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the production comparison module could not be imported "
+                    f"({exc}); the receipt's verdict partition is therefore UNVERIFIED")
+        return
+    production = tuple(sorted(v.value for v in ComparisonVerdict))
+    if production != tuple(sorted(COMPARISON_VERDICTS)):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: this verifier's verdict vocabulary "
+                    f"{sorted(COMPARISON_VERDICTS)} is not the production one "
+                    f"{list(production)}; a restated contract nobody re-derives is a "
+                    f"second writable copy of it")
+    counts = results.get("verdict_counts", {})
+    if tuple(sorted(counts)) != production:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt partitions its pairs over {sorted(counts)} and "
+                    f"production classifies {list(production)}; a partition missing a "
+                    f"verdict cannot be exhaustive")
+    elif sum(counts.values()) != results.get("measured_pairs"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the verdict counts sum to {sum(counts.values())} against "
+                    f"{results.get('measured_pairs')!r} measured pair(s)")
+    if list(results.get("verdict_vocabulary", [])) != list(production):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt records verdict vocabulary "
+                    f"{results.get('verdict_vocabulary')} and production defines "
+                    f"{list(production)}")
+
+    # -- 1. the witness, re-read from the tracked tree ------------------------
+    pointer = str(bound.get("path") or "")
+    path = REPO_ROOT / pointer
+    if not pointer or path.is_symlink() or not path.is_file():
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound measurement witness {pointer!r} is not a regular "
+                    f"tracked file; the evaluation source is then bound to nothing")
+        return
+    code, tracked = _git("ls-files", "--error-unmatch", "--", pointer)
+    if code != 0 or not tracked:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the measurement witness {pointer} is untracked; a bridge "
+                    f"Git does not carry cannot cross a repair commit")
+    raw = path.read_bytes()
+    if sha256_bytes(raw) != bound.get("measurement_witness_sha256"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the tracked measurement witness does not hash to the digest "
+                    f"the receipt bound; one of the two describes a different measurement")
+        return
+    try:
+        witness = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound measurement witness is unreadable ({exc})")
+        return
+    for problem in validate_against_schema(measurement_witness_schema(), witness):
+        report.fail("EVALUATION_RECEIPT", f"{cid}: measurement witness {problem}")
+    body = {k: v for k, v in witness.items() if k != "witness_hash"}
+    if witness.get("witness_hash") != sha256_bytes(canonical_bytes(body)):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the measurement witness's own digest does not match its "
+                    f"bytes")
+    if witness.get("witness_hash") != bound.get("measurement_witness_hash"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt records witness hash "
+                    f"{str(bound.get('measurement_witness_hash'))[:12]} and the witness "
+                    f"carries {str(witness.get('witness_hash'))[:12]}")
+
+    # A witness that granted anything would be a receipt wearing another name.
+    grants = witness.get("grants", {})
+    if any(grants.get(flag) for flag in ("candidate_state", "promotion", "activation",
+                                         "registry_mutation", "retry_or_rerun",
+                                         "is_an_evaluation_receipt")):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound measurement witness claims to grant something; a "
+                    f"witness records facts and authorises nothing")
+    if witness.get("evaluation_id") != receipt.get("evaluation_id") or \
+            int(witness.get("evaluation_generation", -1)) != \
+            int(receipt.get("evaluation_generation", -2)):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the witness describes "
+                    f"{witness.get('evaluation_id')!r} generation "
+                    f"{witness.get('evaluation_generation')!r} and the receipt describes "
+                    f"{receipt.get('evaluation_id')!r} generation "
+                    f"{receipt.get('evaluation_generation')!r}")
+    if witness.get("candidate_id") != cid:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound witness describes {witness.get('candidate_id')!r}")
+
+    witness_source = witness.get("evaluation_source", {})
+    for field in ("evaluation_source_commit", "evaluation_source_tree_oid",
+                  "evaluation_source_digest"):
+        if source.get(field) != witness_source.get(field):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt's {field} is "
+                        f"{str(source.get(field))[:12]} and the pre-repair witness "
+                        f"recorded {str(witness_source.get(field))[:12]}; the evaluation "
+                        f"source must come from the witness, never from a repair-time "
+                        f"HEAD")
+
+    ledger, evidence = receipt.get("ledger", {}), receipt.get("evidence", {})
+    w_ledger, w_evidence = witness.get("ledger", {}), witness.get("evidence", {})
+    for section, mine, theirs, fields in (
+            ("ledger", ledger, w_ledger,
+             ("plan_hash", "plan_started_event_hash", "holdout_commit_event_hash",
+              "terminal_event_hash", "terminal_event")),
+            ("evidence", evidence, w_evidence,
+             ("report_hash", "evaluation_manifest_hash",
+              "evaluation_artifact_tree_hash", "comparison_manifest_hash",
+              "metrics_summary_hash", "gate_report_hash", "bootstrap_report_hash"))):
+        for field in fields:
+            if mine.get(field) != theirs.get(field):
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: {section}.{field} is {str(mine.get(field))[:12]} in "
+                            f"the receipt and {str(theirs.get(field))[:12]} in the "
+                            f"witness")
+    if receipt.get("plan", {}).get("plan_hash") != witness.get("plan", {}).get("plan_hash"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt and the witness bind different plans")
+    holdout, w_corpus = receipt.get("holdout", {}), witness.get("eval_corpus", {})
+    for field in ("dataset_id", "dataset_version", "dataset_manifest_hash",
+                  "task_pack_hash", "hidden_target_store_hash"):
+        if holdout.get(field) != w_corpus.get(field):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: holdout.{field} is {str(holdout.get(field))[:12]} in "
+                        f"the receipt and {str(w_corpus.get(field))[:12]} in the "
+                        f"witness; the corpus that was spent is not open to revision")
+    if receipt.get("evidence", {}).get("pack_manifest_hash") != \
+            w_corpus.get("pack_manifest_hash"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt and the witness disagree about the pack manifest")
+    if w_corpus.get("status_claim") != "USED_IMMUTABLE" or not w_corpus.get("spent_once"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the witness does not record the corpus as spent exactly "
+                    f"once and immutable")
+    w_results = witness.get("results", {})
+    for field in ("task_count", "measured_pairs", "missing_pairs",
+                  "total_model_result_count", "baseline_result_count",
+                  "candidate_result_count", "paired_result_count"):
+        if results.get(field) != w_results.get(field):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: results.{field} is {results.get(field)!r} in the receipt "
+                        f"and {w_results.get(field)!r} in the witness")
+    # The witness predates the exhaustive-key rule and carries only what it observed.
+    if {k: v for k, v in counts.items() if v} != w_results.get("verdict_counts"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt's non-zero verdict counts are not the ones the "
+                    f"witness recorded")
+    if results.get("numeric_delta_counts") != w_results.get("numeric_delta_counts"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt and the witness disagree about the numeric "
+                    f"delta partition")
+    if witness.get("outcome", {}).get("canonical_eligibility") != \
+            receipt.get("outcome", {}).get("eligibility"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the witness rederived "
+                    f"{witness.get('outcome', {}).get('canonical_eligibility')!r} and "
+                    f"the receipt claims "
+                    f"{receipt.get('outcome', {}).get('eligibility')!r}")
+
+    # -- 2. the Git topology that survives the repair -------------------------
+    witness_commit = str(bound.get("measurement_witness_commit", ""))
+    code, parents = _git("rev-list", "--parents", "-n", "1", witness_commit)
+    if code != 0 or not parents:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: measurement witness commit {witness_commit[:12]} is not a "
+                    f"commit in this repository")
+    else:
+        chain = parents.split()
+        first_parent = chain[1] if len(chain) > 1 else ""
+        if first_parent != str(source.get("evaluation_source_commit", "")):
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the measurement witness commit's first parent is "
+                        f"{first_parent[:12] or '(none)'} and the receipt names "
+                        f"evaluation source "
+                        f"{str(source.get('evaluation_source_commit'))[:12]}; the "
+                        f"topology that fixes the evaluation source is the one thing a "
+                        f"post-repair receipt cannot re-create")
+        code, _ = _git("merge-base", "--is-ancestor", witness_commit, "HEAD")
+        if code != 0:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the measurement witness commit is not an ancestor of "
+                        f"HEAD")
+        # The witness must be the file THAT commit carried, not one edited afterwards.
+        code, blob = _git("rev-parse", f"{witness_commit}:{pointer}")
+        code2, current = _git("hash-object", "--", str(path))
+        if code == 0 and code2 == 0 and blob != current:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the tracked measurement witness is not the blob its own "
+                        f"commit recorded; a bridge edited after it was laid is not one")
+
+    # -- the two sources are separate, and the seal source is real ------------
+    seal_commit = str(seal.get("seal_implementation_source_commit", ""))
+    code, _ = _git("cat-file", "-e", f"{seal_commit}^{{commit}}")
+    if code != 0:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: seal implementation source {seal_commit[:12]} is not a "
+                    f"commit in this repository")
+    elif _git("merge-base", "--is-ancestor", seal_commit, "HEAD")[0] != 0:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: seal implementation source {seal_commit[:12]} is not an "
+                    f"ancestor of HEAD")
+    differs = seal_commit != str(source.get("evaluation_source_commit", ""))
+    if bool(seal.get("differs_from_evaluation_source")) != differs:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt says the seal and evaluation sources "
+                    f"{'differ' if seal.get('differs_from_evaluation_source') else 'match'} "
+                    f"and the commits say otherwise")
+    if differs and _git("merge-base", "--is-ancestor",
+                        str(source.get("evaluation_source_commit", "")),
+                        seal_commit)[0] != 0:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the seal implementation source does not descend from the "
+                    f"evaluation source; a repair that is not built on the evaluated "
+                    f"code is not a repair of this measurement")
+    report.note(
+        f"{cid}: seal recovery verified - measured at "
+        f"{str(source.get('evaluation_source_commit'))[:12]}, sealed at "
+        f"{seal_commit[:12]}, bridged by witness "
+        f"{str(bound.get('measurement_witness_sha256'))[:12]} whose first parent IS the "
+        f"evaluation source; {sum(counts.values()) if counts else 0} pair(s) partitioned "
+        f"over {len(production)} production verdict(s)")
 
 
 def transition_problems(before: str, after: str, table: dict, label: str) -> list[str]:

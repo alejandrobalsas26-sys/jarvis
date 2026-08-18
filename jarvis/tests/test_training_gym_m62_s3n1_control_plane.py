@@ -1407,14 +1407,27 @@ def test_the_verifier_writes_nothing_when_it_runs():
 
 
 def test_the_verifier_only_shells_out_to_read_only_git():
+    """Every git subcommand the verifier runs, and why each one cannot write.
+
+    `rev-list` and `hash-object` joined the set at S3Q.0.2, which needs to walk a
+    commit's parents and re-derive a tracked blob's oid to check that a measurement
+    witness is the document its own commit carried.
+
+    `hash-object` is the one that deserves the second assertion below: it is read-only
+    ONLY without `-w`. With `-w` it writes into the object database, so a verifier is not
+    permitted to pass it — and "we did not mean to" is not a control.
+    """
     read_only = {"rev-parse", "cat-file", "merge-base", "ls-files", "diff", "grep",
-                 "show"}
+                 "show", "rev-list", "hash-object"}
     for node in ast.walk(VERIFIER_TREE):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id == "_git":
             first = node.args[0]
             assert isinstance(first, ast.Constant) and first.value in read_only, \
                 ast.dump(first)
+            if first.value == "hash-object":
+                literals = [a.value for a in node.args if isinstance(a, ast.Constant)]
+                assert "-w" not in literals, ast.dump(node)
     assert "shell=False" in VERIFIER_SOURCE
     assert "shell=True" not in VERIFIER_SOURCE
 

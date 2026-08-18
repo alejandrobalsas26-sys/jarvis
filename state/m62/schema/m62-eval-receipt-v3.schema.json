@@ -1,0 +1,1526 @@
+{
+  "$id": "m62-eval-receipt-v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root-independent, tracked evidence that ONE identified candidate, built from ONE identified training receipt and ONE identified adapter, completed ONE held-out evaluation against ONE identified baseline under ONE spent single-use authority, and that its EVALUATED_* status claim is REDERIVABLE from the body-free decision evidence it carries rather than asserted by it. v3 seals an EXISTING measurement after the fact: it binds the evaluation source through a pre-repair measurement witness and names the seal implementation source separately, because after a post-live repair they are legitimately different commits. Its canonical bytes are canonical JSON encoded UTF-8, so production decision text is preserved exactly. It is EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER: it grants no retry, no second evaluation, no promotion, no activation, no registry mutation and no release. receipt_hash proves payload integrity only -- not human authorisation, not execution authenticity, not who ran the command.",
+  "properties": {
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "form": {
+          "const": "EVAL:<plan-hash>"
+        },
+        "grants_no_further_authority": {
+          "const": true
+        },
+        "holdout_commit_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "human_authorization": {
+          "const": "external_milestone_authority"
+        },
+        "plan_consumption_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "retry_authorized": {
+          "const": false
+        },
+        "seal_consumed_no_authority": {
+          "const": true
+        },
+        "spent_by_the_run_this_receipt_describes": {
+          "const": true
+        },
+        "token_literal_recorded": {
+          "const": false
+        }
+      },
+      "required": [
+        "bound_plan_hash",
+        "form",
+        "grants_no_further_authority",
+        "holdout_commit_count",
+        "human_authorization",
+        "plan_consumption_count",
+        "retry_authorized",
+        "seal_consumed_no_authority",
+        "spent_by_the_run_this_receipt_describes",
+        "token_literal_recorded"
+      ],
+      "type": "object"
+    },
+    "baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "base_model_identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "tokenizer_identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_model_identity_hash",
+        "model_id",
+        "reference_hash",
+        "revision",
+        "tokenizer_identity_hash"
+      ],
+      "type": "object"
+    },
+    "candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_artifact_set_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "adapter_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "adapter_reference_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "adapter_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "candidate_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "identity_source": {
+          "const": "training_receipt"
+        },
+        "status_claim": {
+          "enum": [
+            "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
+            "EVALUATED_NEEDS_MORE_EVIDENCE",
+            "EVALUATED_NOT_ELIGIBLE",
+            "EVALUATED_QUARANTINED"
+          ]
+        }
+      },
+      "required": [
+        "adapter_artifact_set_hash",
+        "adapter_manifest_hash",
+        "adapter_reference_hash",
+        "adapter_sha256",
+        "candidate_id",
+        "identity_source",
+        "status_claim"
+      ],
+      "type": "object"
+    },
+    "canonical_encoding": {
+      "const": "canonical JSON (scripts.verify_m62_control_plane.canonical_json) encoded UTF-8"
+    },
+    "decision_evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap": {
+          "additionalProperties": false,
+          "properties": {
+            "ci_high": {
+              "type": "number"
+            },
+            "ci_low": {
+              "type": "number"
+            },
+            "claim": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "confidence_level": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "error_accounting": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "excludes_regression_margin": {
+              "type": "boolean"
+            },
+            "indicates_regression": {
+              "type": "boolean"
+            },
+            "iterations": {
+              "maximum": 10000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "limitations": {
+              "items": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "losses": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mean_delta": {
+              "type": "number"
+            },
+            "median_delta": {
+              "type": "number"
+            },
+            "method": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "n_excluded": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "n_missing": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "n_pairs": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "observed_improvement": {
+              "type": "boolean"
+            },
+            "p_value_reported": {
+              "const": false
+            },
+            "regression_margin": {
+              "type": "number"
+            },
+            "seed": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "statistics_version": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "ties": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "verdict": {
+              "enum": [
+                "sufficient",
+                "small_sample",
+                "insufficient_evidence",
+                "invalid"
+              ]
+            },
+            "wins": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ci_high",
+            "ci_low",
+            "claim",
+            "confidence_level",
+            "error_accounting",
+            "excludes_regression_margin",
+            "indicates_regression",
+            "iterations",
+            "limitations",
+            "losses",
+            "mean_delta",
+            "median_delta",
+            "method",
+            "n_excluded",
+            "n_missing",
+            "n_pairs",
+            "observed_improvement",
+            "p_value_reported",
+            "regression_margin",
+            "seed",
+            "statistics_version",
+            "ties",
+            "verdict",
+            "wins"
+          ],
+          "type": "object"
+        },
+        "canonical_decision": {
+          "additionalProperties": false,
+          "properties": {
+            "activates_model": {
+              "const": false
+            },
+            "blockers": {
+              "items": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "eligibility": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "empirical_status": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "human_review_required": {
+              "type": "boolean"
+            },
+            "promotes_model": {
+              "const": false
+            },
+            "rationale": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            }
+          },
+          "required": [
+            "activates_model",
+            "blockers",
+            "eligibility",
+            "empirical_status",
+            "human_review_required",
+            "promotes_model",
+            "rationale",
+            "warnings"
+          ],
+          "type": "object"
+        },
+        "carries_non_ascii_decision_text": {
+          "type": "boolean"
+        },
+        "decision_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "empirical_status": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gate_report": {
+          "additionalProperties": false,
+          "properties": {
+            "blocking_count": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "evaluated_gates": {
+              "items": {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "findings": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "gate": {
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "security",
+                      "quality",
+                      "family",
+                      "coverage",
+                      "statistical",
+                      "operational"
+                    ]
+                  },
+                  "message": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observed": {
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "maxLength": 320,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "severity": {
+                    "enum": [
+                      "blocking",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "threshold": {
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "maxLength": 320,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "threshold_calibrated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "gate",
+                  "kind",
+                  "message",
+                  "observed",
+                  "severity",
+                  "threshold",
+                  "threshold_calibrated"
+                ],
+                "type": "object"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "gates_version": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "limitations": {
+              "items": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "passed": {
+              "type": "boolean"
+            },
+            "security_blocking_count": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "security_is_a_veto_not_a_weight": {
+              "const": true
+            },
+            "thresholds_are_calibrated": {
+              "type": "boolean"
+            },
+            "warning_count": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "blocking_count",
+            "evaluated_gates",
+            "findings",
+            "gates_version",
+            "limitations",
+            "passed",
+            "security_blocking_count",
+            "security_is_a_veto_not_a_weight",
+            "thresholds_are_calibrated",
+            "warning_count"
+          ],
+          "type": "object"
+        },
+        "non_ascii_codepoints": {
+          "items": {
+            "maxLength": 16,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "rederived_by": {
+          "const": "training_gym.evaluation.reports.decision_from_evidence"
+        },
+        "report_serialization_state": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "bootstrap",
+        "canonical_decision",
+        "carries_non_ascii_decision_text",
+        "decision_hash",
+        "empirical_status",
+        "gate_report",
+        "non_ascii_codepoints",
+        "rederived_by",
+        "report_serialization_state"
+      ],
+      "type": "object"
+    },
+    "evaluation_generation": {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "evaluation_id": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    },
+    "evaluation_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "evaluation_source": {
+      "additionalProperties": false,
+      "properties": {
+        "derived_from": {
+          "const": "measurement_witness"
+        },
+        "evaluation_source_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "evaluation_source_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evaluation_source_tree_oid": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "evidence_level": {
+          "const": "the measurement witness was written in a clean worktree at this commit, before the repair moved HEAD, and its Git first parent is this commit; that is repository provenance and not proof of which bytes executed"
+        }
+      },
+      "required": [
+        "derived_from",
+        "evaluation_source_commit",
+        "evaluation_source_digest",
+        "evaluation_source_tree_oid",
+        "evidence_level"
+      ],
+      "type": "object"
+    },
+    "evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "comparison_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evaluation_artifact_tree_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evaluation_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "files": {
+          "type": "object"
+        },
+        "gate_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "metrics_summary_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bootstrap_report_hash",
+        "comparison_manifest_hash",
+        "evaluation_artifact_tree_hash",
+        "evaluation_manifest_hash",
+        "files",
+        "gate_report_hash",
+        "metrics_summary_hash",
+        "pack_manifest_hash",
+        "report_hash"
+      ],
+      "type": "object"
+    },
+    "execution": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_problems": {
+          "maxItems": 0,
+          "type": "array"
+        },
+        "artifact_verification": {
+          "const": "PASS"
+        },
+        "backend_ids": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "backend_version": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "empirical_status": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "model_generations_during_seal": {
+          "const": 0
+        },
+        "model_loads_during_seal": {
+          "const": 0
+        },
+        "report_serialization_state": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sealed_from_existing_measurement": {
+          "const": true
+        }
+      },
+      "required": [
+        "artifact_problems",
+        "artifact_verification",
+        "backend_ids",
+        "backend_version",
+        "empirical_status",
+        "model_generations_during_seal",
+        "model_loads_during_seal",
+        "report_serialization_state",
+        "sealed_from_existing_measurement"
+      ],
+      "type": "object"
+    },
+    "holdout": {
+      "additionalProperties": false,
+      "properties": {
+        "counts_by_family": {
+          "type": "object"
+        },
+        "counts_by_kind": {
+          "type": "object"
+        },
+        "counts_by_split": {
+          "type": "object"
+        },
+        "dataset_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "dataset_manifest_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "dataset_version": {
+          "pattern": "^v[0-9]+$",
+          "type": "string"
+        },
+        "hidden_target_store_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_manifest_shard_hashes": {
+          "type": "object"
+        },
+        "split_manifest_hashes": {
+          "type": "object"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "task_pack_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "counts_by_family",
+        "counts_by_kind",
+        "counts_by_split",
+        "dataset_id",
+        "dataset_manifest_hash",
+        "dataset_version",
+        "hidden_target_store_hash",
+        "pack_manifest_shard_hashes",
+        "split_manifest_hashes",
+        "task_count",
+        "task_pack_hash"
+      ],
+      "type": "object"
+    },
+    "holdout_commit": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "commit_schema_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "first_arm": {
+          "enum": [
+            "baseline",
+            "candidate"
+          ]
+        },
+        "first_request_parity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "first_task_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "order_assignment_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "pack_identity_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "performs_inference": {
+          "type": "boolean"
+        },
+        "target_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend_id",
+        "commit_schema_version",
+        "first_arm",
+        "first_request_parity_hash",
+        "first_task_hash",
+        "order_assignment_hash",
+        "pack_identity_hash",
+        "performs_inference",
+        "target_count",
+        "task_count"
+      ],
+      "type": "object"
+    },
+    "ledger": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "type": "object"
+        },
+        "holdout_commit_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "holdout_commit_event_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "plan_started_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "plan_started_event_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "terminal_count": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "terminal_event": {
+          "enum": [
+            "completed",
+            "failed",
+            "interrupted",
+            "quarantined"
+          ]
+        },
+        "terminal_event_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "terminal_is_successful": {
+          "type": "boolean"
+        },
+        "terminal_state": {
+          "enum": [
+            "completed",
+            "failed",
+            "interrupted",
+            "quarantined"
+          ]
+        },
+        "unique_plan_hashes": {
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "unrecognised_events": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array"
+        }
+      },
+      "required": [
+        "events",
+        "holdout_commit_count",
+        "holdout_commit_event_hash",
+        "plan_hash",
+        "plan_started_count",
+        "plan_started_event_hash",
+        "terminal_count",
+        "terminal_event",
+        "terminal_event_hash",
+        "terminal_is_successful",
+        "terminal_state",
+        "unique_plan_hashes",
+        "unrecognised_events"
+      ],
+      "type": "object"
+    },
+    "measurement_witness": {
+      "additionalProperties": false,
+      "properties": {
+        "grants_no_authority": {
+          "const": true
+        },
+        "measurement_witness_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "measurement_witness_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "measurement_witness_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "type": "string"
+        },
+        "witness_first_parent_is_evaluation_source": {
+          "const": true
+        },
+        "witness_schema_version": {
+          "const": "m62.measurement_witness.1"
+        }
+      },
+      "required": [
+        "grants_no_authority",
+        "measurement_witness_commit",
+        "measurement_witness_hash",
+        "measurement_witness_sha256",
+        "path",
+        "witness_first_parent_is_evaluation_source",
+        "witness_schema_version"
+      ],
+      "type": "object"
+    },
+    "outcome": {
+      "additionalProperties": false,
+      "properties": {
+        "activates_model": {
+          "const": false
+        },
+        "eligibility": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "gate_blockers": {
+          "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "gate_warnings": {
+          "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "human_review_required": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "mutates_model_registry": {
+          "const": false
+        },
+        "promotes_model": {
+          "const": false
+        },
+        "security_blocking_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activates_model",
+        "eligibility",
+        "gate_blockers",
+        "gate_warnings",
+        "human_review_required",
+        "limitations",
+        "mutates_model_registry",
+        "promotes_model",
+        "security_blocking_count"
+      ],
+      "type": "object"
+    },
+    "plan": {
+      "additionalProperties": false,
+      "properties": {
+        "binds_exact_pack_identity": {
+          "const": true
+        },
+        "evaluation_config_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evaluator_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expected_task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "order_assignment_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "order_policy": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "performs_inference": {
+          "type": "boolean"
+        },
+        "plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "plan_schema_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "binds_exact_pack_identity",
+        "evaluation_config_hash",
+        "evaluator_version",
+        "expected_task_count",
+        "order_assignment_hash",
+        "order_policy",
+        "performs_inference",
+        "plan_hash",
+        "plan_schema_version"
+      ],
+      "type": "object"
+    },
+    "policies": {
+      "additionalProperties": false,
+      "properties": {
+        "configured_timeout_s": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dependency_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "family_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "gate_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "generation_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "batch_size": {
+              "maximum": 4096,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "device_policy": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "do_sample": {
+              "type": "boolean"
+            },
+            "max_input_tokens": {
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "max_new_tokens": {
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mode": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "policy_version": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "precision_policy": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "reasoning_policy": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "repetition_penalty": {
+              "type": "number"
+            },
+            "seed": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "stop_sequences": {
+              "items": {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "timeout_s": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "top_k": {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "truncation_side": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "batch_size",
+            "device_policy",
+            "do_sample",
+            "max_input_tokens",
+            "max_new_tokens",
+            "mode",
+            "policy_version",
+            "precision_policy",
+            "reasoning_policy",
+            "repetition_penalty",
+            "seed",
+            "stop_sequences",
+            "temperature",
+            "timeout_s",
+            "top_k",
+            "top_p",
+            "truncation_side"
+          ],
+          "type": "object"
+        },
+        "generation_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "grader_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "hardware_report_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "metric_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "statistical_policy_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "timeout_enforced": {
+          "const": false
+        }
+      },
+      "required": [
+        "configured_timeout_s",
+        "dependency_report_hash",
+        "family_policy_hash",
+        "gate_policy_hash",
+        "generation_policy",
+        "generation_policy_hash",
+        "grader_policy_hash",
+        "hardware_report_hash",
+        "metric_policy_hash",
+        "statistical_policy_hash",
+        "timeout_enforced"
+      ],
+      "type": "object"
+    },
+    "receipt_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "receipt_version": {
+      "const": "m62.eval_receipt.3"
+    },
+    "results": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_result_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "baseline_score_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidate_result_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidate_score_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expected_task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "losses": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measured_pairs": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "missing_pairs": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "numeric_delta_counts": {
+          "additionalProperties": false,
+          "properties": {
+            "negative": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "positive": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "zero": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "negative",
+            "positive",
+            "zero"
+          ],
+          "type": "object"
+        },
+        "paired_result_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ties": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_model_result_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verdict_counts": {
+          "additionalProperties": false,
+          "properties": {
+            "improved": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "not_comparable": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "regressed": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "security_improvement": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "security_regression": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unchanged": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "improved",
+            "not_comparable",
+            "regressed",
+            "security_improvement",
+            "security_regression",
+            "unchanged"
+          ],
+          "type": "object"
+        },
+        "verdict_vocabulary": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "wins": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wins_ties_losses_are_a_partial_partition": {
+          "const": true
+        }
+      },
+      "required": [
+        "baseline_result_count",
+        "baseline_score_count",
+        "candidate_result_count",
+        "candidate_score_count",
+        "expected_task_count",
+        "losses",
+        "measured_pairs",
+        "missing_pairs",
+        "numeric_delta_counts",
+        "paired_result_count",
+        "task_count",
+        "ties",
+        "total_model_result_count",
+        "verdict_counts",
+        "verdict_vocabulary",
+        "wins",
+        "wins_ties_losses_are_a_partial_partition"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "m62.eval_receipt.3"
+    },
+    "seal_implementation_source": {
+      "additionalProperties": false,
+      "properties": {
+        "derived_from_repository_head": {
+          "const": true
+        },
+        "differs_from_evaluation_source": {
+          "type": "boolean"
+        },
+        "evidence_level": {
+          "const": "this is the tracked code that BUILT the receipt; it did not measure, and recording it as the evaluation source is the defect m62.eval_receipt.3 exists to fix"
+        },
+        "seal_implementation_source_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "seal_implementation_tree_oid": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "worktree_clean_at_build": {
+          "const": true
+        }
+      },
+      "required": [
+        "derived_from_repository_head",
+        "differs_from_evaluation_source",
+        "evidence_level",
+        "seal_implementation_source_commit",
+        "seal_implementation_tree_oid",
+        "worktree_clean_at_build"
+      ],
+      "type": "object"
+    },
+    "seal_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "training_receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "type": "string"
+        },
+        "schema_version": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "training_milestone": {
+          "pattern": "^S[0-9A-Z.]{1,10}$",
+          "type": "string"
+        },
+        "training_plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "training_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "training_source_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "path",
+        "schema_version",
+        "training_milestone",
+        "training_plan_hash",
+        "training_receipt_sha256",
+        "training_source_commit"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "authority",
+    "baseline",
+    "candidate",
+    "canonical_encoding",
+    "decision_evidence",
+    "evaluation_generation",
+    "evaluation_id",
+    "evaluation_milestone",
+    "evaluation_source",
+    "evidence",
+    "execution",
+    "holdout",
+    "holdout_commit",
+    "ledger",
+    "measurement_witness",
+    "outcome",
+    "plan",
+    "policies",
+    "receipt_hash",
+    "receipt_version",
+    "results",
+    "schema_version",
+    "seal_implementation_source",
+    "seal_milestone",
+    "training_receipt"
+  ],
+  "title": "M62 portable evaluation receipt v3",
+  "type": "object"
+}
