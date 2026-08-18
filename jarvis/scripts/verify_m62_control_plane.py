@@ -90,6 +90,36 @@ TRAIN_RECEIPT_SCHEMA_VERSION = "m62.train_receipt.1"
 #: same reason the training receipt exists, one milestone later and one door further in.
 EVAL_RECEIPT_SCHEMA_VERSION = "m62.eval_receipt.1"
 
+#: S3Q.0.1. The MODERN portable evaluation receipt. `.1` was qualified against synthetic
+#: evidence and, audited before the one-shot live run, was found to leave four holes an
+#: auditor could drive a claim through: it emitted EMPTY direct adapter identities, it
+#: bound no training receipt, it accepted a caller's candidate label and source commit
+#: unchecked, and it copied `eligibility` out of the report so the strongest thing a
+#: clean clone could say about an EVALUATED_* claim was "the receipt says so".
+#:
+#: Those are contract changes, not clarifications, so the version moves rather than `.1`
+#: being mutated under the synthetic receipts that already verify against it. No real
+#: eval-v4 receipt exists, so nothing is migrated.
+EVAL_RECEIPT_V2_SCHEMA_VERSION = "m62.eval_receipt.2"
+
+#: The receipt versions a MODERN (non-legacy) EVALUATED_* candidate may present. Only
+#: `.2`: a `.1` receipt for a run measured after S3Q.0.1 would be evidence deliberately
+#: written to a weaker contract, and accepting one would make the upgrade optional.
+MODERN_EVAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
+    EVAL_RECEIPT_V2_SCHEMA_VERSION})
+
+#: The closed terminal vocabulary, restated here and RE-DERIVED from
+#: `EvaluationRunState.is_terminal` by `check_evaluation_receipt`. Restated because the
+#: schema must build on a host where the package will not import; re-derived because a
+#: literal nobody checks is the second writable copy of a contract.
+#:
+#: The distinction that matters: `completed` is the only SUCCESSFUL terminal state. A run
+#: that ended `failed`, `interrupted` or `quarantined` reached a terminal event and did
+#: not reach a measurement.
+TERMINAL_EVALUATION_EVENTS: tuple[str, ...] = (
+    "completed", "failed", "interrupted", "quarantined")
+SUCCESSFUL_TERMINAL_EVALUATION_EVENT = "completed"
+
 #: Candidates whose evaluated state predates the portable evaluation receipt.
 #:
 #: S3I measured candidate 001 and S3L measured candidate 002, both before this evidence
@@ -113,6 +143,7 @@ CURRENT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-current.schema.json"
 SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
 TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
 EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
+EVAL_RECEIPT_V2_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v2.schema.json"
 RECEIPT_DIR = f"{STATE_DIR}/receipts"
 MIGRATION_DIR = f"{STATE_DIR}/migrations"
 MIGRATION_MANIFEST_PATH = f"{MIGRATION_DIR}/0001-control-plane-v2.json"
@@ -902,6 +933,362 @@ def eval_receipt_schema() -> dict:
     }
 
 
+#: Gate prose, a bootstrap claim and a decision rationale are machine-generated from
+#: counts, thresholds and policy names by `gates.py`, `statistics.py` and `reports.py` --
+#: none of which is ever handed a prompt, a held-out target or a model response. They run
+#: longer than `MAX_JSON_STRING_CHARS`, so they get their own bound rather than the
+#: 320-character one that exists to stop free text arriving in instalments. The bound is
+#: still a bound: it is what keeps "the decision evidence" from becoming "a place to put
+#: a paragraph".
+_DECISION_TEXT = {"type": "string", "minLength": 1, "maxLength": 1000}
+_MEASURED = {"oneOf": [{"type": "number"}, _SHORT, {"type": "null"}]}
+_COUNT = {"type": "integer", "minimum": 0, "maximum": 100_000}
+
+
+def _gate_evidence_schema() -> dict:
+    """One serialised `GateReport`. Strict, because a partial one decides nothing."""
+    finding = _obj({
+        "gate": _SHORT,
+        "kind": {"enum": ["security", "quality", "family", "coverage", "statistical",
+                          "operational"]},
+        "severity": {"enum": ["blocking", "warning", "info"]},
+        "message": _DECISION_TEXT,
+        "observed": _MEASURED,
+        "threshold": _MEASURED,
+        "threshold_calibrated": {"type": "boolean"},
+    })
+    return _obj({
+        "gates_version": _SHORT,
+        "passed": {"type": "boolean"},
+        "blocking_count": _COUNT,
+        "security_blocking_count": _COUNT,
+        "warning_count": _COUNT,
+        "findings": {"type": "array", "maxItems": 128, "items": finding},
+        "evaluated_gates": {"type": "array", "maxItems": 128, "items": _SHORT},
+        "security_is_a_veto_not_a_weight": {"const": True},
+        "thresholds_are_calibrated": {"type": "boolean"},
+        "limitations": {"type": "array", "maxItems": 64, "items": _DECISION_TEXT},
+    })
+
+
+def _bootstrap_evidence_schema() -> dict:
+    """One serialised `BootstrapReport`, including the derived claims it must reproduce."""
+    return _obj({
+        "statistics_version": _SHORT,
+        "verdict": {"enum": ["sufficient", "small_sample", "insufficient_evidence",
+                             "invalid"]},
+        "n_pairs": _COUNT, "n_excluded": _COUNT, "n_missing": _COUNT,
+        "mean_delta": {"type": "number"}, "median_delta": {"type": "number"},
+        "wins": _COUNT, "ties": _COUNT, "losses": _COUNT,
+        "ci_low": {"type": "number"}, "ci_high": {"type": "number"},
+        "confidence_level": {"type": "number", "minimum": 0, "maximum": 1},
+        "iterations": {"type": "integer", "minimum": 0, "maximum": 10_000_000},
+        "seed": {"type": "integer", "minimum": 0, "maximum": 2**32 - 1},
+        "method": _SHORT,
+        "regression_margin": {"type": "number"},
+        "error_accounting": _SHORT,
+        "observed_improvement": {"type": "boolean"},
+        "excludes_regression_margin": {"type": "boolean"},
+        "indicates_regression": {"type": "boolean"},
+        "claim": _DECISION_TEXT,
+        "p_value_reported": {"const": False},
+        "limitations": {"type": "array", "maxItems": 64, "items": _DECISION_TEXT},
+    })
+
+
+def eval_receipt_v2_schema() -> dict:
+    """S3Q.0.1 -- the MODERN portable evaluation receipt's contract.
+
+    WHAT `.2` ADDS, AND WHY EACH ADDITION IS A REFUSAL RATHER THAN A FIELD
+    ---------------------------------------------------------------------
+    * DIRECT ADAPTER IDENTITY. `.1` wrote `adapter_sha256: ""` and
+      `adapter_manifest_hash: ""` and its schema PERMITTED the empty string, so the one
+      question a later auditor most needs answered -- which weights were measured --
+      had a blank where the answer belongs. Here all four adapter identities are
+      64-hex-mandatory and an empty string is a schema violation.
+    * TRAINING-RECEIPT BINDING. The evaluated candidate is now rooted in the tracked
+      S3P receipt by digest, so the evaluation chain reaches back past the gitignored
+      runtime tree to sealed evidence a clean clone actually holds.
+    * TRUTHFUL AUTHORITY SEMANTICS. `.1` recorded `authority.creations`, implying a
+      durable token-creation event. The ledger owns no such event. Inventing one would
+      have been worse; the field is gone and `plan_consumption_count` says exactly what
+      the ledger can witness.
+    * PORTABLE VERDICT EVIDENCE. `.1` copied `eligibility` from the report, so a clean
+      clone could only repeat the claim. `.2` carries the body-free INPUTS the canonical
+      decision was made from, and the verifier feeds them back into the production
+      `decide_eligibility` -- one algorithm, two callers, no second implementation to
+      drift.
+
+    WHAT IT STILL NEVER CARRIES
+    ---------------------------
+    No prompt, no held-out target, no rubric prose, no model response, no `EVAL:`
+    confirmation literal, no absolute path, no home directory and -- new in `.2` -- no
+    individual held-out TASK ID. `.1` bound `holdout_commit.first_task_id`; on a live
+    eval-v4 run that would have named one of the 36 frozen task ids inside a tracked
+    file, which the holdout firewall refuses and which the commit's `first_task_hash`
+    already establishes without naming anything.
+
+    WHAT `receipt_hash` PROVES
+    --------------------------
+    Payload integrity relative to the canonical bytes, and nothing else. Not human
+    identity, not human authorisation, not a commit signature, not who ran the command.
+    Authenticity comes from the receipt being TRACKED and from the control plane's own
+    hash chain; SHA-256 is not being oversold here.
+    """
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "m62-eval-receipt-v2.schema.json",
+        "title": "M62 portable evaluation receipt v2",
+        "description": (
+            "Root-independent, tracked evidence that ONE identified candidate, built from "
+            "ONE identified training receipt and ONE identified adapter, completed ONE "
+            "held-out evaluation against ONE identified baseline under ONE spent "
+            "single-use authority, and that its EVALUATED_* status claim is REDERIVABLE "
+            "from the body-free decision evidence it carries rather than asserted by it. "
+            "It is EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER: it grants no "
+            "retry, no second evaluation, no promotion, no activation, no registry "
+            "mutation and no release. receipt_hash proves payload integrity only -- not "
+            "human authorisation, not authenticity, not who ran the command."),
+        **_obj({
+            "schema_version": {"const": EVAL_RECEIPT_V2_SCHEMA_VERSION},
+            "receipt_version": {"const": EVAL_RECEIPT_V2_SCHEMA_VERSION},
+            "receipt_hash": _SHA256,
+            "evaluation_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            "evaluation_id": _SHORT,
+            "evaluation_generation": {"type": "integer", "minimum": 1,
+                                      "maximum": 100_000},
+
+            # ── where the code that measured came from ───────────────────────
+            "source": _obj({
+                "evaluation_source_commit": _COMMIT,
+                "evaluation_source_tree_oid": _COMMIT,
+                "derived_from_repository_head": {"const": True},
+                "worktree_clean_at_build": {"type": "boolean"},
+                "evidence_level": {"const": "the receipt was built in a worktree at this "
+                                            "commit; it does not by itself prove which "
+                                            "bytes executed"},
+            }),
+
+            # ── who was measured ─────────────────────────────────────────────
+            "candidate": _obj({
+                "candidate_id": _SHORT,
+                "status_claim": {"enum": sorted(EVALUATED_CANDIDATE_STATES)},
+                "identity_source": {"const": "training_receipt"},
+                "adapter_reference_hash": _SHA256,
+                "adapter_sha256": _SHA256,
+                "adapter_manifest_hash": _SHA256,
+                "adapter_artifact_set_hash": _SHA256,
+            }),
+            "training_receipt": _obj({
+                "path": _REPO_PATH,
+                "training_receipt_sha256": _SHA256,
+                "schema_version": _SHORT,
+                "candidate_id": _SHORT,
+                "training_plan_hash": _SHA256,
+                "training_source_commit": _COMMIT,
+                "training_milestone": {"type": "string", "pattern": "^S[0-9A-Z.]{1,10}$"},
+            }),
+            "baseline": _obj({
+                "model_id": _SHORT,
+                "revision": _COMMIT,
+                "reference_hash": _SHA256,
+                "tokenizer_identity_hash": _SHA256,
+                "base_model_identity_hash": _SHA256,
+            }),
+
+            # ── what it was measured on ──────────────────────────────────────
+            "holdout": _obj({
+                "dataset_id": _SHORT,
+                "dataset_version": {"type": "string", "pattern": "^v[0-9]+$"},
+                "dataset_manifest_hash": _SHA256,
+                "task_pack_hash": _SHA256,
+                "hidden_target_store_hash": _SHA256,
+                "pack_manifest_shard_hashes": {"type": "object"},
+                "split_manifest_hashes": {"type": "object"},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "counts_by_split": {"type": "object"},
+                "counts_by_family": {"type": "object"},
+                "counts_by_kind": {"type": "object"},
+            }),
+            "plan": _obj({
+                "plan_hash": _SHA256,
+                "plan_schema_version": _SHORT,
+                "evaluator_version": _SHORT,
+                "evaluation_config_hash": _SHA256,
+                "order_policy": _SHORT,
+                "order_assignment_hash": _SHA256,
+                "performs_inference": {"type": "boolean"},
+                "binds_exact_pack_identity": {"const": True},
+                "expected_task_count": {"type": "integer", "minimum": 1,
+                                        "maximum": 100_000},
+            }),
+            "policies": _obj({
+                "generation_policy_hash": _SHA256,
+                "grader_policy_hash": _SHA256,
+                "metric_policy_hash": _SHA256,
+                "statistical_policy_hash": _SHA256,
+                "gate_policy_hash": _SHA256,
+                "family_policy_hash": _SHA256,
+                "dependency_report_hash": _SHA256,
+                "hardware_report_hash": _SHA256,
+                # D33. The CONFIGURED value and whether anything enforced it are two
+                # different facts, and recording only the first is how "timeout_s: 300"
+                # reads as a watchdog that does not exist.
+                "configured_timeout_s": {"type": "integer", "minimum": 0,
+                                         "maximum": 100_000},
+                "timeout_enforced": {"type": "boolean"},
+                # The whole canonical generation policy, so `generation_policy_hash` is
+                # RE-DERIVABLE from the receipt rather than merely quoted by it.
+                "generation_policy": _obj({
+                    "policy_version": _SHORT,
+                    "mode": _SHORT,
+                    "max_new_tokens": {"type": "integer", "minimum": 1,
+                                       "maximum": 1_000_000},
+                    "max_input_tokens": {"type": "integer", "minimum": 1,
+                                         "maximum": 10_000_000},
+                    "do_sample": {"type": "boolean"},
+                    "temperature": {"type": "number"},
+                    "top_p": {"type": "number"},
+                    "top_k": {"type": "integer", "minimum": 0, "maximum": 1_000_000},
+                    "repetition_penalty": {"type": "number"},
+                    "stop_sequences": {"type": "array", "maxItems": 32, "items": _SHORT},
+                    "seed": {"type": "integer", "minimum": 0, "maximum": 2**32 - 1},
+                    "timeout_s": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                    "batch_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+                    "truncation_side": _SHORT,
+                    "reasoning_policy": _SHORT,
+                    "device_policy": _SHORT,
+                    "precision_policy": _SHORT,
+                }),
+            }),
+
+            # ── the single-use authority, described as the ledger can witness it ──
+            "authority": _obj({
+                "form": {"const": "EVAL:<plan-hash>"},
+                "bound_plan_hash": _SHA256,
+                # NOT `creations`. There is no durable token-creation event, and a
+                # receipt may not count one it cannot point at.
+                "plan_consumption_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "token_literal_recorded": {"const": False},
+                "retry_authorized": {"const": False},
+                "grants_no_further_authority": {"const": True},
+                # A receipt builder could write `human_authorized: true` itself, which is
+                # exactly why it never does. Human intent lives in the milestone
+                # authority; this document proves execution.
+                "human_authorization": {"const": "external_milestone_authority"},
+            }),
+            "ledger": _obj({
+                "plan_started_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "holdout_commit_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_count": {"type": "integer", "minimum": 1, "maximum": 1},
+                "terminal_event": {"enum": list(TERMINAL_EVALUATION_EVENTS)},
+                "terminal_state": {"enum": list(TERMINAL_EVALUATION_EVENTS)},
+                "terminal_is_successful": {"type": "boolean"},
+                "events": {"type": "object"},
+                # Future body-free ledger lines may coexist. They are NAMED here so they
+                # are visible, and they can never become the terminal witness.
+                "unrecognised_events": {"type": "array", "maxItems": 16, "items": _SHORT},
+                "plan_hash": _SHA256,
+                "unique_plan_hashes": {"type": "integer", "minimum": 1, "maximum": 1},
+                "plan_started_event_hash": _SHA256,
+                "holdout_commit_event_hash": _SHA256,
+                "terminal_event_hash": _SHA256,
+            }),
+            "holdout_commit": _obj({
+                "commit_schema_version": _SHORT,
+                "pack_identity_hash": _SHA256,
+                "order_assignment_hash": _SHA256,
+                # `first_task_id` is DELIBERATELY ABSENT: see the class docstring.
+                "first_task_hash": _SHA256,
+                "first_arm": {"enum": ["baseline", "candidate"]},
+                "first_request_parity_hash": _SHA256,
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "target_count": {"type": "integer", "minimum": 0, "maximum": 100_000},
+                "backend_id": _SHORT,
+                "performs_inference": {"type": "boolean"},
+            }),
+
+            # ── what happened ────────────────────────────────────────────────
+            "execution": _obj({
+                # NOT `run_state`. A report is serialised in `comparing` or
+                # `artifact_validation`; conflating that with how the RUN ended is the
+                # confusion that put a spurious blocker on every live run in S3E.2.
+                "report_serialization_state": _SHORT,
+                "empirical_status": _SHORT,
+                "backend_ids": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "items": _SHORT},
+                "backend_version": {"type": "string", "maxLength": 200},
+                "artifact_verification": {"const": "PASS"},
+                "artifact_problems": {"type": "array", "maxItems": 0},
+            }),
+            "results": _obj({
+                "expected_task_count": {"type": "integer", "minimum": 1,
+                                        "maximum": 100_000},
+                "task_count": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                "baseline_result_count": _COUNT,
+                "candidate_result_count": _COUNT,
+                "paired_result_count": _COUNT,
+                "baseline_score_count": _COUNT,
+                "candidate_score_count": _COUNT,
+                "total_model_result_count": _COUNT,
+                "measured_pairs": _COUNT,
+                "missing_pairs": _COUNT,
+                "wins": _COUNT, "ties": _COUNT, "losses": _COUNT,
+            }),
+            "evidence": _obj({
+                "report_hash": _SHA256,
+                "evaluation_manifest_hash": _SHA256,
+                # NOT `artifact_tree_hash`: the ADAPTER has an artefact set digest too,
+                # and two things called a tree hash in one document is one rename away
+                # from being cross-checked against each other.
+                "evaluation_artifact_tree_hash": _SHA256,
+                "comparison_manifest_hash": _SHA256,
+                "metrics_summary_hash": _SHA256,
+                "pack_manifest_hash": _SHA256,
+                "gate_report_hash": _SHA256,
+                "bootstrap_report_hash": _SHA256,
+                "files": {"type": "object"},
+            }),
+
+            # ── why the status claim follows ─────────────────────────────────
+            "decision_evidence": _obj({
+                "empirical_status": _SHORT,
+                "report_serialization_state": _SHORT,
+                "gate_report": _gate_evidence_schema(),
+                "bootstrap": _bootstrap_evidence_schema(),
+                "canonical_decision": _obj({
+                    "eligibility": _SHORT,
+                    "empirical_status": _SHORT,
+                    "human_review_required": {"type": "boolean"},
+                    "blockers": {"type": "array", "maxItems": 128,
+                                 "items": _DECISION_TEXT},
+                    "warnings": {"type": "array", "maxItems": 128,
+                                 "items": _DECISION_TEXT},
+                    "rationale": _DECISION_TEXT,
+                    "promotes_model": {"const": False},
+                    "activates_model": {"const": False},
+                }),
+                "decision_hash": _SHA256,
+                "rederived_by": {
+                    "const": "training_gym.evaluation.reports.decision_from_evidence"},
+            }),
+            "outcome": _obj({
+                "eligibility": _SHORT,
+                "human_review_required": {"type": "boolean"},
+                "promotes_model": {"const": False},
+                "activates_model": {"const": False},
+                "mutates_model_registry": {"const": False},
+                "gate_blockers": {"type": "array", "maxItems": 128,
+                                  "items": _DECISION_TEXT},
+                "gate_warnings": {"type": "array", "maxItems": 128,
+                                  "items": _DECISION_TEXT},
+                "limitations": {"type": "array", "maxItems": 64, "items": _DECISION_TEXT},
+            }),
+        }),
+    }
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -1166,7 +1553,8 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
     for rel, builder in ((CURRENT_SCHEMA_PATH, current_schema),
                          (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
                          (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema),
-                         (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema)):
+                         (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema),
+                         (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema)):
         path = REPO_ROOT / rel
         if not path.is_file():
             report.fail("SCHEMA", f"{rel} is missing")
@@ -2228,7 +2616,19 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             report.fail("EVALUATION_RECEIPT", f"{cid}: receipt is unreadable ({exc})")
             continue
-        for problem in validate_against_schema(eval_receipt_schema(), receipt):
+        # S3Q.0.1. The version decides the contract. A candidate measured after the
+        # modern receipt existed may not present a `.1` document: that would be evidence
+        # deliberately written to the weaker contract, which makes the upgrade optional
+        # and the audit worth what the weakest accepted form is worth.
+        version = str(receipt.get("schema_version", ""))
+        if version not in MODERN_EVAL_RECEIPT_VERSIONS:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: receipt schema {version or '(absent)'!r} is not a "
+                        f"modern evaluation receipt "
+                        f"{sorted(MODERN_EVAL_RECEIPT_VERSIONS)}; every candidate "
+                        f"measured after S3Q.0.1 produces one")
+            continue
+        for problem in validate_against_schema(eval_receipt_v2_schema(), receipt):
             report.fail("EVALUATION_RECEIPT", f"{cid}: receipt {problem}")
 
         # Held to every content rule the other control-plane surfaces are: no token
@@ -2347,6 +2747,174 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
                 report.fail("EVALUATION_RECEIPT",
                             f"{cid}: the receipt claims {flag}; no mechanism in this "
                             f"repository could have performed it")
+
+        _check_modern_evaluation_receipt(cp, report, entry=entry, receipt=receipt,
+                                         raw=raw, cid=cid)
+
+
+def _check_modern_evaluation_receipt(cp: ControlPlane, report: Report, *, entry: dict,
+                                     receipt: dict, raw: bytes, cid: str) -> None:
+    """S3Q.0.1 - the bindings that let a CLEAN CLONE check an EVALUATED_* claim.
+
+    Everything above this point can be satisfied by a document that agrees with itself.
+    These are the checks that reach OUTSIDE the receipt: to the tracked training receipt
+    that sealed the weights, to the snapshot's own adapter digests, to the base model the
+    control plane names, to Git, and - the one that matters most - to the production
+    eligibility algorithm, which is asked what the receipt's own body-free evidence
+    concludes rather than told what the receipt concluded.
+
+    Loads no model, opens no socket, reads no held-out material, and does not require the
+    gitignored evaluation tree to still exist. Runtime artefacts are gone by the time
+    anyone audits this; that is the whole reason a receipt is written.
+    """
+    candidate = receipt.get("candidate", {})
+    bound_training = receipt.get("training_receipt", {})
+    ledger = receipt.get("ledger", {})
+
+    # -- the terminal vocabulary is the PRODUCTION one, re-derived not restated --
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from training_gym.evaluation.config import EvaluationRunState
+        from training_gym.evaluation.reports import ReportError, decision_from_evidence
+    except Exception as exc:  # pragma: no cover - environment failure, reported not hidden
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the production evaluation module could not be imported "
+                    f"({exc}); the receipt's verdict is therefore UNVERIFIED, which is a "
+                    f"failure and not a pass")
+        return
+    derived = tuple(sorted(s.value for s in EvaluationRunState if s.is_terminal))
+    if derived != tuple(sorted(TERMINAL_EVALUATION_EVENTS)):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: this verifier's terminal vocabulary {TERMINAL_EVALUATION_EVENTS} "
+                    f"is not the production one {derived}; a restated contract nobody "
+                    f"re-derives is a second writable copy of it")
+    if str(ledger.get("terminal_event", "")) not in derived:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: terminal event {ledger.get('terminal_event')!r} is outside "
+                    f"the production terminal vocabulary {list(derived)}")
+
+    # -- the training receipt the SNAPSHOT names is the one the receipt bound ---
+    pointer = str(entry.get("training_receipt") or "")
+    if not pointer:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: an evaluated candidate carries no training receipt; the "
+                    f"weights that were measured have no sealed origin")
+        return
+    if bound_training.get("path") != pointer:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the evaluation receipt binds training receipt "
+                    f"{bound_training.get('path')!r} and the snapshot names {pointer!r}")
+    if bound_training.get("candidate_id") != cid:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound training receipt describes "
+                    f"{bound_training.get('candidate_id')!r}")
+
+    training_path = REPO_ROOT / pointer
+    if training_path.is_symlink() or not training_path.is_file():
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound training receipt {pointer!r} is not a regular file")
+        return
+    training_bytes = training_path.read_bytes()
+    if sha256_bytes(training_bytes) != bound_training.get("training_receipt_sha256"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the tracked training receipt does not hash to the digest "
+                    f"the evaluation receipt bound; one of the two describes a different "
+                    f"training run")
+        return
+    try:
+        training = json.loads(training_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the bound training receipt is unreadable ({exc})")
+        return
+
+    # -- the adapter, agreed by THREE independent surfaces (S3Q.0.1 section 14) --
+    # Snapshot, training receipt and evaluation receipt. None of them is permitted to
+    # stand in for a missing other, and the runtime weights are NOT required: history
+    # does not stop being true when a gitignored tree is deleted.
+    trained_adapter = training.get("adapter", {})
+    for label, snapshot_field, training_field, receipt_field in (
+            ("adapter weights", "adapter_sha256", "sha256", "adapter_sha256"),
+            ("adapter manifest", "adapter_manifest_hash", "manifest_hash",
+             "adapter_manifest_hash")):
+        values = {
+            "the snapshot": str(entry.get(snapshot_field) or ""),
+            "the training receipt": str(trained_adapter.get(training_field) or ""),
+            "the evaluation receipt": str(candidate.get(receipt_field) or ""),
+        }
+        if len(set(values.values())) != 1:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the three surfaces disagree about the {label} - "
+                        f"{ {k: v[:12] for k, v in values.items()} }")
+    if str(trained_adapter.get("artifact_set_hash") or "") != \
+            str(candidate.get("adapter_artifact_set_hash") or ""):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the training receipt and the evaluation receipt disagree "
+                    f"about the adapter artefact set")
+
+    # -- the baseline the control plane names is the baseline that was measured -
+    base = cp.snapshot.get("base_model", {})
+    baseline = receipt.get("baseline", {})
+    for label, mine, theirs in (("base model", baseline.get("model_id"),
+                                 base.get("model_id")),
+                                ("base revision", baseline.get("revision"),
+                                 base.get("revision"))):
+        if mine != theirs:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: the receipt measured against {label} {mine!r} and the "
+                        f"control plane names {theirs!r}")
+
+    # -- the source the code came from is in this branch's history --------------
+    commit = str(receipt.get("source", {}).get("evaluation_source_commit", ""))
+    code, _ = _git("cat-file", "-e", f"{commit}^{{commit}}")
+    if code != 0:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: evaluation source commit {commit[:12]} is not an object in "
+                    f"this repository; a receipt may not name code nobody can fetch")
+    else:
+        code, _ = _git("merge-base", "--is-ancestor", commit, "HEAD")
+        if code != 0:
+            report.fail("EVALUATION_RECEIPT",
+                        f"{cid}: evaluation source commit {commit[:12]} is not an "
+                        f"ancestor of HEAD; the evidence and the tree that carries it "
+                        f"describe different histories")
+
+    # -- the verdict, REDERIVED by the production algorithm (S3Q.0.1 FINDING I) -
+    evidence = receipt.get("decision_evidence", {})
+    try:
+        decision = decision_from_evidence(
+            gate_report=evidence.get("gate_report"),
+            bootstrap=evidence.get("bootstrap"),
+            empirical_status=evidence.get("empirical_status"),
+            run_state=evidence.get("report_serialization_state"))
+    except (ReportError, KeyError, TypeError, ValueError) as exc:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the canonical eligibility could not be rederived from the "
+                    f"receipt's own body-free evidence ({type(exc).__name__}: {exc}); "
+                    f"'the receipt says so' is not a verified state")
+        return
+    expected = {
+        "not_eligible": "EVALUATED_NOT_ELIGIBLE",
+        "eligible_for_human_review": "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
+        "needs_more_evidence": "EVALUATED_NEEDS_MORE_EVIDENCE",
+        "quarantined": "EVALUATED_QUARANTINED",
+    }.get(decision.eligibility.value, "")
+    if candidate.get("status_claim") != expected:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt claims {candidate.get('status_claim')!r} and "
+                    f"the canonical decision rederived from its own evidence supports "
+                    f"{expected or 'no evaluated state'}")
+    if decision.to_dict() != evidence.get("canonical_decision"):
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt's recorded decision is not the one its evidence "
+                    f"produces")
+    report.note(
+        f"{cid}: evaluation receipt {receipt.get('receipt_version')} verified - adapter "
+        f"{str(candidate.get('adapter_sha256'))[:12]} rooted in training receipt "
+        f"{str(bound_training.get('training_receipt_sha256'))[:12]}, verdict "
+        f"{decision.eligibility.value} REDERIVED from body-free evidence rather than "
+        f"read from the claim")
 
 
 def transition_problems(before: str, after: str, table: dict, label: str) -> list[str]:

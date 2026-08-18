@@ -302,31 +302,48 @@ def test_an_unrecognised_eligibility_supports_no_evaluated_state():
 # ══════════════════════════════════════════════════════════════════════════════
 #  The CLI
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_builder_cli_emits_and_verifies_a_receipt(evaluated, tmp_path, capsys):
+# S3Q.0.1 MOVED THIS CONTRACT, ON PURPOSE.
+#
+# The `.1` CLI marked `--generation-directory`, `--candidate` and
+# `--evaluation-source-commit` REQUIRED in every mode, so verifying an existing receipt
+# meant inventing three build arguments the verifier then ignored (S3Q.0.1 FINDING D).
+# A read-only check that demands write-mode arguments teaches operators to supply
+# fiction, so the flat parser was replaced by `build` and `verify` subcommands.
+#
+# `.1` receipts are still READ by the standalone verifier — they are history and history
+# stays verifiable — and the two tests below now assert that, rather than asserting an
+# invocation the repository deliberately no longer offers.
+def test_the_standalone_verifier_still_reads_a_legacy_receipt(receipt, tmp_path,
+                                                              capsys):
+    from scripts.build_m62_eval_receipt import main
+    from scripts.verify_m62_control_plane import canonical_json
+
+    destination = tmp_path / "receipt.json"
+    destination.write_text(canonical_json(receipt), encoding="utf-8")
+    assert main(["verify", str(destination)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "PASS"
+    assert payload["receipt_version"] == RECEIPT_SCHEMA_VERSION
+
+
+def test_the_legacy_flat_invocation_is_gone(tmp_path):
+    """Verifying no longer requires three arguments the verifier does not use."""
     from scripts.build_m62_eval_receipt import main
 
-    outcome, root = evaluated
-    destination = tmp_path / "receipt.json"
-    code = main(["--generation-directory", str(outcome.directory),
-                 "--candidate", "s3q0-synthetic-candidate",
-                 "--evaluation-source-commit", "a" * 40,
-                 "--ledger", str(root / "evaluation_runs.jsonl"),
-                 "--emit", str(destination)])
-    capsys.readouterr()
-    assert code == 0
-    assert destination.is_file()
-
-    assert main(["--verify", str(destination), "--generation-directory", "x",
-                 "--candidate", "x", "--evaluation-source-commit", "a" * 40]) == 0
-    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        main(["--generation-directory", str(tmp_path / "absent"),
+              "--candidate", "s3q0-synthetic-candidate",
+              "--evaluation-source-commit", "a" * 40])
 
 
 def test_the_builder_cli_refuses_without_a_traceback(tmp_path, capsys):
     from scripts.build_m62_eval_receipt import main
 
-    code = main(["--generation-directory", str(tmp_path / "absent"),
-                 "--candidate", "s3q0-synthetic-candidate",
-                 "--evaluation-source-commit", "a" * 40])
+    code = main(["build",
+                 "--generation-directory", str(tmp_path / "absent"),
+                 "--training-receipt", str(tmp_path / "absent.train.json"),
+                 "--adapter-run-directory", str(tmp_path / "absent-adapter"),
+                 "--evaluation-config", str(tmp_path / "absent-config.json")])
     payload = json.loads(capsys.readouterr().out)
     assert code == 1
     assert payload["status"] == "refused"

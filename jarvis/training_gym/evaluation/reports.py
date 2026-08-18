@@ -37,9 +37,10 @@ from .comparison import (
     refusal_counts,
 )
 from .config import EvaluationRunState
-from .gates import GateReport
+from .gates import GateFinding, GateKind, GateReport, GateSeverity
 from .plan import EvaluationPlan
 from .policy import EvaluationPolicySet
+from .statistics import BootstrapReport, StatisticalVerdict
 from .references import AdapterEvaluationReference, BaseModelEvaluationReference
 
 #: Bumped when the report's shape changes.
@@ -449,10 +450,202 @@ def verify_report_payload(payload: object, *, expected_hash: str = "") -> dict:
     return {**data, "report_hash": stored}
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  S3Q.0.1 — rederiving ONE serialised decision, without a second algorithm
+# ══════════════════════════════════════════════════════════════════════════════
+# THE FAILURE THIS EXISTS TO PREVENT
+# ----------------------------------
+# A portable evaluation receipt claims an ``EVALUATED_*`` state. A clean clone holds the
+# receipt and nothing else -- the generation directory is gitignored runtime and is gone.
+# If the receipt merely COPIES ``eligibility`` out of the report, the strongest thing an
+# auditor can say about the claim is "the receipt says so", and the one irreversible act
+# in the milestone rests on a document asserting its own conclusion.
+#
+# The obvious fix is the wrong one. Reimplementing :func:`decide_eligibility` inside the
+# receipt verifier would create TWO eligibility algorithms that can drift, and the day
+# they disagree is the day the audit is worth less than no audit at all.
+#
+# So the receipt carries the body-free INPUTS the decision was made from, and this
+# module -- the one that owns the decision -- rebuilds them into the production objects
+# and calls the SAME :func:`decide_eligibility`. One algorithm, two callers.
+#
+# WHAT THIS IS NOT
+# ----------------
+# It decides nothing live. ``build_report`` does not call it, no runner reaches it, and
+# it cannot change a gate, a metric, a policy digest or a report. It VERIFIES SERIALISED
+# EVIDENCE and returns what the canonical decision function would have concluded from it.
+#
+# WHY THE INPUTS ARE REBUILT STRICTLY
+# -----------------------------------
+# A lenient reconstruction is a hole: a receipt that omitted the one blocking finding
+# would rederive "eligible" and agree with its own claim. So every field is required,
+# every unknown field is refused, and a payload that is not exactly a serialised
+# ``GateReport`` / ``BootstrapReport`` raises rather than being repaired.
+
+
+#: The body-free report fields a canonical decision can be rederived from. Exactly these:
+#: :func:`decide_eligibility` reads the gates, the empirical status, the bootstrap and the
+#: serialisation state, and nothing else. Deriving the list from the function's own
+#: parameters is what keeps a receipt from carrying "most of" the evidence.
+DECISION_EVIDENCE_FIELDS: tuple[str, ...] = (
+    "gate_report", "bootstrap", "empirical_status", "run_state")
+
+
+@dataclass(frozen=True)
+class _BootstrapCarrier:
+    """The only member of a :class:`ComparisonSummary` that a decision reads.
+
+    Deliberately not a reconstructed ``ComparisonSummary``: rebuilding one would require
+    every per-task comparison, which means every model response, which is precisely the
+    material a body-free receipt must never carry. :func:`decide_eligibility` touches
+    ``summary.bootstrap`` and nothing else, so this carries exactly that and would fail
+    loudly -- ``AttributeError``, not a wrong verdict -- if that ever stopped being true.
+    """
+
+    bootstrap: BootstrapReport
+
+
+def gate_report_from_evidence(payload: object) -> GateReport:
+    """Rebuild the serialised gate report. Strict: no missing field, no unknown one."""
+    from ..schemas import reject_unknown_fields, require_mapping
+
+    data = require_mapping(payload, "gate evidence")
+    allowed = {"gates_version", "passed", "blocking_count", "security_blocking_count",
+               "warning_count", "findings", "evaluated_gates",
+               "security_is_a_veto_not_a_weight", "thresholds_are_calibrated",
+               "limitations"}
+    reject_unknown_fields(data, allowed, label="gate evidence")
+    missing = sorted(allowed - set(data))
+    if missing:
+        raise ReportError(
+            f"gate evidence: {missing} absent. A decision rederived from a partial gate "
+            f"report is a decision about a different run")
+
+    findings: list[GateFinding] = []
+    for index, raw in enumerate(data["findings"]):
+        entry = require_mapping(raw, f"gate evidence.findings[{index}]")
+        reject_unknown_fields(
+            entry, {"gate", "kind", "severity", "message", "observed", "threshold",
+                    "threshold_calibrated"},
+            label=f"gate evidence.findings[{index}]")
+        try:
+            findings.append(GateFinding(
+                gate=str(entry["gate"]),
+                kind=GateKind(str(entry["kind"])),
+                severity=GateSeverity(str(entry["severity"])),
+                message=str(entry["message"]),
+                observed=entry.get("observed"), threshold=entry.get("threshold"),
+                threshold_calibrated=bool(entry.get("threshold_calibrated", False))))
+        except (KeyError, ValueError) as exc:
+            raise ReportError(
+                f"gate evidence.findings[{index}]: not a serialised gate finding "
+                f"({exc})") from None
+
+    report = GateReport(
+        findings=tuple(findings),
+        evaluated_gates=tuple(str(g) for g in data["evaluated_gates"]),
+        limitations=tuple(str(limit) for limit in data["limitations"]))
+
+    # The counts are DERIVED properties. If the serialised ones disagree with the
+    # findings, the document was edited -- and the honest answer is to refuse rather than
+    # to silently prefer either one.
+    rebuilt = report.to_dict()
+    for field_name in ("passed", "blocking_count", "security_blocking_count",
+                       "warning_count"):
+        if rebuilt[field_name] != data[field_name]:
+            raise ReportError(
+                f"gate evidence: {field_name} is recorded as {data[field_name]!r} and "
+                f"the findings produce {rebuilt[field_name]!r}; a gate report whose "
+                f"summary disagrees with its own findings decides nothing")
+    return report
+
+
+def bootstrap_report_from_evidence(payload: object) -> BootstrapReport:
+    """Rebuild the serialised paired-bootstrap report. Strict, and self-consistent."""
+    from ..schemas import reject_unknown_fields, require_mapping
+
+    data = require_mapping(payload, "bootstrap evidence")
+    #: The stored fields that are DERIVED, not constructor arguments.
+    derived = {"statistics_version", "observed_improvement",
+               "excludes_regression_margin", "indicates_regression", "claim",
+               "p_value_reported"}
+    constructed = {"verdict", "n_pairs", "n_excluded", "n_missing", "mean_delta",
+                   "median_delta", "wins", "ties", "losses", "ci_low", "ci_high",
+                   "confidence_level", "iterations", "seed", "method",
+                   "regression_margin", "error_accounting", "limitations"}
+    reject_unknown_fields(data, derived | constructed, label="bootstrap evidence")
+    missing = sorted((derived | constructed) - set(data))
+    if missing:
+        raise ReportError(
+            f"bootstrap evidence: {missing} absent. A directional claim rederived from "
+            f"a partial bootstrap is a claim about a different sample")
+    try:
+        report = BootstrapReport(
+            verdict=StatisticalVerdict(str(data["verdict"])),
+            n_pairs=int(data["n_pairs"]), n_excluded=int(data["n_excluded"]),
+            n_missing=int(data["n_missing"]), mean_delta=float(data["mean_delta"]),
+            median_delta=float(data["median_delta"]), wins=int(data["wins"]),
+            ties=int(data["ties"]), losses=int(data["losses"]),
+            ci_low=float(data["ci_low"]), ci_high=float(data["ci_high"]),
+            confidence_level=float(data["confidence_level"]),
+            iterations=int(data["iterations"]), seed=int(data["seed"]),
+            method=str(data["method"]),
+            regression_margin=float(data["regression_margin"]),
+            error_accounting=str(data["error_accounting"]),
+            limitations=tuple(str(limit) for limit in data["limitations"]))
+    except (TypeError, ValueError) as exc:
+        raise ReportError(
+            f"bootstrap evidence: not a serialised bootstrap report ({exc})") from None
+
+    rebuilt = report.to_dict()
+    for field_name in sorted(derived):
+        if rebuilt[field_name] != data[field_name]:
+            raise ReportError(
+                f"bootstrap evidence: {field_name} is recorded as "
+                f"{data[field_name]!r} and the sample produces {rebuilt[field_name]!r}; "
+                f"a derived claim that disagrees with its own numbers is not evidence")
+    return report
+
+
+def decision_from_evidence(*, gate_report: object, bootstrap: object,
+                           empirical_status: object,
+                           run_state: object) -> EligibilityDecision:
+    """What :func:`decide_eligibility` concludes from serialised body-free evidence.
+
+    The one supported way to check a portable receipt's status claim. It calls the
+    production decision function -- it does not reimplement it -- so a change to
+    eligibility can never be true for a live run and false for an audit of that run.
+
+    Reads no task body, no held-out target and no model response: a gate report, a
+    bootstrap report, a status word and a state word are the entire input.
+    """
+    gates = gate_report_from_evidence(gate_report)
+    paired = bootstrap_report_from_evidence(bootstrap)
+    try:
+        empirical = EmpiricalStatus(str(empirical_status))
+    except ValueError:
+        raise ReportError(
+            f"decision evidence: {empirical_status!r} is not an empirical status this "
+            f"repository recognises, and an unrecognised status is not a passing "
+            f"one") from None
+    try:
+        state = EvaluationRunState(str(run_state))
+    except ValueError:
+        raise ReportError(
+            f"decision evidence: {run_state!r} is not an evaluation run state this "
+            f"repository recognises") from None
+    return decide_eligibility(gates=gates, empirical=empirical,
+                              summary=_BootstrapCarrier(bootstrap=paired),
+                              run_state=state)
+
+
 __all__ = [
     "REPORT_SCHEMA_VERSION", "REPORT_SERIALISATION_STATES", "SYNTHETIC_BACKEND_IDS",
     "CandidateEligibility",
     "EligibilityDecision", "EmpiricalStatus", "EvaluationReport", "ReportError",
-    "build_report", "classify_empirical_status", "decide_eligibility",
+    "DECISION_EVIDENCE_FIELDS",
+    "bootstrap_report_from_evidence", "build_report", "classify_empirical_status",
+    "decide_eligibility", "decision_from_evidence", "gate_report_from_evidence",
     "verify_report_payload",
 ]
