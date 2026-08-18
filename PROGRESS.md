@@ -78,7 +78,7 @@ subject rather than equal it.
 | Phase | **Between milestones.** The student has been taught, the airlock is ready, and the exam is still sealed |
 | Live training since S3N | **one run** — candidate 003, 40/40 optimizer steps, `TRAIN` capability spent. **No retry is authorised** |
 | Live evaluation since S3N | none — **0 generations, 0 response tokens, 0 held-out reads, no `EVAL` authority** |
-| S3Q.0 | infrastructure only — **0 model weights loaded, 0 generations, no confirmation string materialised, no plan consumed, `eval-v4` untouched** |
+| S3Q.0 | infrastructure only — **0 weights loaded, 0 generations, no confirmation string, no plan consumed, `eval-v4` untouched** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that collects and
 grades defensive task episodes, builds immutable leakage-checked datasets, plans and
@@ -213,62 +213,48 @@ body and is safe to read in full.
 Qualified and hardened **before** `eval-v4` is spent. Deep authority:
 `jarvis/docs/V69_M62_S3Q0_EVAL_CEREMONY_QUALIFICATION.md`.
 
-**Four events, four different facts.** They are recorded separately because they fail
-separately, and collapsing any pair is how a spent holdout gets re-spent or a lost record
-gets reported as success:
-
-```
-PLAN_CONSUMED                    one approval began one run
-HOLDOUT_MODEL_FACING_COMMITTED   a held-out task is about to reach a model
-EVALUATION_COMPLETED             artefacts exist and re-verify from disk
-TERMINAL_LEDGER_RECORDED         how it ended is durable
-```
+**Four events, four different facts**, recorded separately because they fail separately:
+`PLAN_CONSUMED` · `HOLDOUT_MODEL_FACING_COMMITTED` · `EVALUATION_COMPLETED` ·
+`TERMINAL_LEDGER_RECORDED`. Collapsing any pair re-spends a holdout or reports a lost
+record as success.
 
 **PROSPECTIVE SPEND RULE.** A fresh holdout is `USED_IMMUTABLE` the moment the evaluator
-**durably commits** the first held-out request to the model-facing backend boundary —
-after request parity, immediately before the first `backend.generate`. Ledger event
-`holdout_model_facing_committed` (`m62.evaluation_holdout_commit.1`), body-free, unique per
-`(evaluation_id, generation, plan_hash)`, fail-closed: if it cannot be appended, no backend
-is called. **Once written the holdout is spent whatever happens next, and RERUN is
-FORBIDDEN.** Applies **prospectively only**: candidates 001 and 002 are sealed and are not
-reinterpreted.
+**durably commits** the first held-out request to the model-facing boundary — after
+request parity, immediately before the first `backend.generate`. Ledger event
+`holdout_model_facing_committed` (`m62.evaluation_holdout_commit.1`): body-free, unique per
+`(evaluation_id, generation, plan_hash)`, fail-closed. **Once written the holdout is spent
+whatever happens next, and RERUN is FORBIDDEN.** Prospective only — 001/002 stay sealed.
 
 **EXACT PLAN BINDING.** `task_pack_hash`, `hidden_target_store_hash` and
-`order_assignment_hash` were **proxies** (manifest + counts, manifest digest, and
+`order_assignment_hash` were **proxies** (manifest+counts, manifest digest,
 `"<policy>:<seed>"`). They are now the runtime identities themselves, derived once by
-`training_gym/evaluation/preflight.py` and consumed by planning *and* execution. Execution
-re-verifies them plus both references and the generation policy immediately before the
-commit — a mismatch stops the run with the holdout still unread. An unblocked plan whose
-three identities are not real digests is refused at construction.
+`training_gym/evaluation/preflight.py` and consumed by planning *and* execution, which
+re-verifies them plus both references and the generation policy immediately before the commit
+— a mismatch stops the run with the holdout unread. An unblocked plan whose three identities
+are not real digests is refused at construction. **`performs_inference` is now TRUE**; it was
+`false` on the exact object `--execute` hands to a function loading weights.
 
-**`performs_inference` is now TRUE** on the production plan. It was `false` on the exact
-object `--execute` hands to a function that loads weights.
-
-**PRE-GO vs GO.** `--live-preflight` reports the exact plan identity and its blockers and
-does **not** materialise `EVAL:<plan-hash>`. `--dry-run` and `--print-plan` **do**. Token
-silence is ceremony hygiene, **not** cryptography: the string is a pure function of the
+**PRE-GO vs GO.** `--live-preflight` prints the exact plan identity and its blockers
+**without** materialising `EVAL:<plan-hash>`; `--dry-run` and `--print-plan` **do** emit it.
+Token silence is **hygiene, not cryptography** — the string is a pure function of the
 `plan_hash` the preflight prints.
 
 **DURABILITY.** `ExecutionOutcome.ok` now requires `COMPLETED` **and** the holdout commit
 **and** the terminal ledger line **and** no durability-critical problem. A completed
-measurement whose terminal line failed returns `EXIT_DURABILITY` (22) — artefacts retained,
+measurement whose terminal line failed returns `EXIT_DURABILITY` (22): artefacts retained,
 plan spent, **recovery required, never a rerun**. A plan-ledger failure is structured, the
-plan stays unspent, and the empty directory that attempt created is withdrawn (`rmdir`
-only, never recursive).
+plan stays unspent, and the empty directory that attempt created is withdrawn (`rmdir` only).
 
 **PORTABLE EVALUATION RECEIPT.** `scripts/build_m62_eval_receipt.py`, schema
-`m62.eval_receipt.1`. Deterministic, body-free, binds the three durable events and the exact
-identities. **A future `EVALUATED_*` state for candidate 003 REQUIRES one** — snapshot
-alone, verifier constant alone and prose are all insufficient, in both verdict directions.
-Candidates 001/002 are a **closed** legacy exemption and are **not** retrofitted.
+`m62.eval_receipt.1` — deterministic, body-free, binding the three durable events and the
+exact identities. **A future `EVALUATED_*` state for candidate 003 REQUIRES one**; snapshot,
+verifier constant and prose are insufficient in **both** directions. 001/002 are a **closed**
+legacy exemption. **A receipt is evidence, never authority for another operation.**
 
-**A receipt is evidence of an operation, never authority for another.**
-
-**Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden ·
-`BODY_OPAQUE_PROGRAMMATIC_ACCESS` permitted for reviewed hashing/validation code ·
-`MODEL_FACING_ACCESS` is the spend. `task-pack.jsonl` is **`BODY_BEARING`** by design;
-every other evaluation artefact, every ledger line and the receipt are **`BODY_FREE`**,
-proved with prompt/target/response canaries.
+**Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden · `BODY_OPAQUE_PROGRAMMATIC_ACCESS`
+permitted for reviewed hashing/validation code · `MODEL_FACING_ACCESS` is the spend.
+`task-pack.jsonl` is **`BODY_BEARING`** by design; every other artefact, every ledger line and
+the receipt are **`BODY_FREE`**, proved with canaries.
 
 ---
 
@@ -435,16 +421,14 @@ result          3623 passed · 20 skipped · 0 failed        [S3Q.0]
 
 S3Q.0 added **182** tests across seven focused suites (plan truthfulness, exact binding,
 holdout commit, ledger durability, body blindness, portable receipt, control-plane
-anti-circularity) plus the shared synthetic scaffolding `tests/_s3q0_synthetic.py`.
-3441 + 182 = 3623 on one interpreter; **never reconcile counts across interpreters by
-arithmetic.**
+anti-circularity) plus `tests/_s3q0_synthetic.py`. 3441 + 182 = 3623 on one interpreter;
+**never reconcile counts across interpreters by arithmetic.**
 
-S3Q.0 rescoped **one** pre-existing assertion.
-`test_s3n_changed_no_evaluation_policy_grader_or_gate_source` diffed S3N's starting commit
-against the **working tree**, so it silently asserted that no *later* milestone had touched
-`training_gym` either — true by coincidence through S3N.1, S3O and S3P. The second endpoint
-is now pinned to S3N's closing commit `ec446e3`, so it measures exactly the property its
-name states, and that property still holds. S3Q.0's own scope has its own guard.
+**Two pre-existing assertions were rescoped, and neither is a regression.** Both compared a
+sealed milestone's property against *live* state, so each also asserted that no later
+generation existed — true by coincidence until S3Q.0 wrote one. The S3N source-scope test is
+pinned to S3N's closing commit `ec446e3`; the S3P gen2→gen3 transition test reads generation
+3, not the newest snapshot. Each still measures the property its name states.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running
 `pytest` from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -515,10 +499,9 @@ control-plane generation. The only valid primary comparison is a **simultaneousl
 baseline on `v4`** versus candidate 003 on `v4`, under identical generation, metric and gate
 policy digests. D28, D29 and D33 must be restated in that report.
 
-**The ceremony is qualified (S3Q.0) and it is not authorised.** Preparing the airlock is
-not opening the exam. `eval-v4` is spent the moment the durable model-facing commit lands,
-and after that there is **no rerun** — not for a crash, not for a failed artefact write,
-not for a lost terminal ledger line.
+**The ceremony is qualified (S3Q.0) and it is not authorised.** Preparing the airlock is not
+opening the exam. `eval-v4` is spent the moment the durable model-facing commit lands, and
+after that there is **no rerun** — not for a crash, a failed write or a lost ledger line.
 
 **Comparability, before anyone builds a table.** Candidate 003 is **not** head-to-head
 comparable with 001 or 002: it is fitted under a different training representation *and*
@@ -527,9 +510,6 @@ will be measured on a different exam. The only valid comparison is candidate 003
 
 **Nothing predicts the outcome.** D37's historical causality is `NOT_ESTABLISHED`. Do not
 record, anywhere, that candidate 003 will fix stopping, restore 9/9 or repair safety.
-
-**Also ruled out now:** re-running a spent evaluation for any reason · fabricating a
-receipt for candidate 001 or 002 · claiming an `EVALUATED_*` state from a snapshot alone.
 
 **Still explicitly ruled out:** a second `TRAIN` capability for candidate 003 · retraining,
 resuming or re-seeding it · reading `eval-v4` bodies to explain, debug or tune it · turning

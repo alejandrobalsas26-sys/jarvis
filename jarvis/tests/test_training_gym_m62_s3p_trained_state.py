@@ -947,16 +947,29 @@ def test_the_snapshot_chain_is_hash_linked_and_current():
 
 
 def test_the_trained_state_is_recorded_at_a_new_generation_descending_from_gen2():
-    """Properties 34, 35. The moment candidate 003 is trained in the live control plane,
-    it must be at generation 3 with generation 2 as its parent — never by editing
-    generation 2 in place."""
-    snapshot = _live_snapshot()
+    """Properties 34, 35. The trained state was RECORDED at generation 3, with generation
+    2 as its parent — never by editing generation 2 in place.
+
+    Read from generation 3 specifically rather than from whatever the newest snapshot is.
+    V69 M62 S3Q.0 pinned that: reading it live meant the test also asserted that no LATER
+    generation existed, which was true only until the next milestone wrote one. The
+    property S3P owns is about the gen2 -> gen3 TRANSITION, and that transition is
+    immutable — so it is checked where it happened, and stays checkable forever.
+    """
+    generation_3 = next(
+        p for p in sorted((REPO / V.SNAPSHOT_DIR).iterdir())
+        if json.loads(p.read_text(encoding="utf-8"))["state_generation"] == 3)
+    snapshot = json.loads(generation_3.read_text(encoding="utf-8"))
     entry = _entry(snapshot, 3)
     if entry["status"] != "TRAINED_UNEVALUATED":
         pytest.skip("the control plane has not yet recorded the trained state")
     assert snapshot["state_generation"] == 3
     assert snapshot["parent_snapshot_sha256"] == GEN2_SHA
     assert snapshot["subject_state_milestone"] == "S3P"
+
+    # And the candidate is still trained-and-unevaluated in the CURRENT generation: the
+    # transition above is history, this is the state now, and they are different claims.
+    assert _live_candidate(3)["status"] == "TRAINED_UNEVALUATED"
 
 
 def test_the_subject_commit_exists_and_head_descends_from_it():
