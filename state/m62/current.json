@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0003-m62-third-candidate-trained-unevaluated.json",
-  "latest_snapshot_sha256": "701d35473687d2a3cd834fc5ea8700490326ff8eaa5e54f1b96c6b58a8414d7c",
+  "latest_snapshot_path": "state/m62/snapshots/0004-m62-eval-ceremony-qualified.json",
+  "latest_snapshot_sha256": "f563df9b6cfccc6969ca8685b666f72f5739146aafe834655b7e75c4af5f039c",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 3,
-  "subject_state_commit": "55e6eaae006b8d1e31a9b091bf8c19c14e6bae9b",
+  "state_generation": 4,
+  "subject_state_commit": "4f683f788b02c17b043341aa642fb7de68b41ab3",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

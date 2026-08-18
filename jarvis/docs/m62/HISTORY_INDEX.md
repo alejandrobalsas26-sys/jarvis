@@ -63,6 +63,7 @@ resolve with `git log --oneline <range>`.
 | **S3N.1** | PASS | `V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md` | `ec446e3`…`d8462f5` | **this architecture** — the archive, the snapshot chain, the verifier, the threat model |
 | **S3O** | PASS | `V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md` | `d8462f5`… | **candidate 003 `DESIGNED_UNTRAINED`** — the one-axis diff, the per-lineage id derivation, and the two verifier holes a rename and a missing state arm left open |
 | **S3P** | PASS | `V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md` | `bac49c4`…`55e6eaa` | **candidate 003 `TRAINED_UNEVALUATED`** — one TRAIN capability created and consumed once, 40/40 steps, adapter `6ccd8fdc…`; the portable training receipt that lets a clone with no weights still establish the run; the first live training under D37. Nothing evaluated, `eval-v4` still `FROZEN_UNUSED` |
+| **S3Q.0** | PASS | `V69_M62_S3Q0_EVAL_CEREMONY_QUALIFICATION.md` | `05c043b`… | **the evaluation ceremony, qualified before it runs** — three plan digests moved from PROXY to exact runtime identity; `performs_inference` corrected on an executable plan; the durable `holdout_model_facing_committed` event and the prospective spend rule; a terminal-ledger failure can no longer return clean success; the plan-ledger orphan directory; token-silent `--live-preflight`; the portable evaluation receipt and `EVALUATED_*` anti-circularity. **No model, no `eval-v4`, no authority** |
 
 ---
 

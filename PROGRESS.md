@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **3** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **4** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0003-m62-third-candidate-trained-unevaluated.json` |
-| **Snapshot SHA256** | `701d35473687d2a3cd834fc5ea8700490326ff8eaa5e54f1b96c6b58a8414d7c` |
-| **Subject state commit** | `55e6eaae006b8d1e31a9b091bf8c19c14e6bae9b` (S3P training evidence) |
+| **Latest snapshot** | `state/m62/snapshots/0004-m62-eval-ceremony-qualified.json` |
+| **Snapshot SHA256** | `f563df9b6cfccc6969ca8685b666f72f5739146aafe834655b7e75c4af5f039c` |
+| **Subject state commit** | `4f683f788b02c17b043341aa642fb7de68b41ab3` (S3Q.0 ceremony qualification) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -51,7 +51,7 @@ and the snapshot, and asks Git — not prose — about the branch, the ancestry 
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `55e6eaae006b8d1e31a9b091bf8c19c14e6bae9b` — the commit the current snapshot describes |
+| Subject state commit | `4f683f788b02c17b043341aa642fb7de68b41ab3` — the commit the current snapshot describes |
 | Training source commit | `bac49c4a49194d84fbc7f61656662fdcd54799ca` — the commit candidate 003 actually trained from. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -73,11 +73,12 @@ subject rather than equal it.
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3P** — candidate 003 trained under one single-use `TRAIN` authority |
-| Last milestone | **S3P** — `V69_M62_S3P_CANDIDATE003_LIVE_TRAINING.md`. One capability created, consumed once, one run, one verified adapter. **Nothing evaluated** |
-| Phase | **Between milestones.** The student has been taught and the exam is still sealed |
+| Last state-bearing milestone | **S3Q.0** — the one-shot evaluation ceremony qualified and hardened |
+| Last milestone | **S3Q.0** — `V69_M62_S3Q0_EVAL_CEREMONY_QUALIFICATION.md`. **PASS.** Six ceremony defects reproduced and closed; no model, no holdout, no authority |
+| Phase | **Between milestones.** The student has been taught, the airlock is ready, and the exam is still sealed |
 | Live training since S3N | **one run** — candidate 003, 40/40 optimizer steps, `TRAIN` capability spent. **No retry is authorised** |
 | Live evaluation since S3N | none — **0 generations, 0 response tokens, 0 held-out reads, no `EVAL` authority** |
+| S3Q.0 | infrastructure only — **0 model weights loaded, 0 generations, no confirmation string materialised, no plan consumed, `eval-v4` untouched** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that collects and
 grades defensive task episodes, builds immutable leakage-checked datasets, plans and
@@ -204,6 +205,70 @@ semantic leakage        NOT_QUALIFIED — never reported clean
 **The authoritative list of what a candidate-003 session may and may not read is
 `jarvis/docs/V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md` §17.** That document contains no task
 body and is safe to read in full.
+
+---
+
+## 5b — The evaluation ceremony (S3Q.0)
+
+Qualified and hardened **before** `eval-v4` is spent. Deep authority:
+`jarvis/docs/V69_M62_S3Q0_EVAL_CEREMONY_QUALIFICATION.md`.
+
+**Four events, four different facts.** They are recorded separately because they fail
+separately, and collapsing any pair is how a spent holdout gets re-spent or a lost record
+gets reported as success:
+
+```
+PLAN_CONSUMED                    one approval began one run
+HOLDOUT_MODEL_FACING_COMMITTED   a held-out task is about to reach a model
+EVALUATION_COMPLETED             artefacts exist and re-verify from disk
+TERMINAL_LEDGER_RECORDED         how it ended is durable
+```
+
+**PROSPECTIVE SPEND RULE.** A fresh holdout is `USED_IMMUTABLE` the moment the evaluator
+**durably commits** the first held-out request to the model-facing backend boundary —
+after request parity, immediately before the first `backend.generate`. Ledger event
+`holdout_model_facing_committed` (`m62.evaluation_holdout_commit.1`), body-free, unique per
+`(evaluation_id, generation, plan_hash)`, fail-closed: if it cannot be appended, no backend
+is called. **Once written the holdout is spent whatever happens next, and RERUN is
+FORBIDDEN.** Applies **prospectively only**: candidates 001 and 002 are sealed and are not
+reinterpreted.
+
+**EXACT PLAN BINDING.** `task_pack_hash`, `hidden_target_store_hash` and
+`order_assignment_hash` were **proxies** (manifest + counts, manifest digest, and
+`"<policy>:<seed>"`). They are now the runtime identities themselves, derived once by
+`training_gym/evaluation/preflight.py` and consumed by planning *and* execution. Execution
+re-verifies them plus both references and the generation policy immediately before the
+commit — a mismatch stops the run with the holdout still unread. An unblocked plan whose
+three identities are not real digests is refused at construction.
+
+**`performs_inference` is now TRUE** on the production plan. It was `false` on the exact
+object `--execute` hands to a function that loads weights.
+
+**PRE-GO vs GO.** `--live-preflight` reports the exact plan identity and its blockers and
+does **not** materialise `EVAL:<plan-hash>`. `--dry-run` and `--print-plan` **do**. Token
+silence is ceremony hygiene, **not** cryptography: the string is a pure function of the
+`plan_hash` the preflight prints.
+
+**DURABILITY.** `ExecutionOutcome.ok` now requires `COMPLETED` **and** the holdout commit
+**and** the terminal ledger line **and** no durability-critical problem. A completed
+measurement whose terminal line failed returns `EXIT_DURABILITY` (22) — artefacts retained,
+plan spent, **recovery required, never a rerun**. A plan-ledger failure is structured, the
+plan stays unspent, and the empty directory that attempt created is withdrawn (`rmdir`
+only, never recursive).
+
+**PORTABLE EVALUATION RECEIPT.** `scripts/build_m62_eval_receipt.py`, schema
+`m62.eval_receipt.1`. Deterministic, body-free, binds the three durable events and the exact
+identities. **A future `EVALUATED_*` state for candidate 003 REQUIRES one** — snapshot
+alone, verifier constant alone and prose are all insufficient, in both verdict directions.
+Candidates 001/002 are a **closed** legacy exemption and are **not** retrofitted.
+
+**A receipt is evidence of an operation, never authority for another.**
+
+**Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden ·
+`BODY_OPAQUE_PROGRAMMATIC_ACCESS` permitted for reviewed hashing/validation code ·
+`MODEL_FACING_ACCESS` is the spend. `task-pack.jsonl` is **`BODY_BEARING`** by design;
+every other evaluation artefact, every ledger line and the receipt are **`BODY_FREE`**,
+proved with prompt/target/response canaries.
 
 ---
 
@@ -365,13 +430,21 @@ neither moved, replaced nor weakened that mechanism.
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          3441 passed · 20 skipped · 0 failed        [S3P]
+result          3623 passed · 20 skipped · 0 failed        [S3Q.0]
 ```
 
-S3P added the trained-state suite (`test_training_gym_m62_s3p_trained_state.py`) and
-updated five pre-existing assertions that said candidate 003 was untrained — true before
-S3P and false after it. Each kept the property it owned: no measurement, no tracked
-adapter/config/plan/token, and no trained claim without evidence.
+S3Q.0 added **182** tests across seven focused suites (plan truthfulness, exact binding,
+holdout commit, ledger durability, body blindness, portable receipt, control-plane
+anti-circularity) plus the shared synthetic scaffolding `tests/_s3q0_synthetic.py`.
+3441 + 182 = 3623 on one interpreter; **never reconcile counts across interpreters by
+arithmetic.**
+
+S3Q.0 rescoped **one** pre-existing assertion.
+`test_s3n_changed_no_evaluation_policy_grader_or_gate_source` diffed S3N's starting commit
+against the **working tree**, so it silently asserted that no *later* milestone had touched
+`training_gym` either — true by coincidence through S3N.1, S3O and S3P. The second endpoint
+is now pinned to S3N's closing commit `ec446e3`, so it measures exactly the property its
+name states, and that property still holds. S3Q.0's own scope has its own guard.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running
 `pytest` from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -435,11 +508,17 @@ one authorised training attempt is spent** — no second `TRAIN` token, no retry
 no re-seed. A change to candidate 003 is a **new identity**.
 
 **If evaluation is later authorised**, the sequence is: derive the evaluation plan on the
-executing host in `.venv-m62-eval-linux` → a fresh single-use `EVAL` token → one paired
-run against `eval-v4` → a new control-plane generation. The only valid primary comparison
-is a **simultaneously measured baseline on `v4`** versus candidate 003 on `v4`, under
-identical generation, metric and gate policy digests. D28, D29 and D33 must be restated in
-that report.
+executing host in `.venv-m62-eval-linux` → **run `--live-preflight` and review it** (it
+prints the exact bound identities and **no** token) → a fresh single-use `EVAL` token → one
+paired run against `eval-v4` → **build and verify the portable evaluation receipt** → a new
+control-plane generation. The only valid primary comparison is a **simultaneously measured
+baseline on `v4`** versus candidate 003 on `v4`, under identical generation, metric and gate
+policy digests. D28, D29 and D33 must be restated in that report.
+
+**The ceremony is qualified (S3Q.0) and it is not authorised.** Preparing the airlock is
+not opening the exam. `eval-v4` is spent the moment the durable model-facing commit lands,
+and after that there is **no rerun** — not for a crash, not for a failed artefact write,
+not for a lost terminal ledger line.
 
 **Comparability, before anyone builds a table.** Candidate 003 is **not** head-to-head
 comparable with 001 or 002: it is fitted under a different training representation *and*
@@ -448,6 +527,9 @@ will be measured on a different exam. The only valid comparison is candidate 003
 
 **Nothing predicts the outcome.** D37's historical causality is `NOT_ESTABLISHED`. Do not
 record, anywhere, that candidate 003 will fix stopping, restore 9/9 or repair safety.
+
+**Also ruled out now:** re-running a spent evaluation for any reason · fabricating a
+receipt for candidate 001 or 002 · claiming an `EVALUATED_*` state from a snapshot alone.
 
 **Still explicitly ruled out:** a second `TRAIN` capability for candidate 003 · retraining,
 resuming or re-seeding it · reading `eval-v4` bodies to explain, debug or tune it · turning
