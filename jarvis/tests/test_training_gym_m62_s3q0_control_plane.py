@@ -301,9 +301,22 @@ def test_the_graders_and_the_refusal_detector_are_untouched():
 
 
 def test_no_candidate_003_token_config_plan_or_adapter_became_tracked():
+    """WIDENED at S3Q.0.2 by one path, and not a weakening.
+
+    S3Q.0 qualified the ceremony while candidate 003 was TRAINED_UNEVALUATED, so the only
+    tracked path naming it was its training receipt. S3Q.0.2 sealed the measurement that
+    had already happened, and a portable EVALUATION receipt is precisely what the control
+    plane REFUSES an ``EVALUATED_*`` state without. Its presence in Git is the invariant
+    holding, not a breach of it.
+
+    What this test owns is unchanged and is what its name says: no token, no
+    configuration, no plan and no adapter for candidate 003 is tracked. Both allowlisted
+    paths are receipts under ``state/m62/receipts/``, and that is asserted, not assumed.
+    """
     import subprocess
 
-    allowed = {"state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json"}
+    allowed = {"state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json",
+               "state/m62/receipts/qwen3-06b-lora-quality-live-003.eval.json"}
     try:
         tracked = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
                                  capture_output=True, text=True, timeout=60, check=False)
@@ -312,6 +325,9 @@ def test_no_candidate_003_token_config_plan_or_adapter_became_tracked():
     named = [p for p in tracked.stdout.split()
              if "qwen3-06b-lora-quality-live-003" in p]
     assert set(named) <= allowed, named
+    for path in named:
+        assert path.startswith("state/m62/receipts/") and path.endswith(".json"), path
+        assert "adapter" not in path and "config" not in path and "plan" not in path
 
 
 def test_the_control_plane_still_grants_no_authority():

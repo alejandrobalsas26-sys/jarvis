@@ -550,23 +550,30 @@ def test_candidate_002_is_evaluated_not_eligible(snapshot):
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"
 
 
-def test_candidate_003_is_trained_but_has_no_measurement(snapshot):
-    """S3O moved ordinal 3 NOT_CREATED -> DESIGNED_UNTRAINED; S3P moved it on to
-    TRAINED_UNEVALUATED.
+def test_candidate_003_is_measured_and_backed_by_both_receipts(snapshot):
+    """S3O moved ordinal 3 NOT_CREATED -> DESIGNED_UNTRAINED, S3P -> TRAINED_UNEVALUATED,
+    S3Q.0.2 -> EVALUATED_NOT_ELIGIBLE.
 
-    **What this test owns is unchanged and is the part that matters: candidate 003 has
-    no evaluation.** The adapter fields moved because a training run produced real
-    weights, which is exactly what the second half of the state name says. The half that
-    decides anything -- ``UNEVALUATED`` -- is asserted here as strictly as before, and
-    the new receipt pointer is required because a trained claim the control plane cannot
-    back is the claim it must not be able to make.
+    RENAMED and re-pointed at S3Q.0.2, and not a weakening. This test reads the LIVE
+    snapshot on purpose -- it owns "the control plane models this candidate coherently",
+    not "candidate 003 has not been measured yet", which stopped being true the moment
+    eval-v4 was spent.
+
+    **What it owns is the pairing, and that got STRICTER:** an evaluated candidate must
+    name the corpus that measured it AND carry a portable evaluation receipt, because a
+    state the control plane cannot back is the state it must not be able to claim. Both
+    receipts are asserted here; `check_evaluation_receipt` re-derives what they say.
+
+    NOT ELIGIBLE is a result, not a promotion in waiting: the terminal state is asserted
+    exactly, so a future edit to ELIGIBLE_FOR_HUMAN_REVIEW fails here.
     """
     entry = next(c for c in snapshot["candidates"] if c["ordinal"] == 3)
-    assert entry["status"] == "TRAINED_UNEVALUATED"
+    assert entry["status"] == "EVALUATED_NOT_ELIGIBLE"
     assert entry["adapter_sha256"] is not None
     assert entry["adapter_manifest_hash"] is not None
     assert entry["training_receipt"] is not None
-    assert entry["evaluation_corpus"] is None
+    assert entry["evaluation_receipt"] is not None
+    assert entry["evaluation_corpus"] == "m62-defensive-eval v4"
     assert "v2" in entry["training_corpus"]
     assert entry["candidate_id"] == "qwen3-06b-lora-quality-live-003"
 
@@ -617,11 +624,19 @@ def test_an_evaluated_candidate_without_evidence_is_refused(sandbox):
     assert any("deep evidence pointer" in m for _, m in report.problems)
 
 
-def test_eval_v4_is_frozen_unused(snapshot):
+def test_eval_v4_is_spent_and_names_what_spent_it(snapshot):
+    """Was ``test_eval_v4_is_frozen_unused`` until S3Q spent it.
+
+    The transition FROZEN_UNUSED -> USED_IMMUTABLE is ONE-WAY and has no edge back, so
+    the live assertion is now the other half of the same invariant: a spent holdout is
+    USED_IMMUTABLE and must NAME what spent it. A USED_IMMUTABLE holdout with a null
+    ``spent_by`` is refused by ``check_dataset_state``; this asserts the live plane is
+    on the right side of that.
+    """
     entry = next(d for d in snapshot["datasets"]
                  if d["dataset_id"] == "m62-defensive-eval" and d["version"] == "v4")
-    assert entry["status"] == "FROZEN_UNUSED"
-    assert entry["spent_by"] is None
+    assert entry["status"] == "USED_IMMUTABLE"
+    assert entry["spent_by"] and "S3Q" in entry["spent_by"]
     assert entry["task_count"] == 36
 
 
@@ -642,11 +657,20 @@ def test_eval_v4_manifest_parent_and_pack_are_the_frozen_ones(snapshot):
     assert entry["pack_hash"] == V.EVAL_V4_PACK_HASH
 
 
-def test_relabelling_eval_v4_as_used_fails_verification(sandbox):
+def test_relabelling_eval_v4_as_fresh_fails_verification(sandbox):
+    """INVERTED at S3Q.0.2, and the inversion is the stronger direction.
+
+    Until S3Q this mutation wrote USED_IMMUTABLE over a fresh holdout. eval-v4 is now
+    genuinely spent, so that mutation is a no-op and would assert nothing -- while the
+    lie that actually matters became available: relabelling a SPENT holdout as fresh.
+    That is the single most damaging edit anyone could make to this state, so it is the
+    one this test now makes, and it must still be refused.
+    """
     plane = _plane_from(sandbox)
     mutated = copy.deepcopy(plane.snapshot)
     entry = next(d for d in mutated["datasets"] if d["version"] == "v4")
-    entry["status"] = "USED_IMMUTABLE"
+    entry["status"] = "FROZEN_UNUSED"
+    entry["spent_by"] = None
     _rewrite(sandbox, plane.current["latest_snapshot_path"], mutated)
     _repoint(sandbox)
     report = V.Report()
@@ -1255,11 +1279,19 @@ def test_train_v2_is_unchanged_and_there_is_no_train_v3(snapshot):
                    for d in snapshot["datasets"])
 
 
-def test_the_next_holdout_is_eval_v4_body_free(snapshot):
+def test_no_fresh_holdout_is_available_and_the_spent_one_stays_unread(snapshot):
+    """Was ``test_the_next_holdout_is_eval_v4_body_free``. S3Q spent v4 and there is no v5.
+
+    The property is unchanged in substance and is the one that stops the next session
+    reaching for the exam: NEXT may not offer a fresh holdout it does not have, and the
+    spent one is development evidence under D35 -- readable as identities and results,
+    never as task bodies. "Spent" is not permission to read it.
+    """
     nxt = snapshot["next_milestone"]
-    assert "m62-defensive-eval v4" in nxt["evaluation_holdout"]
-    assert "FROZEN_UNUSED" in nxt["evaluation_holdout"]
-    assert "BODY_FREE_IDENTITY_ONLY" in nxt["holdout_access"]
+    assert "NONE" in nxt["evaluation_holdout"]
+    assert "USED_IMMUTABLE" in nxt["evaluation_holdout"]
+    assert "D35" in nxt["holdout_access"]
+    assert "unread" in nxt["holdout_access"]
 
 
 def test_everything_ruled_out_is_still_ruled_out(snapshot):

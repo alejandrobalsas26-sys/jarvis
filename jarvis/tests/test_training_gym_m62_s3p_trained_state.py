@@ -338,7 +338,13 @@ def test_a_trained_claim_without_a_receipt_pointer_is_refused(sandbox):
     _repoint(sandbox)
     reloaded = _plane_from(sandbox)
 
-    assert V.FROZEN_CANDIDATES[CANDIDATE_003_ID][0] == "TRAINED_UNEVALUATED"
+    # RESCOPED at S3Q.0.2. This asserted the verifier's own constant AGREED with the
+    # sandbox, so the refusal below could not be explained away as a status mismatch.
+    # The constant has since moved to EVALUATED_NOT_ELIGIBLE, so the A/B is stated the
+    # way it always meant: the sandbox claims a state the verifier RECOGNISES, and is
+    # still refused, because no portable evidence backs it.
+    assert "TRAINED_UNEVALUATED" in V.CANDIDATE_STATES
+    assert _entry(reloaded.snapshot, 3)["status"] == "TRAINED_UNEVALUATED"
     report = _receipt_report(reloaded)
     assert "TRAINING_RECEIPT" in _categories(report)
     assert any("offers nothing a reader could check" in m for _, m in report.problems)
@@ -801,10 +807,21 @@ def test_the_two_predecessor_adapters_still_hash_to_their_sealed_values():
         assert V.sha256_bytes(weights.read_bytes()) == expected, cid
 
 
-def test_eval_v4_is_still_frozen_unused():
-    """Property 22, and the whole point of S3P not being an evaluation."""
-    assert V.FROZEN_DATASETS["m62-defensive-eval v4"][0] == "FROZEN_UNUSED"
-    entry = next(d for d in _live_snapshot()["datasets"]
+def test_training_the_candidate_did_not_spend_the_holdout():
+    """Property 22, and the whole point of S3P not being an evaluation.
+
+    RESCOPED at S3Q.0.2 to generation 3, for the reason S3Q.0 pinned the gen2 -> gen3
+    test: read live, this also asserted that no LATER generation had spent v4 -- true by
+    coincidence until S3Q spent it, under a separate authority, which is exactly the
+    sequence S3P said would be required. The property S3P owns is that TRAINING spends no
+    holdout, and it is immutable where S3P recorded it.
+    """
+    generation_3 = next(
+        path for path in sorted((REPO / V.SNAPSHOT_DIR).iterdir())
+        if json.loads(path.read_text(encoding="utf-8"))["state_generation"] == 3)
+    snapshot = json.loads(generation_3.read_text(encoding="utf-8"))
+    assert snapshot["subject_state_milestone"] == "S3P"
+    entry = next(d for d in snapshot["datasets"]
                  if d["dataset_id"] == "m62-defensive-eval" and d["version"] == "v4")
     assert entry["status"] == "FROZEN_UNUSED"
     assert entry["spent_by"] is None
@@ -816,13 +833,22 @@ def test_a_spent_holdout_may_never_be_relabelled_fresh():
                                  V.DATASET_TRANSITIONS, "dataset") != []
 
 
-def test_marking_eval_v4_used_without_an_evaluation_is_refused(sandbox):
-    """Non-vacuity O. Training does not spend the holdout, so nothing may say it did."""
+def test_relabelling_the_spent_holdout_as_fresh_is_refused(sandbox):
+    """Non-vacuity O, INVERTED at S3Q.0.2 because the available lie changed.
+
+    Until S3Q this wrote USED_IMMUTABLE over a fresh holdout: training does not spend a
+    holdout, so nothing might say it did. S3Q then spent v4 under a separate authority,
+    which makes that mutation a no-op that would assert nothing -- and makes the opposite
+    edit possible for the first time. Relabelling a SPENT holdout as fresh is the more
+    dangerous direction by far, it has no edge in the transition table, and it must be
+    refused. Same check, same non-vacuity, pointed at the lie that now exists.
+    """
     plane = _trained(sandbox)
     mutated = copy.deepcopy(plane.snapshot)
     entry = next(d for d in mutated["datasets"]
                  if d["dataset_id"] == "m62-defensive-eval" and d["version"] == "v4")
-    entry["status"] = "USED_IMMUTABLE"
+    entry["status"] = "FROZEN_UNUSED"
+    entry["spent_by"] = None
     _rewrite(sandbox, plane.current["latest_snapshot_path"], mutated)
     _repoint(sandbox)
     report = V.Report()
@@ -967,9 +993,15 @@ def test_the_trained_state_is_recorded_at_a_new_generation_descending_from_gen2(
     assert snapshot["parent_snapshot_sha256"] == GEN2_SHA
     assert snapshot["subject_state_milestone"] == "S3P"
 
-    # And the candidate is still trained-and-unevaluated in the CURRENT generation: the
-    # transition above is history, this is the state now, and they are different claims.
-    assert _live_candidate(3)["status"] == "TRAINED_UNEVALUATED"
+    # RESCOPED at S3Q.0.2. This asserted the candidate was STILL trained-and-unevaluated
+    # in the current generation -- which quietly asserted that no later generation had
+    # measured it. S3Q did. The claim S3P owns is the gen2 -> gen3 transition above; what
+    # survives here is that the candidate is the same one and that its history was not
+    # rewritten underneath the later state.
+    live = _live_candidate(3)
+    assert live["candidate_id"] == CANDIDATE_003_ID
+    assert live["adapter_sha256"] == entry["adapter_sha256"]
+    assert live["training_receipt"] == entry["training_receipt"]
 
 
 def test_the_subject_commit_exists_and_head_descends_from_it():

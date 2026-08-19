@@ -648,10 +648,17 @@ def test_s3n_changed_no_evaluation_policy_grader_or_gate_source():
 #  45-49. No candidate 003, no train-v3, no authority
 # ══════════════════════════════════════════════════════════════════════════════
 #: S3P added exactly one tracked path naming candidate 003: its portable training
-#: receipt. That is evidence a run happened, not a configuration, a plan, an adapter or
-#: a token — none of which may ever be tracked.
+#: receipt. S3Q.0.2 added the second and last: its portable EVALUATION receipt. Both are
+#: evidence an operation happened — not a configuration, a plan, an adapter or a token,
+#: none of which may ever be tracked.
+#:
+#: WIDENED at S3Q.0.2, and not a weakening. The control plane REFUSES an ``EVALUATED_*``
+#: state that carries no tracked portable receipt, so the receipt existing in Git is the
+#: invariant working, not a breach of it. What this allowlist protects is unchanged: an
+#: unlisted tracked path carrying this identity is still a failure.
 CANDIDATE_003_TRACKED_ALLOWLIST = frozenset({
     "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json",
+    "state/m62/receipts/qwen3-06b-lora-quality-live-003.eval.json",
 })
 
 

@@ -55,6 +55,20 @@ def _live_snapshot() -> dict:
                       .read_text(encoding="utf-8"))
 
 
+def _generation(number: int) -> dict:
+    """The snapshot a specific generation wrote, not whatever the newest one is.
+
+    Added at S3Q.0.2. A sealed milestone's claim about the state IT recorded is immutable
+    and must be checked where it happened; read live, it also asserts that no later
+    generation exists, which is true only until the next one is written.
+    """
+    for path in sorted((REPO_ROOT / "state/m62/snapshots").iterdir()):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload["state_generation"] == number:
+            return payload
+    raise AssertionError(f"generation {number} is absent from the snapshot chain")
+
+
 def _plane(snapshot: dict) -> ControlPlane:
     return ControlPlane(
         current=_live_current(), current_bytes=b"", snapshot=snapshot,
@@ -89,17 +103,52 @@ def test_the_live_snapshot_still_passes_the_evaluation_receipt_check():
     assert _problems(_live_snapshot()) == []
 
 
-def test_candidate_003_is_trained_and_unevaluated_with_no_receipt():
-    entry = _candidate(_live_snapshot(), "qwen3-06b-lora-quality-live-003")
+def test_generation_5_stayed_valid_with_nothing_evaluated():
+    """RESCOPED at S3Q.0.2 to generation 5, which is what this file said it guards.
+
+    The header states the property: hardening the evaluated-state contract must not
+    retroactively invalidate a generation in which nothing had been evaluated. That is a
+    claim about GENERATION 5, and reading it live made it silently depend on no
+    generation 6 existing. S3Q.0.2 wrote one, and the S3Q.0.1 contract still accepts
+    generation 5 exactly as it did the day it was sealed.
+    """
+    snapshot = _generation(5)
+    assert snapshot["subject_state_milestone"] == "S3Q.0.1"
+    entry = _candidate(snapshot, "qwen3-06b-lora-quality-live-003")
     assert entry["status"] == "TRAINED_UNEVALUATED"
     assert entry["evaluation_receipt"] is None
     assert entry["evaluation_corpus"] is None
     assert entry["training_receipt"] == \
         "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json"
+    assert _problems(snapshot) == []
 
 
-def test_eval_v4_is_still_frozen_and_unspent():
-    entry = next(d for d in _live_snapshot()["datasets"]
+def test_candidate_003_is_now_evaluated_and_backed_by_a_modern_receipt():
+    """The live half, stated as a claim about NOW rather than about what has not happened.
+
+    S3Q measured candidate 003 and S3Q.0.2 sealed it. The EVALUATED_* state is only
+    admissible because a tracked modern receipt backs it, and `_problems` runs the real
+    `check_evaluation_receipt`, which RE-DERIVES the verdict rather than reading it.
+    """
+    snapshot = _live_snapshot()
+    entry = _candidate(snapshot, "qwen3-06b-lora-quality-live-003")
+    assert entry["status"] == "EVALUATED_NOT_ELIGIBLE"
+    assert entry["status"] in EVALUATED_CANDIDATE_STATES
+    assert entry["evaluation_corpus"] == "m62-defensive-eval v4"
+    assert entry["evaluation_receipt"] == \
+        "state/m62/receipts/qwen3-06b-lora-quality-live-003.eval.json"
+    receipt = json.loads(
+        (REPO_ROOT / entry["evaluation_receipt"]).read_text(encoding="utf-8"))
+    assert receipt["schema_version"] in MODERN_EVAL_RECEIPT_VERSIONS
+    assert _problems(snapshot) == []
+
+
+def test_eval_v4_was_unspent_when_the_evidence_chain_was_closed():
+    """RESCOPED at S3Q.0.2 to generation 5. S3Q.0.1's point was that it closed the
+    evidence chain BEFORE the holdout was spent, and that ordering is immutable: the
+    receipt contract could not have been designed around a result nobody had yet seen.
+    Read live it asserted the holdout was still unspent, which S3Q ended."""
+    entry = next(d for d in _generation(5)["datasets"]
                  if d["dataset_id"] == "m62-defensive-eval" and d["version"] == "v4")
     assert entry["status"] == "FROZEN_UNUSED"
     assert entry["spent_by"] is None

@@ -364,8 +364,14 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
     "m62-defensive-eval v3": (
         "USED_IMMUTABLE",
         "7c948236163198b5de451316e39346a37efcbc1254724f921e116a6c722f75a0"),
+    # S3N froze v4 candidate-blind and S3Q spent it: one plan, one model-facing commit,
+    # one terminal event, 72 results. USED_IMMUTABLE from that durable commit onward,
+    # whatever happened afterwards -- and what happened afterwards is that the SEAL
+    # failed three times and the measurement did not. The transition table has no edge
+    # back, deliberately: relabelling a spent holdout as fresh is the single most
+    # damaging edit anyone could make to this repository.
     "m62-defensive-eval v4": (
-        "FROZEN_UNUSED",
+        "USED_IMMUTABLE",
         "8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5"),
     "m62-defensive-quality-train v1": (
         "USED_IMMUTABLE",
@@ -384,16 +390,20 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
         "EVALUATED_NOT_ELIGIBLE",
         "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409"),
     # S3O named candidate 003 and moved it to DESIGNED_UNTRAINED; S3P spent the one
-    # authorised TRAIN capability on it and it is now TRAINED_UNEVALUATED, with real
-    # weights and a real adapter digest.
+    # authorised TRAIN capability on it; S3Q spent eval-v4 on it and S3Q.0.2 sealed the
+    # result. It is EVALUATED_NOT_ELIGIBLE: measured, and blocked by the frozen canonical
+    # eligibility gate. NOT ELIGIBLE IS A RESULT, NOT A FAILURE OF THE RUN -- 72 results,
+    # 0 generation errors, 0 security blockers, and one deterministic quality gate that
+    # said no.
     #
     # This pair is NOT the evidence for that state, and it is deliberately not enough on
     # its own: `check_candidate_design` re-derives the design from the production
-    # generator, and `check_training_receipt` refuses the trained claim outright unless a
-    # tracked, root-independent receipt establishes it. A snapshot agreeing with this
-    # constant while either of those disagrees is a FAILURE, not a pass.
+    # generator, `check_training_receipt` refuses the trained claim without a tracked
+    # receipt, and `check_evaluation_receipt` refuses the EVALUATED_* claim without a
+    # portable one whose verdict it RE-DERIVES. A snapshot agreeing with this constant
+    # while any of those disagrees is a FAILURE, not a pass.
     "qwen3-06b-lora-quality-live-003": (
-        "TRAINED_UNEVALUATED",
+        "EVALUATED_NOT_ELIGIBLE",
         "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6"),
 }
 
@@ -418,9 +428,28 @@ CANDIDATE_CONTROL_KEY = "002"
 CANDIDATE_003_EVIDENCE = "jarvis/docs/V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md"
 CANDIDATE_003_LORA_SCOPE = "attention_and_mlp"
 
-#: S3P. The portable receipt that backs candidate 003's TRAINED_UNEVALUATED claim.
+#: S3P. The portable receipt that backs candidate 003's training history.
 CANDIDATE_003_TRAIN_RECEIPT = (
     f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-003.train.json")
+
+#: S3Q.0.2. The portable receipt that backs candidate 003's EVALUATED_NOT_ELIGIBLE claim,
+#: and the pre-repair measurement witness it binds its evaluation source through.
+CANDIDATE_003_EVAL_RECEIPT = (
+    f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-003.eval.json")
+S3Q_MEASUREMENT_WITNESS = (
+    f"{STATE_DIR}/witnesses/0001-s3q-live-measurement-witness.json")
+
+#: The evaluation that spent eval-v4, named once so no surface can invent a second one.
+S3Q_EVALUATION_ID = "m62-s3q-quality-heldout-live"
+S3Q_EVALUATION_GENERATION = 1
+S3Q_PLAN_HASH = (
+    "5ef8735337e6244293b44a735e699c8f04174eb331cc236b862f548ef3e9cfbb")
+S3Q_REPORT_HASH = (
+    "bf7dd00d06396a6d8838b8309afced61c0f3be7e98945f0cd81c2d52a46123f1")
+
+#: The commit the measurement ran at. NOT the commit that built the receipt -- the whole
+#: reason `m62.eval_receipt.3` exists is that those are two different things (D42).
+S3Q_EVALUATION_SOURCE_COMMIT = "c2c025e720e9c3e595c45ca32bd96bbe974f548e"
 
 #: The STRUCTURE a candidate-002-architecture adapter must have, quoted from the sealed
 #: S3K live-training record (§10.3) — the milestone that measured it on real weights.
@@ -450,6 +479,12 @@ FROZEN_DEFECT_STATUSES: dict[str, str] = {
     "D37": "FIXED",
     "D38": "FIXED_OBSERVABILITY_ONLY",
     "D39": "OPEN",
+    # S3Q.0.2. The three ways `m62.eval_receipt.2` refused a measurement that was
+    # correct. All three were defects in the RECEIPT, and all three were closed by
+    # moving the contract to the evidence -- never the evidence to the contract.
+    "D40": "FIXED",
+    "D41": "FIXED",
+    "D42": "FIXED",
 }
 
 DEFECT_STATES = (

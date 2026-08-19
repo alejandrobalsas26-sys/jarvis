@@ -242,12 +242,19 @@ def test_an_unknown_candidate_is_still_a_refusal():
         QCFG.candidate_spec("004")
 
 
-#: The ONE tracked non-document artefact permitted to name candidate 003: the S3P
-#: portable training receipt. It is evidence, not an artefact of the model -- no weights,
-#: no configuration document, no plan, no token. Naming it explicitly is the point: an
-#: unlisted tracked path carrying this identity is still a failure.
+#: The TWO tracked non-document artefacts permitted to name candidate 003: the S3P
+#: portable training receipt and, from S3Q.0.2, the portable EVALUATION receipt. Both are
+#: evidence, not artefacts of the model -- no weights, no configuration document, no
+#: plan, no token. Naming them explicitly is the point: an unlisted tracked path carrying
+#: this identity is still a failure.
+#:
+#: WIDENED at S3Q.0.2 by exactly one path, and not a weakening: the control plane refuses
+#: an ``EVALUATED_*`` state that shows no tracked portable receipt, so this file is the
+#: invariant being satisfied. The per-path assertions below are unchanged and still
+#: refuse anything shaped like an adapter, a configuration or a plan.
 CANDIDATE_003_TRACKED_ALLOWLIST = frozenset({
     "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json",
+    "state/m62/receipts/qwen3-06b-lora-quality-live-003.eval.json",
 })
 
 
@@ -776,10 +783,23 @@ def test_the_snapshot_records_no_training_or_evaluation_authority():
     assert observation["eval"] == "NONE_OBSERVED_IN_REPOSITORY"
 
 
-def test_the_holdout_is_still_frozen_and_unused():
-    snapshot = json.loads(
-        (REPO / json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
-         ["latest_snapshot_path"]).read_text(encoding="utf-8"))
+def test_designing_the_candidate_did_not_spend_the_holdout():
+    """RESCOPED at S3Q.0.2 to the generation S3O wrote, and not a weakening.
+
+    This read the LIVE snapshot, so it also asserted -- by coincidence rather than by
+    design -- that no later generation had spent v4. S3Q spent it, which is exactly what
+    S3O said a future authorised evaluation would do.
+
+    The property S3O owns is that DESIGNING a candidate spends nothing, and that property
+    is immutable: it is checked at generation 2, where S3O recorded it, and stays
+    checkable forever. The manifest digest is asserted here too, because "unspent" about
+    the wrong corpus is not the claim.
+    """
+    generation_2 = next(
+        path for path in sorted((REPO / V.SNAPSHOT_DIR).iterdir())
+        if json.loads(path.read_text(encoding="utf-8"))["state_generation"] == 2)
+    snapshot = json.loads(generation_2.read_text(encoding="utf-8"))
+    assert snapshot["subject_state_milestone"] == "S3O"
     v4 = next(d for d in snapshot["datasets"]
               if d["dataset_id"] == "m62-defensive-eval" and d["version"] == "v4")
     assert v4["status"] == "FROZEN_UNUSED"
