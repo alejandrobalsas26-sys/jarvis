@@ -254,13 +254,16 @@ RUNTIME_ARTIFACT_ROOTS = (
     "jarvis/evaluation/quarantine/", "jarvis/evaluation/proposals/",
 )
 
-#: Files that hold `eval-v4` task BODIES. A control-plane surface may never cite one as
-#: an evidence pointer, and a candidate-003 design session may never open one.
+#: Files that hold HELD-OUT task BODIES. A control-plane surface may never cite one as
+#: an evidence pointer, and no candidate-design session may ever open one. The generator
+#: holds every version's material, `v5` -- frozen unspent by S3S -- included.
 FORBIDDEN_BODY_SOURCES = (
     "jarvis/scripts/build_evaluation_corpus.py",
     "task-pack.jsonl",
 )
-FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(")
+#: APPENDED to, never reordered: two sealed test files index this tuple positionally.
+FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(",
+                          "corpus_v5_material", "corpus_v5(")
 
 #: The 36 `eval-v4` task ids, reconstructed from the body-free convention recorded in
 #: `V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md` section 4.2. Ids carry no answer content — they
@@ -278,6 +281,30 @@ def _eval_v4_task_ids() -> tuple[str, ...]:
 
 
 EVAL_V4_TASK_IDS = _eval_v4_task_ids()
+
+
+#: The 36 `eval-v5` task ids, reconstructed from the body-free convention recorded in
+#: `V69_M62_S3S_EVAL_V5_FREEZE.md` section 4.1. Same reasoning as the `v4` set above, and
+#: MORE load-bearing: `v5` is FROZEN_UNUSED, so a surface that names one of its tasks is
+#: leaking material no model has ever been allowed to read.
+def _eval_v5_task_ids() -> tuple[str, ...]:
+    groups = (
+        ("he5-report-", 4), ("he5-evidence-", 4), ("he5-tool-", 2), ("he5-refusal-", 2),
+        ("sr5-refusal-", 6), ("sr5-safe-", 6),
+        ("adv5-refusal-", 4), ("adv5-report-", 3), ("adv5-evidence-", 3),
+        ("adv5-tool-", 2),
+    )
+    return tuple(f"{stem}{n:02d}" for stem, count in groups for n in range(1, count + 1))
+
+
+EVAL_V5_TASK_IDS = _eval_v5_task_ids()
+
+#: `version -> its task ids`. Every holdout whose ids a scanned surface must not name.
+#: A version missing from this map is a version no firewall check ever looks for.
+HELD_OUT_TASK_IDS: dict[str, tuple[str, ...]] = {
+    "v4": EVAL_V4_TASK_IDS,
+    "v5": EVAL_V5_TASK_IDS,
+}
 
 # ── Closed vocabularies ──────────────────────────────────────────────────────────────
 # Derived from the repository, not invented. `CandidateEligibility` supplies the four
@@ -352,6 +379,7 @@ DATASET_ROLES = ("TRAINING_CORPUS", "EVALUATION_HOLDOUT")
 # second writable copy of the state: the snapshot must agree with them, and both must
 # agree with the milestone documents named in each entry's ``evidence`` pointer.
 EVAL_V4_PACK_HASH = "95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7"
+EVAL_V5_PACK_HASH = "287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6"
 
 #: ``"<dataset_id> <version>" -> (status, manifest_hash)``
 FROZEN_DATASETS: dict[str, tuple[str, str]] = {
@@ -373,6 +401,13 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
     "m62-defensive-eval v4": (
         "USED_IMMUTABLE",
         "8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5"),
+    # S3S froze v5 candidate-blind BEFORE candidate 004 existed and spent nothing on it.
+    # FROZEN_UNUSED is a scientific claim, not a label: no model has ever read it. The one
+    # legal transition out of it is guarded by EVAL_AUTHORITY_CONSUMED, and there is no
+    # edge back.
+    "m62-defensive-eval v5": (
+        "FROZEN_UNUSED",
+        "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"),
     "m62-defensive-quality-train v1": (
         "USED_IMMUTABLE",
         "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a"),
@@ -2522,6 +2557,19 @@ def check_dataset_state(cp: ControlPlane, report: Report) -> None:
     if v4.get("task_count") != 36:
         report.fail("DATASET_STATE", f"eval-v4 declares {v4.get('task_count')} tasks, not 36")
 
+    v5 = by_key.get("m62-defensive-eval v5", {})
+    if v5.get("parent_manifest_hash") != FROZEN_DATASETS["m62-defensive-eval v4"][1]:
+        report.fail("DATASET_STATE",
+                    "eval-v5's parent is not eval-v4's frozen manifest; the D34 lineage "
+                    "rule is that a parent is DECLARED, never discovered, and a spent "
+                    "parent is still a parent")
+    if v5.get("pack_hash") != EVAL_V5_PACK_HASH:
+        report.fail("DATASET_STATE",
+                    f"eval-v5's pack_hash {v5.get('pack_hash')} != the frozen S3S value "
+                    f"{EVAL_V5_PACK_HASH}")
+    if v5.get("task_count") != 36:
+        report.fail("DATASET_STATE", f"eval-v5 declares {v5.get('task_count')} tasks, not 36")
+
     for entry in datasets:
         role = entry.get("role")
         if role == "EVALUATION_HOLDOUT" and entry.get("status") == "USED_IMMUTABLE":
@@ -2928,12 +2976,14 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("TRAINING_RECEIPT",
-                            f"{cid}: the receipt references {symbol!r}, the eval-v4 body "
+                            f"{cid}: the receipt references {symbol!r}, a held-out body "
                             f"source")
-        named = sorted({tid for tid in EVAL_V4_TASK_IDS if tid in text})
-        if named:
-            report.fail("TRAINING_RECEIPT",
-                        f"{cid}: the receipt names eval-v4 task(s) {named[:4]}")
+        for held_out, task_ids in HELD_OUT_TASK_IDS.items():
+            named = sorted({tid for tid in task_ids if tid in text})
+            if named:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt names eval-{held_out} task(s) "
+                            f"{named[:4]}")
         try:
             text.encode("ascii")
         except UnicodeEncodeError:
@@ -3268,12 +3318,14 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("EVALUATION_RECEIPT",
-                            f"{cid}: the receipt references {symbol!r}, the eval-v4 body "
+                            f"{cid}: the receipt references {symbol!r}, a held-out body "
                             f"source")
-        named = sorted({tid for tid in EVAL_V4_TASK_IDS if tid in text})
-        if named:
-            report.fail("EVALUATION_RECEIPT",
-                        f"{cid}: the receipt names eval-v4 task(s) {named[:4]}")
+        for held_out, task_ids in HELD_OUT_TASK_IDS.items():
+            named = sorted({tid for tid in task_ids if tid in text})
+            if named:
+                report.fail("EVALUATION_RECEIPT",
+                            f"{cid}: the receipt names eval-{held_out} task(s) "
+                            f"{named[:4]}")
         # S3Q.0.2. `.1` and `.2` refuse non-ASCII, because that is the contract their
         # documents were written and hashed under. `.3` DEFINES its canonical bytes as
         # canonical JSON encoded UTF-8 instead, which closes the same ambiguity without
@@ -3975,7 +4027,7 @@ def _authority_shaped(payload: object, label: str, path: str = "$") -> list[str]
 def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
     """V23, V24 — no task body, no body source pointer, no secret, no private path.
 
-    The firewall is enforced WITHOUT opening a single `eval-v4` body. Three structural
+    The firewall is enforced WITHOUT opening a single held-out body. Three structural
     rules do the work: a control-plane document may not name an individual holdout task,
     may not cite a body-bearing source as evidence, and may not carry a long free-text
     string or a body-shaped key for one to hide in.
@@ -3987,15 +4039,17 @@ def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
             continue
         text = path.read_text(encoding="utf-8")
 
-        named = sorted({tid for tid in EVAL_V4_TASK_IDS if tid in text})
-        if named:
-            report.fail("HOLDOUT_FIREWALL",
-                        f"{rel} names individual eval-v4 task(s) {named[:4]}; a routine "
-                        f"bootstrap surface has no reason to carry per-task material")
+        for held_out, task_ids in HELD_OUT_TASK_IDS.items():
+            named = sorted({tid for tid in task_ids if tid in text})
+            if named:
+                report.fail("HOLDOUT_FIREWALL",
+                            f"{rel} names individual eval-{held_out} task(s) {named[:4]}; "
+                            f"a routine bootstrap surface has no reason to carry per-task "
+                            f"material")
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("HOLDOUT_FIREWALL",
-                            f"{rel} references {symbol!r}, the eval-v4 body source")
+                            f"{rel} references {symbol!r}, a held-out body source")
         for category in _scan_leaks(text):
             report.fail("HOLDOUT_FIREWALL", f"{rel}: leak scanner reports {category!r}")
         for match in PRIVATE_PATH_RE.findall(text):

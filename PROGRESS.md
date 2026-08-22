@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **6** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **7** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0006-m62-s3q-live-measurement-sealed.json` |
-| **Snapshot SHA256** | `26f4ec179a0b5ee7bbfc7b7487aa9ef9b5d4bdaec645e970fc3d523899ac1b96` |
-| **Subject state commit** | `7cc6d2674fc717f1f5da728e0ed12d47c6523bb1` (S3Q.0.2 the S3Q measurement sealed) |
+| **Latest snapshot** | `state/m62/snapshots/0007-m62-s3s-eval-v5-frozen.json` |
+| **Snapshot SHA256** | `e9b2a0a2555a400b66bc18496136bcecf39b6a5a420174147ed74454fe90357b` |
+| **Subject state commit** | `e52129cc819433af83789f042d7bf13ea4d83014` (S3S froze the fresh holdout `eval-v5`) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -42,7 +42,7 @@ snapshot, and asks Git — not prose — about the branch, the ancestry and `mas
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `7cc6d2674fc717f1f5da728e0ed12d47c6523bb1` — the commit the current snapshot describes |
+| Subject state commit | `e52129cc819433af83789f042d7bf13ea4d83014` — the commit the current snapshot describes |
 | Training source commit | `bac49c4a49194d84fbc7f61656662fdcd54799ca` — the commit candidate 003 actually trained from. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -64,9 +64,9 @@ files on top of it. That is why the two differ, and why the verifier requires HE
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3Q.0.2** — the existing S3Q measurement sealed at receipt `.3` |
-| Last milestone | **S3Q.0.2** — `V69_M62_S3Q02_SEAL_RECOVERY.md`. **PASS.** Three receipt defects reproduced against `.2` and closed in `.3`; the measurement was not touched |
-| Phase | **Between milestones.** Three candidates measured, three `EVALUATED_NOT_ELIGIBLE`, every holdout spent, nothing proposed |
+| Last state-bearing milestone | **S3S** — `m62-defensive-eval v5` frozen candidate-blind |
+| Last milestone | **S3S** — `V69_M62_S3S_EVAL_V5_FREEZE.md`. **PASS.** A fifth holdout frozen before candidate 004 exists. S3R closed before it (`V69_M62_S3R_CANDIDATE003_POSTMORTEM.md`, docs-only, `READY_TO_FREEZE_EVAL_V5`) |
+| Phase | **Between milestones.** Three candidates measured, three `EVALUATED_NOT_ELIGIBLE`, a fresh unspent holdout ready, **no fourth candidate proposed** |
 | Live training since S3N | **one run** — candidate 003, 40/40 optimizer steps, `TRAIN` capability spent. **No retry is authorised** |
 | Live evaluation since S3N | **one run** — S3Q, candidate 003 against `eval-v4`. One plan, one holdout commit, one terminal event, **72 results, 0 generation errors.** `eval-v4` is `USED_IMMUTABLE` |
 | S3Q.0.2 | evidence only — **0 weights loaded, 0 generations, 0 new evaluation attempts, no plan consumed, no figure moved** |
@@ -152,7 +152,8 @@ refused, and the verifier rejects every transition absent from its allowed table
 | `m62-defensive-eval v1` | holdout | `USED_IMMUTABLE` | `0970600c…` | genesis | `d714d89b…` | S3E.2 |
 | `m62-defensive-eval v2` | holdout | `USED_IMMUTABLE` | `82b60bfd…` | `0970600c…` | `3744a22e…` | S3I LIVE |
 | `m62-defensive-eval v3` | holdout | `USED_IMMUTABLE` | `7c948236…` | `82b60bfd…` | `28d2f7d0…` | S3L |
-| **`m62-defensive-eval v4`** | holdout | **`USED_IMMUTABLE`** | `8c6871b0…` | `7c948236…` | `95b4e2f6…` | **S3Q, candidate 003** |
+| `m62-defensive-eval v4` | holdout | `USED_IMMUTABLE` | `8c6871b0…` | `7c948236…` | `95b4e2f6…` | S3Q, candidate 003 |
+| **`m62-defensive-eval v5`** | holdout | **`FROZEN_UNUSED`** | `e852f462…` | `8c6871b0…` | `287a9fb6…` | **nothing — unspent** |
 | `m62-defensive-quality-train v1` | training | `USED_IMMUTABLE` | `9bbac2f0…` | genesis | — | S3H |
 | `m62-defensive-quality-train v2` | training | `USED_IMMUTABLE` | `24ceb1e0…` | `9bbac2f0…` | — | S3K |
 
@@ -166,23 +167,31 @@ verifier has no edge back — relabelling a spent holdout as fresh is the single
 edit anyone could make to this state — and a missing or unrecognised status is a **failure**,
 not a fresh corpus. (The S3J/S3K spelling `FROZEN_UNSEEN` is the same state, archive-only.)
 
-### `eval-v4` — spent
+### `eval-v5` — frozen, unspent, candidate-blind
 
 ```
-dataset_id / version    m62-defensive-eval / v4
-status                  USED_IMMUTABLE          spent by S3Q, candidate 003
-manifest                8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5
-pack                    95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7
-tasks / splits          36 / 12-12-12
+dataset_id / version    m62-defensive-eval / v5      status  FROZEN_UNUSED   spent_by null
+manifest                e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c
+pack                    287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6
+parent                  8c6871b0…  (eval-v4, declared not discovered — D34)
+task / prompt / target  cda48cf5…  ·  239c6402…  ·  47dbb2a0…      set digests, body-free
 ```
 
-Its freeze evidence — task/prompt/target hash-set digests, the zero-overlap and leakage
-results, the families and decision classes — is sealed in
-`jarvis/docs/V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md`; what it measured is in
-`jarvis/docs/V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md`. **Under D35 `v4` is now
-development evidence and may never decide eligibility again.** Its task bodies stay unread:
-nothing in S3Q or S3Q.0.2 opened a prompt, a target or a model response. **A candidate 004
-needs an `eval-v5`, frozen candidate-blind BEFORE its training begins.**
+Frozen by **S3S before candidate 004 exists** — no identifier, no configuration, no
+adapter, no `train-v3`, no axis ruling. Zero overlap with `v1`–`v4` on ids, prompts,
+targets and all four hash axes; no pair of the 2,710 compared reaches even the near-duplicate
+warning threshold; leakage against both training corpora `clean` over 16 checks with
+`semantic_similarity` **`NOT_QUALIFIED`, never clean**; identical manifest, pack and set
+digests across three independent build roots; D36 host independence **PASS**. Full body-free
+evidence: `jarvis/docs/V69_M62_S3S_EVAL_V5_FREEZE.md`. **Bind it by the digests above — its
+task bodies stay unread, and the session that authored them may not design what they will
+measure.**
+
+**`eval-v4` is spent** (S3Q, candidate 003 — freeze evidence in
+`V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md`, results in
+`V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md`). **Under D35 it is development
+evidence and may never decide eligibility again.** Its bodies stay unread: nothing in S3Q,
+S3Q.0.2, S3R or S3S opened a prompt, a target or a model response.
 
 ---
 
@@ -425,26 +434,23 @@ moved, replaced or weakened.
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          3910 passed · 20 skipped · 0 failed        [S3Q.0.2]
+result          3981 passed · 20 skipped · 0 failed        [S3S]
 ```
 
-S3Q.0.2 added **145** — 144 across `…_s3q02_eval_receipt_v3.py` (the three findings, each
-reproduced against `.2` before it was fixed; the four-verdict partition; the Unicode battery;
-the source split; the witness cross-check; 36 non-vacuity mutations) plus
-`tests/_s3q02_synthetic.py`, and one strengthened tracked-path assertion. 3765 + 145 = 3910 on
-**one** interpreter; **never reconcile counts across interpreters by arithmetic.** S3Q.0.1
-before it added **142**, and S3Q.0 before that **182**.
+S3S added **71**: 70 in `…_s3s_fresh_eval_v5.py`, the freeze suite for the fifth holdout,
+plus **one** in the S3G file, whose held-out parametrisation is driven by
+`HELD_OUT_VERSIONS` and grew when `v5` joined it. 3910 + 71 = 3981 on **one** interpreter;
+**never reconcile counts across interpreters by arithmetic.**
 
-**Rescoped assertions are not regressions, and there is now a documented pattern for them.**
+**Rescoped assertions are not regressions, and there is a documented pattern for them.**
 An assertion that compares a *sealed* milestone's property against *live* state also asserts,
 silently, that no later generation exists — true by coincidence until the next milestone
 writes one. Such tests are pinned to the generation that recorded the property: the S3N
 source-scope test to `ec446e3`, the S3P gen2→gen3 and holdout tests to generation 3, the S3O
-holdout test to generation 2, the S3Q.0.1 acceptance tests to generation 5. **S3Q.0.2 also
-inverted two non-vacuity mutations**: writing `USED_IMMUTABLE` over `eval-v4` is now a no-op,
-and the lie worth refusing became relabelling the *spent* holdout as fresh. **Three
-candidate-003 tracked-path allowlists were widened by exactly one path** — the portable
-evaluation receipt, which the control plane refuses an `EVALUATED_*` state without.
+holdout test to generation 2, the S3Q.0.1 acceptance tests to generation 5. **S3S rescoped
+four more** — the S3N, S3F.2 and S3J assertions that read the live `CORPUS_VERSIONS`,
+`HELD_OUT_VERSIONS` and `LATEST_DATASET_VERSION` — each keeping the property it owns while
+no longer asserting that no later holdout exists.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running `pytest`
 from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -474,8 +480,9 @@ LEVEL 4  ARCHIVE     full read — audit, migration or root-cause work ONLY
 
 **Do NOT read by default:** the historical archive `PROGRESS_THROUGH_S3N.md` (516,784 bytes,
 and it is history) · every milestone document · **the task bodies of any holdout, spent or
-not — `eval-v4` included, and being spent is not permission** · raw model responses, none of
-which were ever persisted (only `response_sha256`). **Read history only when** a
+not — `eval-v4` included, and being spent is not permission; `eval-v5` above all, which is
+frozen and unread** · raw model responses, none of which were ever persisted (only
+`response_sha256`). **Read history only when** a
 referenced invariant cannot be resolved from current authority. **Every high-impact session
 begins:** Git authority → control-plane verifier → current
 state → the milestone document NEXT names → task-specific authority → *only then* writes.
@@ -484,45 +491,55 @@ state → the milestone document NEXT names → task-specific authority → *onl
 
 ## 12 — EXACT NEXT
 
-> **An explicit HUMAN OPERATOR DECISION on what M62 does now that its third candidate is
-> measured and NOT ELIGIBLE.** S3Q measured it and S3Q.0.2 sealed the measurement. Neither
-> grants anything, and **nothing in this repository proposes a fourth candidate.**
+> **A HUMAN DECISION, IN A NEW SESSION.** `eval-v5` is frozen candidate-blind and unspent.
+> What remains is (A)/(B) below plus an operator ruling on candidate 004's single primary
+> axis. **Nothing in this repository proposes, names or configures a fourth candidate.**
 
-**Candidate 003 is closed as `EVALUATED_NOT_ELIGIBLE`.** It is **not** approved, **not**
-promoted, **not** production-ready and **not** a successful deployment. It improved several
-measurements and failed the frozen canonical eligibility gate. That state is **terminal**.
+**The next session must first decide, explicitly:**
 
-**`eval-v4` is `USED_IMMUTABLE` and cannot be reused** — not for an ablation, not for a
-re-score under changed policies, not to re-check the three seal failures that have since
-been fixed, not for any reason at all. Under **D35** it is now development evidence.
+- **(A)** authorise a **bounded semantic development audit** of the six spent-`v4` candidate
+  ceiling responses — permitted under **D35**, would likely lift S3R's
+  `MECHANISM_CONFIDENCE` from MEDIUM to HIGH and could re-order its hypothesis ranking; **or**
+- **(B)** **waive it** and go straight to the candidate 004 operator ruling and design.
 
-**Any candidate 004 requires a fresh `eval-v5`, generated and FROZEN candidate-blind BEFORE
-candidate 004 training begins.** That ordering is the point: an exam written after seeing
-the student is not an exam. Freezing `v5` is itself a milestone and is **not** authorised
-here, and it must not be done in the same session that designs the candidate.
+S3S did **not** authorise (A) and read no response body. Either way the decision **cannot
+affect frozen `eval-v5`**.
 
-**If M62 continues, the sequence is:** operator decision → `eval-v5` frozen candidate-blind
-→ candidate 004 designed → a fresh single-use `TRAIN` authority → a fresh single-use `EVAL`
-authority at a new generation → one paired run → an `m62.eval_receipt.3` receipt → a new
-control-plane generation. Every arrow is a separate human decision.
+**Then, and separately, the axis ruling.** S3R proposed *as a hypothesis* reducing LoRA
+capacity (`r16 → r8`, alpha scaled to hold `alpha/r = 2`) and established that this
+**conflicts with the `ruled_out` list**, which bars any rank or alpha change. **S3S did not
+resolve that conflict and had no authority to:** `CANDIDATE004_AXIS_DECISION:
+PENDING_HUMAN_RULING`. Only a human may move it.
 
-**Comparability, before anyone builds a table.** The three candidates were measured on
-`v2`, `v3` and `v4` — three different exams with zero shared instances — and 003 was
-additionally fitted under a different training representation. **They may not be ranked in
-one table.** The only valid comparison is each candidate against its own simultaneously
-measured baseline, under identical generation, metric and gate policy digests. **D28, D29
-and D33 bound every one of those comparisons** and must be restated wherever they are used.
+**Candidate 003 is closed as `EVALUATED_NOT_ELIGIBLE`** — not approved, not promoted, not
+production-ready, not a successful deployment. It improved several measurements and failed
+the frozen canonical eligibility gate. That state is **terminal**, and `eval-v4` cannot be
+reused for an ablation, a re-score or any reason at all.
 
-**Still explicitly ruled out:** re-running, re-scoring, ablating or re-interpreting S3Q ·
-reusing `eval-v4` · promoting, activating or registering candidate 003 · calling it approved
-or successful · reading `eval-v4` bodies to explain, debug or tune anything · turning a `v4`
-result into a training example · editing the S3Q report or any recorded figure · retraining,
-resuming or re-seeding candidate 003 · starting candidate 004 before `v5` is frozen ·
-freezing `v5` in the session that designs 004 · changing gates, graders, thresholds or the
-refusal detector in response to this result · creating a D38 gate · fixing **D39** as a
-rider · ranking 001, 002 and 003 in one table · back-filling a receipt for 001 or 002 ·
-rewriting `.1` or `.2` semantics in place · promotion, activation, registry mutation, merge,
-tag, release or version bump.
+**If M62 continues, the sequence is:** (A)/(B) → operator axis ruling → candidate 004
+designed → a fresh single-use `TRAIN` authority → any `train-v3` checked against frozen `v5`
+→ a fresh single-use `EVAL` authority at a new generation → **one** paired run against `v5`
+→ an `m62.eval_receipt.3` receipt → a new control-plane generation. **Every arrow is a
+separate human decision.**
+
+**Comparability, before anyone builds a table.** The candidates were measured on `v2`, `v3`
+and `v4` — three exams with zero shared instances — and 003 was additionally fitted under a
+different training representation. `v5` shares no instance with any of them. **They may not
+be ranked in one table.** The only valid comparison is each candidate against its own
+simultaneously measured baseline, under identical generation, metric and gate policy
+digests. **D28, D29 and D33 bound every one of those comparisons.**
+
+**Still explicitly ruled out:** designing, naming or configuring candidate 004 **in the
+session that authored `v5`** · mutating, re-wording, re-scoping, replacing or
+threshold-tuning frozen `eval-v5` · reading `v5` task bodies in any design, training or
+planning session · reusing `eval-v4`, or reading its bodies to explain, debug or tune
+anything · re-running, re-scoring, ablating or re-interpreting S3Q · promoting, activating
+or registering candidate 003, or calling it approved · retraining, resuming or re-seeding it
+· turning a `v4` result into a training example · editing the S3Q report or any recorded
+figure · changing gates, graders, thresholds, `max_new_tokens` or the refusal detector in
+response to a result · creating a D38 gate · fixing **D39** as a rider · ranking 001, 002 and
+003 in one table · back-filling a receipt for 001 or 002 · rewriting `.1` or `.2` semantics
+in place · promotion, activation, registry mutation, merge, tag, release or version bump.
 
 ---
 

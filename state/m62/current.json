@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0006-m62-s3q-live-measurement-sealed.json",
-  "latest_snapshot_sha256": "26f4ec179a0b5ee7bbfc7b7487aa9ef9b5d4bdaec645e970fc3d523899ac1b96",
+  "latest_snapshot_path": "state/m62/snapshots/0007-m62-s3s-eval-v5-frozen.json",
+  "latest_snapshot_sha256": "e9b2a0a2555a400b66bc18496136bcecf39b6a5a420174147ed74454fe90357b",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 6,
-  "subject_state_commit": "7cc6d2674fc717f1f5da728e0ed12d47c6523bb1",
+  "state_generation": 7,
+  "subject_state_commit": "e52129cc819433af83789f042d7bf13ea4d83014",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
