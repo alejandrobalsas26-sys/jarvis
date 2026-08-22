@@ -102,6 +102,50 @@ EXPERIMENT_NAME_003 = "m62-s3o-defensive-quality-003"
 #: `train-v3` and S3O creates none: a corpus change would be a second axis.
 TRAINING_DATASET_VERSION_003 = TRAINING_DATASET_VERSION_002
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M62 S3U — the FOURTH quality candidate, one dial: the learning rate
+# ══════════════════════════════════════════════════════════════════════════════
+#  Candidate 003 is `EVALUATED_NOT_ELIGIBLE`, terminal, and untouched here. Candidate
+#  004 is a NEW identity: never a relabelling, a resume, a re-seed or a retrain of 003.
+#
+#  It exists because of a HUMAN OPERATOR RULING, not because this file recommends it.
+#  The distinction matters and is kept everywhere: the sealed analysis (S3S.1 §10)
+#  RANKED lower update magnitude as the best remaining hypothesis; a human then RULED
+#  that candidate 004 may move that one dial. Standing generation-8 authority forbade
+#  "any learning-rate, epoch, rank, alpha or dropout change", and the ruling supersedes
+#  exactly the learning-rate clause, prospectively, for THIS candidate only. Epochs,
+#  rank, alpha and dropout stay forbidden and stay unchanged below.
+#
+#  The preregistered question:
+#
+#      Does a SMALLER update preserve candidate 003's measured behavioural improvements
+#      while reducing how far it redistributes the base model's stopping failure mode?
+#
+#  It is a HYPOTHESIS. `TRAINING_ROOT_CAUSE_CONFIDENCE` is `NOT_ESTABLISHED` and this
+#  file predicts no outcome. S3S.1 §7.2 established body-free that BOTH observed ceiling
+#  phenotypes already occur in the base model at rank 0: the adapter cured the base
+#  model's two and produced six of its own. It did not invent the failure family; it
+#  moved which inputs trigger it. That is what makes "how far the update moves the base
+#  model" a more plausible knob than "how much capacity the adapter has" -- and it is
+#  also why the risk is real in the other direction: a weaker update may weaken the
+#  three security findings candidate 003 fixed. Both outcomes are informative.
+RUN_ID_004 = "qwen3-06b-lora-quality-live-004"
+EXPERIMENT_NAME_004 = "m62-s3u-defensive-quality-004"
+#: The candidate 004 is measured AGAINST. Every dial below is inherited from it.
+CANDIDATE_004_REFERENCE_KEY = "003"
+#: Unchanged from candidate 003, which took it unchanged from 002. `train-v2`, the same
+#: 182 promoted records, the same 154 TRAIN and 12 VALIDATION rows. S3U creates no
+#: `train-v3`, adds no row, deletes none and rebalances nothing: a corpus change would
+#: be a second axis, and it stays forbidden.
+TRAINING_DATASET_VERSION_004 = TRAINING_DATASET_VERSION_003
+
+#: THE axis. One field name, written once, and read by the generator, the control-plane
+#: verifier and the tests rather than restated in each of them.
+CANDIDATE_004_PRIMARY_AXIS = "learning_rate"
+#: What the operator ruled. Not a default, not a recommendation, and not adjustable by
+#: this file: `verify_single_axis` refuses any other value, including the reference's.
+CANDIDATE_004_LEARNING_RATE = 5e-5
+
 #: ``candidate`` -> the identity and material it trains on. A candidate this map does
 #: not name cannot be configured, so a typo is a refusal rather than a run under an
 #: authoritative-looking id.
@@ -119,6 +163,9 @@ CANDIDATES: dict[str, dict] = {
     "003": {"run_id": RUN_ID_003, "experiment_name": EXPERIMENT_NAME_003,
             "dataset_version": TRAINING_DATASET_VERSION_003, "milestone": "S3O",
             "notes_prefix": "M62 S3O third quality candidate"},
+    "004": {"run_id": RUN_ID_004, "experiment_name": EXPERIMENT_NAME_004,
+            "dataset_version": TRAINING_DATASET_VERSION_004, "milestone": "S3U",
+            "notes_prefix": "M62 S3U fourth quality candidate"},
 }
 DEFAULT_CANDIDATE = "001"
 
@@ -142,6 +189,13 @@ CANDIDATE_REASONING: dict[str, str] = {
     "002": "LEGACY_MODEL_DEFAULT",
     "003": "TRAIN_EVAL_PARITY",
 }
+
+#: S3U. Candidate 004 INHERITS candidate 003's render representation, by ASSIGNMENT from
+#: the reference rather than by a second literal that happens to spell the same thing.
+#: D37 is FIXED and is not reopened: re-typing `"TRAIN_EVAL_PARITY"` here would make
+#: train/eval parity a value two edits could separate, and the whole point of D37's fix
+#: is that they are one thing.
+CANDIDATE_REASONING["004"] = CANDIDATE_REASONING[CANDIDATE_004_REFERENCE_KEY]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -263,6 +317,183 @@ RECOMMENDED_OPTION = "B"
 #: structural property one equality can assert, rather than eight comparisons that
 #: could each be edited independently.
 CANDIDATE_OPTION: dict[str, str] = {"001": "B", "002": "S3J", "003": "S3J"}
+
+# ── V69 M62 S3U: the fourth candidate's option, DERIVED and not copied ────────────────
+#: The option candidate 004's is built FROM. Candidate 003 shares candidate 002's option
+#: key by reference, so `S3J` is literally the dial set that trained the reference
+#: adapter -- not a transcription of it.
+S3U_REFERENCE_OPTION = CANDIDATE_OPTION[CANDIDATE_004_REFERENCE_KEY]
+
+#: The dials an option controls. Every one of them is a hyperparameter a candidate could
+#: differ on, and the single-axis proof is a set difference over exactly this tuple. The
+#: remaining keys of an option -- `label`, `rationale`, `overfitting_risk`,
+#: `signal_expectation` -- are prose about the dials and are deliberately excluded: they
+#: describe an experiment, they do not configure one.
+OPTION_DIALS = (
+    "lora_rank", "lora_alpha", "lora_dropout", "learning_rate", "weight_decay",
+    "warmup_ratio", "epochs", "max_steps", "gradient_accumulation_steps",
+)
+
+#: Candidate 004's dials, DERIVED from the reference by dictionary expansion.
+#:
+#: This construction is the single-axis guarantee, not a comment claiming one. Rank,
+#: alpha, dropout, weight decay, warmup, epochs, optimizer steps and gradient
+#: accumulation are not re-typed here, so there is no second place for them to drift to
+#: and no edit that can move one by accident. Exactly one key is overridden, and
+#: `verify_single_axis` refuses the configuration if that stops being true.
+#:
+#: alpha is deliberately NOT slaved. Unlike the rank hypothesis, which would have needed
+#: alpha moved with it to hold `alpha/r` constant, a learning-rate change requires no
+#: compensating adjustment: `alpha/r` stays 32/16 = 2.0 because neither term moves. A
+#: "compensating" second dial would be a second axis wearing a justification.
+OPTIONS["S3U"] = {
+    **OPTIONS[S3U_REFERENCE_OPTION],
+    "label": "reduced update magnitude",
+    "rationale":
+        "Candidate 003's dials, with the learning rate halved and nothing else touched. "
+        "The reference improved task success 24/36 -> 25/36 and reward 0.5461 -> 0.5903 "
+        "against its own simultaneously-measured baseline and fixed three security "
+        "findings, while producing six output ceilings where the baseline produced two. "
+        "S3S.1 established body-free that both observed ceiling phenotypes already exist "
+        "in the base model at rank 0, so the adapter redistributed a pre-existing failure "
+        "mode rather than inventing one. The knob that governs how far a fitted adapter "
+        "moves the base model is the size of the update, which is the one dial never "
+        "varied across three candidates. Halving it is the smallest step that produces a "
+        "dose-response reading at all: 2e-4 (001) -> 1e-4 (002, 003) -> 5e-5 gives three "
+        "points on one line, and the two existing points are already measured.",
+    CANDIDATE_004_PRIMARY_AXIS: CANDIDATE_004_LEARNING_RATE,
+    "overfitting_risk":
+        "lower than candidate 003 on the same corpus and the same two passes; the "
+        "opposite risk is the live one -- an update too small to retain the reference's "
+        "measured safety and quality gains",
+    "signal_expectation":
+        "UNKNOWN and deliberately unpredicted. Retaining the reference's improvements "
+        "with fewer ceilings, losing the improvements, and moving nothing measurable are "
+        "all live outcomes, and all three are informative about the same hypothesis",
+}
+
+#: Candidate 004 is the ONLY user of `S3U`. Candidates 001-003 keep the option keys they
+#: were measured under, so adding this one re-identifies nothing.
+CANDIDATE_OPTION["004"] = "S3U"
+
+#: ``candidate -> (reference candidate, the dials that are ALLOWED to differ)``.
+#:
+#: A candidate that declares a single-axis relation has its claim CHECKED rather than
+#: believed -- by `verify_single_axis` here, and again by the control-plane verifier
+#: against the same declaration. Candidates 001 and 002 declare none: 001 is the first
+#: quality candidate and has no in-lineage reference, and 002 moved several dials at
+#: once against 001, which its own milestone recorded openly.
+#:
+#: An EMPTY dial set is the strongest form and means the option is shared BY KEY: that
+#: is candidate 003, whose axis was the render policy and whose dials were required to be
+#: the very same object as its control's.
+CANDIDATE_003_REFERENCE_KEY = "002"
+CANDIDATE_SINGLE_AXIS: dict[str, tuple[str, frozenset[str]]] = {
+    "003": (CANDIDATE_003_REFERENCE_KEY, frozenset()),
+    "004": (CANDIDATE_004_REFERENCE_KEY, frozenset({CANDIDATE_004_PRIMARY_AXIS})),
+}
+
+#: The learning rate each candidate that declares a learning-rate axis is PINNED to by
+#: operator ruling. A candidate whose axis is the learning rate may not pick its own
+#: value: the value is the ruling.
+RULED_LEARNING_RATE: dict[str, float] = {"004": CANDIDATE_004_LEARNING_RATE}
+
+
+def format_learning_rate(value: float) -> str:
+    """``1e-4``, ``5e-5`` — the way this repository writes a learning rate in prose.
+
+    Derived from the number, never typed beside it, so a document or a control-plane
+    string that quotes a rate cannot drift away from the rate the generator configures.
+    Round-tripping is checked: a value this notation cannot represent exactly is a
+    refusal rather than a rounded-off claim.
+    """
+    mantissa, exponent = f"{value:.0e}".split("e")
+    text = f"{mantissa}e{int(exponent)}"
+    if float(text) != float(value):
+        raise ValueError(
+            f"learning rate {value!r} does not round-trip through {text!r}; refusing to "
+            f"print a rate that is not the rate")
+    return text
+
+
+def single_axis_diff(candidate: str) -> frozenset[str]:
+    """The option dials that differ between *candidate* and its declared reference.
+
+    Compared over :data:`OPTION_DIALS` only, and by value. A dial the reference declares
+    and *candidate* does not (or the reverse) counts as a difference rather than being
+    skipped, so deleting a key is not a way to make a diff smaller.
+    """
+    try:
+        reference_key, _ = CANDIDATE_SINGLE_AXIS[candidate]
+    except KeyError:
+        raise ValueError(
+            f"candidate {candidate!r} declares no single-axis relation, so there is "
+            f"nothing to diff it against") from None
+    mine = OPTIONS[CANDIDATE_OPTION[candidate]]
+    theirs = OPTIONS[CANDIDATE_OPTION[reference_key]]
+    sentinel = object()
+    return frozenset(dial for dial in OPTION_DIALS
+                     if mine.get(dial, sentinel) != theirs.get(dial, sentinel))
+
+
+def verify_single_axis(candidate: str) -> None:
+    """Refuse a candidate whose option moved anything but its declared single axis.
+
+    Called by :func:`build_config`, so a second dial cannot reach a configuration
+    document, a plan, a plan hash or a training run: the refusal happens while the
+    configuration is being built, which is the last moment it is cheap.
+
+    Three separate ways a learning-rate experiment can be worthless, each refused here:
+
+      * **A second dial moved.** Then the measurement cannot attribute anything, and a
+        fresh holdout would be spent producing an uninterpretable fourth run.
+      * **The axis did not move.** A candidate whose learning rate equals its
+        reference's is not an experiment, it is a re-run under a new name.
+      * **The axis moved somewhere the operator did not rule.** The value 5e-5 is a human
+        decision recorded at a control-plane generation, not a knob this file may turn.
+    """
+    if candidate not in CANDIDATE_SINGLE_AXIS:
+        return
+    reference_key, declared = CANDIDATE_SINGLE_AXIS[candidate]
+
+    # The RULED value first. Checked before the dial diff on purpose: an axis set back
+    # to its reference's value produces an EMPTY diff, so a diff-first order would
+    # report "no axis moved" for a candidate whose real defect is that it tests nothing,
+    # and the clearer refusal would be unreachable.
+    ruled = RULED_LEARNING_RATE.get(candidate)
+    if ruled is not None:
+        mine = OPTIONS[CANDIDATE_OPTION[candidate]]["learning_rate"]
+        theirs = OPTIONS[CANDIDATE_OPTION[reference_key]]["learning_rate"]
+        if mine == theirs:
+            raise ValueError(
+                f"candidate {candidate!r} carries its reference's learning rate "
+                f"{format_learning_rate(theirs)}, so it tests nothing. A candidate that "
+                f"moves no dial is a re-run under a new identity, not an experiment")
+        if mine != ruled:
+            # `repr` for the offending value, not the prose formatter: an unruled rate
+            # is exactly the kind of number that formatter refuses to render, and a
+            # refusal that raises while composing its own message is a crash, not a
+            # refusal.
+            raise ValueError(
+                f"candidate {candidate!r} is configured at learning rate {mine!r}; the "
+                f"operator ruling for it is {format_learning_rate(ruled)}. The value is "
+                f"a recorded human decision and this generator may not choose a "
+                f"different one")
+
+    moved = single_axis_diff(candidate)
+    if moved != declared:
+        raise ValueError(
+            f"candidate {candidate!r} moves {sorted(moved) or 'no'} dial(s) against "
+            f"candidate {reference_key!r}, but its declared single axis is "
+            f"{sorted(declared) or 'none (the option is shared by key)'}. A second "
+            f"experimental axis produces a measurement nothing can attribute; refusing "
+            f"to build it")
+    if not declared and CANDIDATE_OPTION[candidate] != CANDIDATE_OPTION[reference_key]:
+        raise ValueError(
+            f"candidate {candidate!r} declares its option shared with candidate "
+            f"{reference_key!r}, but the two name different options "
+            f"({CANDIDATE_OPTION[candidate]!r} vs {CANDIDATE_OPTION[reference_key]!r}). "
+            f"Dials that agree today are not dials that are the same")
 
 #: Measured on this host in S3G, from the promoted corpus:
 #: 107 TRAIN rows, mean sequence ~470 characters (~105-135 estimated tokens plus the
@@ -434,6 +665,20 @@ def build_config(option: str, *, dataset_root: Path, output_root: Path,
 
     spec = OPTIONS[option]
     identity = candidate_spec(candidate)
+    # S3U. The single-axis claim is checked HERE, at the last cheap moment: before a
+    # configuration document exists, before a plan hash is derived from one and long
+    # before a token could be spent on it. Candidates that declare no single-axis
+    # relation pass through untouched, so 001's and 002's frozen `config_hash` values
+    # are unaffected by the existence of this call.
+    #
+    # Scoped to the candidate's OWN option, and the limit is stated rather than hidden:
+    # `--option` and `--all-options` deliberately build a candidate under other options
+    # to compare budgets and config hashes, and refusing those would remove a working
+    # comparison tool to guard a path nothing can train from. The configuration a plan,
+    # a token or a run can ever be derived for is the one built under
+    # `CANDIDATE_OPTION[candidate]`, and that one is checked every time.
+    if option == CANDIDATE_OPTION.get(candidate):
+        verify_single_axis(candidate)
     return TrainingConfig(
         run_id=identity["run_id"], experiment_name=identity["experiment_name"],
         method=TrainingMethod.SFT_LORA,
@@ -520,8 +765,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="001 is the frozen S3G candidate (corpus v1); 002 is the "
                              "S3J candidate (corpus v2); 003 is the S3O candidate "
                              "(corpus v2, same option as 002, reasoning policy DISABLED "
-                             "-- the single controlled axis). Defaults to 001 so every "
-                             "existing caller is unchanged")
+                             "-- the single controlled axis); 004 is the S3U candidate "
+                             "(corpus v2, candidate 003's dials with the learning rate "
+                             "as the single axis). Defaults to 001 so every existing "
+                             "caller is unchanged")
     parser.add_argument("--option", default="", choices=["", *sorted(OPTIONS)],
                         help="defaults to the option the chosen candidate declares: "
                              f"{CANDIDATE_OPTION}")

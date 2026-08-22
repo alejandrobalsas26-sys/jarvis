@@ -238,8 +238,11 @@ def test_no_candidate_identity_collides():
 
 def test_an_unknown_candidate_is_still_a_refusal():
     """Fail-closed survived the addition: a typo is a refusal, never a run."""
+    # S3U added candidate 004, so the probe moved on again -- exactly as it moved
+    # from 003 to 004 when S3O added candidate 003. What this line owns is the
+    # FAIL-CLOSED property, never a particular number.
     with pytest.raises(ValueError, match="unknown candidate"):
-        QCFG.candidate_spec("004")
+        QCFG.candidate_spec("005")
 
 
 #: The TWO tracked non-document artefacts permitted to name candidate 003: the S3P

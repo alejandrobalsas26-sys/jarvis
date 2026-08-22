@@ -586,9 +586,10 @@ def test_candidate_001_is_untouched_by_the_second_candidates_existence(qcfg, tra
     # is a refusal, never a run under an authoritative-looking id -- and that property is
     # unchanged and still asserted here. It never owned the number 3. The assertions this
     # test exists for are candidate 001's identity, corpus and byte-exact notes above,
-    # and S3O left all three untouched.
+    # and S3O left all three untouched. S3U added candidate 004 and moved the probe on
+    # once more, for the same reason and with the same nothing at stake.
     with pytest.raises(ValueError, match="unknown candidate"):
-        qcfg.candidate_spec("004")
+        qcfg.candidate_spec("005")
 
 
 def test_the_second_candidate_keeps_the_architecture_and_moves_only_two_dials(qcfg,
