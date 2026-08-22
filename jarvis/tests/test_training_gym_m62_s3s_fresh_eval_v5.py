@@ -693,28 +693,42 @@ def test_d38_remains_diagnostic_and_no_gate_reads_it():
 def test_s3s_changed_no_evaluation_policy_grader_or_gate_source():
     """The only production files S3S may touch are the two corpus generators.
 
-    Measured against the S3S starting commit and the WORKING TREE, which is what makes
-    it a scope test for THIS milestone while it is being written. It is pinned to a
-    closing commit the moment S3S closes, exactly as S3N's equivalent was.
+    PINNED at S3T.0, which is what the sealed spelling asked for: "it is pinned to a
+    closing commit the moment S3S closes, exactly as S3N's equivalent was." While S3S was
+    being written the comparison ran against the WORKING TREE, so the assertion doubled
+    as a live scope test. S3T.0 is the first milestone after the S3S arc closed, and it
+    changes ``jarvis/training_gym/evaluation/`` under explicit operator authorisation, so
+    the range is now S3S's own — start to close — and the claim it makes about S3S is
+    exact and permanent instead of decaying into a freeze on every later milestone.
+
+    The arc, not just the one commit: S3S (``e52129c``), the generation-7 recording and
+    its two rescopes (``c0d6ffd``), and the S3S.1 body-free audit (``bf83cf5``). None of
+    the three touched ``jarvis/training_gym/`` at all, which is a stronger statement than
+    the original made and is the one now pinned.
     """
     import subprocess
 
     root = _repo_root()
     try:
         changed = subprocess.run(
-            ["git", "diff", "--name-only", S3S_STARTING_COMMIT],
+            ["git", "diff", "--name-only", S3S_STARTING_COMMIT, S3S_CLOSING_COMMIT],
             cwd=root, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git here
         pytest.skip("git is not available to compare against the S3S starting commit")
     if changed.returncode != 0:  # pragma: no cover - shallow clone or missing commit
-        pytest.skip("the S3S starting commit is not reachable in this checkout")
-    forbidden = [p for p in changed.stdout.split()
-                 if p.startswith("jarvis/training_gym/")]
+        pytest.skip("the S3S commit range is not reachable in this checkout")
+    touched = changed.stdout.split()
+    assert touched, "an empty diff would make this assertion vacuous"
+    forbidden = [p for p in touched if p.startswith("jarvis/training_gym/")]
     assert forbidden == [], forbidden
 
 
 #: The commit S3S started from — the S3R closure.
 S3S_STARTING_COMMIT = "f9d25fd2a9f6ebe5b0ee7cdb487c21e368afc9b3"
+
+#: The commit the S3S arc closed at — the S3S.1 body-free audit, and the commit S3T.0
+#: started from. Everything in between is S3S, generation 7 and S3S.1.
+S3S_CLOSING_COMMIT = "bf83cf52b92f1fea57d6c09cf20fdcbc8ec941da"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

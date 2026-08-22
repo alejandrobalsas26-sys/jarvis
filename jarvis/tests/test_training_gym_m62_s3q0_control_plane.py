@@ -262,8 +262,28 @@ def test_d38_is_still_read_by_no_gate():
         assert name not in gates, name
 
 
+#: The commit S3Q.0 started from, and the commit that sealed it. The assertion below
+#: measures S3Q.0, so it reads S3Q.0's OWN range.
+_S3Q0_START = "05c043b3a89cdb675846abb8aabf1f476c6d7796"
+_S3Q0_END = "4f683f788b02c17b043341aa642fb7de68b41ab3"
+
+
 def test_s3q0_changed_no_grader_metric_statistic_or_gate_source():
-    """The measurement is frozen. S3Q.0 hardens the ceremony around it and nothing in it."""
+    """The measurement is frozen. S3Q.0 hardens the ceremony around it and nothing in it.
+
+    RESCOPED at S3T.0, which added body-free termination diagnostics to ``scoring.py``
+    and ``score_evidence.py`` under explicit operator authorisation. The sealed spelling
+    diffed S3Q.0's starting commit against the WORKING TREE, so it asserted that nothing
+    in the whole future would ever touch these files — a PASSING FACT at the time, not
+    the property this test owns, which is about **S3Q.0**: that milestone hardened the
+    ceremony around the measurement and changed nothing inside it.
+
+    The range is now S3Q.0's own, start to seal, so the claim is exact and permanent
+    instead of decaying into a freeze on every later milestone. What a LATER milestone
+    may change is that milestone's question, answered by its own behavioural-equivalence
+    evidence — for S3T.0, by ``test_training_gym_m62_s3t0_termination_observability.py``,
+    which pins every policy identity and every preexisting scored field.
+    """
     import subprocess
 
     frozen = ("gates.py", "metrics.py", "scoring.py", "statistics.py", "comparison.py",
@@ -271,14 +291,14 @@ def test_s3q0_changed_no_grader_metric_statistic_or_gate_source():
               "score_evidence.py", "backends/transformers_peft.py", "backends/fake.py")
     try:
         changed = subprocess.run(
-            ["git", "diff", "--name-only",
-             "05c043b3a89cdb675846abb8aabf1f476c6d7796"],
+            ["git", "diff", "--name-only", _S3Q0_START, _S3Q0_END],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git here
         pytest.skip("git is not available to compare against the S3Q.0 starting commit")
     if changed.returncode != 0:  # pragma: no cover - shallow clone
-        pytest.skip("the S3Q.0 starting commit is not reachable in this checkout")
+        pytest.skip("the S3Q.0 commit range is not reachable in this checkout")
     touched = set(changed.stdout.split())
+    assert touched, "an empty diff would make this assertion vacuous"
     for name in frozen:
         assert f"jarvis/training_gym/evaluation/{name}" not in touched, name
 

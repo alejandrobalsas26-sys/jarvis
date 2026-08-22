@@ -54,10 +54,14 @@ from .comparison import PairedComparison
 from .scoring import NOTE_CODES, ArmScore
 
 #: Bumped when the evidence record's shape changes. ``.2`` adds
-#: ``output_budget_exhausted`` (D38). Records written under ``.1`` still read: the field
-#: list is an ALLOWLIST, so a record that omits the new key is accepted and a record that
-#: carries an undeclared one is refused — historical evidence verifies unchanged.
-SCORE_EVIDENCE_VERSION = "m62.evaluation_score_evidence.2"
+#: ``output_budget_exhausted`` (D38). ``.3`` adds the S3T.0 termination diagnostics: the
+#: JSON parser's error CLASS and location, and one repetition statistic over the
+#: response. Records written under ``.1`` and ``.2`` still read: the field list is an
+#: ALLOWLIST, so a record that omits the new keys is accepted and a record that carries
+#: an undeclared one is refused — historical evidence verifies unchanged, and NOTHING is
+#: backfilled onto it, because a diagnosis nobody computed must not be invented for a
+#: response nobody kept.
+SCORE_EVIDENCE_VERSION = "m62.evaluation_score_evidence.3"
 
 #: The file each arm's evidence is written to.
 BASELINE_SCORES_FILE = "baseline-scores.jsonl"
@@ -80,7 +84,9 @@ SCORE_EVIDENCE_FIELDS: tuple[str, ...] = (
     "tool_call_critical", "tool_call_problem_count", "security_findings",
     "hygiene_findings", "grader_statuses", "missing_graders", "blocking", "severity",
     "latency_ms", "output_tokens", "truncated", "output_budget_exhausted", "timed_out",
-    "empty", "note_codes", "response_sha256", "score_hash",
+    "empty", "note_codes", "json_parse_error_kind", "json_parse_error_line",
+    "json_parse_error_column", "json_parse_error_position",
+    "response_unique_char_ngram_ratio", "response_sha256", "score_hash",
 )
 
 
@@ -140,6 +146,34 @@ def score_evidence_record(score: ArmScore, *, evaluation_id: str, generation: in
         "timed_out": bool(score.timed_out),
         "empty": bool(score.empty),
         "note_codes": list(score.note_codes),
+        # -- S3T.0 body-free termination diagnostics --------------------------------
+        # The parser's error CLASS, never its message: CPython's pure-Python decoder
+        # formats the offending character into ``JSONDecodeError.msg``, so persisting
+        # the message would persist one character of the response on any build without
+        # the C accelerator. ``scoring.JsonParseErrorKind`` is the closed vocabulary
+        # that survives instead, and an unrecognised message becomes
+        # ``other_json_parse_error`` rather than being stored verbatim.
+        #
+        # The location is three integer OFFSETS into the response. They quote nothing,
+        # and the response length they are bounded by is already published as
+        # ``response_chars`` in the results artefact, so an offset discloses strictly
+        # less than a field this evaluation has always written.
+        #
+        # Tri-state, so NOT coerced: ``None`` means no parse FAILED here — the document
+        # parsed, the response was empty, it never left its reasoning block, or the
+        # family requested no structural check. A zero would publish a position the
+        # parser never reached.
+        "json_parse_error_kind": (score.json_parse_error_kind.value
+                                  if score.json_parse_error_kind else None),
+        "json_parse_error_line": score.json_parse_error_line,
+        "json_parse_error_column": score.json_parse_error_column,
+        "json_parse_error_position": score.json_parse_error_position,
+        # One scalar in (0, 1]: distinct 16-character shingles over total shingles. The
+        # shingles themselves are counted and discarded inside
+        # ``scoring.unique_char_ngram_ratio`` and never reach this record — a ratio
+        # cannot be inverted into the text it was measured over. ``None`` where the arm
+        # produced no output or the response was shorter than one window.
+        "response_unique_char_ngram_ratio": score.response_unique_char_ngram_ratio,
         "response_sha256": str(response_sha256),
         "score_hash": score.score_hash(),
     }

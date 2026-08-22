@@ -295,6 +295,7 @@ are indexed in `jarvis/docs/m62/HISTORY_INDEX.md`.
 | **D40** | FIXED at `.3` | A receipt may not model the paired outcome as an exhaustive three-way `wins/ties/losses` partition. Production classifies **four** comparable verdicts and `security_improvement` is **not** a win. |
 | **D41** | FIXED at `.3` | An ASCII-only canonical-text rule refuses legitimate production decision text (`U+2212`). Close the encoding question by **defining** the encoding, never by discarding evidence. |
 | **D42** | FIXED at `.3` | Deriving the evaluation source from HEAD at receipt-build time conflates the code that **measured** with the code that **built the receipt**, and makes truthful post-live sealing impossible. |
+| **D43** | FIXED (observability only) | A JSON parse failure persisted one closed note code, so `EXTRA_DATA` — a whole document followed by more output — was indistinguishable in the evidence from a document that never closed. Fixed **prospectively** at S3T.0 with a closed body-free class plus location, and one repetition scalar. **No gate reads any of them and none may be added without a separate operator decision.** Nothing historical is backfilled. |
 
 ### Limitations that travel into any successor run
 
@@ -423,23 +424,25 @@ moved, replaced or weakened.
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          3981 passed · 20 skipped · 0 failed        [S3S]
+result          4060 passed · 20 skipped · 0 failed        [S3T.0]
 ```
 
-S3S added **71**: 70 in `…_s3s_fresh_eval_v5.py`, the freeze suite for the fifth holdout,
-plus **one** in the S3G file, whose held-out parametrisation is driven by
-`HELD_OUT_VERSIONS` and grew when `v5` joined it. 3910 + 71 = 3981 on **one** interpreter;
-**never reconcile counts across interpreters by arithmetic.**
+S3T.0 added **79**, all in `…_s3t0_termination_observability.py`, the suite for the
+body-free parser class and the one repetition scalar (**D43**). 3981 + 79 = 4060 on
+**one** interpreter; **never reconcile counts across interpreters by arithmetic.**
 
 **Rescoped assertions are not regressions, and there is a documented pattern for them.**
 An assertion that compares a *sealed* milestone's property against *live* state also asserts,
 silently, that no later generation exists — true by coincidence until the next milestone
 writes one. Such tests are pinned to the generation that recorded the property: the S3N
 source-scope test to `ec446e3`, the S3P gen2→gen3 and holdout tests to generation 3, the S3O
-holdout test to generation 2, the S3Q.0.1 acceptance tests to generation 5. **S3S rescoped
-four more** — the S3N, S3F.2 and S3J assertions that read the live `CORPUS_VERSIONS`,
-`HELD_OUT_VERSIONS` and `LATEST_DATASET_VERSION` — each keeping the property it owns while
-no longer asserting that no later holdout exists.
+holdout test to generation 2, the S3Q.0.1 acceptance tests to generation 5; **S3S rescoped
+four** (S3N, S3F.2, S3J — the live `CORPUS_VERSIONS`/`HELD_OUT_VERSIONS`/`LATEST_DATASET_
+VERSION` readers); **S3T.0 rescoped three** — D38's response-shaped-key assertion now
+checks every such field is a digest *or a number*, and the S3Q.0 and S3S frozen-source
+assertions now diff their own ranges (`05c043b3…4f683f78`, `f9d25fd2…bf83cf52`) rather
+than the working tree, which is what S3S's own docstring asked for. Each keeps the
+property it owns; all three are argued in full in the S3T.0 document.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running `pytest`
 from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -481,20 +484,17 @@ state → the milestone document NEXT names → task-specific authority → *onl
 ## 12 — EXACT NEXT
 
 > **A HUMAN DECISION, IN A NEW SESSION.** `eval-v5` is frozen candidate-blind and unspent.
-> What remains is (A)/(B) below plus an operator ruling on candidate 004's single primary
-> axis. **Nothing in this repository proposes, names or configures a fourth candidate.**
+> What remains is an operator ruling on candidate 004's single primary axis.
+> **Nothing in this repository proposes, names or configures a fourth candidate.**
 
-**The next session must first decide, explicitly:**
+**The (A)/(B) branch that stood here is CLOSED, and not by a waiver.** S3S.1 executed the
+authorised semantic development audit body-free and found the six spent-`v4` candidate
+response bodies **were never persisted** — not withheld, absent, and unrecoverable without
+new generation. S3R's `MECHANISM_CONFIDENCE` therefore stays MEDIUM permanently. The full
+argument is in `V69_M62_S3S1_SPENT_V4_SEMANTIC_DEV_AUDIT.md`; S3T.0 made the equivalent
+diagnosis available **prospectively** instead (**D43**). Only the axis ruling remains.
 
-- **(A)** authorise a **bounded semantic development audit** of the six spent-`v4` candidate
-  ceiling responses — permitted under **D35**, would likely lift S3R's
-  `MECHANISM_CONFIDENCE` from MEDIUM to HIGH and could re-order its hypothesis ranking; **or**
-- **(B)** **waive it** and go straight to the candidate 004 operator ruling and design.
-
-S3S did **not** authorise (A) and read no response body. Either way the decision **cannot
-affect frozen `eval-v5`**.
-
-**Then, and separately, the axis ruling.** S3R proposed *as a hypothesis* reducing LoRA
+**The axis ruling.** S3R proposed *as a hypothesis* reducing LoRA
 capacity (`r16 → r8`, alpha scaled to hold `alpha/r = 2`) and established that this
 **conflicts with the `ruled_out` list**, which bars any rank or alpha change. **S3S did not
 resolve that conflict and had no authority to:** `CANDIDATE004_AXIS_DECISION:
@@ -505,7 +505,7 @@ production-ready, not a successful deployment. It improved several measurements 
 the frozen canonical eligibility gate. That state is **terminal**, and `eval-v4` cannot be
 reused for an ablation, a re-score or any reason at all.
 
-**If M62 continues, the sequence is:** (A)/(B) → operator axis ruling → candidate 004
+**If M62 continues, the sequence is:** operator axis ruling → candidate 004
 designed → a fresh single-use `TRAIN` authority → any `train-v3` checked against frozen `v5`
 → a fresh single-use `EVAL` authority at a new generation → **one** paired run against `v5`
 → an `m62.eval_receipt.3` receipt → a new control-plane generation. **Every arrow is a

@@ -602,8 +602,14 @@ def test_the_declared_and_computed_metric_sets_must_agree():
 def test_the_evidence_record_carries_the_verdict_and_no_body():
     """§23 — termination metadata only.
 
-    The only ``response``-shaped key a record may carry is the digest; a field holding
-    the text itself is what the closed allowlist exists to keep out.
+    RESCOPED at S3T.0, which added ``response_unique_char_ngram_ratio``. The sealed
+    spelling asserted that ``response_sha256`` was the ONLY ``response``-prefixed key,
+    which encoded a PASSING FACT about D38's field list rather than the property this
+    test owns: **no field may carry the response body.** A digest and a scalar statistic
+    are both body-free; a field holding text is what the closed allowlist exists to keep
+    out, whatever it is called. The property is now checked against the VALUES — every
+    ``response``-shaped field must be a 64-character digest or a number — which holds in
+    both worlds and is strictly stronger than the name it replaces.
     """
     record = score_evidence_record(_score("t1", exhausted=True),
                                    evaluation_id="synthetic", generation=1,
@@ -611,7 +617,17 @@ def test_the_evidence_record_carries_the_verdict_and_no_body():
     assert record["output_budget_exhausted"] is True
     assert record["truncated"] is False
     assert set(record) <= set(SCORE_EVIDENCE_FIELDS)
-    assert [k for k in record if k.startswith("response")] == ["response_sha256"]
+    response_keys = [k for k in record if k.startswith("response")]
+    assert "response_sha256" in response_keys
+    for key in response_keys:
+        value = record[key]
+        if key == "response_sha256":
+            assert isinstance(value, str) and len(value) == 64
+            assert all(c in "0123456789abcdef" for c in value)
+        else:
+            assert value is None or isinstance(value, (int, float)), (
+                f"{key} carries {type(value).__name__}; a response-shaped field that is "
+                f"not a digest must be a number, because a string could be the body")
 
 
 def test_the_evidence_record_does_not_coerce_unmeasured_to_false():

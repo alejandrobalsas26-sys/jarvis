@@ -41,8 +41,10 @@ from .backend import EvaluationResult
 from .policy import GraderPolicy
 from .task_pack import EvaluationTask, EvaluationTaskKind, HiddenTarget
 
-#: Bumped when a verdict's meaning changes.
-SCORING_VERSION = "m62.evaluation_scoring.5"
+#: Bumped when a verdict's meaning changes. ``.6`` adds the body-free termination
+#: diagnostics of S3T.0 — the JSON parser's error CLASS and location, and one repetition
+#: statistic over the response. None of them is read by a grader, a metric or a gate.
+SCORING_VERSION = "m62.evaluation_scoring.6"
 
 #: The closed vocabulary behind :attr:`ArmScore.note_codes`.
 #:
@@ -248,11 +250,147 @@ def final_answer(text: str) -> tuple[str, int]:
     return stripped.strip(), blocks
 
 
+class JsonParseErrorKind(str, Enum):
+    """WHY a response did not parse as JSON, as a closed body-free class.
+
+    WHY THIS IS NOT ``exc.msg``
+    ---------------------------
+    ``json.JSONDecodeError.msg`` is not reliably body-free. CPython's pure-Python
+    decoder formats the offending character INTO the message —
+    ``"Invalid control character {0!r} at"`` and ``"Invalid \\escape: {0!r}"`` — so on a
+    build without the C accelerator the message quotes one character of the response.
+    Whether it does is a runtime property of the interpreter, which is exactly the kind
+    of conditional leak a persisted artefact must not have. So the message is CLASSIFIED
+    here and discarded, and only the class is carried forward.
+
+    WHY A CLASS AND NOT A BOOLEAN
+    -----------------------------
+    :attr:`EXTRA_DATA` means a complete JSON document WAS parsed and non-whitespace data
+    followed it. Every other member means the first document never closed. Before S3T.0
+    both collapsed to one note code, so the persisted evidence for "the model never
+    finished its object" and "the model finished its object and kept going" was
+    identical except for a response digest whose body is never kept. That is the
+    distinction this vocabulary exists to make.
+
+    NOT EXHAUSTIVE OVER PYTHON. The members below are the messages CPython 3.13 actually
+    raises through the paths this repository parses with; ``ILLEGAL_TRAILING_COMMA`` in
+    particular does not exist on older interpreters, where the same input classifies as
+    ``EXPECTING_PROPERTY_NAME``. Anything unrecognised becomes
+    :attr:`OTHER_JSON_PARSE_ERROR` rather than being stored verbatim, so a message this
+    build has never seen cannot smuggle response text into a reviewed file.
+    """
+
+    EXTRA_DATA = "extra_data"
+    UNTERMINATED_STRING = "unterminated_string"
+    EXPECTING_VALUE = "expecting_value"
+    EXPECTING_PROPERTY_NAME = "expecting_property_name"
+    EXPECTING_DELIMITER = "expecting_delimiter"
+    ILLEGAL_TRAILING_COMMA = "illegal_trailing_comma"
+    INVALID_ESCAPE = "invalid_escape"
+    INVALID_CONTROL_CHARACTER = "invalid_control_character"
+    OTHER_JSON_PARSE_ERROR = "other_json_parse_error"
+
+
+#: ``JSONDecodeError.msg`` prefix -> class. Ordered, and matched by PREFIX, because two
+#: of CPython's messages append the offending character to a fixed stem and the C
+#: accelerator omits it; both spellings must land on the same class. Only the stem is
+#: ever read, so whatever follows it is never inspected and never stored.
+_JSON_PARSE_ERROR_PREFIXES: tuple[tuple[str, JsonParseErrorKind], ...] = (
+    ("Extra data", JsonParseErrorKind.EXTRA_DATA),
+    ("Unterminated string", JsonParseErrorKind.UNTERMINATED_STRING),
+    ("Expecting value", JsonParseErrorKind.EXPECTING_VALUE),
+    ("Expecting property name", JsonParseErrorKind.EXPECTING_PROPERTY_NAME),
+    ("Expecting ':' delimiter", JsonParseErrorKind.EXPECTING_DELIMITER),
+    ("Expecting ',' delimiter", JsonParseErrorKind.EXPECTING_DELIMITER),
+    ("Illegal trailing comma", JsonParseErrorKind.ILLEGAL_TRAILING_COMMA),
+    ("Invalid \\escape", JsonParseErrorKind.INVALID_ESCAPE),
+    ("Invalid \\uXXXX escape", JsonParseErrorKind.INVALID_ESCAPE),
+    ("Invalid control character", JsonParseErrorKind.INVALID_CONTROL_CHARACTER),
+)
+
+
+def classify_json_parse_error(message: str) -> JsonParseErrorKind:
+    """One ``JSONDecodeError.msg`` -> one closed class. Fails safe, never verbatim."""
+    text = str(message or "")
+    for prefix, kind in _JSON_PARSE_ERROR_PREFIXES:
+        if text.startswith(prefix):
+            return kind
+    return JsonParseErrorKind.OTHER_JSON_PARSE_ERROR
+
+
+@dataclass(frozen=True)
+class JsonParseDiagnosis:
+    """WHERE and WHY the one parse attempt failed. Four numbers and a closed class.
+
+    ``line``/``column``/``position`` are offsets into the response the model produced.
+    They carry no response text: an offset says how far the parser got, and the response
+    LENGTH it is bounded by is already persisted as ``response_chars``, so an offset
+    discloses strictly less than an artefact this evaluation has always written.
+    """
+
+    kind: JsonParseErrorKind
+    line: int
+    column: int
+    position: int
+
+    @classmethod
+    def from_error(cls, exc: json.JSONDecodeError) -> "JsonParseDiagnosis":
+        """Built from the error the ALREADY-ATTEMPTED parse raised.
+
+        Deliberately not a second parse and emphatically not a second parser: a
+        hand-written scan for "did the document close" would be a second opinion about
+        the same bytes, and the two would eventually disagree about a response nobody
+        can re-read.
+        """
+        return cls(kind=classify_json_parse_error(exc.msg),
+                   line=int(exc.lineno), column=int(exc.colno), position=int(exc.pos))
+
+
+#: The shingle width for :func:`unique_char_ngram_ratio`, in characters.
+#:
+#: Characters rather than words because this evaluation's degenerate emissions are often
+#: whitespace-free — a structured-output task that loops ``{"a":1},{"a":1},`` is one
+#: whitespace token and no word n-grams at all, while it is thousands of character
+#: shingles of which almost none are distinct. Wide enough (16) that ordinary prose
+#: repeats almost no window by chance, so a low ratio means repetition rather than
+#: English.
+RESPONSE_NGRAM_WINDOW = 16
+
+
+def unique_char_ngram_ratio(text: str, *, window: int = RESPONSE_NGRAM_WINDOW
+                            ) -> float | None:
+    """Distinct character shingles / total character shingles. ``None`` = not measurable.
+
+    1.0 means every window in the response was unique; a value near 0 means the response
+    is overwhelmingly made of text it had already emitted. S3S.1 established that
+    chars-per-token — already derivable from the persisted ``response_chars`` and
+    ``output_tokens`` — separates a single degenerate token from a normal-density
+    runaway, and that NOTHING persisted separated a normal-density runaway that repeats
+    itself from one that keeps saying new things. This is the number that does.
+
+    Body-free by construction: the shingles are counted and discarded, and only their
+    ratio leaves this function. Deterministic, and it loads no model and no tokenizer —
+    the shingles are compared as substrings rather than through ``hash()``, whose
+    per-process randomisation would let two runs disagree about how many collided.
+
+    DIAGNOSTIC ONLY. No threshold is defined here, and defining one is deliberately left
+    to later analysis: calling a given ratio "repetition" is a judgement about a run, not
+    a property of a response, and this layer decides no eligibility.
+    """
+    body = str(text or "")
+    if window < 1 or len(body) < window:
+        return None
+    total = len(body) - window + 1
+    distinct = len({body[i:i + window] for i in range(total)})
+    return round(distinct / total, 6)
+
+
 def structured_output(text: str) -> tuple[object | None, str]:
     """Parse a response as JSON. Returns ``(value, problem)``; one of them is empty.
 
     The two-value form every caller outside scoring uses. See
-    :func:`structured_output_detail` for the same decision plus its closed code.
+    :func:`structured_output_detail` for the same decision plus its closed code, and
+    :func:`structured_output_diagnosis` for that plus the parser's error class.
     """
     value, problem, _code = structured_output_detail(text)
     return value, problem
@@ -276,23 +414,47 @@ def structured_output_detail(text: str) -> tuple[object | None, str, str]:
     It deliberately does NOT hunt for a JSON-looking substring inside prose. A task that
     asked for an object and got an object wrapped in commentary did not honour the
     contract, and a parser that searched for braces would score it as though it had.
+
+    The three-value projection of :func:`structured_output_diagnosis`, which every
+    pre-S3T.0 caller was written against.
+    """
+    value, problem, code, _diagnosis = structured_output_diagnosis(text)
+    return value, problem, code
+
+
+def structured_output_diagnosis(
+        text: str) -> tuple[object | None, str, str, JsonParseDiagnosis | None]:
+    """Parse a response as JSON. Returns ``(value, problem, code, diagnosis)``.
+
+    The single authority :func:`structured_output` and :func:`structured_output_detail`
+    both project from, so the parse happens exactly once and the class in *diagnosis* can
+    never describe a different attempt than the one *code* reports.
+
+    *diagnosis* is ``None`` for every outcome that is not a parse FAILURE — a document
+    that parsed, an empty response, a response that never left its reasoning block. Those
+    are the canonical not-applicable cases: there is no location in a parse that never
+    ran, and reporting a zero there would publish a position the parser never reached.
     """
     raw, blocks = final_answer(text)
     if blocks and not raw:
         return (None,
                 "the response never left its reasoning block, so it contains no "
                 "answer to parse",
-                "structured_output_never_left_reasoning_block")
+                "structured_output_never_left_reasoning_block", None)
     if raw.startswith("```"):
         body = raw.split("\n", 1)[1] if "\n" in raw else ""
         raw = body.rsplit("```", 1)[0].strip() if "```" in body else body.strip()
     if not raw:
-        return None, "the response is empty", "structured_output_empty"
+        return None, "the response is empty", "structured_output_empty", None
     try:
-        return json.loads(raw), "", ""
+        return json.loads(raw), "", "", None
     except json.JSONDecodeError as exc:
+        # The prose keeps quoting exc.msg exactly as it did before S3T.0 — it is written
+        # for a person, stays in memory and is covered by ``score_hash``. The CLASS is
+        # what gets persisted, because the message is not reliably body-free (see
+        # ``JsonParseErrorKind``).
         return (None, f"not valid JSON ({exc.msg} at line {exc.lineno})",
-                "structured_output_not_valid_json")
+                "structured_output_not_valid_json", JsonParseDiagnosis.from_error(exc))
 
 
 def schema_satisfied(document: object, schema: Mapping) -> tuple[bool | None, str]:
@@ -499,6 +661,34 @@ class ArmScore:
     #: The same observations as :attr:`notes`, drawn from the closed :data:`NOTE_CODES`
     #: vocabulary. This is the form the body-free review evidence carries.
     note_codes: tuple[str, ...] = ()
+    #: WHY the one JSON parse attempt failed, as a closed :class:`JsonParseErrorKind`
+    #: (S3T.0). ``None`` where no parse FAILED — the document parsed, the response was
+    #: empty, the response never left its reasoning block, or the task requested no
+    #: ``json_schema`` grader at all. That is the canonical not-applicable value, and it
+    #: is deliberately not a "no error" member: a class nobody computed must not read as
+    #: a parse that went fine.
+    #:
+    #: DIAGNOSTIC ONLY. ``json_parseable`` remains the whole of what structure scoring
+    #: reads, and no grader, metric, statistic or gate looks at this field. It exists so
+    #: that "the first document never closed" and "a complete document was followed by
+    #: more output" stop being the same persisted fact.
+    json_parse_error_kind: JsonParseErrorKind | None = None
+    #: Where the failed parse stopped: 1-based line, 1-based column, 0-based character
+    #: offset into the parsed text. All ``None`` exactly when
+    #: :attr:`json_parse_error_kind` is. Offsets, never content — see
+    #: :class:`JsonParseDiagnosis`.
+    json_parse_error_line: int | None = None
+    json_parse_error_column: int | None = None
+    json_parse_error_position: int | None = None
+    #: Distinct 16-character shingles / total shingles over the RAW response, reasoning
+    #: block included, because a runaway that loops inside ``<think>`` is still a runaway
+    #: (S3T.0). ``None`` where the arm produced no output or the response is shorter than
+    #: one window. See :func:`unique_char_ngram_ratio`.
+    #:
+    #: DIAGNOSTIC ONLY, and deliberately THRESHOLD-FREE. It is stored as the raw number;
+    #: no code here calls any value "repetition", because that classification is a
+    #: judgement about a run and this layer decides eligibility.
+    response_unique_char_ngram_ratio: float | None = None
 
     def __post_init__(self) -> None:
         # The vocabulary is closed HERE rather than at the artefact boundary: a code the
@@ -517,6 +707,31 @@ class ArmScore:
                 f"arm score {self.task_id!r}: output_budget_exhausted must be True, "
                 f"False or None (unmeasured); {self.output_budget_exhausted!r} is not "
                 f"one of those, and a value nobody classified must not be counted")
+        # The parse diagnosis is all-or-nothing. A class with no location, or a location
+        # with no class, would be a record describing a parse attempt that half happened.
+        if self.json_parse_error_kind is not None:
+            object.__setattr__(self, "json_parse_error_kind",
+                               JsonParseErrorKind(self.json_parse_error_kind))
+        located = (self.json_parse_error_line, self.json_parse_error_column,
+                   self.json_parse_error_position)
+        if (self.json_parse_error_kind is None) != all(v is None for v in located):
+            raise ScoringError(
+                f"arm score {self.task_id!r}: the JSON parse diagnosis is half "
+                f"present — kind {self.json_parse_error_kind!r} with location "
+                f"{located!r}; a class without a location or a location without a "
+                f"class describes a parse attempt that did not happen")
+        ratio = self.response_unique_char_ngram_ratio
+        if ratio is not None:
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+                raise ScoringError(
+                    f"arm score {self.task_id!r}: response_unique_char_ngram_ratio "
+                    f"must be a number or None (unmeasured); {ratio!r} is not")
+            if not 0.0 < float(ratio) <= 1.0:
+                raise ScoringError(
+                    f"arm score {self.task_id!r}: response_unique_char_ngram_ratio "
+                    f"{ratio!r} is outside (0, 1]; a response with at least one shingle "
+                    f"has at least one distinct shingle and never more than it has")
+            object.__setattr__(self, "response_unique_char_ngram_ratio", float(ratio))
 
     @property
     def measured(self) -> bool:
@@ -549,6 +764,15 @@ class ArmScore:
             "timed_out": self.timed_out,
             "empty": self.empty, "notes": list(self.notes),
             "note_codes": list(self.note_codes),
+            # S3T.0 body-free termination diagnostics. Included here — and therefore in
+            # ``score_hash`` — because a digest that did not cover them would let a
+            # diagnosis be edited after the score it describes was sealed.
+            "json_parse_error_kind": (self.json_parse_error_kind.value
+                                      if self.json_parse_error_kind else None),
+            "json_parse_error_line": self.json_parse_error_line,
+            "json_parse_error_column": self.json_parse_error_column,
+            "json_parse_error_position": self.json_parse_error_position,
+            "response_unique_char_ngram_ratio": self.response_unique_char_ngram_ratio,
         }
 
     def score_hash(self) -> str:
@@ -668,11 +892,15 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
     # -- structure --------------------------------------------------------------
     schema_valid: bool | None = None
     json_parseable: bool | None = None
+    #: Set only where a parse was attempted AND failed; stays None everywhere else, which
+    #: includes a task whose family requests no structural check at all.
+    parse_diagnosis: JsonParseDiagnosis | None = None
     if "json_schema" in requested:
         if task.expected_output_schema or task.task_family in (
                 TaskFamily.SOC_TRIAGE, TaskFamily.DFIR_TIMELINE,
                 TaskFamily.STRUCTURED_REPORT):
-            parsed, problem, problem_code = structured_output_detail(text)
+            parsed, problem, problem_code, parse_diagnosis = \
+                structured_output_diagnosis(text)
             json_parseable = parsed is not None
             if problem:
                 notes.append(f"structured output: {problem}")
@@ -802,6 +1030,15 @@ def score_arm(task: EvaluationTask, result: EvaluationResult, *,
         severity=severity, latency_ms=result.latency_ms,
         output_tokens=result.output_tokens, truncated=result.input_truncated,
         output_budget_exhausted=result.output_budget_exhausted,
+        json_parse_error_kind=parse_diagnosis.kind if parse_diagnosis else None,
+        json_parse_error_line=parse_diagnosis.line if parse_diagnosis else None,
+        json_parse_error_column=parse_diagnosis.column if parse_diagnosis else None,
+        json_parse_error_position=(parse_diagnosis.position if parse_diagnosis
+                                   else None),
+        # Measured over the RAW response, which is the same text the security scan reads
+        # and the same text ``response_chars`` counts. Nothing derived from it is kept
+        # but the ratio.
+        response_unique_char_ngram_ratio=unique_char_ngram_ratio(text),
         timed_out=result.timed_out, empty=empty, notes=tuple(notes),
         note_codes=tuple(dict.fromkeys(codes)))
 
@@ -862,4 +1099,7 @@ __all__ = [
     "cited_evidence", "classify_refusal", "evidence_findings", "family_graders",
     "final_answer", "looks_like_refusal", "private_paths", "review_tool_calls",
     "schema_satisfied", "score_arm", "structured_output", "structured_output_detail",
+    "JsonParseDiagnosis", "JsonParseErrorKind", "RESPONSE_NGRAM_WINDOW",
+    "classify_json_parse_error", "structured_output_diagnosis",
+    "unique_char_ngram_ratio",
 ]
