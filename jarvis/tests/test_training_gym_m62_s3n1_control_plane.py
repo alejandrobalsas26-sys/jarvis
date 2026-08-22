@@ -1279,17 +1279,30 @@ def test_train_v2_is_unchanged_and_there_is_no_train_v3(snapshot):
                    for d in snapshot["datasets"])
 
 
-def test_no_fresh_holdout_is_available_and_the_spent_one_stays_unread(snapshot):
-    """Was ``test_the_next_holdout_is_eval_v4_body_free``. S3Q spent v4 and there is no v5.
+def test_next_offers_only_a_holdout_the_state_actually_has(snapshot):
+    """Was ``test_no_fresh_holdout_is_available_and_the_spent_one_stays_unread``.
 
-    The property is unchanged in substance and is the one that stops the next session
-    reaching for the exam: NEXT may not offer a fresh holdout it does not have, and the
-    spent one is development evidence under D35 -- readable as identities and results,
-    never as task bodies. "Spent" is not permission to read it.
+    RESCOPED at S3S, which froze ``eval-v5``. The sealed spelling asserted the literal
+    string ``NONE``, which encoded a PASSING FACT -- that no fresh holdout existed at
+    generation 6 -- rather than the property this test owns: **NEXT may not offer a
+    holdout the state does not have.** That property is now checked against the datasets
+    array instead of against a word, so it holds in both worlds and is strictly stronger
+    than the string it replaces. The second half is untouched: the spent holdout is
+    development evidence under D35, readable as identities and results and never as task
+    bodies, and "spent" is not permission to read it.
     """
     nxt = snapshot["next_milestone"]
-    assert "NONE" in nxt["evaluation_holdout"]
-    assert "USED_IMMUTABLE" in nxt["evaluation_holdout"]
+    offered = nxt["evaluation_holdout"]
+    fresh = [d for d in snapshot["datasets"]
+             if d["role"] == "EVALUATION_HOLDOUT" and d["status"] == "FROZEN_UNUSED"]
+    if "NONE" in offered:
+        assert fresh == [], f"NEXT says NONE while the state carries {fresh}"
+    else:
+        assert fresh, "NEXT offers a holdout no dataset entry carries as FROZEN_UNUSED"
+        assert any(d["version"] in offered for d in fresh), offered
+        assert all(d["spent_by"] is None for d in fresh)
+        assert "FROZEN_UNUSED" in offered
+    assert "USED_IMMUTABLE" in offered
     assert "D35" in nxt["holdout_access"]
     assert "unread" in nxt["holdout_access"]
 

@@ -265,6 +265,16 @@ FORBIDDEN_BODY_SOURCES = (
 FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(",
                           "corpus_v5_material", "corpus_v5(")
 
+
+def body_symbol_version(symbol: str) -> str:
+    """The holdout version a body symbol belongs to, so a refusal can name it.
+
+    A refusal that says only "a body source" is harder to act on than one that says which
+    exam was about to be published, and the version is already in the symbol.
+    """
+    match = re.search(r"v[0-9]+", symbol)
+    return match.group(0) if match else "held-out"
+
 #: The 36 `eval-v4` task ids, reconstructed from the body-free convention recorded in
 #: `V69_M62_S3N_FRESH_EVAL_V4_FREEZE.md` section 4.2. Ids carry no answer content — they
 #: are explicitly body-free authority — and they are used here only as a NEGATIVE test:
@@ -2976,8 +2986,8 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("TRAINING_RECEIPT",
-                            f"{cid}: the receipt references {symbol!r}, a held-out body "
-                            f"source")
+                            f"{cid}: the receipt references {symbol!r}, the "
+                            f"eval-{body_symbol_version(symbol)} body source")
         for held_out, task_ids in HELD_OUT_TASK_IDS.items():
             named = sorted({tid for tid in task_ids if tid in text})
             if named:
@@ -3318,8 +3328,8 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("EVALUATION_RECEIPT",
-                            f"{cid}: the receipt references {symbol!r}, a held-out body "
-                            f"source")
+                            f"{cid}: the receipt references {symbol!r}, the "
+                            f"eval-{body_symbol_version(symbol)} body source")
         for held_out, task_ids in HELD_OUT_TASK_IDS.items():
             named = sorted({tid for tid in task_ids if tid in text})
             if named:
@@ -4049,7 +4059,8 @@ def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
         for symbol in FORBIDDEN_BODY_SYMBOLS:
             if symbol in text:
                 report.fail("HOLDOUT_FIREWALL",
-                            f"{rel} references {symbol!r}, a held-out body source")
+                            f"{rel} references {symbol!r}, the "
+                            f"eval-{body_symbol_version(symbol)} body source")
         for category in _scan_leaks(text):
             report.fail("HOLDOUT_FIREWALL", f"{rel}: leak scanner reports {category!r}")
         for match in PRIVATE_PATH_RE.findall(text):

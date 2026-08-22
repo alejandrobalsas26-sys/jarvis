@@ -201,7 +201,6 @@ Qualified before `eval-v4` was spent (S3Q.0), its evidence chain closed before i
 executed once (S3Q) and sealed after (S3Q.0.2). Deep authority, in that order:
 `V69_M62_S3Q0_EVAL_CEREMONY_QUALIFICATION.md` · `V69_M62_S3Q01_EVAL_RECEIPT_HARDENING.md` ·
 `V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md` · `V69_M62_S3Q02_SEAL_RECOVERY.md`.
-
 **Four events, four different facts**, recorded separately because they fail separately:
 `PLAN_CONSUMED` · `HOLDOUT_MODEL_FACING_COMMITTED` · `EVALUATION_COMPLETED` ·
 `TERMINAL_LEDGER_RECORDED`. Collapsing any pair re-spends a holdout or reports a lost
@@ -223,39 +222,29 @@ the S3Q milestone document. **No raw prompt, target or response was ever read or
 **PORTABLE EVALUATION RECEIPT — now `m62.eval_receipt.3`.**
 `scripts/build_m62_eval_receipt.py`: deterministic, body-free, atomically written, and the
 **only** thing that may carry an `EVALUATED_*` state out of a gitignored runtime tree. `.2`
-had been qualified against synthetic evidence and refused the real measurement three times;
-all three were defects in the receipt (**D40 · D41 · D42**) and all three were closed by
-moving the contract to the evidence. `.1` and `.2` keep their exact historical semantics.
+refused the real measurement three times; all three were receipt defects (**D40 · D41 ·
+D42**), closed by moving the contract to the evidence. `.1` and `.2` keep their semantics.
 
-`.3` adds: `verdict_counts` over the **four-verdict** production vocabulary re-derived from
-`ComparisonVerdict` and required to sum to `measured_pairs`, with `wins/ties/losses` demoted
-to declared **partial** aliases; `numeric_delta_counts` verified **separately** and never
-compared bucket-for-bucket against them; canonical bytes **defined** as canonical JSON in
-UTF-8 so legitimate Unicode evidence is carried rather than discarded; and
-`evaluation_source` (bound through a **pre-repair measurement witness**) split from
-`seal_implementation_source` (HEAD at build) — **two blocks, expected to differ.**
-
-Everything `.2` hardened is carried forward: mandatory non-empty adapter identity, the
-training receipt as the candidate's identity root, exact holdout and pack identity, policy
-digests, one plan consumption, one model-facing commit, one recognised terminal event each
-bound by its **own** digest, result counts, artefact digests, atomic write, strict standalone
-verification, and an eligibility **re-derived** by the production `decide_eligibility` rather
-than copied. **There is exactly one eligibility algorithm.**
+`.3` adds a four-verdict `verdict_counts` re-derived from `ComparisonVerdict` and required to
+sum to `measured_pairs`; separately-verified `numeric_delta_counts`; canonical bytes **defined**
+as canonical JSON in UTF-8; and `evaluation_source` (bound through a **pre-repair measurement
+witness**) split from `seal_implementation_source` — **two blocks, expected to differ.**
+Everything `.2` hardened is carried forward, and eligibility is **re-derived** by the
+production `decide_eligibility`, never copied. **There is exactly one eligibility algorithm.**
+Field-by-field derivation: `V69_M62_S3Q01_EVAL_RECEIPT_HARDENING.md` and
+`V69_M62_S3Q02_SEAL_RECOVERY.md`, which own it.
 
 **THE MEASUREMENT WITNESS.** `state/m62/witnesses/0001-s3q-live-measurement-witness.json`
 (`m62.measurement_witness.1`), committed **alone** at `98ff42a…` whose **first parent is the
 evaluation source `c2c025e…`** — written before the repair could move HEAD and not
-re-creatable afterwards. It binds the evaluation source, the plan, the report, the artefact
-identities, the three ledger digests, both partitions and the re-derived eligibility. **It is
-not a receipt:** it grants no state, authorises no retry and promotes nothing.
-
-**Git topology and digests establish repository provenance. They do NOT establish
+re-creatable afterwards. **It is not a receipt:** it grants no state, authorises no retry and
+promotes nothing. **Git topology and digests establish repository provenance, NOT
 hardware-level execution attestation** — nothing here is signed and no PKI is implied.
 
-**Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden ·
-`BODY_OPAQUE_PROGRAMMATIC_ACCESS` permitted for reviewed hashing/validation code ·
-`MODEL_FACING_ACCESS` is the spend. `task-pack.jsonl` is **`BODY_BEARING`** by design; every
-other artefact, every ledger line, the witness and the receipt are **`BODY_FREE`**.
+**Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden · `BODY_OPAQUE_PROGRAMMATIC_ACCESS`
+permitted for reviewed hashing/validation code · `MODEL_FACING_ACCESS` is the spend.
+`task-pack.jsonl` is **`BODY_BEARING`** by design; every other artefact, every ledger line, the
+witness and the receipt are **`BODY_FREE`**.
 
 ---
 
