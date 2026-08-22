@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0007-m62-s3s-eval-v5-frozen.json",
-  "latest_snapshot_sha256": "e9b2a0a2555a400b66bc18496136bcecf39b6a5a420174147ed74454fe90357b",
+  "latest_snapshot_path": "state/m62/snapshots/0008-m62-s3t0-termination-observability.json",
+  "latest_snapshot_sha256": "e4001dec216b4623c68f98e7ea64c0dfe6eba74347ccb898eecfd715de2a23fb",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 7,
-  "subject_state_commit": "e52129cc819433af83789f042d7bf13ea4d83014",
+  "state_generation": 8,
+  "subject_state_commit": "5370ccac5702e58fce0362126e69c774026b2fae",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

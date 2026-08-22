@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **7** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **8** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0007-m62-s3s-eval-v5-frozen.json` |
-| **Snapshot SHA256** | `e9b2a0a2555a400b66bc18496136bcecf39b6a5a420174147ed74454fe90357b` |
-| **Subject state commit** | `e52129cc819433af83789f042d7bf13ea4d83014` (S3S froze the fresh holdout `eval-v5`) |
+| **Latest snapshot** | `state/m62/snapshots/0008-m62-s3t0-termination-observability.json` |
+| **Snapshot SHA256** | `e4001dec216b4623c68f98e7ea64c0dfe6eba74347ccb898eecfd715de2a23fb` |
+| **Subject state commit** | `5370ccac5702e58fce0362126e69c774026b2fae` (S3T.0 made JSON termination observable body-free) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -42,7 +42,7 @@ snapshot, and asks Git — not prose — about the branch, the ancestry and `mas
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `e52129cc819433af83789f042d7bf13ea4d83014` — the commit the current snapshot describes |
+| Subject state commit | `5370ccac5702e58fce0362126e69c774026b2fae` — the commit the current snapshot describes |
 | Training source commit | `bac49c4a49194d84fbc7f61656662fdcd54799ca` — the commit candidate 003 actually trained from. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
