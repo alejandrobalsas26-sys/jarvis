@@ -243,7 +243,8 @@ SEMANTIC DIFF:   ['learning_rate']
 | training corpus | `m62-defensive-quality-train v2` | same | no |
 | corpus manifest | `24ceb1e0…18fc0f` | same | no |
 | training export identity | `82780fa0…7ae921` | same | no |
-| validation export identity | `ae6ffe20…1bb764` | same | no |
+| validation shard | `ae6ffe20…1bb764` | same | no |
+| validation export identity | `ac065112…d540fd` | same | no |
 | dataset reference hash | `b3e1be3e…5f54b4` | same | no |
 | reasoning policy | `DISABLED` | same | no |
 | LoRA module surface | `ATTENTION_AND_MLP` | same | no |
@@ -337,6 +338,7 @@ computation in the same process:
 | export manifest | `82780fa0edc4c99198d0074a8a01b08507fa3eed54b4af50c3e045d5e07ae921` |
 | train shard | `a02797f85d11498103918df9114ed4496e232a9a2c88b738f36f8326a72e1c7e` |
 | validation shard | `ae6ffe204df4d2b60b2215aa38a641331cf56d999cc022c24f538fba891bb764` |
+| validation export | `ac065112c4cb3a2195100c3f11289d1e109f40441d293ded280d9b6cddd540fd` |
 | dataset reference hash | `b3e1be3ed7e41953f874493a398c2dc3bd2267321d32d45572a5b4ba95f54a5c` |
 | records | 182 — 154 TRAIN, 12 VALIDATION as converted |
 

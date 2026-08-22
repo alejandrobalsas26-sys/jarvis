@@ -355,6 +355,28 @@ CANDIDATE_TRANSITIONS: dict[str, dict[str, str]] = {
     "PROMOTED": {},
 }
 
+#: The states a candidate at an ordinal the PARENT generation never mentioned may enter
+#: at. Everything else is refused, because a fresh ordinal is the one place a snapshot
+#: could otherwise mint a candidate that faces no transition check at all.
+#:
+#: ``NOT_CREATED`` is the reserved-placeholder route: generation 1 carried ordinal 3 as
+#: the literal ``candidate-003`` precisely so that naming it stayed a design decision.
+#:
+#: ``DESIGNED_UNTRAINED`` was added by S3U, and the reason it is safe is specific rather
+#: than convenient: it is the ONLY other state :func:`check_candidate_design`
+#: independently RE-DERIVES from the production generator. A snapshot cannot assert it
+#: -- the generator must be able to produce that candidate's corpus, base revision,
+#: render policy, control and single-axis relation, and the deep evidence must be a
+#: tracked file -- so admitting it adds an entry point that is checked harder than the
+#: transition it bypasses. Generation 8 recorded no ordinal 4, so this is the entry
+#: candidate 004 used.
+#:
+#: What this deliberately still refuses, and what the guard exists for: a fresh ordinal
+#: arriving already ``TRAINED_UNEVALUATED``, ``EVALUATED_*`` or ``PROMOTED``. Those are
+#: claims about weights, a spent holdout and a human decision, none of which a design
+#: re-derivation can witness. Widening this tuple further is a control-plane migration.
+FRESH_ORDINAL_ENTRY_STATES = ("NOT_CREATED", "DESIGNED_UNTRAINED")
+
 #: No promotion authority exists in this repository — ``ModelCandidateProposal`` is
 #: non-effectful by construction and mutates no registry. A snapshot that RECORDS a
 #: promoted candidate is therefore recording something no repository artefact can
@@ -450,6 +472,12 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-003": (
         "EVALUATED_NOT_ELIGIBLE",
         "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6"),
+    # S3U designed candidate 004 after an explicit human operator ruling and trained
+    # NOTHING. `None` is the adapter digest because no adapter exists, and that is the
+    # entire content of DESIGNED_UNTRAINED: a configuration this repository can produce,
+    # and no weights. `check_candidate_design` re-derives the design from the production
+    # generator, so this pair agreeing with the snapshot is not on its own a pass.
+    "qwen3-06b-lora-quality-live-004": ("DESIGNED_UNTRAINED", None),
 }
 
 #: The placeholder identity generation 1 carried, and what S3O resolved it to.
@@ -472,6 +500,21 @@ CANDIDATE_003_KEY = "003"
 CANDIDATE_CONTROL_KEY = "002"
 CANDIDATE_003_EVIDENCE = "jarvis/docs/V69_M62_S3O_CANDIDATE003_CONTROLLED_DESIGN.md"
 CANDIDATE_003_LORA_SCOPE = "attention_and_mlp"
+
+#: S3U. Candidate 004: designed, untrained, and the subject of the narrow operator
+#: ruling recorded at generation 9. Its axis, its reference and its ruled learning rate
+#: are NOT restated here as literals -- they are read from the production generator by
+#: `check_candidate_design` and `check_next`, because a verifier constant that agrees
+#: with a snapshot while the generator disagrees with both is the circular failure this
+#: whole file exists to prevent.
+CANDIDATE_004_ID = "qwen3-06b-lora-quality-live-004"
+CANDIDATE_004_KEY = "004"
+CANDIDATE_004_EVIDENCE = (
+    "jarvis/docs/V69_M62_S3U_CANDIDATE004_SINGLE_AXIS_DESIGN.md")
+#: The tracked operator-ruling record. It carries a DIGEST of the ruling phrase and not
+#: the phrase: a control plane that stored a replayable authorisation string would be
+#: minting the capability it is forbidden to hold.
+OPERATOR_RULING_S3U = f"{STATE_DIR}/rulings/0001-s3u-candidate004-learning-rate.json"
 
 #: S3P. The portable receipt that backs candidate 003's training history.
 CANDIDATE_003_TRAIN_RECEIPT = (
@@ -530,6 +573,9 @@ FROZEN_DEFECT_STATUSES: dict[str, str] = {
     "D40": "FIXED",
     "D41": "FIXED",
     "D42": "FIXED",
+    # S3T.0. Observability, PROSPECTIVE, and emphatically not a gate. Pinned here so a
+    # later snapshot cannot quietly re-record it as one.
+    "D43": "FIXED_OBSERVABILITY_ONLY",
 }
 
 DEFECT_STATES = (
@@ -2693,15 +2739,17 @@ def check_candidate_state(cp: ControlPlane, report: Report) -> None:
             before_entry = previous_by_ordinal.get(ordinal)
             after = entry.get("status")
             if before_entry is None:
-                # A candidate the parent generation never mentioned may only ENTER as
-                # NOT_CREATED. Otherwise a snapshot could mint a fully-trained candidate
-                # at a fresh ordinal and face no transition check at all.
-                if after != "NOT_CREATED":
+                # A candidate the parent generation never mentioned may only ENTER
+                # at one of FRESH_ORDINAL_ENTRY_STATES. Otherwise a snapshot could mint
+                # a fully-trained candidate at a fresh ordinal and face no transition
+                # check at all. See that constant for why DESIGNED_UNTRAINED qualifies
+                # and TRAINED_UNEVALUATED and every EVALUATED_* state do not.
+                if after not in FRESH_ORDINAL_ENTRY_STATES:
                     report.fail("CANDIDATE_STATE",
                                 f"{cid}: ordinal {ordinal} is absent from the parent "
                                 f"generation and enters at {after}; a candidate the "
-                                f"control plane has never seen may only enter as "
-                                f"NOT_CREATED")
+                                f"control plane has never seen may only enter as one of "
+                                f"{list(FRESH_ORDINAL_ENTRY_STATES)}")
                 continue
             before_id = before_entry.get("candidate_id")
             if before_id != cid:
@@ -2831,15 +2879,41 @@ def check_candidate_design(cp: ControlPlane, report: Report) -> None:
                         f"{control}, not the legacy MODEL_DEFAULT it actually trained "
                         f"under; the comparison is no longer controlled")
 
-        # ONE AXIS. The dials are shared BY REFERENCE -- the same option key, not a copy
-        # whose numbers currently agree -- so this single equality is the whole
-        # multi-axis guard.
-        if generator.CANDIDATE_OPTION.get(key) != \
-                generator.CANDIDATE_OPTION.get(CANDIDATE_CONTROL_KEY):
+        # ONE AXIS. Every designed candidate declares, in the production generator, which
+        # earlier candidate it is the experiment against and which dials that experiment
+        # is allowed to move. The declaration is CHECKED here, not read: the generator's
+        # own refusal runs first, and the dial set it computes must then equal the one it
+        # declares.
+        #
+        # S3U widened this from a single equality to a declared relation. The equality it
+        # replaced -- "candidate 003's option key IS candidate 002's" -- is not weakened:
+        # an empty declared dial set still means shared BY KEY, and `verify_single_axis`
+        # refuses two options whose numbers merely agree. What is new is the other shape,
+        # a DERIVED option that may move exactly the dials it names, which is what a
+        # learning-rate experiment is.
+        relation = generator.CANDIDATE_SINGLE_AXIS.get(key)
+        if relation is None:
             report.fail("CANDIDATE_STATE",
-                        f"{cid}: option {generator.CANDIDATE_OPTION.get(key)!r} is not "
-                        f"the control's {generator.CANDIDATE_OPTION.get(CANDIDATE_CONTROL_KEY)!r}; "
-                        f"a second experimental axis has appeared")
+                        f"{cid}: the generator declares no single-axis relation for it, "
+                        f"so 'exactly one thing changed' is an unchecked claim. A "
+                        f"designed candidate names the candidate it is an experiment "
+                        f"against")
+        else:
+            reference_key, declared = relation
+            try:
+                generator.verify_single_axis(key)
+                moved = generator.single_axis_diff(key)
+            except Exception as exc:
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: the production generator refuses its own design "
+                            f"({exc})")
+            else:
+                if moved != declared:
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: dial(s) {sorted(moved)} moved against candidate "
+                                f"{reference_key}, but the declared single axis is "
+                                f"{sorted(declared)}; a second experimental axis has "
+                                f"appeared")
 
         # The render identity that IS the axis, re-derived from the snapshot's own
         # template digest. String inputs only: no tokenizer is loaded.
@@ -4034,6 +4108,93 @@ def _authority_shaped(payload: object, label: str, path: str = "$") -> list[str]
     return problems
 
 
+def check_operator_ruling(cp: ControlPlane, report: Report) -> None:
+    """S3U — a candidate whose design rests on an operator ruling shows that ruling.
+
+    The failure this prevents is a supersession nobody can audit: a candidate appears at
+    an axis a standing entry forbade, the snapshot's prose says a human allowed it, and
+    no tracked artefact records who decided what. Prose cannot grant authority, so the
+    ruling is not authority here either — it is EVIDENCE that a decision was made, and
+    it is required to exist, to be tracked, and to be checkable.
+
+    The one thing it must NOT contain is the authorisation phrase itself. A control plane
+    holding a replayable string would be holding a capability, so the record carries a
+    digest and says so; a record that stored the literal is a FAILURE, not a convenience.
+    """
+    designed = [c for c in cp.snapshot.get("candidates", [])
+                if c.get("candidate_id") == CANDIDATE_004_ID]
+    if not designed:
+        return
+    path = REPO_ROOT / OPERATOR_RULING_S3U
+    if not path.is_file():
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{CANDIDATE_004_ID} is recorded, but the operator ruling it rests "
+                    f"on ({OPERATOR_RULING_S3U}) is not a file in this tree")
+        return
+    code, out = _git("ls-files", "--error-unmatch", "--", OPERATOR_RULING_S3U)
+    if code != 0 or not out:
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} is untracked; a ruling with no history has "
+                    f"no second witness")
+    payload, raw = _load_json(path, OPERATOR_RULING_S3U)
+    if raw != canonical_bytes(payload):
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} is not in the canonical serialization every "
+                    f"control-plane digest is taken over")
+    if payload.get("ruling_phrase_recorded") is not False:
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} does not state that the authorisation phrase "
+                    f"is withheld")
+    if not SHA256_RE.match(str(payload.get("ruling_phrase_sha256", ""))):
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} carries no digest of the phrase it records, "
+                    f"so which decision was given is unauditable")
+    if payload.get("scope") != "DESIGN_ONLY":
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} claims scope {payload.get('scope')!r}; the "
+                    f"ruling recorded at this generation authorised a DESIGN and "
+                    f"nothing else")
+
+    # The ruling and the repository must name the SAME experiment. Re-derived from the
+    # production generator, so a ruling that drifted from what was built is a failure
+    # rather than a second opinion.
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from scripts import build_quality_training_config as generator
+    except Exception as exc:
+        report.fail("AUTHORITY_SEPARATION",
+                    f"the production candidate generator could not be imported ({exc}); "
+                    f"the operator ruling is therefore UNVERIFIED")
+        return
+    key = CANDIDATE_004_KEY
+    reference_key, declared = generator.CANDIDATE_SINGLE_AXIS[key]
+    expected = {
+        "subject_candidate": generator.CANDIDATES[key]["run_id"],
+        "reference_candidate": generator.CANDIDATES[reference_key]["run_id"],
+        "primary_axis": sorted(declared)[0],
+        "reference_value": generator.format_learning_rate(
+            generator.OPTIONS[generator.CANDIDATE_OPTION[reference_key]][
+                "learning_rate"]),
+        "ruled_value": generator.format_learning_rate(
+            generator.OPTIONS[generator.CANDIDATE_OPTION[key]]["learning_rate"]),
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{OPERATOR_RULING_S3U} records {field}="
+                        f"{payload.get(field)!r}; the repository builds {value!r}")
+    superseded = payload.get("supersedes", {})
+    if superseded.get("historical_entry_erased") is not False:
+        report.fail("AUTHORITY_SEPARATION",
+                    f"{OPERATOR_RULING_S3U} does not state that the historical entry it "
+                    f"supersedes remains factual at the generation that made it")
+    report.note(f"{CANDIDATE_004_ID}: operator ruling {payload.get('ruling_id')} "
+                f"verified body-free - {expected['primary_axis']} "
+                f"{expected['reference_value']} -> {expected['ruled_value']}, scope "
+                f"DESIGN_ONLY, phrase withheld and carried as a digest")
+
+
 def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
     """V23, V24 — no task body, no body source pointer, no secret, no private path.
 
@@ -4174,14 +4335,108 @@ def check_budgets(cp: ControlPlane, report: Report) -> None:
                 f"{bootstrap} bytes")
 
 
+#: Substrings the CURRENT prospective rule must still bar, whatever else it says.
+#:
+#: A ``ruled_out`` list is rewritten at a generation that supersedes part of it, and the
+#: failure mode is not that the rewrite is wrong -- it is that a rewrite aimed at one
+#: clause quietly drops four others nobody was thinking about. These are checked as
+#: substrings of the joined list rather than as exact entries, so the wording stays free
+#: and the coverage does not.
+REQUIRED_RULED_OUT_SUBJECTS = (
+    "epoch", "rank", "alpha", "dropout", "ATTENTION_ONLY", "train-v3", "eval-v4",
+    "eval-v5", "max_new_tokens", "grader", "threshold", "refusal detector",
+    "candidate 003", "promotion",
+)
+
+
+def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
+    """V26 — the recorded axis is the one the production generator actually configures.
+
+    The field describes the experiment that is currently OPEN, so what it must say
+    depends on the state and not on a date: while a designed-but-untrained candidate
+    exists, the axis is that candidate's and is re-derived from the generator; with no
+    such candidate the field records the last measured axis, which is candidate 003's
+    preregistered render-policy transition.
+
+    Re-derived, never matched against a literal in this file. A verifier constant that
+    agreed with a snapshot while the generator built something else would be the exact
+    circular pass this module is built to refuse.
+    """
+    recorded = str(nxt.get("primary_axis", ""))
+    designed = [c for c in cp.snapshot.get("candidates", [])
+                if c.get("status") == "DESIGNED_UNTRAINED"]
+    if not designed:
+        if "MODEL_DEFAULT" not in recorded or "DISABLED" not in recorded:
+            report.fail("CANDIDATE_STATE",
+                        f"the preregistered primary axis is not recorded: {recorded!r}")
+        return
+
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from scripts import build_quality_training_config as generator
+    except Exception as exc:
+        report.fail("CANDIDATE_STATE",
+                    f"the production candidate generator could not be imported ({exc}); "
+                    f"the recorded primary axis is therefore UNVERIFIED")
+        return
+
+    for entry in designed:
+        cid = entry.get("candidate_id")
+        key = next((k for k, spec in generator.CANDIDATES.items()
+                    if spec.get("run_id") == cid), "")
+        relation = generator.CANDIDATE_SINGLE_AXIS.get(key) if key else None
+        if relation is None:
+            continue  # check_candidate_design already failed this candidate
+        reference_key, declared = relation
+        for dial in sorted(declared):
+            if dial not in recorded:
+                report.fail("CANDIDATE_STATE",
+                            f"{cid}: its single axis is {dial!r}, which the recorded "
+                            f"primary_axis {recorded!r} does not name")
+                continue
+            before = generator.OPTIONS[generator.CANDIDATE_OPTION[reference_key]][dial]
+            after = generator.OPTIONS[generator.CANDIDATE_OPTION[key]][dial]
+            render = (generator.format_learning_rate if dial == "learning_rate"
+                      else str)
+            for value, side in ((before, f"candidate {reference_key}'s"),
+                                (after, f"{cid}'s")):
+                if render(value) not in recorded:
+                    report.fail("CANDIDATE_STATE",
+                                f"{cid}: the recorded primary_axis does not carry "
+                                f"{side} {dial} ({render(value)}); an axis recorded "
+                                f"without its two ends is not a measurable claim")
+
+
+def _check_ruled_out(nxt: dict, report: Report) -> None:
+    """The current prospective rule still bars everything it is not superseding.
+
+    A supersession is narrow by construction or it is not a supersession. This checks
+    the two halves of that: the subjects that must remain barred are still named, and a
+    learning-rate permission -- the one clause generation 9 superseded -- is scoped to
+    the candidate it was ruled for rather than opened for every future candidate.
+    """
+    entries = [str(x) for x in nxt.get("ruled_out", [])]
+    joined = " | ".join(entries)
+    missing = [s for s in REQUIRED_RULED_OUT_SUBJECTS if s not in joined]
+    if missing:
+        report.fail("CANDIDATE_STATE",
+                    f"the current ruled_out list no longer bars {missing}; a rewrite "
+                    f"that supersedes one clause may not drop the others")
+    permissions = [e for e in entries
+                   if "learning" in e.lower() and "candidate 004" not in e]
+    for entry in permissions:
+        if any(word in entry.lower() for word in ("allow", "permit", "may ")):
+            report.fail("CANDIDATE_STATE",
+                        f"ruled_out entry {entry!r} reads as an unscoped learning-rate "
+                        f"permission; the supersession is candidate-004-specific")
+
+
 def check_next(cp: ControlPlane, report: Report) -> None:
     """V26, V27 — the NEXT contract and the test baseline are the recorded ones."""
     nxt = cp.snapshot.get("next_milestone", {})
-    if "MODEL_DEFAULT" not in nxt.get("primary_axis", "") or \
-            "DISABLED" not in nxt.get("primary_axis", ""):
-        report.fail("CANDIDATE_STATE",
-                    f"the preregistered primary axis is not recorded: "
-                    f"{nxt.get('primary_axis')!r}")
+    _check_primary_axis(cp, nxt, report)
+    _check_ruled_out(nxt, report)
     if nxt.get("lora_scope") != "ATTENTION_AND_MLP":
         report.fail("CANDIDATE_STATE",
                     f"LoRA scope {nxt.get('lora_scope')!r} is not the preregistered "
@@ -4223,6 +4478,7 @@ def run() -> Report:
     check_evaluation_receipt(cp, report)
     check_policy_identities(cp, report)
     check_authority_separation(cp, report)
+    check_operator_ruling(cp, report)
     check_holdout_firewall(cp, report)
     check_budgets(cp, report)
     check_next(cp, report)

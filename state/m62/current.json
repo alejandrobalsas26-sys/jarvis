@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0008-m62-s3t0-termination-observability.json",
-  "latest_snapshot_sha256": "e4001dec216b4623c68f98e7ea64c0dfe6eba74347ccb898eecfd715de2a23fb",
+  "latest_snapshot_path": "state/m62/snapshots/0009-m62-s3u-candidate004-designed.json",
+  "latest_snapshot_sha256": "4b6f1c9b1d5e512ecd22a66849245709204ed69c1c5ad25dd26cca9766022c98",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 8,
-  "subject_state_commit": "5370ccac5702e58fce0362126e69c774026b2fae",
+  "state_generation": 9,
+  "subject_state_commit": "43cb590b9a8da7b912dd146a2e5ac410680729c4",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

@@ -1,0 +1,41 @@
+{
+  "decision_kind": "HUMAN_OPERATOR_RULING",
+  "distinct_from_analysis": "S3S.1 section 10 RANKED lower update magnitude first among candidate 004 axes. A ranking is analysis and authorises nothing. This record is the separate human decision, and the two are deliberately not collapsed.",
+  "excluded_from_this_ruling": [
+    "training candidate 004 or any candidate",
+    "evaluating any candidate",
+    "spending eval-v5",
+    "reusing eval-v4",
+    "promotion, activation, registry mutation, merge, tag, release, version bump",
+    "any second experimental axis",
+    "modifying train-v2 or creating train-v3",
+    "changing gates, graders, thresholds or the refusal detector"
+  ],
+  "m62_continues": true,
+  "milestone": "S3U",
+  "note": "The phrase itself is deliberately NOT stored. A digest proves which phrase was given and cannot be spent; a stored phrase would be a replayable string in a control plane that is forbidden to hold one. Same reason the training receipt carries token_literal_recorded false.",
+  "primary_axis": "learning_rate",
+  "recorded_at_state_generation": 9,
+  "reference_candidate": "qwen3-06b-lora-quality-live-003",
+  "reference_value": "1e-4",
+  "ruled_value": "5e-5",
+  "ruling_id": "S3U-001",
+  "ruling_phrase_recorded": false,
+  "ruling_phrase_sha256": "0749f41e26c301f6b768d2aebbd94bd282a7a423f68be93a8b68e3fcdd63941f",
+  "schema_version": "m62.operator_ruling.1",
+  "scope": "DESIGN_ONLY",
+  "subject_candidate": "qwen3-06b-lora-quality-live-004",
+  "supersedes": {
+    "at_state_generation": 8,
+    "clause": "learning-rate change",
+    "clauses_untouched": [
+      "epoch change",
+      "rank change",
+      "alpha change",
+      "dropout change"
+    ],
+    "entry": "any learning-rate, epoch, rank, alpha or dropout change",
+    "historical_entry_erased": false,
+    "scope": "candidate 004 only, prospectively, and only to 5e-5"
+  }
+}

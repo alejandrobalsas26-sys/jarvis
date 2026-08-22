@@ -1255,15 +1255,37 @@ def test_an_oversized_snapshot_fails_the_budget_check(sandbox, monkeypatch):
 
 
 # ── 14. the NEXT contract survived intact ────────────────────────────────────────────
-def test_the_preregistered_primary_axis_is_preserved(snapshot):
+def test_the_preregistered_primary_axis_is_preserved():
     """The axis survived being implemented. S3N preregistered it; S3O bound it into a
     configuration, so the wording moved from "exactly one axis" to "already bound" -- but
-    the axis itself must still read MODEL_DEFAULT -> DISABLED, unswapped."""
-    nxt = snapshot["next_milestone"]
-    assert "MODEL_DEFAULT" in nxt["primary_axis"]
-    assert "DISABLED" in nxt["primary_axis"]
-    assert nxt["primary_axis"].index("MODEL_DEFAULT") < nxt["primary_axis"].index(
-        "DISABLED"), "the axis direction was reversed"
+    the axis itself must still read MODEL_DEFAULT -> DISABLED, unswapped.
+
+    RESCOPED AT S3U to the generations that recorded it, which is the documented pattern
+    for an assertion that compares a sealed milestone's property against LIVE state: it
+    also asserts, silently, that no later generation exists. Generation 9 opened a NEW
+    experiment -- candidate 004's learning rate -- so `next_milestone.primary_axis` now
+    describes THAT one, and reading the live snapshot here would assert candidate 003's
+    axis is still the open question. It is not; it was measured.
+
+    The property this test owns is unchanged and is now checked where it lives: EVERY
+    generation that recorded the D37 axis must still record it, in the right direction.
+    Nothing is waived -- the check got stricter, because it now covers seven snapshots
+    instead of whichever one happens to be current.
+    """
+    recorded = []
+    for path in sorted((REPO / V.SNAPSHOT_DIR).iterdir()):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        axis = payload["next_milestone"]["primary_axis"]
+        if "MODEL_DEFAULT" not in axis:
+            continue
+        recorded.append(payload["state_generation"])
+        assert "DISABLED" in axis, path.name
+        assert axis.index("MODEL_DEFAULT") < axis.index("DISABLED"), (
+            f"{path.name}: the axis direction was reversed")
+    # Generation 1 preregistered it and generation 8 was the last to carry it: a
+    # CONTIGUOUS run, so a generation quietly dropping the axis mid-lineage is caught
+    # rather than absorbed into a min/max that still looks right.
+    assert recorded == list(range(1, 9)), recorded
 
 
 def test_the_lora_scope_is_attention_and_mlp(snapshot):
@@ -1308,6 +1330,16 @@ def test_next_offers_only_a_holdout_the_state_actually_has(snapshot):
 
 
 def test_everything_ruled_out_is_still_ruled_out(snapshot):
+    """Every subject barred at S3N.1 is still barred by the CURRENT prospective rule.
+
+    Deliberately still read from the LIVE snapshot: unlike the axis above, this property
+    is not about one sealed milestone's experiment. It is the standing prohibition set,
+    and a rewrite that quietly dropped one of these is exactly what it exists to catch.
+    S3U rewrote the list and superseded ONE clause -- the learning rate, for candidate
+    004 only -- so `learning-rate` must still appear, and it does, as the scope of that
+    supersession rather than as a blanket bar. That is the narrowing, and it is checked
+    for scope by `_check_ruled_out` in the verifier.
+    """
     joined = " ".join(snapshot["next_milestone"]["ruled_out"])
     for marker in ("ATTENTION_ONLY", "learning-rate", "train-v3", "max_new_tokens",
                    "structured rows", "response schema", "refusal detector",

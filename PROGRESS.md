@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **8** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **9** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0008-m62-s3t0-termination-observability.json` |
-| **Snapshot SHA256** | `e4001dec216b4623c68f98e7ea64c0dfe6eba74347ccb898eecfd715de2a23fb` |
-| **Subject state commit** | `5370ccac5702e58fce0362126e69c774026b2fae` (S3T.0 made JSON termination observable body-free) |
+| **Latest snapshot** | `state/m62/snapshots/0009-m62-s3u-candidate004-designed.json` |
+| **Snapshot SHA256** | `4b6f1c9b1d5e512ecd22a66849245709204ed69c1c5ad25dd26cca9766022c98` |
+| **Subject state commit** | `43cb590b9a8da7b912dd146a2e5ac410680729c4` (S3U designed candidate 004 as a learning-rate single-axis experiment) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -42,7 +42,7 @@ snapshot, and asks Git — not prose — about the branch, the ancestry and `mas
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `5370ccac5702e58fce0362126e69c774026b2fae` — the commit the current snapshot describes |
+| Subject state commit | `43cb590b9a8da7b912dd146a2e5ac410680729c4` — the commit the current snapshot describes |
 | Training source commit | `bac49c4a49194d84fbc7f61656662fdcd54799ca` — the commit candidate 003 actually trained from. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -64,9 +64,9 @@ files on top of it. That is why the two differ, and why the verifier requires HE
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3S** — `m62-defensive-eval v5` frozen candidate-blind |
-| Last milestone | **S3S** — `V69_M62_S3S_EVAL_V5_FREEZE.md`. **PASS.** A fifth holdout frozen before candidate 004 exists. S3R closed before it (`V69_M62_S3R_CANDIDATE003_POSTMORTEM.md`, docs-only, `READY_TO_FREEZE_EVAL_V5`) |
-| Phase | **Between milestones.** Three candidates measured, three `EVALUATED_NOT_ELIGIBLE`, a fresh unspent holdout ready, **no fourth candidate proposed** |
+| Last state-bearing milestone | **S3U** — candidate 004 designed, `DESIGNED_UNTRAINED`, on a human operator ruling |
+| Last milestone | **S3U** — `V69_M62_S3U_CANDIDATE004_SINGLE_AXIS_DESIGN.md`. **PASS.** Candidate 004 designed on one dial. **No training, no evaluation, no promotion.** S3T.0 closed before it (**D43**, observability only) |
+| Phase | **Between milestones.** Three candidates measured and `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is DESIGNED and UNTRAINED**; `eval-v5` fresh and unspent. **No TRAIN authority exists** |
 | Live training since S3N | **one run** — candidate 003, 40/40 optimizer steps, `TRAIN` capability spent. **No retry is authorised** |
 | Live evaluation since S3N | **one run** — S3Q, candidate 003 against `eval-v4`. One plan, one holdout commit, one terminal event, **72 results, 0 generation errors.** `eval-v4` is `USED_IMMUTABLE` |
 | S3Q.0.2 | evidence only — **0 weights loaded, 0 generations, 0 new evaluation attempts, no plan consumed, no figure moved** |
@@ -112,6 +112,7 @@ that is history and is not rewritten. `tokenizer_chat_template_hash` digests the
 | `qwen3-06b-lora-quality-live-001` | `EVALUATED_NOT_ELIGIBLE` | `43213035…e22ac858` | `train v1` | `eval v2` | `V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md` |
 | `qwen3-06b-lora-quality-live-002` | `EVALUATED_NOT_ELIGIBLE` | `319c2524…f9665409` | `train v2` | `eval v3` | `V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md` |
 | `qwen3-06b-lora-quality-live-003` | **`EVALUATED_NOT_ELIGIBLE`** | `6ccd8fdc…c76ce4ea6` | `train v2` | **`eval v4`** | `V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md` |
+| `qwen3-06b-lora-quality-live-004` | **`DESIGNED_UNTRAINED`** | *none — no adapter exists* | `train v2` | *not measured* | `V69_M62_S3U_CANDIDATE004_SINGLE_AXIS_DESIGN.md` |
 
 **Candidate 003 is MEASURED and NOT ELIGIBLE.** S3O designed it moving **exactly one**
 primary axis — training render reasoning policy `MODEL_DEFAULT` → `DISABLED` — with LoRA
@@ -126,6 +127,15 @@ does **not** exclude a regression.
 
 **It is NOT approved, NOT promoted and NOT production-ready.** `EVALUATED_NOT_ELIGIBLE` is
 terminal, and it improved several measurements while failing the frozen eligibility gate.
+
+**Candidate 004 is DESIGNED and UNTRAINED.** S3U built it from candidate 003's
+configuration with **one dial moved** — `learning_rate` 1e-4 → 5e-5 — on an explicit human
+operator ruling that superseded only the learning-rate clause of one generation-8 entry,
+for this candidate only (§12). Rank 16, alpha 32, `alpha/r` 2.0, dropout 0.05, 2 epochs,
+seed 42, `ATTENTION_AND_MLP`, `train v2` and reasoning `DISABLED` are inherited by
+construction, not re-typed; the measured semantic diff is exactly `{learning_rate}`.
+**No adapter, no plan token, no receipt and no `TRAIN` authority exists.** It is a
+hypothesis: `TRAINING_ROOT_CAUSE_CONFIDENCE` stays **NOT_ESTABLISHED**.
 
 **Neither claim is this table's to make.** `check_training_receipt` and
 `check_evaluation_receipt` re-derive both from the tracked, root-independent receipts in
@@ -424,25 +434,20 @@ moved, replaced or weakened.
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          4060 passed · 20 skipped · 0 failed        [S3T.0]
+result          4234 passed · 20 skipped · 0 failed        [S3U]
 ```
 
-S3T.0 added **79**, all in `…_s3t0_termination_observability.py`, the suite for the
-body-free parser class and the one repetition scalar (**D43**). 3981 + 79 = 4060 on
-**one** interpreter; **never reconcile counts across interpreters by arithmetic.**
+S3U added **174** across `…_s3u_fourth_candidate.py` (the design and its refusals) and
+`…_s3u_control_plane.py` (generation 9 and the operator ruling). Counts are **one**
+interpreter's; **never reconcile counts across interpreters by arithmetic.**
 
 **Rescoped assertions are not regressions, and there is a documented pattern for them.**
-An assertion that compares a *sealed* milestone's property against *live* state also asserts,
-silently, that no later generation exists — true by coincidence until the next milestone
-writes one. Such tests are pinned to the generation that recorded the property: the S3N
-source-scope test to `ec446e3`, the S3P gen2→gen3 and holdout tests to generation 3, the S3O
-holdout test to generation 2, the S3Q.0.1 acceptance tests to generation 5; **S3S rescoped
-four** (S3N, S3F.2, S3J — the live `CORPUS_VERSIONS`/`HELD_OUT_VERSIONS`/`LATEST_DATASET_
-VERSION` readers); **S3T.0 rescoped three** — D38's response-shaped-key assertion now
-checks every such field is a digest *or a number*, and the S3Q.0 and S3S frozen-source
-assertions now diff their own ranges (`05c043b3…4f683f78`, `f9d25fd2…bf83cf52`) rather
-than the working tree, which is what S3S's own docstring asked for. Each keeps the
-property it owns; all three are argued in full in the S3T.0 document.
+An assertion that compares a *sealed* milestone's property against *live* state also
+asserts, silently, that no later generation exists — true by coincidence until the next
+milestone writes one. Such tests are pinned to the generation that recorded the property,
+and each rescoping is argued in full in its own milestone document. **S3U rescoped two**,
+both fail-closed unknown-candidate probes that moved from `004` to `005`: they own the
+property that an unnamed candidate is a refusal, never a number.
 
 **Known invocation-context artefact — do not rediscover it as a regression.** Running `pytest`
 from the **repository root** instead of `jarvis/` fails **8** tests in
@@ -483,52 +488,47 @@ state → the milestone document NEXT names → task-specific authority → *onl
 
 ## 12 — EXACT NEXT
 
-> **A HUMAN DECISION, IN A NEW SESSION.** `eval-v5` is frozen candidate-blind and unspent.
-> What remains is an operator ruling on candidate 004's single primary axis.
-> **Nothing in this repository proposes, names or configures a fourth candidate.**
+> **LIVE TRAINING OF CANDIDATE 004, IN A NEW SESSION, UNDER A NEW SINGLE-USE HUMAN
+> `TRAIN` AUTHORITY.** Candidate 004 is **designed and untrained**: no adapter, no plan
+> token, no receipt. **`eval-v5` stays frozen and unspent until it has trained.**
 
-**The (A)/(B) branch that stood here is CLOSED, and not by a waiver.** S3S.1 executed the
-authorised semantic development audit body-free and found the six spent-`v4` candidate
-response bodies **were never persisted** — not withheld, absent, and unrecoverable without
-new generation. S3R's `MECHANISM_CONFIDENCE` therefore stays MEDIUM permanently. The full
-argument is in `V69_M62_S3S1_SPENT_V4_SEMANTIC_DEV_AUDIT.md`; S3T.0 made the equivalent
-diagnosis available **prospectively** instead (**D43**). Only the axis ruling remains.
+**The axis ruling that stood here is CLOSED.** An explicit human operator ruling permitted
+M62 to continue and permitted candidate 004 to be **designed** as a learning-rate
+single-axis experiment at **5e-5**. It superseded **one clause of one** generation-8
+`ruled_out` entry — the learning-rate clause of *"any learning-rate, epoch, rank, alpha or
+dropout change"* — **prospectively, for candidate 004 only**. Epoch, rank, alpha and
+dropout changes stay ruled out. The historical entry is **not erased**; it remains factual
+at the generation that made it. The ruling is recorded body-free at
+`state/m62/rulings/0001-s3u-candidate004-learning-rate.json`, with the authorisation
+phrase **withheld** and carried as a digest.
 
-**The axis ruling.** S3R proposed *as a hypothesis* reducing LoRA
-capacity (`r16 → r8`, alpha scaled to hold `alpha/r = 2`) and established that this
-**conflicts with the `ruled_out` list**, which bars any rank or alpha change. **S3S did not
-resolve that conflict and had no authority to:** `CANDIDATE004_AXIS_DECISION:
-PENDING_HUMAN_RULING`. Only a human may move it.
+**Keep the two apart.** S3S.1 §10 *ranked* lower update magnitude first among candidate
+004 axes — analysis, which authorised nothing. The ruling is the separate human decision,
+and the repository records both, never as one thing.
+
+**What candidate 004 is: §4, in full.** One dial, everything else inherited by
+construction, and `verify_single_axis` refuses to build anything else. It is a
+**hypothesis** — the learning rate has never been varied here, so no dose-response is
+measured, and S3S.1 rated the risk to candidate 003's three security gains from a weaker
+update as **HIGH**. Losing them would be an informative result, not a surprise.
 
 **Candidate 003 is closed as `EVALUATED_NOT_ELIGIBLE`** — not approved, not promoted, not
-production-ready, not a successful deployment. It improved several measurements and failed
-the frozen canonical eligibility gate. That state is **terminal**, and `eval-v4` cannot be
-reused for an ablation, a re-score or any reason at all.
+production-ready. That state is **terminal**, and `eval-v4` cannot be reused for an
+ablation, a re-score or any reason at all.
 
-**If M62 continues, the sequence is:** operator axis ruling → candidate 004
-designed → a fresh single-use `TRAIN` authority → any `train-v3` checked against frozen `v5`
-→ a fresh single-use `EVAL` authority at a new generation → **one** paired run against `v5`
-→ an `m62.eval_receipt.3` receipt → a new control-plane generation. **Every arrow is a
-separate human decision.**
+**The remaining sequence, every arrow a separate human decision:** a fresh single-use
+`TRAIN` authority in a new session → **one** training run → an `m62.train_receipt` and a
+new generation → a token-silent preflight → a fresh single-use `EVAL` authority at a new
+generation → **one** paired run against `v5` → an `m62.eval_receipt.3` → a new generation.
+Promotion is a further decision no authority here grants.
 
-**Comparability, before anyone builds a table.** The candidates were measured on `v2`, `v3`
-and `v4` — three exams with zero shared instances — and 003 was additionally fitted under a
-different training representation. `v5` shares no instance with any of them. **They may not
-be ranked in one table.** The only valid comparison is each candidate against its own
-simultaneously measured baseline, under identical generation, metric and gate policy
-digests. **D28, D29 and D33 bound every one of those comparisons.**
+**Comparability, before anyone builds a table.** 001, 002 and 003 were measured on `v2`,
+`v3` and `v4` — zero shared instances — and 003 was additionally fitted under a different
+training representation; `v5` shares none with any of them. **They may not be ranked in one
+table:** each compares only against its own simultaneously measured baseline, under
+identical generation, metric and gate policy digests. **D28, D29 and D33 bound every one.**
 
-**Still explicitly ruled out:** designing, naming or configuring candidate 004 **in the
-session that authored `v5`** · mutating, re-wording, re-scoping, replacing or
-threshold-tuning frozen `eval-v5` · reading `v5` task bodies in any design, training or
-planning session · reusing `eval-v4`, or reading its bodies to explain, debug or tune
-anything · re-running, re-scoring, ablating or re-interpreting S3Q · promoting, activating
-or registering candidate 003, or calling it approved · retraining, resuming or re-seeding it
-· turning a `v4` result into a training example · editing the S3Q report or any recorded
-figure · changing gates, graders, thresholds, `max_new_tokens` or the refusal detector in
-response to a result · creating a D38 gate · fixing **D39** as a rider · ranking 001, 002 and
-003 in one table · back-filling a receipt for 001 or 002 · rewriting `.1` or `.2` semantics
-in place · promotion, activation, registry mutation, merge, tag, release or version bump.
+**Still explicitly ruled out** — the machine-readable list is `next_milestone.ruled_out` in the generation-9 snapshot and it is the authority; the headline items are: any **epoch, rank, alpha or dropout** change · reading candidate 004's learning-rate permission as **general** · a second axis, `ATTENTION_ONLY` or any module-surface change · any dial slaved to the learning rate · `train-v3` or any `train-v2` modification · raising `max_new_tokens` · changing gates, graders, thresholds or the refusal detector, or turning a **D38/D43** diagnostic into a gate · mutating frozen `eval-v5` · reusing `eval-v4` or reading `v4`/`v5` bodies · retraining candidate 003 or calling it approved · training candidate 004 in the session that designed it · evaluating it before it has trained · ranking 001-004 in one table · fixing **D39** as a rider · promotion, activation, registry mutation, merge, tag, release or version bump.
 
 ---
 
