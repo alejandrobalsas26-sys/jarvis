@@ -373,14 +373,14 @@ def test_the_sft_export_covers_exactly_the_train_split(train_root):
 def test_v3_declares_an_explicit_deterministic_lineage():
     """What S3J owns is v3's PARENT. The version list itself moves when a version is added.
 
-    V69 M62 S3N added ``v4`` and moved ``LATEST_DATASET_VERSION`` onto it. That does not
-    touch anything S3J froze: ``v3`` still declares ``v2`` as its parent and still hashes
-    to the digest the S3L evaluation of record bound.
+    V69 M62 S3N added ``v4`` and S3S added ``v5``, each moving ``LATEST_DATASET_VERSION``
+    onto itself. Neither touches anything S3J froze: ``v3`` still declares ``v2`` as its
+    parent and still hashes to the digest the S3L evaluation of record bound.
     """
     assert BC.canonical_parent_for("v3") == ("v2", EVAL_V2_MANIFEST)
     assert BC.CANONICAL_V2_MANIFEST == EVAL_V2_MANIFEST
-    assert BC.LATEST_DATASET_VERSION == "v4"
-    assert sorted(BC.CORPUS_VERSIONS) == ["v1", "v2", "v3", "v4"]
+    assert BC.LATEST_DATASET_VERSION == "v5"
+    assert sorted(BC.CORPUS_VERSIONS) == ["v1", "v2", "v3", "v4", "v5"]
 
 
 def test_v3_holds_thirty_six_tasks_in_the_same_splits_and_families(eval_root):
