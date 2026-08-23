@@ -476,6 +476,11 @@ FROZEN_TRAIN_EXPORTS: dict[str, tuple[str, str, str]] = {
 #: be re-derived without the gitignored run tree, which is precisely why the sealed value
 #: is recorded here: otherwise a mutated artifact-set hash is accepted by every check.
 FROZEN_ADAPTER_ARTIFACT_SETS: dict[str, str] = {
+    # S3P's candidate. Recorded here at S3V rather than at S3P because the binding did not
+    # exist then; the value is the one its sealed receipt has carried since S3P and is not
+    # re-derived from the run tree, which may be gone.
+    "qwen3-06b-lora-quality-live-003":
+        "148e3ef15e9e3890e25f83ad1b7361192f08ed92c89741a043e4f3985cbf83da",
     "qwen3-06b-lora-quality-live-004":
         "326678618101eb4eec0a12b89a5e02f89340148111d5f4adf97d6a04f449b864",
 }
@@ -4473,10 +4478,18 @@ def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
     """V26 — the recorded axis is the one the production generator actually configures.
 
     The field describes the experiment that is currently OPEN, so what it must say
-    depends on the state and not on a date: while a designed-but-untrained candidate
+    depends on the state and not on a date: while a candidate with an UNMEASURED axis
     exists, the axis is that candidate's and is re-derived from the generator; with no
     such candidate the field records the last measured axis, which is candidate 003's
     preregistered render-policy transition.
+
+    S3V widened "unmeasured" from ``DESIGNED_UNTRAINED`` alone to include
+    ``TRAINED_UNEVALUATED``, for the same reason S3P widened `check_candidate_design`:
+    training a candidate does not answer its question. Candidate 004's experiment is at
+    its most open the moment weights exist and no measurement does, and the narrower
+    reading would have demanded the snapshot advertise candidate 003's already-measured
+    render-policy axis as the live one -- retiring an open experiment from the control
+    plane at exactly the moment it became real.
 
     Re-derived, never matched against a literal in this file. A verifier constant that
     agreed with a snapshot while the generator built something else would be the exact
@@ -4484,7 +4497,7 @@ def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
     """
     recorded = str(nxt.get("primary_axis", ""))
     designed = [c for c in cp.snapshot.get("candidates", [])
-                if c.get("status") == "DESIGNED_UNTRAINED"]
+                if c.get("status") in ("DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED")]
     if not designed:
         if "MODEL_DEFAULT" not in recorded or "DISABLED" not in recorded:
             report.fail("CANDIDATE_STATE",

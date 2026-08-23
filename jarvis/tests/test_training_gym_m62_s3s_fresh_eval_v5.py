@@ -734,21 +734,40 @@ S3S_CLOSING_COMMIT = "bf83cf52b92f1fea57d6c09cf20fdcbc8ec941da"
 # ══════════════════════════════════════════════════════════════════════════════
 #  45-49. No candidate 004, no train-v3, no authority, no leaked body
 # ══════════════════════════════════════════════════════════════════════════════
-def test_no_candidate_004_identity_exists_anywhere_in_the_repository():
-    """S3S froze the exam. It may not name, design, configure or train the student."""
+#: The commit S3S sealed the `eval-v5` freeze at, from the generation-7 snapshot's
+#: `subject_state_commit`. The candidate-blindness claim is a property of THIS tree.
+S3S_FREEZE_COMMIT = "e52129cc819433af83789f042d7bf13ea4d83014"
+
+
+def test_the_eval_v5_freeze_commit_named_no_candidate_004():
+    """S3S froze the exam. It may not name, design, configure or train the student.
+
+    RESCOPED AT S3V, from the LIVE tree to the sealed freeze commit, because the live
+    reading asserted something S3S never claimed. Candidate-blindness is a statement about
+    what the freezing session could SEE: at `e52129c` no candidate 004 existed, so `v5`
+    cannot have been shaped around it. It is not a statement that candidate 004 may never
+    exist afterwards -- S3U designed it, S3V trained it, and both were supposed to.
+
+    Read live, the assertion would have forced a choice between deleting candidate 004's
+    tracked evidence and deleting the test, and the freeze's actual guarantee would have
+    been lost either way. Read at the commit, it holds forever and no later milestone can
+    weaken it: rewriting `e52129c` would break the control plane's hash chain.
+    """
     import subprocess
 
     root = _repo_root()
     try:
-        tracked = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True,
-                                 text=True, timeout=60, check=False)
+        tracked = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", S3S_FREEZE_COMMIT],
+            cwd=root, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git here
-        pytest.skip("git is not available to enumerate tracked files")
-    if tracked.returncode != 0:  # pragma: no cover
-        pytest.skip("this checkout is not a git repository")
+        pytest.skip("git is not available to enumerate the freeze commit")
+    if tracked.returncode != 0:  # pragma: no cover - shallow clone, or commit absent
+        pytest.skip("the S3S freeze commit is not present in this checkout")
     names = [p for p in tracked.stdout.split() if not p.endswith(".md")]
     assert [p for p in names if "quality-live-004" in p] == []
     assert [p for p in names if "candidate_004" in p or "candidate-004" in p] == []
+    assert [p for p in names if "candidate004" in p] == []
 
 
 def test_the_training_corpus_still_has_no_third_version():

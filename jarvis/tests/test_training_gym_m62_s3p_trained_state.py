@@ -100,6 +100,11 @@ _SANDBOX_FILES = (
     V.CURRENT_PATH, V.MIGRATION_MANIFEST_PATH, V.ARCHIVE_PATH, V.PROGRESS_PATH,
     V.HISTORY_INDEX_PATH, V.CURRENT_SCHEMA_PATH, V.SNAPSHOT_SCHEMA_PATH,
     V.TRAIN_RECEIPT_SCHEMA_PATH, V.CANDIDATE_003_TRAIN_RECEIPT,
+    # S3V. `check_training_receipt` walks EVERY `TRAINED_UNEVALUATED` candidate, so from
+    # generation 10 the sandbox needs candidate 004's receipt too. Without it the check
+    # reports a missing file for 004 and this file's candidate-003 assertions fail for a
+    # reason that has nothing to do with candidate 003.
+    V.CANDIDATE_004_TRAIN_RECEIPT,
 )
 
 

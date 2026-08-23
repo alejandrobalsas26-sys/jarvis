@@ -62,11 +62,24 @@ REFERENCE_LEARNING_RATE_TEXT = "1e-4"
 RULED_LEARNING_RATE_TEXT = "5e-5"
 
 
+#: The snapshot THIS file is about, named by path rather than followed from the live
+#: pointer. RESCOPED AT S3V, which is the documented pattern here for an assertion that
+#: compares a sealed milestone's property against LIVE state.
+#:
+#: Through generation 9 the two were the same document, so reading the pointer looked
+#: equivalent. It was not: it made every assertion below silently claim "and no later
+#: generation exists", so the moment S3V sealed generation 10 this file failed on
+#: candidate 004 having been trained -- which is not a defect in S3U and not something
+#: S3U's tests have any business asserting. A sealed generation is immutable; reading it
+#: by path is what makes these assertions true forever instead of true until the next
+#: milestone.
+S3U_SNAPSHOT = "0009-m62-s3u-candidate004-designed.json"
+
+
 @pytest.fixture(scope="module")
 def snapshot():
-    current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
     return json.loads(
-        (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+        (REPO / V.SNAPSHOT_DIR / S3U_SNAPSHOT).read_text(encoding="utf-8"))
 
 
 @pytest.fixture()
@@ -151,11 +164,22 @@ def test_the_generation_advanced_by_one_from_the_recorded_parent(snapshot):
     assert parent["state_generation"] == EXPECTED_GENERATION - 1
 
 
-def test_the_current_pointer_names_the_generation_nine_snapshot(snapshot):
+def test_the_generation_nine_snapshot_is_still_byte_exact():
+    """RESCOPED AT S3V. This asserted the LIVE pointer still named generation 9, which
+    stopped being true the moment a later milestone sealed one -- and "no successor
+    exists" was never S3U's claim to make.
+
+    What S3U is owed forever is that its own generation was not rewritten. A superseded
+    snapshot is never revised, so its digest is checked against the bytes on disk here,
+    and the live pointer is checked only for the property that must hold at EVERY
+    generation: that it is internally consistent."""
+    data = (REPO / V.SNAPSHOT_DIR / S3U_SNAPSHOT).read_bytes()
+    assert V.sha256_bytes(data) == (
+        "4b6f1c9b1d5e512ecd22a66849245709204ed69c1c5ad25dd26cca9766022c98")
     current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
-    assert current["state_generation"] == EXPECTED_GENERATION
-    data = (REPO / current["latest_snapshot_path"]).read_bytes()
-    assert current["latest_snapshot_sha256"] == V.sha256_bytes(data)
+    assert current["state_generation"] >= EXPECTED_GENERATION
+    live = (REPO / current["latest_snapshot_path"]).read_bytes()
+    assert current["latest_snapshot_sha256"] == V.sha256_bytes(live)
 
 
 def test_the_snapshot_is_within_its_reviewed_budget(snapshot):
