@@ -612,18 +612,41 @@ def test_the_two_configurations_are_distinct_identities(reference, experiment):
 # ══════════════════════════════════════════════════════════════════════════════
 #  10. No capability arrived with the design
 # ══════════════════════════════════════════════════════════════════════════════
-def test_no_adapter_run_directory_or_ledger_entry_exists_for_the_fourth_candidate():
-    assert not (REPO / "jarvis/training_adapters" / CANDIDATE_004_ID).exists()
-    assert not (REPO / "jarvis/training_runs/runs" / CANDIDATE_004_ID).exists()
+def test_the_fourth_candidate_was_trained_exactly_once():
+    """RESCOPED AT S3V, for the reason this file rescopes rather than deletes.
+
+    Through generation 9 this asserted that candidate 004 had NO run, NO adapter and NO
+    ledger entry, because S3U designed it and trained nothing. S3V then spent one
+    plan-bound single-use TRAIN authority on it, so the old assertion is now false about
+    LIVE state while remaining true about S3U -- and a test that merely deleted itself at
+    the moment the thing it guarded began to exist would have stopped guarding anything.
+
+    What survives the transition is the property that actually matters and is permanent:
+    the authority was single-use, so there is EXACTLY ONE run and EXACTLY ONE terminal
+    event. A second start would be a retry nothing authorised.
+
+    The ledger is a gitignored runtime tree, so its absence is not a failure: a fresh
+    clone legitimately has none of it, and the portable receipt carries the history.
+    """
     ledger = REPO / "jarvis/training_runs/training_runs.jsonl"
-    if ledger.is_file():
-        assert CANDIDATE_004_ID not in ledger.read_text(encoding="utf-8")
+    if not ledger.is_file():
+        pytest.skip("the gitignored training ledger is not present on this host")
+    events = [json.loads(line) for line in
+              ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    mine = [e for e in events if e.get("run_id") == CANDIDATE_004_ID]
+    assert [e.get("event") for e in mine] == ["started", "completed"]
+    assert len({e.get("plan_hash") for e in mine}) == 1
 
 
-def test_no_receipt_exists_for_the_fourth_candidate():
-    """A receipt is evidence of an operation. No operation has happened."""
+def test_exactly_one_receipt_exists_for_the_fourth_candidate():
+    """RESCOPED AT S3V. A receipt is evidence of an operation, and now one has happened.
+
+    It must be a TRAINING receipt and nothing more: an evaluation receipt for this
+    candidate would mean `eval-v5` had been spent, which no authority permits.
+    """
     receipts = REPO / "state/m62/receipts"
-    assert not any(CANDIDATE_004_ID in p.name for p in receipts.iterdir())
+    mine = sorted(p.name for p in receipts.iterdir() if CANDIDATE_004_ID in p.name)
+    assert mine == [f"{CANDIDATE_004_ID}.train.json"]
 
 
 def test_the_generator_carries_no_spendable_token_literal():

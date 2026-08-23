@@ -198,15 +198,33 @@ def test_the_three_earlier_candidates_are_unchanged(snapshot):
         assert after[cid] == entry, f"{cid} moved"
 
 
-def test_the_verifier_pins_candidate_004_with_no_adapter():
-    assert V.FROZEN_CANDIDATES[CANDIDATE_004_ID] == ("DESIGNED_UNTRAINED", None)
+def test_the_verifier_pins_candidate_004_as_trained_and_unevaluated():
+    """RESCOPED AT S3V. Through generation 9 this pinned ``("DESIGNED_UNTRAINED", None)``:
+    S3U designed candidate 004 and produced no weights, and ``None`` WAS the whole content
+    of that state. S3V spent one plan-bound TRAIN authority, so the pin moves with it.
+
+    The digest is asserted to be candidate 004's OWN, not merely non-null and not candidate
+    003's: a fourth candidate inheriting a third's weights digest is exactly the
+    substitution this pair exists to catch.
+    """
+    status, adapter = V.FROZEN_CANDIDATES[CANDIDATE_004_ID]
+    assert status == "TRAINED_UNEVALUATED"
+    assert adapter == (
+        "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67")
+    assert adapter != V.FROZEN_CANDIDATES[CANDIDATE_003_ID][1]
 
 
-def test_no_receipt_or_runtime_artefact_exists_for_candidate_004():
-    assert not any(CANDIDATE_004_ID in p.name
-                   for p in (REPO / "state/m62/receipts").iterdir())
-    assert not (REPO / "jarvis/training_adapters" / CANDIDATE_004_ID).exists()
-    assert not (REPO / "jarvis/training_runs/runs" / CANDIDATE_004_ID).exists()
+def test_candidate_004_has_a_training_receipt_and_no_evaluation_receipt():
+    """RESCOPED AT S3V. A training receipt now exists because a training run happened.
+
+    An EVALUATION receipt must NOT: that would mean `eval-v5` had been spent, and no EVAL
+    authority has ever existed for this candidate. Runtime artefacts are deliberately not
+    asserted either way -- they are gitignored, and a trained candidate stays trained after
+    its run tree is deleted.
+    """
+    names = sorted(p.name for p in (REPO / "state/m62/receipts").iterdir()
+                   if CANDIDATE_004_ID in p.name)
+    assert names == [f"{CANDIDATE_004_ID}.train.json"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

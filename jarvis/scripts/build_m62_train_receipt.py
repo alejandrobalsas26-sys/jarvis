@@ -47,11 +47,20 @@ if str(_ROOT) not in sys.path:  # pragma: no cover - layout shim, as the sibling
 
 RECEIPT_SCHEMA_VERSION = "m62.train_receipt.1"
 
-#: The milestone that designed the candidate, and the one that trained it. Recorded so a
-#: reader can see that the design and the execution are two separate commits and two
-#: separate operator decisions.
-DESIGN_MILESTONE = "S3O"
-TRAINING_MILESTONE = "S3P"
+#: The milestone that trained each candidate, keyed by the production generator's
+#: candidate key. Recorded beside the DESIGN milestone so a reader can see that the design
+#: and the execution are two separate commits and two separate operator decisions.
+#:
+#: A MAP rather than the single constant this file carried through S3P, because a constant
+#: silently re-attributed every later candidate to the milestone that trained the FIRST
+#: one: candidate 004 was designed by S3U and trained by S3V, and a receipt claiming S3O /
+#: S3P for it would be false provenance sealed into portable evidence. A candidate absent
+#: here is a REFUSAL, never a default -- guessing a milestone is the failure this replaced.
+#:
+#: The DESIGN milestone is not duplicated here at all: it is re-derived from the production
+#: generator's own ``CANDIDATES`` entry, so the receipt records a derivation rather than a
+#: second copy that could disagree with the design authority.
+TRAINING_MILESTONES: dict[str, str] = {"003": "S3P", "004": "S3V"}
 
 #: The authority form, WITHOUT the plan hash that completes it. Naming the shape is
 #: documentation; naming the instance would be handing over the capability.
@@ -124,6 +133,22 @@ def build_receipt(run_directory: str | Path, *, candidate: str,
     if not isinstance(policy, ReasoningPolicy):  # pragma: no cover - defensive
         raise TypeError("the generator returned a non-enum reasoning policy")
 
+    # The DESIGN milestone is the generator's own; the TRAINING milestone is this file's,
+    # because it is a property of the EXECUTION rather than of the design. Both refuse
+    # rather than default: a receipt that guessed either would be false provenance.
+    design_milestone = generator.CANDIDATES[key].get("milestone", "")
+    if not design_milestone:
+        raise ValueError(
+            f"{candidate!r} names no design milestone in the production generator; a "
+            f"receipt may not invent the milestone that designed a candidate")
+    try:
+        training_milestone = TRAINING_MILESTONES[key]
+    except KeyError:
+        raise ValueError(
+            f"{candidate!r} has no recorded training milestone; add it to "
+            f"TRAINING_MILESTONES rather than letting the receipt inherit another "
+            f"candidate's") from None
+
     # ── the canonical verifiers, run here rather than quoted ──────────────────
     lora_config = {**body["lora"]}
     run_problems = verify_completed_run(directory, lora=lora_config,
@@ -163,8 +188,8 @@ def build_receipt(run_directory: str | Path, *, candidate: str,
     payload = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "candidate_id": candidate,
-        "design_milestone": DESIGN_MILESTONE,
-        "training_milestone": TRAINING_MILESTONE,
+        "design_milestone": design_milestone,
+        "training_milestone": training_milestone,
         "design_commit": design_commit,
         "training_source_commit": training_source_commit,
 

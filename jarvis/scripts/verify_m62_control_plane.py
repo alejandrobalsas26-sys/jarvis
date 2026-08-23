@@ -448,6 +448,38 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
         "24ceb1e0677b14aaccaea2b667e6d7388530e73f2df4d7a463368500d818fc0f"),
 }
 
+#: S3V. ``dataset key -> (export manifest, train shard, validation shard)``, the SEALED
+#: export identities a training receipt is held to beyond its corpus manifest.
+#:
+#: THE GAP THIS CLOSES. Through S3P a receipt's corpus binding was its `manifest_hash`
+#: alone, so `export_manifest_hash`, `train_shard_hash` and `validation_shard_hash` could
+#: each be replaced wholesale and the verifier still passed: the receipt named the right
+#: corpus while claiming to have trained on material nothing checked. A candidate's train
+#: split is exactly what a reader most needs pinned, because substituting it is how a run
+#: silently trains on something other than what it says.
+#:
+#: These are PINNED rather than re-derived on purpose. The dataset store is a gitignored
+#: runtime tree, so a fresh clone cannot rebuild these digests; pinning them is what makes
+#: the binding portable. They are content digests of an immutable promoted export, so
+#: pinning them dates nothing and a legitimate corpus change is a NEW VERSION with its own
+#: row, never an edit to this one.
+FROZEN_TRAIN_EXPORTS: dict[str, tuple[str, str, str]] = {
+    "m62-defensive-quality-train v2": (
+        "82780fa0edc4c99198d0074a8a01b08507fa3eed54b4af50c3e045d5e07ae921",
+        "a02797f85d11498103918df9114ed4496e232a9a2c88b738f36f8326a72e1c7e",
+        "ae6ffe204df4d2b60b2215aa38a641331cf56d999cc022c24f538fba891bb764"),
+}
+
+#: S3V. ``candidate_id -> adapter artifact-set hash``. The adapter's SET digest covers the
+#: whole artefact set rather than the weights file alone, so it is the one identity that
+#: notices a file appearing or disappearing beside `adapter_model.safetensors`. It cannot
+#: be re-derived without the gitignored run tree, which is precisely why the sealed value
+#: is recorded here: otherwise a mutated artifact-set hash is accepted by every check.
+FROZEN_ADAPTER_ARTIFACT_SETS: dict[str, str] = {
+    "qwen3-06b-lora-quality-live-004":
+        "326678618101eb4eec0a12b89a5e02f89340148111d5f4adf97d6a04f449b864",
+}
+
 #: ``candidate_id -> (status, adapter_sha256 or None)``
 FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-001": (
@@ -472,12 +504,18 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-003": (
         "EVALUATED_NOT_ELIGIBLE",
         "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6"),
-    # S3U designed candidate 004 after an explicit human operator ruling and trained
-    # NOTHING. `None` is the adapter digest because no adapter exists, and that is the
-    # entire content of DESIGNED_UNTRAINED: a configuration this repository can produce,
-    # and no weights. `check_candidate_design` re-derives the design from the production
-    # generator, so this pair agreeing with the snapshot is not on its own a pass.
-    "qwen3-06b-lora-quality-live-004": ("DESIGNED_UNTRAINED", None),
+    # S3U designed candidate 004 after an explicit human operator ruling; S3V then spent
+    # ONE plan-bound single-use TRAIN authority on it and evaluated nothing. The digest is
+    # the adapter S3V actually produced, and it is NOT candidate 003's: a fourth candidate
+    # inheriting a third's weights digest is precisely the substitution this pair exists to
+    # catch. `check_candidate_design` re-derives the single-axis design from the production
+    # generator and `check_training_receipt` re-derives the trained claim from the portable
+    # receipt, so this pair agreeing with the snapshot is not on its own a pass.
+    # TRAINED_UNEVALUATED, never EVALUATED_*: eval-v5 is untouched and no EVAL authority
+    # has ever existed for this candidate.
+    "qwen3-06b-lora-quality-live-004": (
+        "TRAINED_UNEVALUATED",
+        "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67"),
 }
 
 #: The placeholder identity generation 1 carried, and what S3O resolved it to.
@@ -519,6 +557,14 @@ OPERATOR_RULING_S3U = f"{STATE_DIR}/rulings/0001-s3u-candidate004-learning-rate.
 #: S3P. The portable receipt that backs candidate 003's training history.
 CANDIDATE_003_TRAIN_RECEIPT = (
     f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-003.train.json")
+
+#: S3V. The portable receipt that backs candidate 004's TRAINED_UNEVALUATED claim. Named
+#: separately from candidate 003's rather than derived from the id, so a receipt pointer
+#: that silently swapped to the other candidate's file is a mismatch this file can state.
+#: `check_training_receipt` reads the pointer from the SNAPSHOT and re-derives everything
+#: from the receipt itself; this constant is the second witness, never the only one.
+CANDIDATE_004_TRAIN_RECEIPT = (
+    f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-004.train.json")
 
 #: S3Q.0.2. The portable receipt that backs candidate 003's EVALUATED_NOT_ELIGIBLE claim,
 #: and the pre-repair measurement witness it binds its evaluation source through.
@@ -3136,6 +3182,23 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
                         f"{generator.CANDIDATES[key]['dataset_version']}, the receipt "
                         f"records {dataset.get('version')}")
 
+        # ── S3V: the EXPORT it actually trained on, not merely the corpus it names ──
+        # The manifest above identifies the dataset; these identify the material. Left
+        # unbound, a receipt could name the sealed corpus while recording an export,
+        # train shard or validation shard that nothing in the repository ever promoted.
+        exports = FROZEN_TRAIN_EXPORTS.get(declared)
+        if exports is None:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: {declared!r} has no sealed export identity, so the "
+                        f"material this run trained on is unverifiable")
+        else:
+            for field, sealed in zip(("export_manifest_hash", "train_shard_hash",
+                                      "validation_shard_hash"), exports):
+                if dataset.get(field) != sealed:
+                    report.fail("TRAINING_RECEIPT",
+                                f"{cid}: the receipt's {field} {dataset.get(field)} is "
+                                f"not the sealed {sealed}")
+
         # ── THE AXIS, re-derived and required to still be the only one ─────────
         policy = generator.candidate_reasoning_policy(key)
         representation = receipt.get("representation", {})
@@ -3210,6 +3273,31 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
                         f"{cid}: the receipt configures "
                         f"{execution.get('epochs_configured')} epochs, the design "
                         f"declares {option['epochs']}")
+        # S3V: the epochs it CONFIGURED were bound above; the epochs it COMPLETED were
+        # not, so a run that stopped a full pass early could still call itself trained.
+        completed_epochs = execution.get("epochs_completed")
+        if (completed_epochs is None
+                or not math.isfinite(float(completed_epochs))
+                or float(completed_epochs) != float(option["epochs"])):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: {completed_epochs} of {option['epochs']} epochs "
+                        f"completed. A run that stopped short trained a different "
+                        f"candidate than the one designed")
+        # S3V: the ledger tells one story or the receipt is not evidence of it. Exactly
+        # one start and one terminal event, under exactly one plan.
+        events = receipt.get("ledger", {}).get("events", {})
+        if events.get("started") != 1:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the ledger records {events.get('started')} start(s); a "
+                        f"single-use authority starts exactly one run, and a second "
+                        f"start is a retry nothing authorised")
+        if events.get("completed") != 1:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the ledger records {events.get('completed')} completion "
+                        f"event(s) for a run the receipt calls SUCCESS")
+        if len(set(receipt.get("ledger", {}).get("plan_hashes", []))) != 1:
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: the ledger names more than one plan for this identity")
         if not execution.get("final_validation_present"):
             report.fail("TRAINING_RECEIPT",
                         f"{cid}: no closing validation pass is recorded (D31)")
@@ -3240,6 +3328,38 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
         if not adapter.get("artifact_set_hash"):
             report.fail("TRAINING_RECEIPT",
                         f"{cid}: the receipt records no artifact-set hash")
+        else:
+            # S3V: presence was checked; IDENTITY was not, so the one digest that covers
+            # the whole artefact set could be replaced freely. Sealed per candidate
+            # because it cannot be re-derived without the gitignored run tree.
+            sealed_set = FROZEN_ADAPTER_ARTIFACT_SETS.get(cid)
+            if sealed_set is None:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: no sealed artifact-set hash is recorded for this "
+                            f"candidate, so its artefact set is unverifiable")
+            elif adapter.get("artifact_set_hash") != sealed_set:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the receipt's artifact-set hash "
+                            f"{adapter.get('artifact_set_hash')} is not the sealed "
+                            f"{sealed_set}")
+        # S3V: the LoRA geometry the design declares, re-derived rather than pinned --
+        # rank, alpha and dropout are the dials candidate 004's whole single-axis claim
+        # rests on staying equal to candidate 003's.
+        for field_name, dial in (("lora_rank", "lora_rank"),
+                                 ("lora_alpha", "lora_alpha"),
+                                 ("lora_dropout", "lora_dropout")):
+            if adapter.get(field_name) != option[dial]:
+                report.fail("TRAINING_RECEIPT",
+                            f"{cid}: the adapter records {field_name} "
+                            f"{adapter.get(field_name)}, the design declares "
+                            f"{option[dial]}")
+        # S3V: two parameter counts that must agree. A LoRA adapter's parameters ARE its
+        # trainable parameters; a receipt where they diverge is describing two adapters.
+        if adapter.get("adapter_parameter_count") != adapter.get("trainable_parameters"):
+            report.fail("TRAINING_RECEIPT",
+                        f"{cid}: adapter_parameter_count "
+                        f"{adapter.get('adapter_parameter_count')} != "
+                        f"trainable_parameters {adapter.get('trainable_parameters')}")
         for field_name, expected in STRUCTURAL_ADAPTER_CONTROL.items():
             if adapter.get(field_name) != expected:
                 report.fail("TRAINING_RECEIPT",
