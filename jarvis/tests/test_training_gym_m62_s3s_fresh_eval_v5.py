@@ -147,8 +147,14 @@ def _repo_root():
 #  1-4. v5 exists as a NEW version, with a declared lineage
 # ══════════════════════════════════════════════════════════════════════════════
 def test_v5_is_a_new_version_and_the_old_ones_still_exist():
-    assert sorted(BC.CORPUS_VERSIONS) == ["v1", "v2", "v3", "v4", "v5"]
-    assert BC.LATEST_DATASET_VERSION == "v5"
+    # V69 M62 S3X.1 added v6 -- the fresh holdout the eval-v5 ELIGIBILITY retirement
+    # requires -- and moved LATEST_DATASET_VERSION onto it, the same rescoping S3S itself
+    # performed on S3N's equivalent assertion. What S3S owns is that v5 EXISTS, still
+    # builds and was not replaced or rewritten. Its retirement is an eligibility ruling,
+    # not a deletion, and is asserted at its own surface rather than here.
+    assert sorted(BC.CORPUS_VERSIONS)[:5] == ["v1", "v2", "v3", "v4", "v5"]
+    assert "v5" in BC.CORPUS_VERSIONS
+    assert BC.LATEST_DATASET_VERSION >= "v5"
 
 
 def test_v5_declares_an_explicit_lineage_onto_v4_rather_than_discovering_one():
@@ -158,8 +164,15 @@ def test_v5_declares_an_explicit_lineage_onto_v4_rather_than_discovering_one():
 
 
 def test_an_undeclared_version_is_refused_rather_than_promoted_as_a_genesis():
+    """The property is that an UNDECLARED version is refused, not that ``v6`` is one.
+
+    ``v6`` was undeclared when S3S wrote this and is declared now, so the probe moved to a
+    version nothing has ever declared -- the same move S3N and S3I.1 made before it. Had
+    the assertion been left naming ``v6``, freezing ``v6`` would have "failed" a test whose
+    subject is the D34 fail-closed rule and nothing else.
+    """
     with pytest.raises(ValueError, match="canonical lineage"):
-        BC.canonical_parent_for("v6")
+        BC.canonical_parent_for("v9")
 
 
 def test_v5_is_not_an_alias_for_v4():
@@ -292,7 +305,7 @@ def test_the_body_free_set_identities_are_the_frozen_ones(v5_rows):
 def test_v5_is_one_of_the_held_out_versions_the_training_corpus_is_checked_against():
     """A version absent from this tuple is a version nothing is ever checked against."""
     assert "v5" in QC.HELD_OUT_VERSIONS
-    assert sorted(QC.HELD_OUT_VERSIONS) == ["v1", "v2", "v3", "v4", "v5"]
+    assert sorted(QC.HELD_OUT_VERSIONS)[:5] == ["v1", "v2", "v3", "v4", "v5"]
 
 
 @pytest.mark.parametrize("train_version", ("v1", "v2"))

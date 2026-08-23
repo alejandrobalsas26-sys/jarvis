@@ -84,11 +84,14 @@ ACTOR = "local-operator"
 #: The held-out corpora this material must never overlap. Every version is checked —
 #: including ``v3``, the fresh eligibility holdout S3J froze before candidate 002 was
 #: trained, ``v4``, the one S3N froze before any third candidate existed, and ``v5``, the
-#: one S3S froze before any fourth candidate exists. A held-out version absent from this
+#: one S3S froze before any fourth candidate existed and S3X.0 later retired from
+#: ELIGIBILITY use, unspent, and ``v6``, the fresh one S3X.1 froze to replace it. A
+#: retired holdout stays in this tuple: retirement bars it as EVIDENCE, and training on
+#: material it contains would still be contamination. A held-out version absent from this
 #: tuple is a version this corpus is never checked against, so adding one here is part of
 #: freezing it, not a follow-up.
 HELD_OUT_DATASET_ID = "m62-defensive-eval"
-HELD_OUT_VERSIONS: tuple[str, ...] = ("v1", "v2", "v3", "v4", "v5")
+HELD_OUT_VERSIONS: tuple[str, ...] = ("v1", "v2", "v3", "v4", "v5", "v6")
 
 #: The frozen digest of ``m62-defensive-quality-train v1`` — the corpus S3H trained
 #: ``qwen3-06b-lora-quality-live-001`` on, promoted and verified on disk.
