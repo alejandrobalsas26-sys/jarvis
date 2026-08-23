@@ -26,9 +26,11 @@ into an unbounded one. It fits because of **lossless compaction of prose that ge
   to restate at length live on the ``frozen_invariants`` surface, which is where permanent
   rules belong. ``_check_ruled_out`` enforces the coverage as substrings precisely so that
   the wording stays free while the coverage does not.
-* Four limitation entries are MERGED with the entry that already carried their subject:
-  the holdout root-independence pair, the two environmental optional-dependency facts, the
-  D33 corollary and its own defect, and the two holdout-authoring firewalls.
+* Three limitation entries are MERGED with the entry that already carried their subject:
+  the holdout root-independence pair, the two environmental optional-dependency facts, and
+  the two holdout-authoring firewalls. A fourth merge -- the D33 corollary into D33's own
+  entry -- was ABANDONED: the two facts together exceed the 320-character per-entry cap,
+  and the only way to fit them was to drop content, which is not compaction.
 
 Every clause that must survive that compaction is listed in :data:`CARRIED_FORWARD` and
 checked HERE, fail-closed, before the projection is even measured — a compaction that
@@ -61,6 +63,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: The headroom the projected generation must clear. Not the schema budget: a snapshot
 #: that fits with nothing to spare is one truthful sentence away from not fitting.
 REQUIRED_HEADROOM_BYTES = 1024
+
+#: The per-entry character cap the verifier enforces on every snapshot string. Mirrored
+#: here so a projection fails before it is written rather than after it is reviewed.
+MAX_ENTRY_CHARS = 320
 
 EXPECTED_PARENT_SHA256 = (
     "6d04f5ee05f60c497e9396d861e7074deb5d02790219ff9bbba8cd85be81dc54")
@@ -115,6 +121,13 @@ CARRIED_FORWARD: tuple[tuple[str, str], ...] = (
     ("5e-5", "next_milestone.ruled_out"),
     # The budget rule itself, which a capacity milestone is the likeliest to erode.
     ("raising a reviewed budget", "next_milestone.ruled_out"),
+    # The S3N.1 standing-prohibition marker set, which a compaction is exactly what would
+    # erode. Checked here as well as there, so the producer refuses before the suite does.
+    ("learning-rate", "next_milestone.ruled_out"),
+    ("structured rows", "next_milestone.ruled_out"),
+    ("response schema", "next_milestone.ruled_out"),
+    ("D38 gate", "next_milestone.ruled_out"),
+    ("D35", "next_milestone.holdout_access"),
     # The merged limitations. Every subject that entered a merge must leave it.
     ("promotion_plan_hash", "limitations"),
     ("openai", "limitations"),
@@ -188,19 +201,23 @@ def project_gen13(parent: dict, *, subject_commit: str, parent_sha256: str,
     })
     g["datasets"].sort(key=lambda d: (d["dataset_id"], d["version"]))
 
-    # ── Invariants: one amendment, one extension, no deletion ────────────────────
+    # ── Invariants: ONE addition. Nothing existing is reworded ───────────────────
+    #
+    # Invariants 25 and 26 are left byte-exact. Both sit within a few characters of the
+    # 320-character per-entry cap -- the firewall that stops a body arriving in
+    # instalments -- so the new rule goes in its OWN entry rather than being appended to
+    # the body-blindness gate it belongs beside. That the cap forces a separate entry is
+    # a better outcome anyway: this is a distinct rule about WHO may evaluate, not another
+    # clause about which routes may render.
     inv = g["frozen_invariants"]
-    _replace(inv, 25, "ORCHESTRATOR BODY-BLINDNESS IS A GATE",
-             inv[25].rstrip() + " A session that LEGITIMATELY authored a holdout is "
-                                "permanently disqualified from evaluating any candidate "
-                                "against it.")
-    _replace(inv, 26, "EVAL_V5_ELIGIBILITY_USE: RETIRED",
-             "EVAL_V5_ELIGIBILITY_USE: RETIRED, prospectively from generation 12. "
-             "eval-v5 may never be eligibility evidence for candidate 004 or any later "
-             "candidate. It stays FROZEN_UNUSED, spent_by null, because NO MODEL EVER "
-             "SAW IT; its preregistered body-blindness precondition failed "
-             "pre-authorisation. FRESH_V6_REQUIRED, satisfied at generation 13 by "
-             "eval-v6 frozen unspent; the retirement survives it unconditionally.")
+    assert inv[25].startswith("ORCHESTRATOR BODY-BLINDNESS IS A GATE")
+    assert inv[26].startswith("EVAL_V5_ELIGIBILITY_USE: RETIRED")
+    inv.append(
+        "A HOLDOUT AUTHOR IS NEVER ITS EVALUATOR. A session that legitimately authored a "
+        "holdout has seen its bodies and is permanently disqualified from evaluating any "
+        "candidate against it, as S3X.0 was from authoring the eval-v6 it specified. "
+        "PROCEDURAL, carried by ceremony and a new session; no check here detects a "
+        "breach.")
 
     # ── Limitations: four lossless merges, two factual advances ──────────────────
     lim = g["limitations"]
@@ -215,17 +232,15 @@ def project_gen13(parent: dict, *, subject_commit: str, parent_sha256: str,
              "The authoritative interpreter lacks two declared dependencies: openai's "
              "absence alone fails 62 tests in three files, and transformers' absence "
              "skips the two S3O tokenizer tests. Environmental, reproduced at pristine "
-             "HEAD, never reconciled across interpreters by arithmetic; the training venv "
-             "has no pytest and installing either is forbidden.")
+             "HEAD, never reconciled by arithmetic; the training venv has no pytest and "
+             "installing either is barred.")
     _replace(lim, 12, "The two S3O tokenizer tests skip", "")
-    _replace(lim, 19, "D28, D29 and D33 stay OPEN",
-             "D28, D29 and D33 stay OPEN and bound every measurement: "
-             "tool_call_validity_rate is VACUOUS so the six tool_call_schema tasks decide "
-             "nothing; timeout_s is hashed into the generation policy but never enforced, "
-             "so timeout_rate is VACUOUS and every S3Q.0 surface quoting the 300 s "
-             "ceiling reports timeout_enforced false beside it; D29 bounds refusal "
-             "figures in BOTH directions.")
-    _replace(lim, 20, "Every S3Q.0 surface quoting", "")
+    # The D33 corollary was NOT merged into D33's own entry. Both facts together run to
+    # 346 characters, over the 320-character cap, and the only way to fit them was to drop
+    # content -- which is not compaction. They stay two entries, and the capacity gate is
+    # cleared without them.
+    assert lim[19].startswith("D28, D29 and D33 stay OPEN")
+    assert lim[20].startswith("Every S3Q.0 surface quoting")
     _replace(lim, 26, "eval-v4 is spent",
              "eval-v4 is spent: no ablation, retry or re-scoring of candidate 003 against "
              "it is possible in any circumstance. The fifth holdout D35 requires WAS "
@@ -259,40 +274,41 @@ def project_gen13(parent: dict, *, subject_commit: str, parent_sha256: str,
         "training_corpus": "m62-defensive-quality-train v2, spent on candidates 003 and "
                            "004, reused UNCHANGED. No train-v3 exists or is proposed; "
                            "S3Y trains nothing.",
-        "evaluation_holdout": "eval-v6, FROZEN_UNUSED, spent_by null, frozen "
-                              "candidate-blind at generation 13 and the ONLY fresh "
-                              "eligibility corpus that exists. eval-v5 is RETIRED from "
-                              "eligibility use and eval-v4 is USED_IMMUTABLE.",
+        "evaluation_holdout": "eval-v6, FROZEN_UNUSED, spent_by null, the ONLY fresh "
+                              "eligibility corpus. eval-v5 is RETIRED from eligibility "
+                              "use and eval-v4 is USED_IMMUTABLE.",
         "holdout_access": "Only the evaluation runtime may render an eval-v6 body; D44's "
-                          "body-blindness gate applies unchanged to every orchestration "
-                          "session. eval-v4 and eval-v5 bodies stay unread permanently.",
+                          "body-blindness gate applies unchanged. eval-v4 is spent and "
+                          "development evidence under D35; its bodies and eval-v5's stay "
+                          "unread permanently.",
         "authority_required": [
             "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, bound to a "
             "plan derived from a post-S3X.1 HEAD and naming eval-v6. None has ever "
             "existed for candidate 004",
-            "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before any "
-            "further training. The S3V one is SPENT and carries nothing forward",
-            "a separate explicit human decision before any promotion, which no evaluation "
-            "result implies",
+            "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before "
+            "any further training; the S3V one is SPENT",
+            "a separate explicit human decision before any promotion, which no result "
+            "implies",
         ],
         "ruled_out": [
             "using eval-v5 as eligibility evidence, creating EVAL authority naming it, "
             "calling it fresh, marking it USED_IMMUTABLE or setting spent_by non-null. "
             "NO MODEL SAW IT: the retirement is prospective and unconditional, and the "
             "lifecycle fact and the eligibility ruling may not be forged into each other",
-            "reusing eval-v4 for any candidate, or reading, quoting or reconstructing "
-            "eval-v4, eval-v5 or leaked material in any session",
+            "reusing eval-v4, or reading, quoting or reconstructing eval-v4, eval-v5 "
+            "or leaked material in any session",
             "the eval-v6 authoring session evaluating candidate 004, or any session "
-            "rendering an eval-v6 body outside the evaluation runtime",
-            "recording candidate 004 as evaluated, eligible or promoted without a valid "
-            "portable receipt re-derived by the production decide_eligibility",
-            "relaxing body-blindness or any preregistered gate now that one has failed; "
-            "weakening a gate after it fails is post-hoc",
+            "rendering an eval-v6 body outside the runtime",
+            "recording candidate 004 as evaluated, eligible or promoted without a "
+            "portable receipt re-derived by production decide_eligibility",
+            "relaxing body-blindness or any preregistered gate now that one has "
+            "failed, which is post-hoc weakening",
             "any epoch, rank, alpha or dropout change, any dial slaved to the learning "
             "rate, a second axis, ATTENTION_ONLY, or any module-surface change",
-            "creating train-v3, adding, deleting or rebalancing train-v2 rows, "
-            "strengthening the response schema, or changing gates, graders, thresholds, "
-            "the refusal detector, max_new_tokens, the seed or the reasoning policy",
+            "creating train-v3, adding structured rows, deleting or rebalancing "
+            "train-v2 rows, strengthening the response schema, or changing gates, "
+            "graders, thresholds, the refusal detector, max_new_tokens, the seed or the "
+            "reasoning policy, or creating a D38 gate or a D43 gate",
             "reading candidate 004's learning-rate permission as general: the S3U ruling "
             "superseded the generation-8 clause for candidate 004 only, prospectively, "
             "and only to 5e-5",
@@ -310,6 +326,18 @@ def project_gen13(parent: dict, *, subject_commit: str, parent_sha256: str,
     g["test_baseline"]["passed"] = passed
     g["test_baseline"]["skipped"] = skipped
     g["test_baseline"]["failed"] = failed
+
+    # The 320-character per-entry cap is a FIREWALL, not a style rule: it is what stops a
+    # held-out body being smuggled into state one instalment at a time. The verifier
+    # enforces it, and so does this, so a projection that would violate it never reaches
+    # the point of being measured, emitted or reviewed.
+    too_long = [f"{surface}[{i}] is {len(text)} characters"
+                for surface in ("frozen_invariants", "limitations")
+                for i, text in enumerate(g[surface]) if len(text) > MAX_ENTRY_CHARS]
+    if too_long:
+        raise RuntimeError(
+            f"entries exceed the {MAX_ENTRY_CHARS}-character control-plane cap: "
+            f"{too_long}")
 
     lost = check_carried_forward(g)
     if lost:

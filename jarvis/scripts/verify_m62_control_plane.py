@@ -309,11 +309,29 @@ def _eval_v5_task_ids() -> tuple[str, ...]:
 
 EVAL_V5_TASK_IDS = _eval_v5_task_ids()
 
+
+#: The 36 `eval-v6` task ids, from the body-free convention recorded in
+#: `V69_M62_S3X1_EVAL_V6_FREEZE.md`. The most load-bearing set of the three: `v6` is
+#: FROZEN_UNUSED, fresh, and is the corpus a future candidate-004 evaluation will actually
+#: be judged against, so a surface naming one of its tasks leaks the live exam.
+def _eval_v6_task_ids() -> tuple[str, ...]:
+    groups = (
+        ("he6-report-", 4), ("he6-evidence-", 4), ("he6-tool-", 2), ("he6-refusal-", 2),
+        ("sr6-refusal-", 6), ("sr6-safe-", 6),
+        ("adv6-refusal-", 4), ("adv6-report-", 3), ("adv6-evidence-", 3),
+        ("adv6-tool-", 2),
+    )
+    return tuple(f"{stem}{n:02d}" for stem, count in groups for n in range(1, count + 1))
+
+
+EVAL_V6_TASK_IDS = _eval_v6_task_ids()
+
 #: `version -> its task ids`. Every holdout whose ids a scanned surface must not name.
 #: A version missing from this map is a version no firewall check ever looks for.
 HELD_OUT_TASK_IDS: dict[str, tuple[str, ...]] = {
     "v4": EVAL_V4_TASK_IDS,
     "v5": EVAL_V5_TASK_IDS,
+    "v6": EVAL_V6_TASK_IDS,
 }
 
 # ── Closed vocabularies ──────────────────────────────────────────────────────────────
@@ -412,6 +430,7 @@ DATASET_ROLES = ("TRAINING_CORPUS", "EVALUATION_HOLDOUT")
 # agree with the milestone documents named in each entry's ``evidence`` pointer.
 EVAL_V4_PACK_HASH = "95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7"
 EVAL_V5_PACK_HASH = "287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6"
+EVAL_V6_PACK_HASH = "41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16"
 
 #: ``"<dataset_id> <version>" -> (status, manifest_hash)``
 FROZEN_DATASETS: dict[str, tuple[str, str]] = {
@@ -440,6 +459,13 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
     "m62-defensive-eval v5": (
         "FROZEN_UNUSED",
         "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"),
+    # S3X.1 froze v6 as the replacement the v5 ELIGIBILITY retirement requires. It is
+    # FRESH: no model has read it, and it is the corpus a future candidate-004 evaluation
+    # would be judged against. The one legal transition out is guarded by
+    # EVAL_AUTHORITY_CONSUMED, which no authority in this repository can supply.
+    "m62-defensive-eval v6": (
+        "FROZEN_UNUSED",
+        "413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6"),
     "m62-defensive-quality-train v1": (
         "USED_IMMUTABLE",
         "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a"),
@@ -2689,6 +2715,22 @@ def check_dataset_state(cp: ControlPlane, report: Report) -> None:
                     f"{EVAL_V5_PACK_HASH}")
     if v5.get("task_count") != 36:
         report.fail("DATASET_STATE", f"eval-v5 declares {v5.get('task_count')} tasks, not 36")
+
+    v6 = by_key.get("m62-defensive-eval v6", {})
+    if v6:
+        if v6.get("parent_manifest_hash") != FROZEN_DATASETS["m62-defensive-eval v5"][1]:
+            report.fail("DATASET_STATE",
+                        "eval-v6's parent is not eval-v5's frozen manifest; the D34 "
+                        "lineage rule is that a parent is DECLARED, never discovered, and "
+                        "a RETIRED parent is still a parent -- retirement rules on what "
+                        "may be measured against, not on where a corpus came from")
+        if v6.get("pack_hash") != EVAL_V6_PACK_HASH:
+            report.fail("DATASET_STATE",
+                        f"eval-v6's pack_hash {v6.get('pack_hash')} != the frozen S3X.1 "
+                        f"value {EVAL_V6_PACK_HASH}")
+        if v6.get("task_count") != 36:
+            report.fail("DATASET_STATE",
+                        f"eval-v6 declares {v6.get('task_count')} tasks, not 36")
 
     for entry in datasets:
         role = entry.get("role")

@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0012-m62-s3x0-holdout-firewall-recovery.json",
-  "latest_snapshot_sha256": "6d04f5ee05f60c497e9396d861e7074deb5d02790219ff9bbba8cd85be81dc54",
+  "latest_snapshot_path": "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json",
+  "latest_snapshot_sha256": "9f49c759b32c571b05b285be9da210da6a609c0aaea6e059010b07bcf2dc6f6c",
   "schema_version": "m62.control_plane.1",
-  "state_generation": 12,
-  "subject_state_commit": "dcd38cf573e75841581859ba3f95fb59a07afd57",
+  "state_generation": 13,
+  "subject_state_commit": "6667cf06468b7e8115d3d8411f379c127f36cb69",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

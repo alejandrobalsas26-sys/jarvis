@@ -168,7 +168,7 @@ and measures it. It is the same transform `--emit` writes, so the bytes measured
 bytes that land on disk, and it **fails closed**: `--emit` refuses if the gate does not
 pass, and refuses again if a stand-in digest would be written into real state.
 
-The first projection **FAILED** at 416 bytes of headroom. It passes now at **1 059**, and
+The first projection **FAILED** at 416 bytes of headroom. It passes now at **1 033**, and
 the difference is not a budget raise:
 
 > `SNAPSHOT_MAX_BYTES` stays 34 816. `PROGRESS_MAX_BYTES` stays 40 960.
@@ -183,11 +183,22 @@ duplicates**:
   on the `frozen_invariants` surface, which is where permanent rules belong.
   `_check_ruled_out` enforces coverage as substrings precisely so the wording stays free
   while the coverage does not.
-- **Four limitation entries were merged with the entry already carrying their subject**:
-  the holdout root-independence pair, the two environmental optional-dependency facts, the
-  D33 corollary and D33 itself, and the two holdout-authoring firewalls.
+- **Three limitation entries were merged with the entry already carrying their subject**:
+  the holdout root-independence pair, the two environmental optional-dependency facts, and
+  the two holdout-authoring firewalls.
 
-No defect, limitation, invariant or historical scientific fact was deleted to make room.
+A **fourth merge was attempted and abandoned**, which is the more useful fact. Every
+snapshot string is capped at **320 characters** — the firewall that stops a held-out body
+being smuggled into state one instalment at a time — and generation 12's entries already sit
+at up to 319. Folding the D33 corollary into D33's own entry came to 346 characters, and the
+only way to fit it was to drop content, which is not compaction. The two stay separate. For
+the same reason the new author-disqualification rule is its **own** invariant rather than a
+sentence appended to the body-blindness gate: invariants 25 and 26 are left **byte-exact**.
+The projector now enforces the 320-character cap itself, fail-closed, so a projection that
+would breach it is refused before it can be measured, emitted or reviewed.
+
+No defect, limitation, invariant or historical scientific fact was deleted to make room, and
+no existing invariant was reworded.
 Thirty named clauses are listed in `CARRIED_FORWARD` and checked **fail-closed inside the
 producer**, before the projection is measured — a compaction that drops a standing
 prohibition raises rather than reports. A separate test mutates the snapshot to prove that
@@ -195,8 +206,8 @@ check can actually fail.
 
 | | |
 |---|---|
-| Projected generation 13 | 33 757 bytes |
-| Headroom | **1 059** (floor 1 024) |
+| Projected generation 13 | 33 783 bytes |
+| Headroom | **1 033** (floor 1 024) |
 | `PROGRESS.md` | 40 592 bytes / 609 lines |
 | PROGRESS headroom | 368 bytes / 151 lines |
 | Compaction | LOSSLESS across 30 carried-forward clauses |
@@ -403,6 +414,31 @@ Generation 13 — `M62_S3X1_FRESH_EVAL_V6_FROZEN`, parent
 `eval-v6` is **not** preregistered as candidate 004's `evaluation_corpus`. The architecture
 binds that field when a run actually happens, and writing it early would record a binding
 no authority created.
+
+---
+
+## 10b — The trust boundary was extended to cover `eval-v6`
+
+A holdout the verifier does not know about is a holdout no firewall check ever looks for, so
+`verify_m62_control_plane.py` was extended rather than left to infer `v6` from the snapshot
+it is supposed to be checking:
+
+- **`FROZEN_DATASETS`** gains `m62-defensive-eval v6` → (`FROZEN_UNUSED`, manifest). This is
+  an *independent anchor*, not a second writable copy: the snapshot must agree with it, and
+  both must agree with this document.
+- **`EVAL_V6_PACK_HASH`**, plus lineage, pack and task-count checks beside `v4`'s and
+  `v5`'s. The lineage check states in its own failure message why a RETIRED parent is still
+  a parent.
+- **`HELD_OUT_TASK_IDS["v6"]`** — the 36 task ids, reconstructed from the body-free naming
+  convention. This is the load-bearing one: it puts `v6` into the three body-free surface
+  scans that already look for `v4` and `v5` ids, so `PROGRESS.md`, the control plane and the
+  milestone documents are now checked for the ids of the corpus a future evaluation will
+  actually use.
+
+The new anchor was confirmed **live before it was satisfied**: with `v6` authored but
+generation 13 not yet written, the verifier failed with exactly one problem —
+`m62-defensive-eval v6 is absent from the snapshot` — and historical generations were
+untouched, since `FROZEN_DATASETS` is checked against the *current* snapshot only.
 
 ---
 

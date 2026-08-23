@@ -49,6 +49,23 @@ def snapshot(current) -> dict:
     return json.loads((REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
 
 
+#: Generation 12 BY PATH, not by following ``current.json``.
+#:
+#: What S3X.0 sealed is a fact about ONE snapshot: that generation 12 is the milestone
+#: which retired eval-v5. Reading that through the current pointer also asserts, silently,
+#: that no later generation exists -- true by coincidence until S3X.1 wrote generation 13.
+#: The sealed half is therefore read from the sealed artefact, and the live pointer is
+#: checked separately for the property it actually owns: that it has not regressed behind
+#: the retirement.
+RECOVERY_SNAPSHOT_PATH = (
+    "state/m62/snapshots/0012-m62-s3x0-holdout-firewall-recovery.json")
+
+
+@pytest.fixture(scope="module")
+def recovery_snapshot() -> dict:
+    return json.loads((REPO / RECOVERY_SNAPSHOT_PATH).read_text(encoding="utf-8"))
+
+
 def _plane(snapshot: dict) -> V.ControlPlane:
     """A ControlPlane carrying *snapshot*. Only the snapshot is read by the check."""
     raw = V.canonical_bytes(snapshot)
@@ -151,9 +168,17 @@ def test_progress_keeps_both_of_its_budgets(current):
 # ══════════════════════════════════════════════════════════════════════════════
 #  2. The recovery generation says what it must
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_current_generation_is_the_recovery_one(snapshot):
-    assert snapshot["state_generation"] == RETIREMENT_GENERATION
-    assert snapshot["subject_state_milestone"] == "S3X.0"
+def test_the_recovery_generation_is_sealed_and_still_binds(recovery_snapshot, snapshot):
+    """RESCOPED at S3X.1, which wrote generation 13.
+
+    The sealed claim -- generation 12 is the S3X.0 recovery -- is asserted against
+    generation 12 itself, pinned by path, so it stays true no matter how far the control
+    plane advances. The live pointer is asserted only for what it owns: it may move
+    forward, and it may never regress behind the generation the retirement took effect at.
+    """
+    assert recovery_snapshot["state_generation"] == RETIREMENT_GENERATION
+    assert recovery_snapshot["subject_state_milestone"] == "S3X.0"
+    assert snapshot["state_generation"] >= RETIREMENT_GENERATION
 
 
 def test_candidate_004_is_trained_and_unevaluated(snapshot):
