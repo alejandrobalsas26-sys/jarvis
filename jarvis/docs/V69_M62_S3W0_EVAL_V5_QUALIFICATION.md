@@ -478,12 +478,16 @@ space. Both were therefore proved **before** generation 11 was written, by
 real snapshot — so the bytes measured are the bytes written.
 
 ```
-PROJECTED_GEN11_SNAPSHOT_BYTES:   31721      HEADROOM: 1047   PASS
-PROJECTED_GEN12_SNAPSHOT_BYTES:   31319      HEADROOM: 1449   PASS
-PROGRESS_BYTES:                   40044      HEADROOM:  916   PASS
-PROGRESS_LINES:                     609      HEADROOM:  151   PASS
+PROJECTED_GEN11_SNAPSHOT_BYTES:   31741      HEADROOM: 1027   PASS
+PROJECTED_GEN12_SNAPSHOT_BYTES:   31109      HEADROOM: 1659   PASS
+PROGRESS_BYTES:                   40317      HEADROOM:  643   PASS
+PROGRESS_LINES:                     610      HEADROOM:  150   PASS
 REQUIRED_HEADROOM_BYTES:           1024
 ```
+
+`--emit` is **fail-closed**: the tool refuses to write a snapshot whose capacity gate did
+not pass, because a state written past its own gate is one nobody proved room for and the
+next generation is what pays for it.
 
 The generation 12 projection is a **conservative shape, never a prediction**: it assumes
 the outcome that costs the most bytes to record truthfully — measured **NOT eligible**,
@@ -492,16 +496,26 @@ carrying a blocking gate, a regression that is not excluded and a security summa
 no figure; a projection carrying a delta or an interval would be a prediction about
 candidate 004 written down before the holdout was read. It works for either verdict.
 
+Generation 12 also **replaces** generation 11's forward-looking qualification entries
+rather than accumulating on top of them: "eligibility is unknown", "`v5` still has to be
+rebuilt" and "nothing has been loaded" are all false once the evaluation has run, and the
+`eval-v4`/`v5` lifecycle entry is rewritten in place for the same reason. Updating a
+superseded claim is not dropping a fact.
+
 ### What was recompacted, and what was not
 
-Three merges were applied, each combining entries that state **one fact at two
-granularities**, with every clause carried into the replacement and asserted by test:
+Generation 10 was already close to its information-density limit, so every byte generation
+11 spends had to be found rather than assumed. Four **merges** combined entries that state
+one fact at two granularities, and four **single-entry compressions** removed filler from
+long entries. Every clause of every original is asserted present in its replacement by
+`test_the_recompacted_entries_kept_every_fact_they_merged`:
 
 | Merged | Kept |
 |---|---|
 | "one run per candidate" + "every S3Q figure is a single observation" | no repeat, ablation, second host, GPU, dtype arm; `deterministic_reproduction_claimed` false; paired baseline in the same run; no plan reproduces weights twice |
 | candidate 003's gate verdict + its bootstrap interval | 9/9 → 8/9, one task, 36-task resolution, +0.044208, CI [−0.022359, +0.129413], `regression_not_excluded` |
 | "a receipt is required" + "an EVALUATED_\* state is re-derived" | valid portable receipt, REDERIVED, both verdict directions, production `decide_eligibility`, gate/bootstrap/empirical-status evidence |
+| "plan tokens are single-use" + "token silence" | single-use, never replayed, hygiene not cryptography, pure function of `plan_hash`, neither secret nor unpredictable, PRE-GO surfaces must not materialise it |
 
 **Two further merges were attempted and abandoned.** Combining the host-bound-hash rule
 with its `eval-v5` instance, and the D28/D29/D33 entry with the 300 s-ceiling surface note,
@@ -509,6 +523,26 @@ would each have exceeded the schema's 320-character field cap — meaning the "m
 have had to drop roughly 190 and 60 characters of real content. **A merge that loses a
 clause is a deletion wearing a merge's clothes**, so both were reverted and all four
 entries stand unchanged.
+
+Three pieces of duplication **this milestone itself introduced** were then removed rather
+than paid for: a second copy of the frozen policy digests, which `policy_identities`
+already records and `ruled_out` already bars moving; a standalone "eligibility is unknown"
+limitation, folded into the entry that already said so; and a second copy of the
+absent-`v5`-bytes instruction, which belongs in `next_milestone.holdout_access` where the
+session that must act on it reads it.
+
+### Two guard rails did their job
+
+The first generation 11 draft compacted `next_milestone` too far, and it was caught twice.
+The **verifier** refused it because the recorded `primary_axis` no longer **named** the dial
+or its two ends, and `ruled_out` had dropped `epoch`, `alpha`, `dropout`, `ATTENTION_ONLY`
+and `train-v3`. The **sealed S3N.1 suite** then refused a second draft on three further
+counts: `holdout_access` had lost **D35**, `ruled_out` had lost "structured rows", and
+`authority_required` named only `EVAL`, which reads as though the `TRAIN` authority were
+still live. All six were restored in full and the block was re-tightened around them.
+
+**A forward contract that reads well and bars less is not a compaction; it is a weakened
+invariant** — and the checks that caught it are the ones that will catch the next attempt.
 
 No budget was raised. No machine authority was deleted. No historical snapshot was touched —
 generations 1–10 remain byte-exact.
@@ -524,7 +558,9 @@ generations 1–10 remain byte-exact.
   metadata, digests and safetensors headers. What the two arms *would* load is identified;
   it is not proved loadable.
 * **`eval-v5`'s promoted bytes are absent from this host** and must be rebuilt by S3W.1
-  from the tracked generator, with manifest and pack re-verified before any request.
+  from the tracked generator, with manifest and pack re-verified before any request. This
+  is recorded in generation 11's `next_milestone.holdout_access`, where the session that
+  has to act on it reads it.
 * **The candidate-blind firewall is procedural in one direction.** S3S authored `v5` and is
   disqualified from designing candidate 004; that is enforced by using separate sessions,
   and no check in this repository can detect a breach of it.

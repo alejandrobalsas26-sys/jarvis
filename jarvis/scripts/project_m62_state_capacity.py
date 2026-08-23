@@ -55,6 +55,12 @@ REQUIRED_HEADROOM_BYTES = 1024
 GEN11_LABEL = "M62_S3W0_CANDIDATE004_EVAL_READY"
 GEN11_MILESTONE = "S3W.0"
 
+#: The authoritative focused baseline measured at S3W.0, on the invocation and interpreter
+#: generation 10 already records. The counts MOVE as tests are added -- 4234 -> 4284 is the
+#: S3W.0 suite -- so what is pinned is the invocation and ZERO failures, never the total.
+GEN11_TEST_BASELINE_PASSED = 4284
+GEN11_TEST_BASELINE_SKIPPED = 20
+
 #: The parent generation 11 chains onto. Passed in rather than discovered, so a run
 #: against a control plane somebody else advanced fails loudly instead of re-parenting.
 EXPECTED_PARENT_SHA256 = (
@@ -78,14 +84,19 @@ def project_gen11(parent: dict, *, subject_commit: str, parent_sha256: str,
     state["subject_state_commit"] = subject_commit
     state["parent_snapshot_sha256"] = parent_sha256
     state["control_plane_note"] = (
-        "S3W.0 qualified the candidate 004 evaluation ceremony BODY-FREE and evaluated "
-        "nothing: 0 model weight loads, 0 generations, 0 eval attempts, 0 holdout spend "
-        "events, 0 EVAL authority created. eval-v5 stays FROZEN_UNUSED, spent_by null, "
-        "bodies unread. READINESS, NOT AUTHORITY. EVAL and promotion authority: NONE.")
+        "S3W.0 qualified the candidate 004 eval ceremony BODY-FREE and evaluated "
+        "nothing: 0 weight loads, 0 generations, 0 eval attempts, 0 holdout spends, "
+        "0 EVAL authority created. eval-v5 stays FROZEN_UNUSED, spent_by null, bodies "
+        "unread. EVAL and promotion authority: NONE.")
 
     state["limitations"] = _gen11_limitations(parent["limitations"])
     state["frozen_invariants"] = _gen11_invariants(parent["frozen_invariants"])
     state["next_milestone"] = _gen11_next_milestone()
+    state["test_baseline"] = {**parent["test_baseline"],
+                              "milestone": GEN11_MILESTONE,
+                              "passed": GEN11_TEST_BASELINE_PASSED,
+                              "skipped": GEN11_TEST_BASELINE_SKIPPED,
+                              "failed": 0}
     if test_baseline is not None:
         state["test_baseline"] = test_baseline
     return state
@@ -100,6 +111,30 @@ def _recompact(limitations: list[str]) -> list[str]:
     clothes. Only genuinely duplicate narrative is touched; no machine authority, no
     digest, no count and no invariant is compacted.
     """
+    #: Lossless single-entry compressions: filler removed, every clause kept. Asserted
+    #: clause-for-clause by ``test_the_recompacted_entries_kept_every_fact_they_merged``.
+    compressed = {
+        "Hashes binding output_root_id are host-bound": (
+            "Hashes binding output_root_id are host-bound: RE-DERIVE on the executing "
+            "host, never paste. config_hash and plan_hash also bind runtime and hardware "
+            "evidence, so candidate 003's 6f9f470f/414ce9e3 and 004's hold for this "
+            "output root only, and a plan hash moves once a run directory exists."),
+        "The prospective spend boundary is deliberately EARLIER": (
+            "The prospective spend boundary is deliberately EARLIER than proof a forward "
+            "pass ran: no atomic transaction spans a durable local append and an external "
+            "synchronous call, so a crash in that gap marks spent a holdout no model may "
+            "have read. The conservative error is chosen."),
+        "receipt_hash and the measurement witness prove": (
+            "receipt_hash and the measurement witness prove payload integrity against the "
+            "canonical bytes and REPOSITORY PROVENANCE only: not human identity, "
+            "authorisation, a signature, who ran it or hardware attestation. Nothing is "
+            "signed and no PKI is implied."),
+        "A receipt is built AFTER its run": (
+            "A receipt is built AFTER its run from artefacts that already exist and needs "
+            "the gitignored runtime tree present: it proves what those artefacts say, not "
+            "that nobody touched them between run and seal, and cannot be built once the "
+            "run directory is gone."),
+    }
     merged = {
         # "One run per candidate" and "every S3Q figure is one observation" are one fact.
         "Training and measurement are one host": (
@@ -123,7 +158,7 @@ def _recompact(limitations: list[str]) -> list[str]:
     for entry in limitations:
         if any(entry.startswith(prefix) for prefix in absorbed):
             continue
-        for prefix, replacement in merged.items():
+        for prefix, replacement in {**compressed, **merged}.items():
             if entry.startswith(prefix):
                 entry = replacement
                 break
@@ -132,97 +167,141 @@ def _recompact(limitations: list[str]) -> list[str]:
 
 
 def _recompact_invariants(invariants: list[str]) -> list[str]:
-    """The one invariant pair that states a single rule twice. Every clause is kept."""
-    replacement = (
+    """The two invariant pairs that state a single rule twice. Every clause is kept."""
+    receipt = (
         "An EVALUATED_* state REQUIRES a valid portable receipt and is REDERIVED from "
         "it: a snapshot, verifier constant, prose or human sentence is insufficient in "
         "BOTH directions, and the PRODUCTION decide_eligibility is asked what the "
         "receipt's body-free gate, bootstrap, empirical-status and serialisation "
         "evidence conclude.")
+    token = (
+        "Plan tokens are single-use and a consumed or failed plan is never replayed. "
+        "Token silence is ceremony hygiene, not cryptography: the confirmation string is "
+        "a pure function of plan_hash, neither secret nor unpredictable, and PRE-GO "
+        "surfaces simply must not materialise it.")
+    absorbed = ("An EVALUATED_* state is REDERIVED, never read",
+                "Token silence is ceremony hygiene")
+    replaced = {"A future EVALUATED_* state requires a valid portable": receipt,
+                "Plan tokens are single-use": token}
     out: list[str] = []
     for entry in invariants:
-        if entry.startswith("An EVALUATED_* state is REDERIVED, never read"):
+        if entry.startswith(absorbed):
             continue
-        if entry.startswith("A future EVALUATED_* state requires a valid portable"):
-            entry = replacement
+        for prefix, replacement in replaced.items():
+            if entry.startswith(prefix):
+                entry = replacement
+                break
         out.append(entry)
     return out
 
 
 def _gen11_limitations(parent: list[str]) -> list[str]:
-    return _recompact(parent) + [
-        "S3W.0 qualified the ceremony body-free and measured NOTHING about candidate "
-        "004's quality: readiness is structural, eligibility is UNKNOWN, and no figure "
-        "here predicts or bounds a result.",
-        "eval-v5's promoted bytes are gitignored runtime state, ABSENT from this host "
-        "and rebuilt on demand: S3W.1 must rebuild them from the tracked generator and "
-        "re-verify manifest e852f462 and pack 287a9fb6 before constructing a request.",
+    """The recompacted set, plus the caveats a qualification session owes its reader.
+
+    The "eligibility is UNKNOWN" fact is EXTENDED in place rather than repeated: an entry
+    already says it, and a second one saying the same thing in different words is the
+    duplicate narrative this milestone is supposed to be removing, not adding.
+    """
+    entries = _recompact(parent)
+    unknown = "A successful S3V means only that training completed"
+    for index, entry in enumerate(entries):
+        if entry.startswith(unknown):
+            entries[index] = entry.rstrip() + (
+                " S3W.0 qualification is readiness, not evidence.")
+            break
+    else:  # pragma: no cover - the entry is present in every generation from 10
+        raise AssertionError("the eligibility-unknown limitation is missing")
+    return entries + [
         "The adapter, base weights and runtime were qualified from metadata, digests and "
-        "safetensors headers only. No model was loaded, so what the two arms would load "
-        "is identified, not proved loadable.",
+        "safetensors headers only. Nothing was loaded: what the arms would load is "
+        "identified, not proved loadable.",
     ]
 
 
 def _gen11_invariants(parent: list[str]) -> list[str]:
     return _recompact_invariants(parent) + [
         "GEN11 IS READINESS, NOT AUTHORITY. A qualified ceremony is not an authorised "
-        "one: no EVAL capability exists, no human has authorised evaluation, no holdout "
-        "is spent, and no candidate has passed or failed.",
-        "The policy identities recorded here are FROZEN for the next ceremony: "
-        "generation c6b0b682, metric e07dd133, gate e5003319, reasoning DISABLED and "
-        "max_new_tokens 512 may not move before candidate 004's receipt.",
+        "one: no EVAL capability exists, no human authorised evaluation, no holdout is "
+        "spent and no candidate has passed or failed.",
     ]
 
 
 def _gen11_next_milestone() -> dict:
+    """The forward contract, rewritten for S3W.1.
+
+    Four properties are enforced elsewhere and are easy to lose to a compaction, so they
+    are called out here: ``primary_axis`` must NAME the dial and BOTH its ends;
+    ``ruled_out`` must still bar every subject it is not superseding, in the words the
+    sealed S3N.1 suite looks for; ``authority_required`` must name BOTH authorities,
+    because a contract mentioning only EVAL reads as though TRAIN were still live; and
+    ``holdout_access`` must keep D35, the rule that a spent holdout never decides
+    eligibility again. A first draft of this block lost all four and was caught by the
+    verifier and that suite. **A forward contract that reads well and bars less is not a
+    compaction; it is a weakened invariant.**
+    """
     return {
         "name": ("S3W.1 candidate 004 live held-out evaluation on eval-v5, in a NEW "
-                 "session, derived from the FINAL clean generation 11 HEAD. It is "
-                 "TRAINED_UNEVALUATED and qualified; no measurement exists."),
+                 "session, from the FINAL clean generation 11 HEAD. Candidate 004 is "
+                 "qualified and unmeasured."),
         "requires_new_session": True,
-        "primary_axis": ("MEASURED, not predicted. Candidate 004 against its own "
-                         "simultaneously-measured baseline on eval-v5. Eligibility is "
-                         "UNKNOWN; S3W.0 qualification is not evidence of it and "
-                         "training loss never was."),
+        "primary_axis": ("MEASURED, not predicted. Candidate 004 against candidate 003: "
+                         "learning_rate 1e-4 -> 5e-5, one dial, alpha not slaved so "
+                         "alpha/r stays 2.0. Eligibility is UNKNOWN; S3W.0 qualification "
+                         "is not evidence of it and training loss never was."),
         "lora_scope": "ATTENTION_AND_MLP",
-        "training_corpus": ("m62-defensive-quality-train v2, spent. No train-v3 exists "
-                            "and none is proposed. S3W.1 trains nothing."),
+        "training_corpus": ("m62-defensive-quality-train v2, spent on candidates 003 and "
+                            "004, reused UNCHANGED. No train-v3 exists or is proposed; "
+                            "S3W.1 trains nothing."),
         "evaluation_holdout": ("m62-defensive-eval v5, FROZEN_UNUSED, spent_by null, "
                                "frozen candidate-blind by S3S before candidate 004 "
                                "existed. eval-v4 is USED_IMMUTABLE and may never be "
                                "reused."),
-        "holdout_access": ("eval-v5 task bodies stay UNREAD by the orchestrator. S3W.1 "
-                           "rebuilds the promoted bytes from the tracked generator and "
-                           "hands them to the evaluator; only the model reads a task."),
+        "holdout_access": ("eval-v5 task bodies are UNREAD and stay unread: S3W.0 bound "
+                           "it by manifest, pack and status only. Its promoted bytes are "
+                           "absent from disk, so S3W.1 rebuilds and re-verifies them. "
+                           "eval-v4 stays development evidence under D35."),
         "authority_required": [
-            "a fresh single-use human EVAL authority of the form EVAL:<plan-hash>, bound "
-            "to a plan derived from the final generation 11 HEAD, after a token-silent "
-            "preflight. No authority exists now and S3W.0 created none",
+            "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, bound to a "
+            "plan derived from the final generation 11 HEAD, after a token-silent "
+            "preflight. The S3V TRAIN authority is SPENT and carries nothing forward",
             "a separate explicit human decision before any promotion, which no authority "
-            "in this repository grants",
-            "a new explicit human ruling before any axis moves; S3W.1 changes no dial",
+            "here grants",
+            "a new explicit human ruling before any axis other than candidate 004's "
+            "learning rate moves; every other axis stays barred below",
         ],
         "ruled_out": [
-            "deriving the EVAL plan from anything but the final clean generation 11 HEAD, "
-            "or reusing a plan hash computed in S3W.0, which computed none",
+            "evaluating candidate 004 without a fresh single-use EVAL authority at a new "
+            "generation, in the session that trained it, under a plan not derived from "
+            "the final generation 11 HEAD, or a second time after the durable holdout "
+            "commit",
+            "any epoch, rank, alpha or dropout change, and any compensating "
+            "hyperparameter slaved to the learning rate; a justified second dial is still "
+            "a second one",
+            "reading candidate 004's learning-rate permission as general. The S3U ruling "
+            "superseded the generation-8 learning-rate clause ONLY, for candidate 004 "
+            "only, prospectively, and only to 5e-5; a fifth candidate needs its own ruling",
+            "a second experimental axis, ATTENTION_ONLY, or any module-surface change; the "
+            "LoRA scope stays ATTENTION_AND_MLP over the same seven projections",
+            "creating train-v3, adding rows, deleting rows or rebalancing train-v2, a "
+            "teacher-generated corpus, adding structured rows or strengthening the "
+            "response schema",
+            "changing gates, graders, thresholds or the refusal detector, raising "
+            "max_new_tokens, changing the seed or reasoning policy, or creating a D38 "
+            "gate or a D43 gate",
             "mutating, re-wording, re-scoping, replacing or threshold-tuning frozen "
             "eval-v5, in whole or in part, for any reason including a candidate 004 "
-            "result, and reusing eval-v4 for any candidate",
-            "changing gates, graders, thresholds, the refusal detector, the generation "
-            "policy, the seed, max_new_tokens or the reasoning policy, and creating a D38 "
-            "or D43 gate or making either diagnostic a hidden success criterion",
-            "persisting a raw prompt, target, response or an exception quoting one, and "
-            "reading eval-v5 task bodies into any orchestration transcript",
-            "a second evaluation attempt after the durable holdout_model_facing_committed "
-            "event, a retry, a re-score, an ablation or a re-run at a new generation",
-            "retraining, resuming, re-seeding, further fine-tuning or patching candidate "
-            "003 or candidate 004, or describing either as approved or production-ready",
-            "treating training or validation loss as eligibility evidence, and ranking "
-            "candidates 001-004 in one table; each compares only against its own "
-            "simultaneously-measured baseline on its own holdout",
+            "result",
+            "reusing eval-v4 for any candidate, persisting a raw prompt, target or "
+            "response, and reading a task body into any transcript",
+            "retraining, resuming, re-seeding or patching candidate 003 or candidate 004 "
+            "under its own id, or describing either as approved or production-ready",
+            "tuning candidate 004 from its training or validation loss, or treating "
+            "either as eligibility evidence",
+            "ranking candidates 001-004 in one table; each compares only against its own "
+            "simultaneously-measured baseline",
             "back-filling a portable evaluation receipt for candidate 001 or 002",
-            "promotion, activation, registry mutation, merge, tag, release or version "
-            "bump, and fixing D39 as a rider",
+            "promotion, activation, registry mutation, merge, tag, release or version bump",
+            "fixing D39 as a rider",
         ],
     }
 
@@ -368,10 +447,19 @@ def main(argv: list[str] | None = None) -> int:
                         help="the commit generation 11 is a claim about")
     parser.add_argument("--emit", default="",
                         help="write the projected generation 11 to this path")
+    parser.add_argument("--parent", default="",
+                        help="the generation 10 snapshot to project from. Defaults to "
+                             "whatever state/m62/current.json points at, which is the "
+                             "right answer only until the pointer advances; the digest "
+                             "guard below is what actually decides, either way")
     args = parser.parse_args(argv)
 
-    current = json.loads((REPO_ROOT / "state/m62/current.json").read_text("utf-8"))
-    parent_path = REPO_ROOT / current["latest_snapshot_path"]
+    if args.parent:
+        parent_path = Path(args.parent)
+    else:
+        current = json.loads(
+            (REPO_ROOT / "state/m62/current.json").read_text("utf-8"))
+        parent_path = REPO_ROOT / current["latest_snapshot_path"]
     parent_bytes = parent_path.read_bytes()
     parent_sha = sha256_bytes(parent_bytes)
     parent = json.loads(parent_bytes.decode("utf-8"))
@@ -407,14 +495,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"PROGRESS_HEADROOM_INVARIANT: "
           f"{'PASS' if p_head > 0 and p_line_head > 0 else 'FAIL'}")
 
+    ok = (g11_head >= REQUIRED_HEADROOM_BYTES
+          and g12_head >= REQUIRED_HEADROOM_BYTES
+          and p_head > 0 and p_line_head > 0)
+
+    if args.emit and not ok:
+        # Fail closed. A snapshot written past its own gate is a state nobody proved
+        # room for, and the next generation is the one that pays for it.
+        print("EMIT_REFUSED: the capacity gate did not pass")
+        return 1
     if args.emit:
         Path(args.emit).write_bytes(canonical_bytes(gen11))
         print(f"EMITTED: {args.emit}")
         print(f"EMITTED_SHA256: {sha256_bytes(canonical_bytes(gen11))}")
 
-    ok = (g11_head >= REQUIRED_HEADROOM_BYTES
-          and g12_head >= REQUIRED_HEADROOM_BYTES
-          and p_head > 0 and p_line_head > 0)
     return 0 if ok else 1
 
 

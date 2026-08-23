@@ -541,48 +541,82 @@ def test_progress_is_inside_both_of_its_budgets():
 def test_the_recompacted_entries_kept_every_fact_they_merged(parent_state):
     """A merge that loses a clause is a deletion wearing a merge's clothes.
 
-    Each surviving merge is checked the hard way: the distinctive substrings of BOTH
-    originals must appear in the single replacement, and the replacement must be shorter
-    than the two it replaced or it is not a recompaction at all.
+    Every replacement is checked the hard way: the distinctive substrings of ALL the
+    originals must appear in it, and the originals must be gone. The same rule is applied
+    to the single-entry compressions, where the risk is not a lost entry but a lost
+    clause inside one.
     """
-    merged_limitations = P._recompact(parent_state["limitations"])
-    merged_invariants = P._recompact_invariants(parent_state["frozen_invariants"])
+    limitations = P._recompact(parent_state["limitations"])
+    invariants = P._recompact_invariants(parent_state["frozen_invariants"])
 
-    cases = (
-        (merged_limitations, "One host, CPU, one seed",
+    merges = (
+        (limitations, "One host, CPU, one seed",
          ("no repeat", "dtype control arm", "deterministic_reproduction_claimed",
           "single observation", "paired baseline measured in the same run",
           "reproduces weights twice"),
          ("Training and measurement are one host",
           "Every S3Q figure is a single observation")),
-        (merged_limitations, "Candidate 003 is NOT ELIGIBLE",
+        (limitations, "Candidate 003 is NOT ELIGIBLE",
          ("9/9 -> 8/9", "36-task holdout cannot distinguish", "+0.044208",
           "-0.022359", "+0.129413", "regression_not_excluded"),
          ("Candidate 003's paired mean delta is +0.044208",)),
-        (merged_invariants, "An EVALUATED_* state REQUIRES",
+        (invariants, "An EVALUATED_* state REQUIRES",
          ("valid portable receipt", "REDERIVED", "BOTH directions",
           "decide_eligibility", "bootstrap", "empirical-status"),
          ("A future EVALUATED_* state requires a valid portable",
           "An EVALUATED_* state is REDERIVED, never read")),
+        (invariants, "Plan tokens are single-use",
+         ("consumed or failed plan is never replayed", "Token silence",
+          "not cryptography", "pure function of plan_hash", "neither secret",
+          "must not materialise it"),
+         ("Token silence is ceremony hygiene",)),
     )
-    for collection, prefix, clauses, originals in cases:
+    for collection, prefix, clauses, originals in merges:
         replacement, = [e for e in collection if e.startswith(prefix)]
         for clause in clauses:
             assert clause in replacement, (prefix, clause)
         for original in originals:
             assert not any(e.startswith(original) for e in collection), original
 
+    compressions = (
+        ("Hashes binding output_root_id are host-bound",
+         ("RE-DERIVE on the executing host", "never paste", "config_hash", "plan_hash",
+          "runtime and hardware evidence", "6f9f470f/414ce9e3", "this output root only",
+          "moves once a run directory exists")),
+        ("The prospective spend boundary is deliberately EARLIER",
+         ("proof a forward pass ran", "no atomic transaction", "durable local append",
+          "external synchronous call", "conservative error is chosen")),
+        ("receipt_hash and the measurement witness prove",
+         ("payload integrity", "canonical bytes", "REPOSITORY PROVENANCE only",
+          "not human identity", "authorisation", "who ran it", "hardware attestation",
+          "no PKI is implied")),
+        ("A receipt is built AFTER its run",
+         ("artefacts that already exist", "gitignored runtime tree",
+          "not that nobody touched them between run and seal",
+          "cannot be built once the run directory is gone")),
+    )
+    for prefix, clauses in compressions:
+        replacement, = [e for e in limitations if e.startswith(prefix)]
+        original, = [e for e in parent_state["limitations"]
+                     if e.startswith(prefix)]
+        for clause in clauses:
+            assert clause in replacement, (prefix, clause)
+        assert len(replacement) < len(original), prefix
+
 
 def test_recompaction_only_shortens_and_never_deletes_an_unmerged_entry(parent_state):
     before = parent_state["limitations"]
     after = P._recompact(before)
-    assert len(after) == len(before) - 2
+    assert len(after) == len(before) - 2          # exactly the two absorbed entries
     assert len("".join(after)) < len("".join(before))
-    # Every entry that was not part of a merge survives byte-for-byte.
-    merged_away = {e for e in before if e not in after}
-    assert len(merged_away) == 4
+    invariants = P._recompact_invariants(parent_state["frozen_invariants"])
+    assert len(invariants) == len(parent_state["frozen_invariants"]) - 2
+
+    # Every entry that took part in no merge and no compression survives byte-for-byte.
+    changed = {e for e in before if e not in after}
+    assert len(changed) == 8                      # 4 merged away + 4 compressed
     for entry in before:
-        if entry not in merged_away:
+        if entry not in changed:
             assert entry in after, entry
 
 
@@ -742,3 +776,69 @@ def test_the_capacity_tool_contains_no_held_out_task_body():
         for _split, _family, _task, prompt, target in BC.corpus_for(version):
             assert prompt not in source
             assert target not in source
+
+
+# ── 9. the emitted generation 11 IS the projection that was measured ─────────────────
+GEN11_PATH = "state/m62/snapshots/0011-m62-s3w0-candidate004-eval-ready.json"
+
+
+@pytest.fixture(scope="module")
+def live_current() -> dict:
+    return json.loads((REPO_ROOT / "state/m62/current.json").read_text("utf-8"))
+
+
+def test_the_control_plane_advanced_to_generation_eleven(live_current):
+    assert live_current["state_generation"] == 11
+    assert live_current["latest_snapshot_path"] == GEN11_PATH
+    assert live_current["schema_version"] == "m62.control_plane.1"
+
+
+def test_the_emitted_snapshot_is_byte_identical_to_the_measured_projection(
+        parent_state, live_current):
+    """The capacity proof is only worth something if the same transform wrote the file.
+
+    A projection computed by one code path and a snapshot authored by another is a
+    measurement of something that was never written. These are the same function, so this
+    asserts the property the milestone document claims: the bytes measured are the bytes
+    on disk.
+    """
+    emitted = (REPO_ROOT / GEN11_PATH).read_bytes()
+    projected = V.canonical_bytes(P.project_gen11(
+        parent_state, subject_commit=live_current["subject_state_commit"],
+        parent_sha256=GEN10_SNAPSHOT_SHA))
+    assert emitted == projected
+    assert V.sha256_bytes(emitted) == live_current["latest_snapshot_sha256"]
+
+
+def test_the_emitted_snapshot_is_inside_its_budget_with_the_required_headroom():
+    emitted = (REPO_ROOT / GEN11_PATH).read_bytes()
+    assert len(emitted) <= V.SNAPSHOT_MAX_BYTES
+    assert V.SNAPSHOT_MAX_BYTES - len(emitted) >= P.REQUIRED_HEADROOM_BYTES
+
+
+def test_generation_eleven_chains_onto_generation_ten():
+    state = json.loads((REPO_ROOT / GEN11_PATH).read_text("utf-8"))
+    assert state["state_generation"] == 11
+    assert state["parent_snapshot_sha256"] == GEN10_SNAPSHOT_SHA
+    assert state["subject_state_milestone"] == "S3W.0"
+    assert state["generation_label"] == "M62_S3W0_CANDIDATE004_EVAL_READY"
+
+
+def test_the_generation_ten_snapshot_is_still_byte_exact():
+    """A superseded snapshot is never revised. Generation 11 is a new file, not an edit."""
+    raw = (REPO_ROOT
+           / "state/m62/snapshots/0010-m62-s3v-candidate004-trained.json").read_bytes()
+    assert V.sha256_bytes(raw) == GEN10_SNAPSHOT_SHA
+
+
+def test_the_emit_path_refuses_to_write_past_its_own_capacity_gate(tmp_path,
+                                                                  monkeypatch):
+    """Fail-closed, proved by forcing the gate to fail rather than by reading the code."""
+    monkeypatch.setattr(P, "REQUIRED_HEADROOM_BYTES", V.SNAPSHOT_MAX_BYTES)
+    destination = tmp_path / "refused.json"
+    code = P.main([
+        "--subject-commit", "0" * 40, "--emit", str(destination),
+        "--parent", str(REPO_ROOT
+                        / "state/m62/snapshots/0010-m62-s3v-candidate004-trained.json")])
+    assert code == 1
+    assert not destination.exists()

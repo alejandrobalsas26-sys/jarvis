@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **10** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **11** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0010-m62-s3v-candidate004-trained.json` |
-| **Snapshot SHA256** | `b36b13baf4c9624e6045450737256db95421625c86c6659b0e531731553da075` |
-| **Subject state commit** | `50d9de407681bf32157546087f9cded79e3943a5` (S3V trained candidate 004 once under a plan-bound `TRAIN` authority) |
+| **Latest snapshot** | `state/m62/snapshots/0011-m62-s3w0-candidate004-eval-ready.json` |
+| **Snapshot SHA256** | `3c85eadff59a00c37d08161330cbb0c3c630ddfef527308549febcc0ed502603` |
+| **Subject state commit** | `4d75d3faa66ccb5388b8e6ced621cc0878f680e3` (S3W.0 qualified the candidate 004 × `eval-v5` ceremony body-free; nothing was evaluated) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -42,7 +42,7 @@ snapshot, and asks Git — not prose — about the branch, the ancestry and `mas
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `50d9de407681bf32157546087f9cded79e3943a5` — the commit the current snapshot describes |
+| Subject state commit | `4d75d3faa66ccb5388b8e6ced621cc0878f680e3` — the commit the current snapshot describes |
 | Training source commits | candidate 003 `bac49c4a49194d84fbc7f61656662fdcd54799ca`; candidate 004 `80565d32795fb276df202f6bef46ed38bb2bb7c5`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -64,12 +64,13 @@ files on top of it. That is why the two differ, and why the verifier requires HE
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3V** — candidate 004 trained, `TRAINED_UNEVALUATED`, under a plan-bound human `TRAIN` authority |
-| Last milestone | **S3V** — `V69_M62_S3V_CANDIDATE004_LIVE_TRAINING.md`. **PASS.** Candidate 004 trained once, 40/40 steps. **No evaluation, no promotion.** The `TRAIN` authority is SPENT |
-| Phase | **Between milestones.** Three candidates measured and `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is TRAINED and UNEVALUATED**; `eval-v5` fresh and unspent. **No EVAL authority exists** |
+| Last state-bearing milestone | **S3W.0** — the candidate 004 × `eval-v5` ceremony qualified body-free. **READINESS, NOT AUTHORITY** |
+| Last milestone | **S3W.0** — `V69_M62_S3W0_EVAL_V5_QUALIFICATION.md`. **PASS.** **0 weight loads, 0 generations, 0 eval attempts, 0 holdout spend events, 0 `EVAL` authority created.** No live plan was built |
+| Phase | **Between milestones — EVAL_READY.** Three candidates measured and `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is TRAINED and UNEVALUATED** and structurally qualified; `eval-v5` fresh and unspent. **No EVAL authority exists** |
 | Live training since S3N | **two runs** — candidates 003 and 004, 40/40 optimizer steps each, both `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **one run** — S3Q, candidate 003 against `eval-v4`. One plan, one holdout commit, one terminal event, **72 results, 0 generation errors.** `eval-v4` is `USED_IMMUTABLE` |
 | S3Q.0.2 | evidence only — **0 weights loaded, 0 generations, 0 new evaluation attempts, no plan consumed, no figure moved** |
+| Next | **S3W.1** in a NEW session, from this HEAD: rebuild `eval-v5`, derive the live plan, token-silent preflight, explicit plan-bound human `EVAL` authority, **one** evaluation |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that collects and
 grades defensive task episodes, builds immutable leakage-checked datasets, plans and executes
