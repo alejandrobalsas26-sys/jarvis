@@ -30,6 +30,7 @@ from scripts.verify_m62_control_plane import (
     EVALUATED_CANDIDATE_STATES,
     LEGACY_EVALUATION_CANDIDATES,
     REPO_ROOT,
+    SNAPSHOT_MAX_BYTES,
     ControlPlane,
     Report,
     canonical_json,
@@ -387,6 +388,8 @@ def test_no_tracked_file_carries_a_live_confirmation_literal():
 
 
 def test_the_snapshot_and_the_schema_stay_within_budget():
-    assert SNAPSHOT_PATH.stat().st_size <= 32_768
+    # Bound to the constant rather than a copy of its value: S3X.0 migrated the reviewed
+    # snapshot budget, and a duplicated literal here would have silently disagreed.
+    assert SNAPSHOT_PATH.stat().st_size <= SNAPSHOT_MAX_BYTES
     assert (REPO_ROOT / "state/m62/current.json").stat().st_size <= 2_048
-    assert len(canonical_json(_snapshot()).encode("utf-8")) <= 32_768
+    assert len(canonical_json(_snapshot()).encode("utf-8")) <= SNAPSHOT_MAX_BYTES

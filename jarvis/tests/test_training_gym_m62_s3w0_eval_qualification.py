@@ -526,7 +526,9 @@ def test_both_projected_generations_are_schema_valid(projections):
 
 
 def test_the_projection_never_raises_a_reviewed_budget():
-    assert V.SNAPSHOT_MAX_BYTES == 32_768
+    # The snapshot ceiling moved at S3X.0 by operator ruling, 32,768 -> 34,816. Every
+    # OTHER budget on this list is unchanged, which is the point of listing them here.
+    assert V.SNAPSHOT_MAX_BYTES == 34_816
     assert V.PROGRESS_MAX_BYTES == 40_960
     assert V.PROGRESS_MAX_LINES == 760
     assert P.REQUIRED_HEADROOM_BYTES == 1_024
@@ -780,6 +782,10 @@ def test_the_capacity_tool_contains_no_held_out_task_body():
 
 # ── 9. the emitted generation 11 IS the projection that was measured ─────────────────
 GEN11_PATH = "state/m62/snapshots/0011-m62-s3w0-candidate004-eval-ready.json"
+#: Generation 11's own digest, pinned so this sealed milestone's byte-for-byte claim is
+#: checked against ITSELF and not against whatever the live pointer happens to name.
+GEN11_SNAPSHOT_SHA = (
+    "3c85eadff59a00c37d08161330cbb0c3c630ddfef527308549febcc0ed502603")
 
 
 @pytest.fixture(scope="module")
@@ -787,27 +793,40 @@ def live_current() -> dict:
     return json.loads((REPO_ROOT / "state/m62/current.json").read_text("utf-8"))
 
 
-def test_the_control_plane_advanced_to_generation_eleven(live_current):
-    assert live_current["state_generation"] == 11
-    assert live_current["latest_snapshot_path"] == GEN11_PATH
-    assert live_current["schema_version"] == "m62.control_plane.1"
+def test_the_control_plane_advanced_to_generation_eleven():
+    """RESCOPED at S3X.0, which wrote generation 12.
+
+    The sealed spelling read the LIVE pointer and asserted it said 11. That encoded a
+    passing fact -- generation 11 was the newest at S3W.0 -- rather than the property this
+    test owns: **S3W.0 wrote generation 11, and it is at GEN11_PATH.** Read by path, that
+    is true forever; read from the live pointer it was true only until the next milestone,
+    which is exactly the pattern PROGRESS §10 documents.
+    """
+    gen11 = json.loads((REPO_ROOT / GEN11_PATH).read_text(encoding="utf-8"))
+    assert gen11["state_generation"] == 11
+    assert gen11["schema_version"] == "m62.control_plane.1"
+    assert gen11["subject_state_milestone"] == "S3W.0"
 
 
-def test_the_emitted_snapshot_is_byte_identical_to_the_measured_projection(
-        parent_state, live_current):
+def test_the_emitted_snapshot_is_byte_identical_to_the_measured_projection(parent_state):
     """The capacity proof is only worth something if the same transform wrote the file.
 
     A projection computed by one code path and a snapshot authored by another is a
     measurement of something that was never written. These are the same function, so this
     asserts the property the milestone document claims: the bytes measured are the bytes
     on disk.
+
+    RESCOPED at S3X.0 alongside the test above, and for the same reason: the subject commit
+    and the digest are now taken from generation 11 ITSELF rather than from a live pointer
+    that has since moved on. The byte-for-byte claim is unchanged and is still checked.
     """
     emitted = (REPO_ROOT / GEN11_PATH).read_bytes()
+    gen11 = json.loads(emitted.decode("utf-8"))
     projected = V.canonical_bytes(P.project_gen11(
-        parent_state, subject_commit=live_current["subject_state_commit"],
+        parent_state, subject_commit=gen11["subject_state_commit"],
         parent_sha256=GEN10_SNAPSHOT_SHA))
     assert emitted == projected
-    assert V.sha256_bytes(emitted) == live_current["latest_snapshot_sha256"]
+    assert V.sha256_bytes(emitted) == GEN11_SNAPSHOT_SHA
 
 
 def test_the_emitted_snapshot_is_inside_its_budget_with_the_required_headroom():

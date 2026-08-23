@@ -183,10 +183,16 @@ def test_the_generation_nine_snapshot_is_still_byte_exact():
 
 
 def test_the_snapshot_is_within_its_reviewed_budget(snapshot):
-    """S3U recompacted rather than raising a budget. The budget must be intact."""
-    assert V.SNAPSHOT_MAX_BYTES == 32_768
+    """S3U recompacted rather than raising a budget, and that remains true OF S3U.
+
+    The reviewed ceiling itself moved once, at S3X.0, from 32,768 to 34,816 bytes under
+    an explicit operator ruling recorded in the generation 12 snapshot. This pin is the
+    anchor that makes a SILENT raise impossible, so it names the number literally; the
+    size assertion below binds to the constant so the two can never disagree.
+    """
+    assert V.SNAPSHOT_MAX_BYTES == 34_816
     current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
-    assert len((REPO / current["latest_snapshot_path"]).read_bytes()) <= 32_768
+    assert len((REPO / current["latest_snapshot_path"]).read_bytes()) <= V.SNAPSHOT_MAX_BYTES
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -825,10 +825,26 @@ def test_d37_is_fixed_d38_is_fixed_and_d39_is_open(snapshot):
     assert defects["D39"]["status"] == "OPEN"
 
 
+#: The ONLY defect that is a gate, and it is one by explicit operator ruling at S3X.0.
+#: Listing it here rather than relaxing the sweep keeps an ACCIDENTAL new gate failing.
+DELIBERATE_GATE_DEFECTS = frozenset({"D44"})
+
+
 def test_d38_is_not_a_gate_in_the_state_or_in_the_source(snapshot):
+    """RESCOPED at S3X.0, which made D44 a gate by operator ruling.
+
+    The sealed spelling asserted that NO defect was a gate. That encoded a PASSING FACT --
+    none was, at generation 11 -- rather than the property this test owns: **D38 is not a
+    gate, and no defect becomes one by accident.** Asserting the gate SET is exactly the
+    deliberate one is strictly stronger than the blanket `all(...)`: it still fails on an
+    unplanned gate, and it now also fails if D44 silently stops being one.
+    """
     defects = {d["id"]: d for d in snapshot["defects"]}
     assert defects["D38"]["is_gate"] is False
-    assert all(d["is_gate"] is False for d in snapshot["defects"])
+    gates = {d["id"] for d in snapshot["defects"] if d["is_gate"]}
+    assert gates == DELIBERATE_GATE_DEFECTS, (
+        f"the gate set is {sorted(gates)}; only {sorted(DELIBERATE_GATE_DEFECTS)} is a gate "
+        f"by ruling, and a gate added without one is exactly what this catches")
     gates = (REPO / "jarvis" / "training_gym" / "evaluation" / "gates.py").read_text(
         encoding="utf-8")
     assert "output_budget_exhaust" not in gates
@@ -1315,8 +1331,21 @@ def test_next_offers_only_a_holdout_the_state_actually_has(snapshot):
     """
     nxt = snapshot["next_milestone"]
     offered = nxt["evaluation_holdout"]
+    # RESCOPED at S3X.0. Until the retirement, FROZEN_UNUSED and "available to spend" were
+    # the same set. They no longer are: eval-v5 is frozen, never model-spent, and barred
+    # from eligibility use, so it is a holdout the state HAS but may not OFFER. Reading
+    # availability from the verifier's retirement registry keeps this test asking its own
+    # question -- may NEXT offer this? -- rather than a question about a status word.
+    retired = {(d, v) for (d, v), effective in V.RETIRED_ELIGIBILITY_HOLDOUTS.items()
+               if snapshot["state_generation"] >= effective}
     fresh = [d for d in snapshot["datasets"]
-             if d["role"] == "EVALUATION_HOLDOUT" and d["status"] == "FROZEN_UNUSED"]
+             if d["role"] == "EVALUATION_HOLDOUT" and d["status"] == "FROZEN_UNUSED"
+             and (d["dataset_id"], d["version"]) not in retired]
+    for dataset_id, version in retired:
+        if any(d["dataset_id"] == dataset_id and d["version"] == version
+               for d in snapshot["datasets"]):
+            assert "RETIRED" in offered, (
+                f"{dataset_id} {version} is retired and NEXT must say so, not omit it")
     if "NONE" in offered:
         assert fresh == [], f"NEXT says NONE while the state carries {fresh}"
     else:

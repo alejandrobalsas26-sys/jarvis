@@ -694,9 +694,22 @@ PRIVATE_PATH_RE = re.compile(r"(/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+|[A-
 PROGRESS_MAX_LINES = 760
 PROGRESS_MAX_BYTES = 40_960
 # Snapshot migrated at 19,141 bytes: max(x * 1.5, x + 8000) -> 32,768.
-SNAPSHOT_MAX_BYTES = 32_768
+# S3X.0 MIGRATED 32,768 -> 34,816 (34 KiB) under an explicit recorded operator ruling.
+# WHY, and why this number: a truthful recovery generation 12 must ADD the D44 incident,
+# the ruling, the defect and the retirement invariants while REPLACING nothing, because
+# candidate 004 is still unmeasured and every forward-looking entry stays live. The
+# leanest truthful projection measured 32,739 bytes -- 29 bytes of headroom under the old
+# cap, against a required 1,024. Recompaction was attempted first and made the block
+# LARGER (-133 bytes), and no supported mechanism archives ``limitations`` or ``defects``,
+# so the only alternatives were raising a reviewed budget or deleting recorded authority.
+# +2,048 bytes is the smallest step that clears the policy headroom without inviting a
+# second migration. This is still a STRICT FINITE BUDGET, not a relaxation: the invariant
+# remains ``snapshot_size <= SNAPSHOT_MAX_BYTES`` with >= REQUIRED_HEADROOM_BYTES spare.
+SNAPSHOT_MAX_BYTES = 34_816
 # current.json migrated at 398 bytes. A pointer that needs a kilobyte is a second state.
 CURRENT_MAX_BYTES = 2_048
+# DELIBERATELY still 32 KiB. It shared a value with SNAPSHOT_MAX_BYTES by coincidence,
+# never by derivation; the S3X.0 ruling migrated the snapshot budget alone.
 HISTORY_INDEX_MAX_BYTES = 32_768
 
 
@@ -4380,6 +4393,103 @@ def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
         report.fail("HOLDOUT_FIREWALL", "the historical archive is in the bootstrap set")
 
 
+#: Holdouts RETIRED FROM ELIGIBILITY USE, mapped to the generation the ruling took effect.
+#: A retired holdout is a different thing from a spent one, and the distinction is the
+#: whole point: eval-v5 was frozen, NEVER model-spent, and retired anyway because the
+#: preregistered orchestrator body-blindness precondition failed BEFORE any authorisation
+#: existed (D44). Relaxing a preregistered gate after it fails is post-hoc protocol
+#: weakening, so the conservative remedy is retirement rather than reuse.
+RETIRED_ELIGIBILITY_HOLDOUTS = {("m62-defensive-eval", "v5"): 12}
+
+#: Machine-verifiable markers the retirement is carried by. The dataset STATUS vocabulary
+#: cannot express "frozen, never model-spent, but retired from eligibility" and was not
+#: extended to fake it, so the rule lives on the invariant surface and is enforced here.
+RETIREMENT_MARKER = "ELIGIBILITY_USE: RETIRED"
+FRESH_HOLDOUT_MARKER = "FRESH_V6_REQUIRED"
+
+
+def _names_holdout(text: str, dataset_id: str, version: str) -> bool:
+    """True when *text* designates that specific held-out corpus version."""
+    return f"eval-{version}" in text or f"{dataset_id} {version}" in text
+
+
+def check_holdout_retirement(cp: ControlPlane, report: Report) -> None:
+    """A retired holdout may never come back as eligibility evidence.
+
+    Reported under HOLDOUT_FIREWALL because it IS the firewall, extended in time: the
+    body-blindness gate failed once for eval-v5, and the remedy only holds if a later
+    session cannot quietly spend it anyway. Six independent conditions carry the rule, so
+    no single edit relaxes it.
+
+    Deliberately PROSPECTIVE. Generations 7 to 11 truthfully called eval-v5
+    ``FROZEN_UNUSED`` before the exposure was known and stay byte-exact; this check does
+    nothing to a snapshot older than the generation the ruling took effect.
+    """
+    generation = cp.snapshot.get("state_generation", 0)
+    for (dataset_id, version), effective_from in RETIRED_ELIGIBILITY_HOLDOUTS.items():
+        if generation < effective_from:
+            continue
+        label = f"{dataset_id} {version}"
+
+        # 1. The lifecycle fact. No model ever saw it, so the dataset record must keep
+        #    saying so. Marking it USED_IMMUTABLE to "represent" the incident would be a
+        #    measurement claim nothing supports.
+        entries = [d for d in cp.snapshot.get("datasets", [])
+                   if d.get("dataset_id") == dataset_id and d.get("version") == version]
+        if len(entries) != 1:
+            report.fail("HOLDOUT_FIREWALL",
+                        f"{label} is retired but appears {len(entries)} times in datasets")
+            continue
+        entry = entries[0]
+        if entry.get("status") != "FROZEN_UNUSED" or entry.get("spent_by") is not None:
+            report.fail("HOLDOUT_FIREWALL",
+                        f"{label} is recorded status={entry.get('status')!r} "
+                        f"spent_by={entry.get('spent_by')!r}. It was NEVER model-spent: "
+                        f"0 weight loads, 0 generations, 0 holdout spend events and no "
+                        f"receipt. Retirement is an ELIGIBILITY ruling and may not be "
+                        f"written into the dataset lifecycle as a spend that never "
+                        f"happened")
+
+        # 2. The invariant surface must still carry the ruling, and the replacement
+        #    requirement must still be stated.
+        invariants = " ".join(cp.snapshot.get("frozen_invariants", []))
+        if RETIREMENT_MARKER not in invariants:
+            report.fail("HOLDOUT_FIREWALL",
+                        f"no frozen invariant carries {RETIREMENT_MARKER!r}; the {label} "
+                        f"eligibility retirement was dropped rather than superseded")
+        if FRESH_HOLDOUT_MARKER not in invariants:
+            report.fail("HOLDOUT_FIREWALL",
+                        f"no frozen invariant carries {FRESH_HOLDOUT_MARKER!r}; a retired "
+                        f"holdout leaves the replacement requirement, and dropping it "
+                        f"would leave candidate 004 with no path to eligibility")
+
+        # 3. No candidate may claim it as the corpus it was measured against.
+        for candidate in cp.snapshot.get("candidates", []):
+            if candidate.get("evaluation_corpus") == label:
+                report.fail("HOLDOUT_FIREWALL",
+                            f"candidate {candidate.get('candidate_id')} names retired "
+                            f"{label} as its evaluation_corpus")
+
+        # 4-6. The next milestone may not point a future session back at it.
+        nxt = cp.snapshot.get("next_milestone", {})
+        holdout_text = nxt.get("evaluation_holdout", "")
+        if _names_holdout(holdout_text, dataset_id, version) and (
+                "RETIRED" not in holdout_text):
+            report.fail("HOLDOUT_FIREWALL",
+                        f"next_milestone.evaluation_holdout names {label} without saying "
+                        f"it is RETIRED, which reads as a designation to spend it")
+        for required in nxt.get("authority_required", []):
+            if _names_holdout(required, dataset_id, version):
+                report.fail("HOLDOUT_FIREWALL",
+                            f"next_milestone.authority_required requests authority naming "
+                            f"retired {label}: {required[:80]!r}")
+        if not any(_names_holdout(rule, dataset_id, version)
+                   for rule in nxt.get("ruled_out", [])):
+            report.fail("HOLDOUT_FIREWALL",
+                        f"next_milestone.ruled_out does not restate the {label} "
+                        f"prohibition where the next session actually reads it")
+
+
 def _body_shaped(payload: object, label: str, path: str = "$") -> list[str]:
     problems: list[str] = []
     if isinstance(payload, dict):
@@ -4613,6 +4723,7 @@ def run() -> Report:
     check_authority_separation(cp, report)
     check_operator_ruling(cp, report)
     check_holdout_firewall(cp, report)
+    check_holdout_retirement(cp, report)
     check_budgets(cp, report)
     check_next(cp, report)
     return report

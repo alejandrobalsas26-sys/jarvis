@@ -525,9 +525,13 @@ covers the historical `PROGRESS.md` only. Defects D25 and D28–D43 may not be r
 S3X0_STATE_CAPACITY_BLOCKER
 ```
 
-**No fact was erased to make room.** The blocker is reported rather than resolved,
+**No fact was erased to make room.** The blocker was reported rather than resolved,
 because the two ways to clear it — raising a reviewed budget, or dropping recorded
 constraints — are both operator decisions, not a milestone's to take.
+
+> **RESOLVED in Phase B** by the operator ruling in §15, which raised the reviewed budget
+> and dropped nothing. The measurement above is left exactly as it was taken; §18 records
+> what the finalised generation 12 actually cost.
 
 ---
 
@@ -539,3 +543,170 @@ open, read or grep the untracked residue · copy residue into the repository · 
 `eval-v6` bodies · mark `eval-v5` `USED_IMMUTABLE` · mark candidate 004 evaluated ·
 invent a dataset status · rewrite D25 or D28–D43 · rewrite history · promote, merge, tag,
 release or bump a version.
+
+**Phase B added nothing to that list and removed nothing from it.** It additionally did not:
+raise a budget without the exact ruling phrase · weaken `PATH_INTEGRITY` or `STALE_STATE` to
+get a green verifier · delete a test to get a green suite · touch the `PROGRESS` budget or its
+headroom invariant · change a schema · design `eval-v6` · delete the incident transcript.
+
+---
+
+# PHASE B — the ruling, the migration, and generation 12
+
+## 15 — The operator ruling, recorded body-free
+
+Phase A stopped at a blocker it had no authority to clear. Phase B began by presenting the
+recovery evidence read-only and requesting exactly one authorisation phrase, which a human
+operator then gave. It authorised **two things and nothing else**:
+
+| Authorised | Not authorised |
+|---|---|
+| Retiring `eval-v5` from all FUTURE ELIGIBILITY use | Evaluation · `EVAL` authority · promotion |
+| Migrating the reviewed snapshot budget `32,768 → 34,816` bytes | `candidate005` · `eval-v6` creation · training |
+| Body-blind deletion of S3W.1 runtime residue | Gate/scoring changes · `PROGRESS` budget changes |
+
+The ruling is **methodological, not an allegation**. Candidate 004 was trained and immutable
+**before** the exposure; no model saw `eval-v5`; no target was used for tuning; no evaluation
+occurred. What failed is that the ceremony **preregistered** orchestrator body-blindness, and
+relaxing a preregistered gate *after* it fails is post-hoc protocol weakening. Retirement is
+the conservative reading, and it is the only one available without rewriting the protocol.
+
+## 16 — Lifecycle truth and eligibility retirement are different facts
+
+The dataset status vocabulary has no word for *"frozen, never model-spent, but retired from
+eligibility"*, and **no word was invented and no schema was changed**. Both facts are recorded
+separately, and both are machine-verifiable:
+
+```
+LIFECYCLE   status FROZEN_UNUSED    spent_by null      MODEL_FACING_SPENT: NO
+ELIGIBILITY ELIGIBILITY_USE: RETIRED                   FRESH_V6_REQUIRED
+```
+
+`spent_by` was **not** abused to represent the incident. Writing `USED_IMMUTABLE` there would
+have asserted a measurement that never happened — 0 weight loads, 0 generations, 0 spend
+events, no receipt — and the repository would then carry a spend it cannot evidence. The
+retirement lives on the `frozen_invariants`, `defects` and `next_milestone` surfaces instead,
+which already existed and already carry prospective rules.
+
+`check_holdout_retirement` in the verifier enforces it on **six independent conditions**: a
+forged spend, a dropped retirement invariant, a dropped `FRESH_V6_REQUIRED`, a candidate
+naming `v5` as its corpus, an authority request naming `v5`, and a `ruled_out` list that stops
+restating the prohibition. Each is proved non-vacuous by a throwaway mutation in
+`test_training_gym_m62_s3x0_recovery_state.py`.
+
+**The retirement is PROSPECTIVE.** Generations 7–11 are byte-exact against Git and still
+truthfully call `eval-v5` `FROZEN_UNUSED`; the check does nothing to a snapshot older than
+generation 12, and a test asserts that stripping the invariant from generation 11 still
+passes. A ruling that reached backwards would invalidate every sealed generation.
+
+## 17 — The budget migration, and everything it did not move
+
+```
+SNAPSHOT_MAX_BYTES        32,768  ->  34,816     (+2,048, exactly 34 KiB)
+HISTORY_INDEX_MAX_BYTES   32,768      32,768     unchanged — it shared the value by coincidence
+PROGRESS_MAX_BYTES        40,960      40,960     unchanged
+PROGRESS_MAX_LINES           760         760     unchanged
+CURRENT_MAX_BYTES          2,048       2,048     unchanged
+REQUIRED_HEADROOM_BYTES    1,024       1,024     unchanged
+```
+
+`SNAPSHOT_MAX_BYTES` remains the single source of truth. The duplicated literals in
+`test_..._s3q0_control_plane.py` were **bound to the constant** rather than re-typed; the two
+deliberate reviewed-value pins were moved to `34_816` and left literal, because a pin that
+reads the constant it guards cannot catch a silent raise. A sweep test asks `git grep` whether
+any M62 surface still names the superseded number, so a **partial** migration fails loudly
+instead of leaving an emitter and a test quietly disagreeing.
+
+## 18 — Generation 12, measured on the real artifact
+
+```
+GEN12_SNAPSHOT        state/m62/snapshots/0012-m62-s3x0-holdout-firewall-recovery.json
+GEN12_BYTES           33,739 / 34,816            HEADROOM 1,077   >= 1,024   PASS
+PROGRESS              40,592 / 40,960            HEADROOM   368              PASS
+PROGRESS_LINES           609 / 610 (760 - 150)   MARGIN       1              PASS
+```
+
+Reaching it required **compacting, never deleting**. An intermediate draft came in at 34,095
+bytes — inside the new budget but **721 bytes** of headroom, under the required 1,024 — and the
+response was to tighten wording while preserving every clause, not to drop a constraint. In the
+course of that draft the S3N.1 guard caught four standing prohibitions the rewrite had silently
+dropped (`learning-rate` scope, `structured rows`, `response schema`, `D38 gate`) and the
+missing `TRAIN` half of the authority contract. **All five were restored.** That guard existed
+precisely for this failure mode, and it worked.
+
+## 19 — Residue hygiene, and one deliberate exception
+
+**514 files** were deleted **body-blind** — identified by path, size, mtime and session
+provenance, with nothing opened and no content read:
+
+| Removed | Established by |
+|---|---|
+| `jarvis/evaluation/configs/m62-s3w1-…json` | untracked, gitignored, `sha256 d01d9db3…`, mtime 10:17:42 |
+| the runtime `eval-v5` store copy | mtime 10:16, and generation 11 had recorded its bytes ABSENT from disk |
+| the S3W.1 session scratch root (509 files) | its `materialize_v5.py` timestamp matches the store to the second |
+
+Deleting the store copy is safe because the corpus is **derived**: the S3S suite rebuilds all
+five versions into a `tmp_path` root from a tracked generator, so nothing unique was destroyed.
+This was verified **before** deleting, not assumed.
+
+Hygiene **does not undo the exposure**, and no part of the ruling depends on it having
+succeeded.
+
+```
+RESIDUE_DELETE_BLOCKED_BY_POLICY
+```
+
+The S3W.1 session transcript is **deliberately preserved as incident and audit evidence**.
+Deleting it would destroy the entire session record rather than the exposure, and it is the
+primary human-readable account of what happened. Preservation does **not** authorise reopening,
+inspecting, quoting or semantically using any held-out body it contains.
+
+## 20 — The pre-existing residue test failure
+
+Phase A reported one test failing because of the untracked S3W.1 config:
+`test_no_candidate_004_evaluation_evidence_exists_anywhere`, which scans `jarvis/evaluation/`
+for any mention of candidate 004. After the body-blind cleanup it **passes with the test file
+unmodified**. The test was right and the tree was wrong; nothing was added to an ignore list.
+
+## 21 — Final state
+
+```
+FOCUSED_M62            4352 passed · 20 skipped · 0 failed
+CONTROL_PLANE_VERIFY   PASS · PROBLEMS 0 · 15/15 categories
+CANDIDATE004           TRAINED_UNEVALUATED · corpus null · receipt null
+EVAL_V5                FROZEN_UNUSED · spent_by null · ELIGIBILITY RETIRED
+D44                    FIXED · is_gate true
+EVAL_AUTHORITY         NONE          PROMOTION_AUTHORITY   NONE
+EVAL_V6                NOT CREATED   FRESH_V6_REQUIRED     YES
+```
+
+Four tests were **rescoped**, each argued in place and none weakened: two sealed S3W.0
+assertions now read generation 11 **by path** instead of the live pointer; the D38 sweep
+asserts the gate set is **exactly** the one deliberate gate rather than empty, which is
+strictly stronger; and holdout availability is read from the retirement registry rather than
+from the word `FROZEN_UNUSED`, which stopped meaning "available" the moment `v5` was retired.
+
+## 22 — Limitations
+
+- The exposure **scope was never re-measured**. Sizing it would mean re-opening the material,
+  so **one rendered body is a floor, not a proved bound**.
+- Body-blindness is proved with **synthetic canaries only**, never against real holdout
+  material, and by an allowlist-free sweep over body-bearing dataclasses.
+- `ConvertedRecord` keeps the generated repr while `training_gym/training/` is frozen. It holds
+  training rows and never holdout material, and a test fails the moment that freeze lifts.
+- The firewall is **architectural, not total**: a future dataclass that holds a body and does
+  not install a body-free repr is caught by the sweep, but code that deliberately prints a
+  field is not a repr problem and this fix does not address it.
+- Retirement is a **repository rule**. It cannot reach a copy of `v5` outside this repository.
+- Transcript preservation means the exposed material **still exists on this host**.
+
+## 23 — Next milestone
+
+**S3X.1 — freeze a fresh `eval-v6`, candidate-blind, in a NEW session**, under the repaired
+body-blindness regime. It freezes a corpus and **measures nothing**.
+
+`v6` must be built from the generator and the gate denominators by a session that has read no
+`v5` body and no leaked transcript; deriving it from the exposed corpus would inherit the
+exposure. Candidate 004 stays `TRAINED_UNEVALUATED` until `v6` is frozen and then spent
+**exactly once** under a fresh single-use human `EVAL` authority — a separate decision that
+nothing in this milestone grants.
