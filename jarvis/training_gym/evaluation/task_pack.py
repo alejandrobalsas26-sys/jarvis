@@ -38,6 +38,7 @@ from enum import Enum
 from ..datasets.candidate import DatasetCandidate, DatasetSplit, require_digest
 from ..policies import credential_shaped
 from ..schemas import (
+    body_free_repr,
     SchemaError,
     SensitivityClass,
     assert_no_private_content,
@@ -246,6 +247,17 @@ class EvaluationTask:
     sensitivity: SensitivityClass = SensitivityClass.SYNTHETIC
     pack_version: str = TASK_PACK_VERSION
 
+    def __repr__(self) -> str:
+        """Identity and digests only. See :func:`body_free_repr`.
+
+        This class holds ``system_prompt`` and ``user_prompt``. The generated
+        dataclass repr rendered both, and ``repr`` of any bound method of a pack
+        holding these tasks rendered them too.
+        """
+        return body_free_repr(
+            self, "task_id", "task_family", "split", "kind", "task_hash",
+            "source_dataset_manifest_hash", "input_record_hash")
+
     def __post_init__(self) -> None:
         set_ = object.__setattr__
         set_(self, "task_id", require_id(self.task_id, "task.task_id"))
@@ -402,6 +414,11 @@ class HiddenTarget:
     target_source: str = ""
     rubric: dict = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        """Identity and digests only — never ``target_text``."""
+        return body_free_repr(self, "task_id", "task_hash", "target_hash",
+                              "target_source")
+
     def __post_init__(self) -> None:
         set_ = object.__setattr__
         set_(self, "task_id", require_id(self.task_id, "hidden target.task_id"))
@@ -517,6 +534,16 @@ class EvaluationTaskPack:
     dataset_version: str
     generation: int = 1
     pack_version: str = TASK_PACK_VERSION
+
+    def __repr__(self) -> str:
+        """Shape only. The tasks tuple is summarised by count, never rendered.
+
+        This is the object whose bound-method repr leaked a held-out prompt body:
+        ``repr(pack.pack_hash)`` expands to ``<bound method ... of {pack!r}>``.
+        With this override that expansion is body-free.
+        """
+        return body_free_repr(self, "dataset_id", "dataset_version", "generation",
+                              "pack_version", task_count=len(self.tasks))
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__

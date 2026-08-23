@@ -30,6 +30,7 @@ from enum import Enum
 from pathlib import Path
 
 from ..schemas import (
+    body_free_repr,
     SchemaError,
     assert_no_private_content,
     require_bool,
@@ -318,6 +319,17 @@ class EvaluationResult:
     #: The digest of the request this answers. The runner compares it against the
     #: request it sent, so a result for the wrong task cannot be filed as the right one.
     request_parity_hash: str = ""
+
+    def __repr__(self) -> str:
+        """Outcome and accounting only — never ``response_text``.
+
+        A model response to a held-out task is as disclosing as the task itself:
+        it is the measurement.
+        """
+        return body_free_repr(
+            self, "backend_id", "role", "task_id", "task_hash", "status",
+            "finish_reason", "input_tokens", "output_tokens", "latency_ms",
+            "timed_out", "interrupted", "error_category", "request_parity_hash")
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__

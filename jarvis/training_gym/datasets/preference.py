@@ -47,6 +47,7 @@ from pathlib import Path
 
 from ..atomicio import atomic_write_text
 from ..schemas import (
+    body_free_repr,
     GYM_VERSION,
     SCHEMA_KEY,
     SCHEMA_VERSION,
@@ -158,6 +159,11 @@ class RejectedResponse:
     sensitivity: SensitivityClass = SensitivityClass.SYNTHETIC
     provenance: str = ""
     safe_to_retain: bool = False
+
+    def __repr__(self) -> str:
+        """Identity and digests only — never the rejected ``text``."""
+        return body_free_repr(self, "rejected_id", "task_hash", "attempt_hash",
+                              "source_model_id", "sensitivity", "safe_to_retain")
 
     def __post_init__(self) -> None:
         setattr_ = object.__setattr__

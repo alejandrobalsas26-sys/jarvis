@@ -472,6 +472,99 @@ def scan_private_content(payload: Any) -> tuple[str, ...]:
     return tuple(found)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Body-free representation
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS EXISTS
+#
+# A held-out evaluation prompt reached an orchestration session through nothing more
+# than Python's default representation machinery. No evaluation ran, no weights were
+# loaded and no holdout was spent — the body was rendered before any of that, by a
+# debug display.
+#
+# Three ordinary language features compose into the leak:
+#
+#   1. ``@dataclass`` generates a ``__repr__`` that renders EVERY field, so a record
+#      holding ``user_prompt`` prints the prompt.
+#   2. A container's repr recurses into its elements, so a pack of such records
+#      prints the whole corpus.
+#   3. ``repr`` of a BOUND METHOD is ``<bound method C.m of {self!r}>`` — it
+#      interpolates the repr of ``__self__``. Merely displaying ``pack.pack_hash``
+#      WITHOUT CALLING IT renders every task body in the pack.
+#
+# Route 3 is the one that actually fired, and it is the reason a fix aimed only at
+# ``repr(pack)`` would be insufficient: there is no ``__repr__`` on the method
+# object to override. The only defence is that the pack's OWN repr — which the
+# method repr interpolates — must already be body-free.
+#
+# So the rule is architectural, not local: a container that holds bodies must never
+# have a representation that can render them, because the caller who triggers the
+# rendering is frequently not the caller who knows bodies are present.
+
+#: Field values a body-free repr may render literally. Everything else is described
+#: by type and size only. The allowlist is by TYPE, never by field name: a future
+#: contributor who adds a body-bearing field to a safe-field list still cannot leak,
+#: because a ``str`` is only rendered when it is short and digest- or id-shaped.
+_REPR_ATOMIC = (bool, int, float, type(None))
+
+#: The longest string a body-free repr will render literally. Digests are 64 chars,
+#: ids and version strings are shorter. A prompt is not.
+MAX_BODY_FREE_REPR_STR = 80
+
+
+def _body_free_value(value: Any) -> str:
+    """Render one field value without ever emitting a body.
+
+    Deliberately conservative: anything that is not an atom, a short scalar-shaped
+    string or an enum is reduced to its type and size. Being unhelpful about an
+    unexpected value is the correct failure — the alternative failure mode printed a
+    held-out prompt.
+    """
+    if isinstance(value, _REPR_ATOMIC):
+        return repr(value)
+    if isinstance(value, Enum):
+        # ``repr(enum_member)`` is body-free by construction: it names the class and
+        # the member, never a payload.
+        return f"{type(value).__name__}.{value.name}"
+    if isinstance(value, str):
+        if len(value) <= MAX_BODY_FREE_REPR_STR and "\n" not in value:
+            return repr(value)
+        return f"<str len={len(value)}>"
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return f"<{type(value).__name__} len={len(value)}>"
+    if isinstance(value, dict):
+        return f"<dict keys={len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
+def body_free_repr(obj: Any, *fields: str, **extra: Any) -> str:
+    """Build a representation of *obj* from *fields* that cannot render a body.
+
+    Pass identity and digest fields only. The renderer does not trust that list —
+    every value still goes through :func:`_body_free_value` — so the guarantee holds
+    even if the caller names a body-bearing field by mistake.
+
+    *extra* adds computed summary values (a task count, say) that are not fields.
+    They are rendered through the same guard as everything else.
+
+    A body-bearing class must install the result as its ``__repr__``. That single
+    override closes ``repr(obj)``, ``str(obj)``, f-strings, ``%r``, logging, exception
+    interpolation AND ``repr`` of any bound method of the object at once, because
+    every one of those routes ultimately calls this method.
+    """
+    rendered = []
+    for name in fields:
+        try:
+            value = getattr(obj, name)
+        except AttributeError:
+            continue
+        rendered.append(f"{name}={_body_free_value(value)}")
+    for name, value in extra.items():
+        rendered.append(f"{name}={_body_free_value(value)}")
+    return f"{type(obj).__name__}({', '.join(rendered)})"
+
+
 def assert_no_private_content(payload: Any, *, label: str) -> None:
     """Raise unless *payload* is free of secrets, home paths and hidden reasoning."""
     found = scan_private_content(payload)
@@ -482,9 +575,10 @@ def assert_no_private_content(payload: Any, *, label: str) -> None:
 
 __all__ = [
     "APPROVABLE_STATUSES", "GYM_VERSION", "MAX_HASHED_FILE_BYTES",
-    "RESERVED_DEVICE_NAMES", "SCHEMA_KEY", "SCHEMA_VERSION",
+    "MAX_BODY_FREE_REPR_STR", "RESERVED_DEVICE_NAMES", "SCHEMA_KEY", "SCHEMA_VERSION",
     "ResultStatus", "SchemaError", "SensitivityClass", "Severity",
-    "assert_no_private_content", "canonical_json", "check_schema_version",
+    "assert_no_private_content", "body_free_repr", "canonical_json",
+    "check_schema_version",
     "reject_unknown_fields", "require_binding", "require_bool", "require_enum",
     "require_float", "require_id", "require_int", "require_mapping",
     "require_str_tuple", "require_text", "scan_private_content", "sha256_file",

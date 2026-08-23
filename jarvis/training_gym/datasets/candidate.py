@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..schemas import (
+    body_free_repr,
     GYM_VERSION,
     SCHEMA_KEY,
     SCHEMA_VERSION,
@@ -350,6 +351,12 @@ class DatasetCandidate:
     candidate_version: str = CANDIDATE_VERSION
 
     # -- validation -------------------------------------------------------------
+    def __repr__(self) -> str:
+        """Identity, state and digests only — never the prompt or the target."""
+        return body_free_repr(
+            self, "candidate_id", "task_id", "task_family", "task_hash",
+            "target_hash", "target_source", "state", "sensitivity")
+
     def __post_init__(self) -> None:
         setattr_ = object.__setattr__
         setattr_(self, "candidate_id", require_id(self.candidate_id,

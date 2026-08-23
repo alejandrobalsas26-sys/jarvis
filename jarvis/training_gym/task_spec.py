@@ -49,6 +49,7 @@ from .policies import (
     ScoringPolicy,
 )
 from .schemas import (
+    body_free_repr,
     SCHEMA_KEY,
     SCHEMA_VERSION,
     SchemaError,
@@ -323,6 +324,11 @@ class TaskSpec:
     tags: tuple[str, ...] = ()
 
     # -- validation -------------------------------------------------------------
+    def __repr__(self) -> str:
+        """Identity and classification only — never ``prompt``."""
+        return body_free_repr(self, "task_id", "task_family", "version",
+                              "sensitivity", "evaluation_only", "dataset_eligible")
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_id", require_id(self.task_id, "task_id"))
         object.__setattr__(self, "created_by", require_id(self.created_by, "created_by"))

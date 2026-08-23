@@ -57,6 +57,7 @@ from enum import Enum
 from typing import ClassVar
 
 from ..schemas import (
+    body_free_repr,
     SCHEMA_KEY,
     SCHEMA_VERSION,
     ResultStatus,
@@ -463,6 +464,10 @@ class ProviderResponse:
     text: str = ""
     cost: CostEstimate | None = None
     audit: Mapping[str, object] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        """Accounting only — never the generated ``text``."""
+        return body_free_repr(self, "cost", text_len=len(self.text or ""))
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):

@@ -56,7 +56,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from ..schemas import SchemaError, require_bool, require_int
+from ..schemas import SchemaError, body_free_repr, require_bool, require_int
 from .base import (
     MAX_TEACHER_PROMPT_BYTES,
     MAX_TEACHER_RESPONSE_BYTES,
@@ -148,6 +148,10 @@ class CloudResponse:
     status: int
     text: str = ""
     headers: Mapping[str, str] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        """Transport status only — never the response ``text``."""
+        return body_free_repr(self, "status", text_len=len(self.text or ""))
 
     def __post_init__(self) -> None:
         require_int(self.status, "cloud response: status", minimum=100, maximum=599)
