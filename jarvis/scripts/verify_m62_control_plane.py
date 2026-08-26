@@ -263,7 +263,8 @@ FORBIDDEN_BODY_SOURCES = (
 )
 #: APPENDED to, never reordered: two sealed test files index this tuple positionally.
 FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(",
-                          "corpus_v5_material", "corpus_v5(")
+                          "corpus_v5_material", "corpus_v5(",
+                          "corpus_v6_material", "corpus_v6(")
 
 
 def body_symbol_version(symbol: str) -> str:
