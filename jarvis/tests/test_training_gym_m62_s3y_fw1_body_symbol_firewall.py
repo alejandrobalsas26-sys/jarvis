@@ -33,11 +33,16 @@ test rather than a quiet hole.
 
 BODY-FREE BY CONSTRUCTION
 -------------------------
-Every probe string here is synthetic. This file reads no held-out corpus, imports no
-corpus builder, materialises no pack, and names no evaluation task; the two v6 symbol
-strings it does carry are FUNCTION NAMES, which is precisely what the registry protects
-and precisely what a test of the registry must be able to say. The prohibition is
-asserted, not promised: see :func:`test_this_suite_names_no_held_out_task_material`.
+Every probe string here is synthetic. This file never opens the body-bearing corpus
+builder — not to read it and not to parse it, because parsing it is reading it — imports
+no corpus builder, materialises no pack, and enumerates no real evaluation task
+identifier. The two v6 symbol strings it does carry are FUNCTION NAMES, which is precisely
+what the registry protects and precisely what a test of the registry must be able to say.
+
+A registry test does not need to open the exam to prove the registry is right, and a
+regression that opened it to prove a name exists would defeat the thing it guards. Real
+held-out identifiers stay the sole responsibility of the separate, canonical task-id
+firewall; this suite neither restates that suite nor reads the id table in order to.
 
 NOTHING HERE TRAINS, EVALUATES, LOADS WEIGHTS OR GENERATES A TOKEN. NO HOLDOUT IS SPENT.
 """
@@ -66,6 +71,8 @@ APPENDED_SUFFIX = (
 )
 V6_MATERIAL_SYMBOL, V6_WRAPPER_SYMBOL = APPENDED_SUFFIX
 
+#: A path string only. This suite never opens it, by any mechanism: the registry is
+#: checked against the registry, never against the exam it protects.
 BODY_BEARING_SOURCE = "jarvis/scripts/build_evaluation_corpus.py"
 
 
@@ -152,15 +159,6 @@ def test_each_new_symbol_resolves_to_the_v6_generation():
     assert V.body_symbol_version(V6_WRAPPER_SYMBOL) == "v6"
 
 
-def test_both_new_symbols_name_functions_that_really_exist_in_the_body_source():
-    """Parsed, never read: the AST yields names, and no statement is rendered."""
-    tree = ast.parse((REPO / BODY_BEARING_SOURCE).read_text(encoding="utf-8"))
-    defined = {node.name for node in ast.walk(tree)
-               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    assert V6_MATERIAL_SYMBOL in defined
-    assert V6_WRAPPER_SYMBOL.rstrip("(") in defined
-
-
 def test_the_body_source_is_still_declared_body_bearing():
     assert BODY_BEARING_SOURCE in V.FORBIDDEN_BODY_SOURCES
 
@@ -170,21 +168,24 @@ def test_the_body_source_is_still_declared_body_bearing():
 # ══════════════════════════════════════════════════════════════════════════════
 def test_a_scanned_surface_citing_the_v6_material_symbol_is_refused(sandbox):
     problems = _body_source_problems(sandbox, V6_MATERIAL_SYMBOL)
-    assert [m for m in problems if "eval-v6" in m], problems
+    assert [m for m in problems if "eval-v6" in m]
 
 
 def test_a_scanned_surface_citing_the_v6_wrapper_symbol_is_refused(sandbox):
     """Protecting the material alone would leave this citation working."""
     problems = _body_source_problems(sandbox, V6_WRAPPER_SYMBOL)
-    assert [m for m in problems if "eval-v6" in m], problems
+    assert [m for m in problems if "eval-v6" in m]
 
 
-def test_the_refusal_names_the_symbol_and_no_holdout_material(sandbox):
+def test_the_refusal_names_the_synthetic_symbol_it_refused(sandbox):
+    """A refusal must be actionable, so it names the symbol that triggered it.
+
+    The symbol is synthetic and is a function name. Whether a refusal could ever carry a
+    real held-out identifier is the canonical task-id firewall's question, and it is not
+    re-asked here: asking it would mean enumerating the identifiers to look for.
+    """
     problems = _body_source_problems(sandbox, V6_MATERIAL_SYMBOL)
     assert any(V6_MATERIAL_SYMBOL in m for m in problems)
-    for message in problems:
-        for task_ids in V.HELD_OUT_TASK_IDS.values():
-            assert not [t for t in task_ids if t in message]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -225,7 +226,7 @@ def test_removing_the_wrapper_entry_leaves_the_material_entry_working(sandbox,
 def test_the_historical_generations_are_still_refused_too(sandbox):
     """The append must not have displaced what was already protected."""
     problems = _body_source_problems(sandbox, HISTORICAL_PREFIX[0])
-    assert [m for m in problems if "eval-v4" in m], problems
+    assert [m for m in problems if "eval-v4" in m]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -255,12 +256,15 @@ def test_the_scanner_matches_by_substring_and_this_suite_does_not_change_that(sa
 # ══════════════════════════════════════════════════════════════════════════════
 #  5. this suite depends on no real exam material
 # ══════════════════════════════════════════════════════════════════════════════
-def test_this_suite_names_no_held_out_task_material():
-    """Applied with the control plane's OWN tables, never a weaker second opinion."""
+def test_this_suite_carries_no_authority_token_and_no_private_path():
+    """Applied with the control plane's OWN patterns, never a weaker second opinion.
+
+    Whether any tracked file names a real held-out task identifier is the canonical
+    task-id firewall's question and stays there. A regression that answered it here would
+    have to iterate the identifiers to search for them, which is the disclosure it claims
+    to be preventing, and a failure would print the ones it found.
+    """
     text = Path(__file__).read_text(encoding="utf-8")
-    for version, task_ids in V.HELD_OUT_TASK_IDS.items():
-        named = sorted({tid for tid in task_ids if tid in text})
-        assert not named, f"this suite names eval-{version} task(s) {named[:4]}"
     assert V.TOKEN_LITERAL_RE.search(text) is None
     assert not V.PRIVATE_PATH_RE.findall(text)
 

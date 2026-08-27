@@ -55,9 +55,13 @@ reason the registry exists.
 * **negative control** at the scanner's own containment semantics, recorded rather than
   redesigned.
 
-Every probe string is synthetic. The suite reads no held-out corpus, imports no corpus
-builder, materialises no pack and names no evaluation task; that prohibition is asserted
-in the suite itself against the control plane's own task-id tables.
+Every probe string is synthetic. The suite never opens the body-bearing builder — not to
+read it and not to parse it — imports no corpus builder, materialises no pack and
+enumerates no real evaluation task identifier. It asserts its own freedom from authority
+tokens and private paths with the control plane's own patterns. Whether any tracked file
+names a real held-out identifier stays the sole responsibility of the separate, canonical
+task-id firewall, which is unchanged here: a registry regression that re-asked that
+question would have to iterate the identifiers to search for them.
 
 ## 4. Scientific state — unchanged
 
