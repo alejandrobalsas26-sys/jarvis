@@ -62,7 +62,8 @@ def _project(state: str, **kw) -> dict:
         parent_sha256=CAP.EXPECTED_PARENT_SHA256,
         evaluation_id="m62-s3y-quality-heldout-live",
         plan_digest="0" * 8, report_digest="0" * 8,
-        passed=0, skipped=0, failed=0)
+        passed=CAP.STANDIN_PASSED, skipped=CAP.STANDIN_SKIPPED,
+        failed=CAP.STANDIN_FAILED)
     defaults.update(kw)
     return CAP.project_gen14(_parent(), **defaults)
 
@@ -429,3 +430,116 @@ def test_the_capacity_proof_spent_nothing() -> None:
     assert c4["evaluation_corpus"] is None and c4["evaluation_receipt"] is None
     assert live["authority_observation"]["eval"] == "NONE_OBSERVED_IN_REPOSITORY"
     assert not (REPO / CAP.EVAL_RECEIPT_PATH).exists()
+
+
+# ── the stand-in must be a BOUND, not a fiction (S3Y.CAP1) ───────────────────────────
+#
+# The gate used to be measured with passed=skipped=failed=0 -- one digit each, where the
+# real baseline carries four and two. That understated every projection by four bytes, and
+# four bytes was the entire margin: the worst-case ending measured 1027 spare against a
+# 1024 floor, so the truthful figure was 1023 and the green gate was measuring a snapshot
+# that could never be written. These tests exist so that cannot recur.
+def _real_baseline() -> tuple[int, int, int]:
+    """The baseline generation 14 will actually carry, from the parent it projects from."""
+    tb = _parent()["test_baseline"]
+    return tb["passed"], tb["skipped"], tb["failed"]
+
+
+def test_the_standin_baseline_is_at_least_as_wide_as_a_real_one() -> None:
+    """A stand-in narrower than the truth produces a projection smaller than the truth."""
+    passed, skipped, failed = _real_baseline()
+    assert len(str(CAP.STANDIN_PASSED)) >= len(str(passed))
+    assert len(str(CAP.STANDIN_SKIPPED)) >= len(str(skipped))
+    assert len(str(CAP.STANDIN_FAILED)) >= len(str(failed))
+
+
+@pytest.mark.parametrize("state", CAP.TERMINAL_STATES)
+def test_the_standin_projection_is_never_smaller_than_the_truthful_one(state: str) -> None:
+    """The gate is decided on the stand-in, so it must bound every truthful baseline."""
+    passed, skipped, failed = _real_baseline()
+    standin, _ = CAP.measure(_project(state))
+    truthful, _ = CAP.measure(
+        _project(state, passed=passed, skipped=skipped, failed=failed))
+    assert standin >= truthful, f"{state}: stand-in {standin} < truthful {truthful}"
+
+
+@pytest.mark.parametrize("state", CAP.TERMINAL_STATES)
+def test_the_real_baseline_also_clears_the_floor(state: str) -> None:
+    passed, skipped, failed = _real_baseline()
+    _, headroom = CAP.measure(
+        _project(state, passed=passed, skipped=skipped, failed=failed))
+    assert headroom >= CAP.REQUIRED_HEADROOM_BYTES, f"{state}: {headroom} spare"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"passed": 10 ** len(str(CAP.STANDIN_PASSED))},
+    {"skipped": 10 ** len(str(CAP.STANDIN_SKIPPED))},
+    {"failed": 10 ** len(str(CAP.STANDIN_FAILED))},
+    {"passed": -1},
+])
+def test_a_baseline_wider_than_the_standin_is_refused(kwargs: dict) -> None:
+    """NON-VACUITY: the width guard fires rather than silently under-measuring."""
+    with pytest.raises(RuntimeError, match="stand-in width|does not fit"):
+        _project("DURABILITY_FAILURE", **kwargs)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"plan_digest": "a" * 64},
+    {"report_digest": "b" * 64},
+    {"plan_digest": "c" * 7},
+    {"evaluation_id": "x" * (CAP.MAX_EVALUATION_ID_CHARS + 1)},
+    {"evaluation_generation": 0},
+    {"evaluation_generation": CAP.MAX_EVALUATION_GENERATION + 1},
+])
+def test_an_oversized_spend_field_is_refused(kwargs: dict) -> None:
+    """A full 64-hex digest would add 112 bytes to a projection with less margin."""
+    with pytest.raises(RuntimeError):
+        _project("DURABILITY_FAILURE", **kwargs)
+
+
+def test_the_spend_record_interpolates_the_generation_it_is_given() -> None:
+    """gen-N used to be a hard-coded literal, so a gen-2 run recorded a false ordinal."""
+    for n in (1, 2, 9):
+        v6 = _entry(_project("ELIGIBLE", evaluation_generation=n),
+                    "datasets", "manifest_hash", EVAL_V6_MANIFEST)
+        assert f"gen-{n}," in v6["spent_by"]
+
+
+# ── the two authorised rewrites this milestone applied ───────────────────────────────
+@pytest.mark.parametrize("state", CAP.TERMINAL_STATES)
+def test_gen11_readiness_invariant_is_no_longer_falsified_by_its_own_generation(
+        state: str) -> None:
+    """Generation 13 said 'no holdout is spent'. Generation 14 spends one, in EVERY
+    ending, because the spend boundary is the durable commit and not proof a forward pass
+    finished. Shipping the clause unchanged would emit a snapshot contradicting its own
+    spent_by."""
+    inv = [x for x in _project(state)["frozen_invariants"]
+           if x.startswith("GEN11 IS READINESS")]
+    assert len(inv) == 1
+    assert "no holdout is spent" not in inv[0]
+    assert "no human authorised evaluation" not in inv[0]
+    # The permanent half -- qualification is not authorisation -- is what it is FOR.
+    assert "GEN11 IS READINESS, NOT AUTHORITY" in inv[0]
+
+
+@pytest.mark.parametrize("state", CAP.TERMINAL_STATES)
+def test_the_author_disqualification_rule_is_stated_once_not_twice(state: str) -> None:
+    """kind (c): the rule and its procedural caveat live on the invariant surface; the
+    limitation surface carries the candidate-004 INSTANCE, not a second copy."""
+    g = _project(state)
+    rule = [x for x in g["frozen_invariants"] if "HOLDOUT AUTHOR IS NEVER" in x]
+    assert len(rule) == 1 and "no check here detects a breach" in rule[0]
+    entry = [x for x in g["limitations"]
+             if x.startswith("The session that authored eval-v5")]
+    assert len(entry) == 1
+    assert "no check here can detect a breach" not in entry[0]
+    # Both subjects CARRIED_FORWARD pins survive the compaction.
+    assert "authored eval-v5" in entry[0] and "authored eval-v6" in entry[0]
+
+
+@pytest.mark.parametrize("state", CAP.TERMINAL_STATES)
+def test_no_snapshot_entry_carries_stray_whitespace(state: str) -> None:
+    g = _project(state)
+    for surface in ("frozen_invariants", "limitations"):
+        for text in g[surface]:
+            assert text == text.strip(), f"{surface}: {text[:60]!r}"

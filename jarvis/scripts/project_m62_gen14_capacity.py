@@ -53,10 +53,28 @@ Not a budget raise, and not a deletion. Only:
   settled fact rather than kept as an open question beside its own answer. "Candidate
   004's eligibility is UNKNOWN until eval-v6 is spent exactly once" is superseded by
   eval-v6 having been spent exactly once; keeping both is duplication, not history.
+* The same is true of one FROZEN INVARIANT. ``GEN11 IS READINESS, NOT AUTHORITY`` asserted
+  "no human authorised evaluation, no holdout is spent"; generation 14 falsifies both in
+  ALL FOUR endings. Shipping it unchanged would emit a snapshot contradicting its own
+  ``spent_by``, so it is rewritten to the settled fact. That is truthfulness, not room.
 
 Every clause that must survive that compaction is listed in :data:`CARRIED_FORWARD` and
 checked HERE, fail-closed, before the projection is measured. A compaction that drops a
 standing prohibition is refused rather than reported.
+
+WHY THE STAND-INS ARE THE POINT (S3Y.CAP1)
+------------------------------------------
+The first version of this projector defaulted ``passed``/``skipped``/``failed`` to ``0``.
+One digit each — where a real baseline carries four and two. Every projection therefore
+came out FOUR BYTES SMALLER than any snapshot that could actually be written, and four
+bytes was the whole margin: the worst-case ending reported 1027 spare against a 1024
+floor, so the truthful figure was 1023 and the gate was green while measuring a fiction.
+
+A stand-in of the wrong SHAPE is worse than no stand-in at all, because it prints PASS. So
+every value this projector cannot know before S3Y runs is now either a fixed-length
+literal, or a RIGHT-SIZED bounded maximum that is refused if the real value outgrows it:
+:func:`assert_baseline_within_standin` and :func:`assert_spend_fields_within_standin` fail
+closed rather than under-measure.
 
 NOTHING HERE WRITES STATE UNLESS ``--emit`` IS PASSED. Nothing here reads a held-out task
 body, loads a model, touches an adapter, generates a token, creates or requests an
@@ -91,6 +109,35 @@ REQUIRED_HEADROOM_BYTES = 1024
 #: The per-entry character cap the verifier enforces on every snapshot string. Mirrored
 #: here so a projection fails before it is written rather than after it is reviewed.
 MAX_ENTRY_CHARS = 320
+
+#: Right-SIZED stand-ins for the fields whose value is not known until S3Y has run.
+#:
+#: A stand-in of the wrong SHAPE is worse than no stand-in, because it produces a
+#: projection that is SMALLER than any truthful snapshot and prints PASS. That is exactly
+#: what ``passed=skipped=failed=0`` did: one digit each, where the real baseline carries a
+#: four-digit pass count and a two-digit skip count. Those four bytes were the whole
+#: margin -- the worst-case ending measured 1027 spare against a 1024 floor, so the
+#: truthful figure was 1023 and the gate was green only because it was measuring a
+#: fiction.
+#:
+#: These are the canonical BOUNDED MAXIMA for the digit widths, not today's values: the
+#: suite may grow, and a projection that has to be re-argued every time a test is added is
+#: not a bound. ``assert_baseline_within_standin`` refuses any real count wider than what
+#: was projected.
+STANDIN_PASSED = 99_999      # 5 digits
+STANDIN_SKIPPED = 999        # 3 digits
+STANDIN_FAILED = 999         # 3 digits
+
+#: The short digests the spend record interpolates are EIGHT hex characters, as every
+#: historical ``spent_by`` shows. Nothing used to enforce that: the full ``plan_hash`` is
+#: 64 hex, so passing it -- the natural mistake -- silently added 112 bytes to a
+#: projection whose whole margin is smaller than that.
+SHORT_DIGEST_CHARS = 8
+
+#: ``evaluation_id`` and the generation ordinal are interpolated into ``spent_by`` too.
+#: Both are bounded so the projection cannot be quietly outgrown by its own inputs.
+MAX_EVALUATION_ID_CHARS = 32
+MAX_EVALUATION_GENERATION = 9
 
 EXPECTED_PARENT_SHA256 = (
     "9f49c759b32c571b05b285be9da210da6a609c0aaea6e059010b07bcf2dc6f6c")
@@ -224,13 +271,53 @@ def _entry(payload: dict, surface: str, key: str, value: str) -> dict:
     return hits[0]
 
 
+def assert_baseline_within_standin(passed: int, skipped: int, failed: int) -> None:
+    """Refuse a real test baseline wider than the one capacity was proved against.
+
+    The projection is a claim about a SHAPE. If the real baseline needs more digits than
+    the stand-in reserved, the bytes measured here are not the bytes that would land, and
+    the gate proved nothing about the snapshot actually being written.
+    """
+    for name, value, bound in (("passed", passed, STANDIN_PASSED),
+                               ("skipped", skipped, STANDIN_SKIPPED),
+                               ("failed", failed, STANDIN_FAILED)):
+        if value < 0 or len(str(value)) > len(str(bound)):
+            raise RuntimeError(
+                f"test_baseline.{name}={value} does not fit the projected stand-in width "
+                f"of {len(str(bound))} digits; capacity was not proved for it")
+
+
+def assert_spend_fields_within_standin(evaluation_id: str, plan_digest: str,
+                                       report_digest: str,
+                                       evaluation_generation: int) -> None:
+    """Refuse any spend-record field longer than the projection assumed."""
+    if len(evaluation_id) > MAX_EVALUATION_ID_CHARS:
+        raise RuntimeError(
+            f"evaluation_id is {len(evaluation_id)} characters, over the projected "
+            f"{MAX_EVALUATION_ID_CHARS}")
+    for name, digest in (("plan_digest", plan_digest),
+                         ("report_digest", report_digest)):
+        if len(digest) != SHORT_DIGEST_CHARS:
+            raise RuntimeError(
+                f"{name} is {len(digest)} characters; the spend record interpolates the "
+                f"{SHORT_DIGEST_CHARS}-character SHORT digest, and a full 64-hex hash "
+                f"would add bytes this projection never measured")
+    if not 1 <= evaluation_generation <= MAX_EVALUATION_GENERATION:
+        raise RuntimeError(
+            f"evaluation generation {evaluation_generation} is outside the projected "
+            f"range 1..{MAX_EVALUATION_GENERATION}")
+
+
 def project_gen14(parent: dict, *, terminal_state: str, subject_commit: str,
                   parent_sha256: str, evaluation_id: str, plan_digest: str,
                   report_digest: str, passed: int, skipped: int,
-                  failed: int) -> dict:
+                  failed: int, evaluation_generation: int = 1) -> dict:
     """Generation 13 -> the minimum truthful generation 14. Pure; writes nothing."""
     if terminal_state not in TERMINAL_STATES:
         raise RuntimeError(f"unknown terminal state {terminal_state!r}")
+    assert_baseline_within_standin(passed, skipped, failed)
+    assert_spend_fields_within_standin(
+        evaluation_id, plan_digest, report_digest, evaluation_generation)
     g = json.loads(json.dumps(parent))
     measured = terminal_state in ("ELIGIBLE", "NOT_ELIGIBLE")
 
@@ -252,8 +339,8 @@ def project_gen14(parent: dict, *, terminal_state: str, subject_commit: str,
     v6["status"] = "USED_IMMUTABLE"
     v6["evidence"] = GEN14_EVIDENCE
     v6["spent_by"] = (
-        f"S3Y LIVE, candidate 004 (evaluation {evaluation_id} gen-1, plan "
-        f"{plan_digest}, report {report_digest})")
+        f"S3Y LIVE, candidate 004 (evaluation {evaluation_id} "
+        f"gen-{evaluation_generation}, plan {plan_digest}, report {report_digest})")
 
     # ── eval-v5 is NOT touched, in any state ─────────────────────────────────────
     v5 = _entry(g, "datasets", "version", "v5")
@@ -370,8 +457,7 @@ def project_gen14(parent: dict, *, terminal_state: str, subject_commit: str,
     _replace_prefix(
         lim, "The session that authored eval-v5",
         "The session that authored eval-v5 is disqualified from designing candidate 004, "
-        "and the one that authored eval-v6 from evaluating it. PROCEDURAL, enforced by "
-        "using a new session; no check here can detect a breach.")
+        "and the one that authored eval-v6 from evaluating it.")
 
     if generated:
         # (a) Both entries said "nothing has been loaded or generated yet". S3Y is that
@@ -432,6 +518,24 @@ def project_gen14(parent: dict, *, terminal_state: str, subject_commit: str,
     # halves of what those states add.
 
     g["limitations"] = [x for x in lim if x]
+
+    # ── Frozen invariants: one PROSPECTIVE clause that S3Y settles ───────────────
+    #
+    # (a), applied to the invariant surface. Generation 13 recorded "no EVAL capability
+    # exists, no human authorised evaluation, no holdout is spent and no candidate has
+    # passed or failed". Every one of those clauses is FALSE the moment S3Y crosses the
+    # model-facing boundary -- in ALL FOUR endings, because the spend boundary is the
+    # durable commit and not proof a forward pass finished. Shipping it unchanged would
+    # emit a snapshot asserting "no holdout is spent" beside a spent_by naming what spent
+    # it, which is not a compaction question but a truthfulness one.
+    #
+    # What the invariant is FOR -- qualification is not authorisation -- is permanent and
+    # is kept verbatim as the leading clause CARRIED_FORWARD pins.
+    _replace_prefix(
+        g["frozen_invariants"], "GEN11 IS READINESS, NOT AUTHORITY",
+        "GEN11 IS READINESS, NOT AUTHORITY. A qualified ceremony is not an authorised "
+        "one. S3Y consumed ONE single-use human EVAL authority and spent eval-v6; "
+        "neither is reusable.")
 
     # ── The prospective contract, rewritten for the milestone that has not happened ──
     if measured:
@@ -581,9 +685,13 @@ def main(argv: list[str] | None = None) -> int:
                              "plan exists, which is what makes this a PREFLIGHT")
     parser.add_argument("--report-digest", default="0" * 8,
                         help="short report digest; a stand-in of the right SHAPE")
-    parser.add_argument("--passed", type=int, default=0)
-    parser.add_argument("--skipped", type=int, default=0)
-    parser.add_argument("--failed", type=int, default=0)
+    parser.add_argument("--evaluation-generation", type=int, default=1,
+                        help="the evaluation generation ordinal the spend record names")
+    parser.add_argument("--passed", type=int, default=STANDIN_PASSED,
+                        help="real focused-M62 pass count; defaults to the RIGHT-SIZED "
+                             "stand-in, never to a narrower fiction")
+    parser.add_argument("--skipped", type=int, default=STANDIN_SKIPPED)
+    parser.add_argument("--failed", type=int, default=STANDIN_FAILED)
     parser.add_argument("--terminal-state", default="", choices=("",) + TERMINAL_STATES,
                         help="project ONE state; default projects all four")
     parser.add_argument("--emit", default="",
@@ -626,7 +734,8 @@ def main(argv: list[str] | None = None) -> int:
             parent, terminal_state=state, subject_commit=args.subject_commit,
             parent_sha256=parent_sha, evaluation_id=args.evaluation_id,
             plan_digest=args.plan_digest, report_digest=args.report_digest,
-            passed=args.passed, skipped=args.skipped, failed=args.failed)
+            passed=args.passed, skipped=args.skipped, failed=args.failed,
+            evaluation_generation=args.evaluation_generation)
         projections[state] = projected
         size, head = measure(projected)
         worst = min(worst, head)
@@ -659,6 +768,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.plan_digest == "0" * 8 or args.report_digest == "0" * 8:
             print("EMIT_REFUSED: refusing to write a snapshot carrying a stand-in digest")
+            return 1
+        if (args.passed, args.skipped, args.failed) == (
+                STANDIN_PASSED, STANDIN_SKIPPED, STANDIN_FAILED):
+            # The stand-in is a BOUND, not a measurement. A snapshot carrying it would
+            # record a test baseline nobody ran.
+            print("EMIT_REFUSED: refusing to write a snapshot carrying the stand-in "
+                  "test baseline")
             return 1
         if args.subject_commit == "0" * 40:
             print("EMIT_REFUSED: refusing to write a snapshot with a stand-in commit")

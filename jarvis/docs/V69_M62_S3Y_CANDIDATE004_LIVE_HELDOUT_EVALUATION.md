@@ -176,20 +176,57 @@ A new projector, `jarvis/scripts/project_m62_gen14_capacity.py`, projects **four
 terminal states from the real generation-13 snapshot through the same `canonical_bytes`
 the emitter and verifier use, so the bytes measured are the bytes that would land.
 
+> **Superseded by S3Y.CAP1.** The figures first recorded here were measured against a
+> `test_baseline` stand-in of the wrong shape and are corrected below. The original table
+> also carried a transposition: it reported `DURABILITY_FAILURE` at 33 871 bytes beside
+> 1 027 headroom, which cannot both hold, since 34 816 − 1 027 = 33 **789**. The headroom
+> column was right and the byte column was wrong.
+
+**The first proof was not conservative.** The projector's CLI and its sealed test helper
+both defaulted `passed`/`skipped`/`failed` to `0` — one digit each — while a real baseline
+carries a four-digit pass count and a two-digit skip count. Truthful values therefore add
+**four bytes** to every projection, and four bytes was the entire margin: the worst-case
+ending measured 1 027 spare against a 1 024 floor, so the truthful figure was **1 023** and
+the gate was green only because it was measuring a snapshot that could never be written.
+
+S3Y.CAP1 replaces the stand-ins with the RIGHT-SIZED bounded maxima
+(`STANDIN_PASSED` 99 999, `STANDIN_SKIPPED` 999, `STANDIN_FAILED` 999), refuses any real
+baseline wider than the width capacity was proved against, and refuses a `spent_by` field
+longer than the projection assumed — a full 64-hex digest in place of the 8-character short
+form would have added 112 bytes unnoticed. The evaluation generation ordinal is now
+interpolated rather than hard-coded as `gen-1`.
+
+Room was recovered by **two authorised rewrites only** — no budget raise, no floor
+reduction, no deletion, and `check_carried_forward` returns empty in all four states:
+
+* **kind (c)** — the limitation naming the holdout-author disqualification stopped
+  restating the procedural caveat that generation 13 had already moved onto
+  `frozen_invariants`. The rule stays on the invariant surface; the limitation keeps the
+  candidate-004 instance. −80 bytes.
+* **kind (a)** — `GEN11 IS READINESS, NOT AUTHORITY` asserted "no human authorised
+  evaluation, no holdout is spent". Generation 14 falsifies both in **all four** endings,
+  because the spend boundary is the durable commit and not proof a forward pass finished.
+  Shipped unchanged it would have emitted a snapshot contradicting its own `spent_by`.
+  Rewritten to the settled fact, it is 29 bytes shorter and, more importantly, **true**.
+
 | Terminal state | Bytes | Headroom | |
 |---|---:|---:|---|
-| `ELIGIBLE` | 33 782 | **1 034** | PASS |
-| `NOT_ELIGIBLE` | 33 751 | **1 065** | PASS |
-| `ABORTED` | 33 514 | **1 302** | PASS |
-| `DURABILITY_FAILURE` | 33 871 | **1 027** | PASS |
+| `ELIGIBLE` | 33 677 | **1 139** | PASS |
+| `NOT_ELIGIBLE` | 33 646 | **1 170** | PASS |
+| `ABORTED` | 33 409 | **1 407** | PASS |
+| `DURABILITY_FAILURE` | 33 684 | **1 132** | PASS |
 
 ```
 SNAPSHOT_MAX_BYTES        34816   (unchanged)
 REQUIRED_HEADROOM_BYTES    1024   (unchanged)
-GEN14_WORST_CASE_HEADROOM  1027
+GEN14_WORST_CASE_HEADROOM  1132   (truthful baseline 4581/20/0)
+GEN14_WORST_CASE_HEADROOM  1128   (right-sized stand-in 99999/999/999 -- the gate)
 S3Y_GEN14_CAPACITY         PASS
 PROGRESS_BYTES  40695  HEADROOM 265   LINES 610  HEADROOM 150
 ```
+
+The gate is now decided on the **stand-in**, which bounds every truthful baseline rather
+than undercutting it, and it clears the floor by 104 bytes instead of by a fiction.
 
 ### 3.1 Why the failure states are projected at all
 
