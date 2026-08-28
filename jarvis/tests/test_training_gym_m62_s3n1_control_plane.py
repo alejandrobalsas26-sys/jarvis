@@ -1298,10 +1298,16 @@ def test_the_preregistered_primary_axis_is_preserved():
         assert "DISABLED" in axis, path.name
         assert axis.index("MODEL_DEFAULT") < axis.index("DISABLED"), (
             f"{path.name}: the axis direction was reversed")
-    # Generation 1 preregistered it and generation 8 was the last to carry it: a
-    # CONTIGUOUS run, so a generation quietly dropping the axis mid-lineage is caught
-    # rather than absorbed into a min/max that still looks right.
-    assert recorded == list(range(1, 9)), recorded
+    # Generation 1 preregistered it and generation 8 was the last to carry it as the OPEN
+    # question: a CONTIGUOUS run, so a generation quietly dropping the axis mid-lineage is
+    # caught rather than absorbed into a min/max that still looks right.
+    #
+    # EXTENDED AT S3Y. Generation 14 names the same axis again, but as the RENDER BASELINE
+    # candidate 004's learning-rate axis was measured on -- not as an open question, since
+    # by then it was measured and closed. A later generation citing it is therefore
+    # allowed; what is NOT allowed is citing it backwards, and the direction assertion in
+    # the loop above applies to every generation that names it, generation 14 included.
+    assert [g for g in recorded if g <= 8] == list(range(1, 9)), recorded
 
 
 def test_the_lora_scope_is_attention_and_mlp(snapshot):
@@ -1346,13 +1352,24 @@ def test_next_offers_only_a_holdout_the_state_actually_has(snapshot):
                for d in snapshot["datasets"]):
             assert "RETIRED" in offered, (
                 f"{dataset_id} {version} is retired and NEXT must say so, not omit it")
-    if "NONE" in offered:
-        assert fresh == [], f"NEXT says NONE while the state carries {fresh}"
-    else:
-        assert fresh, "NEXT offers a holdout no dataset entry carries as FROZEN_UNUSED"
+    # RESCOPED AT S3Y, in the direction this test's own docstring already argues for.
+    # Keying on the literal "NONE" encoded a passing FACT, not the property owned here.
+    # Generation 14 says "NO fresh eligibility corpus exists", which is the same claim in
+    # different words, so the check now asks the two questions directly: every fresh
+    # holdout the state HAS must be named, and a state with none must say so.
+    if fresh:
         assert any(d["version"] in offered for d in fresh), offered
         assert all(d["spent_by"] is None for d in fresh)
         assert "FROZEN_UNUSED" in offered
+    else:
+        # The state has nothing fresh to offer, so NEXT must SAY so rather than stay
+        # silent. Both spellings the control plane has used are accepted; what is
+        # asserted is the claim, not the token.
+        assert "NONE" in offered or "NO fresh" in offered, (
+            f"the state carries no fresh eligibility holdout and NEXT must say so: "
+            f"{offered!r}")
+    if "NONE" in offered:
+        assert fresh == [], f"NEXT says NONE while the state carries {fresh}"
     assert "USED_IMMUTABLE" in offered
     assert "D35" in nxt["holdout_access"]
     assert "unread" in nxt["holdout_access"]

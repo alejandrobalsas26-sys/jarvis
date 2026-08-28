@@ -46,6 +46,7 @@ from scripts import verify_m62_control_plane as V
 REPO = V.REPO_ROOT
 
 CANDIDATE_003_ID = "qwen3-06b-lora-quality-live-003"
+GEN13_SNAPSHOT_PATH = "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json"
 CANDIDATE_004_ID = "qwen3-06b-lora-quality-live-004"
 
 #: Written independently of the artefacts under test.
@@ -95,6 +96,21 @@ def sandbox(tmp_path, monkeypatch):
         destination = tmp_path / V.SNAPSHOT_DIR / source.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    # PINNED AT S3Y to generation 13, BY PATH rather than by following `current.json`.
+    #
+    # Every claim in this file is about the S3U design of candidate 004, which was live
+    # from generation 9 through 13. S3Y then measured the candidate, and generation 14
+    # records the axis as MEASURED and CLOSED -- so `check_candidate_design`, which
+    # deliberately re-derives only DESIGNED_UNTRAINED and TRAINED_UNEVALUATED claims,
+    # correctly finds nothing to re-derive there. Left following the live pointer, every
+    # non-vacuity mutation below would pass by asserting nothing at all.
+    pinned = json.loads((tmp_path / V.CURRENT_PATH).read_text(encoding="utf-8"))
+    pinned["latest_snapshot_path"] = GEN13_SNAPSHOT_PATH
+    pinned["latest_snapshot_sha256"] = V.sha256_bytes(
+        (tmp_path / GEN13_SNAPSHOT_PATH).read_bytes())
+    pinned["state_generation"] = 13
+    (tmp_path / V.CURRENT_PATH).write_text(
+        json.dumps(pinned, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
     return tmp_path
 
@@ -238,23 +254,32 @@ def test_the_verifier_pins_candidate_004_as_trained_and_unevaluated():
     substitution this pair exists to catch.
     """
     status, adapter = V.FROZEN_CANDIDATES[CANDIDATE_004_ID]
-    assert status == "TRAINED_UNEVALUATED"
+    # RE-QUOTED AT S3Y, from the milestone that sealed the transition. The adapter digest
+    # is what this pair is really for and it is UNCHANGED: an evaluation measures weights
+    # and does not alter them.
+    assert status == "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW"
     assert adapter == (
         "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67")
     assert adapter != V.FROZEN_CANDIDATES[CANDIDATE_003_ID][1]
 
 
-def test_candidate_004_has_a_training_receipt_and_no_evaluation_receipt():
-    """RESCOPED AT S3V. A training receipt now exists because a training run happened.
+def test_candidate_004_receipts_are_the_training_one_and_the_s3y_evaluation():
+    """RESCOPED AT S3Y. Both receipts now exist because both operations happened.
 
-    An EVALUATION receipt must NOT: that would mean `eval-v5` had been spent, and no EVAL
-    authority has ever existed for this candidate. Runtime artefacts are deliberately not
-    asserted either way -- they are gitignored, and a trained candidate stays trained after
-    its run tree is deleted.
+    What this test has always really guarded is that an evaluation receipt for this
+    candidate may not mean `eval-v5` was spent. It does not: S3Y spent `eval-v6`, under
+    one explicit human EVAL authority, and `eval-v5` is still FROZEN_UNUSED with
+    `spent_by` null. That invariant is asserted here rather than dropped. Runtime
+    artefacts stay unasserted either way -- they are gitignored, and a measured candidate
+    stays measured after its run tree is deleted.
     """
     names = sorted(p.name for p in (REPO / "state/m62/receipts").iterdir()
                    if CANDIDATE_004_ID in p.name)
-    assert names == [f"{CANDIDATE_004_ID}.train.json"]
+    assert names == [f"{CANDIDATE_004_ID}.eval.json", f"{CANDIDATE_004_ID}.train.json"]
+    receipt = json.loads(
+        (REPO / f"state/m62/receipts/{CANDIDATE_004_ID}.eval.json").read_text("utf-8"))
+    assert receipt["holdout"]["dataset_version"] == "v6"
+    assert "v5" != receipt["holdout"]["dataset_version"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

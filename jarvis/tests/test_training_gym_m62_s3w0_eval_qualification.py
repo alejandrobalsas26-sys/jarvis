@@ -55,6 +55,8 @@ BASE_MODEL = "Qwen/Qwen3-0.6B"
 BASE_REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
 V5_MANIFEST = "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"
 V5_PACK = "287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6"
+#: The one evaluation identity authorised to hold candidate-004 evidence (S3Y).
+S3Y_EVALUATION_ID = "m62-s3y-quality-heldout-live"
 V5_TASK_COUNT = 36
 GEN10_SNAPSHOT_SHA = (
     "b36b13baf4c9624e6045450737256db95421625c86c6659b0e531731553da075")
@@ -94,6 +96,13 @@ def snapshot() -> dict:
 
 
 @pytest.fixture(scope="module")
+def snapshot_gen13() -> dict:
+    """Generation 13 BY PATH: the last pre-spend generation, and the one S3W.0's
+    candidate-004 claims describe."""
+    return json.loads((REPO_ROOT / "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json").read_text("utf-8"))
+
+
+@pytest.fixture(scope="module")
 def receipt() -> dict:
     return json.loads(TRAIN_RECEIPT.read_text("utf-8"))
 
@@ -104,7 +113,11 @@ def adapter_manifest() -> dict:
 
 
 # ── 1. the candidate is trained, unevaluated, and says so consistently ───────────────
-def test_candidate_004_is_trained_and_carries_no_measurement(snapshot):
+def test_candidate_004_was_trained_and_unmeasured_at_the_qualification(snapshot_gen13):
+    """PINNED AT S3Y to generation 13, BY PATH. That candidate 004 carried no measurement
+    is a permanent fact about the generation S3W.0 qualified against; read live it also
+    asserted that no later generation existed, which S3Y's authorised spend made false."""
+    snapshot = snapshot_gen13
     entry, = [c for c in snapshot["candidates"] if c["candidate_id"] == CANDIDATE]
     assert entry["status"] == "TRAINED_UNEVALUATED"
     assert entry["evaluation_corpus"] is None
@@ -336,18 +349,34 @@ def test_candidate_004_did_not_exist_at_the_tree_that_froze_v5():
     assert found.returncode == 1  # git grep: 1 means "no match", not an error
 
 
-def test_no_candidate_004_evaluation_evidence_exists_anywhere():
-    receipts = REPO_ROOT / "state/m62/receipts"
-    assert not (receipts / f"{CANDIDATE}.eval.json").exists()
-    assert sorted(p.name for p in receipts.glob(f"{CANDIDATE}*")) == [
-        f"{CANDIDATE}.train.json"]
+def test_candidate_004_evaluation_evidence_exists_only_under_the_s3y_generation():
+    """RESCOPED AT S3Y, exactly as this milestone's own document said it would be.
 
+    This gate asserted that NO candidate-004 evaluation evidence existed anywhere. It was
+    right to, and it was right that relaxing it while it was inconvenient would have been
+    post-hoc weakening -- so S3Y moved its config out of this tree rather than touch the
+    test, and ran the barrier with the gate green.
+
+    An authorised evaluation has now written a generation naming candidate 004, which the
+    document predicted in terms: updating the gate THEN records history. So the gate now
+    says where that evidence may live -- under the S3Y evaluation id and nowhere else --
+    and keeps unchanged the part that was never about candidate 004 at all: no `eval-v5`
+    pack or manifest may appear anywhere in this tree, spent or not.
+    """
+    receipts = REPO_ROOT / "state/m62/receipts"
+    assert sorted(p.name for p in receipts.glob(f"{CANDIDATE}*")) == [
+        f"{CANDIDATE}.eval.json", f"{CANDIDATE}.train.json"]
+
+    permitted = f"evaluations/{S3Y_EVALUATION_ID}/"
     evaluation_root = JARVIS_ROOT / "evaluation"
     if evaluation_root.is_dir():
         for path in evaluation_root.rglob("*"):
             if path.is_file():
                 text = path.read_text("utf-8", errors="ignore")
-                assert CANDIDATE not in text, path
+                if CANDIDATE in text:
+                    assert permitted in path.as_posix(), (
+                        f"candidate-004 evaluation evidence outside the authorised S3Y "
+                        f"generation: {path}")
                 assert V5_PACK not in text, path
                 assert V5_MANIFEST not in text, path
 

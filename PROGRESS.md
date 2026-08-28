@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **13** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **14** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json` |
-| **Snapshot SHA256** | `9f49c759b32c571b05b285be9da210da6a609c0aaea6e059010b07bcf2dc6f6c` |
-| **Subject state commit** | `6667cf06468b7e8115d3d8411f379c127f36cb69` (S3X.1 froze a fresh `eval-v6` holdout candidate-blind; nothing was evaluated) |
+| **Latest snapshot** | `state/m62/snapshots/0014-m62-s3y-candidate004-evaluated-eligible.json` |
+| **Snapshot SHA256** | `9b995f4e562ddbda5737ebc1f06381c05394ec89249b1b0fc152d6a7b6a697a2` |
+| **Subject state commit** | `1fd8a2a48ef0381594c3a4a2577b89ab8cd193cc` (S3Y spent `eval-v6` on candidate 004 once, under one human `EVAL` authority) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -64,13 +64,13 @@ subject rather than equal it.
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3X.1** — a fresh `eval-v6` authored, qualified and **frozen unspent**; `eval-v5` stays retired |
-| Last milestone | **S3X.1** — `V69_M62_S3X1_EVAL_V6_FREEZE.md`. **PASS.** **0 weight loads, 0 generations, 0 eval attempts, 0 holdout spend events, 0 `EVAL` authority created.** A corpus was frozen; nothing was measured |
-| Phase | **Between milestones — A FRESH HOLDOUT EXISTS, UNSPENT.** Three candidates measured and `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is TRAINED and UNEVALUATED**; `eval-v6` is `FROZEN_UNUSED`; `eval-v5` stays unspent and **retired from eligibility** |
+| Last state-bearing milestone | **S3Y** — `eval-v6` **spent once** on candidate 004; every deterministic gate passed; `eval-v5` stays retired, unspent |
+| Last milestone | **S3Y** — `V69_M62_S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md`. **ONE** evaluation, **one** holdout spend, **one** `EVAL` authority consumed and not reusable. 36/36 pairs, 0 missing |
+| Phase | **Between milestones — AWAITING A HUMAN DECISION.** Candidates 001–003 `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`**; `eval-v6` is `USED_IMMUTABLE`; **no fresh eligibility corpus remains** |
 | Live training since S3N | **two runs** — candidates 003 and 004, 40/40 optimizer steps each, both `TRAIN` capabilities spent. **No retry is authorised** |
-| Live evaluation since S3N | **one run** — S3Q, candidate 003 against `eval-v4`. One plan, one holdout commit, one terminal event, **72 results, 0 generation errors.** `eval-v4` is `USED_IMMUTABLE` |
+| Live evaluation since S3N | **two runs** — S3Q (003 × `eval-v4`) and S3Y (004 × `eval-v6`). One plan, one holdout commit and one terminal event each. Both corpora are `USED_IMMUTABLE`; **no rerun of either is possible** |
 | S3Q.0.2 | evidence only — **0 weights loaded, 0 generations, 0 new evaluation attempts, no plan consumed, no figure moved** |
-| Next | **S3Y** in a NEW session that did **not** author `v6`, from this HEAD: qualify and run the candidate 004 evaluation against `eval-v6` under a fresh single-use human `EVAL` authority |
+| Next | **S3Z** — an explicit human decision on candidate 004's ELIGIBLE measurement: promote, hold or reject. The measurement **requests** that decision and does not make it. **No promotion authority exists** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that grades
 defensive task episodes, builds immutable leakage-checked datasets, runs a bounded LoRA
@@ -109,7 +109,7 @@ that is history and is not rewritten. `tokenizer_chat_template_hash` digests the
 | `qwen3-06b-lora-quality-live-001` | `EVALUATED_NOT_ELIGIBLE` | `43213035…e22ac858` | `train v1` | `eval v2` | `V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md` |
 | `qwen3-06b-lora-quality-live-002` | `EVALUATED_NOT_ELIGIBLE` | `319c2524…f9665409` | `train v2` | `eval v3` | `V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md` |
 | `qwen3-06b-lora-quality-live-003` | **`EVALUATED_NOT_ELIGIBLE`** | `6ccd8fdc…c76ce4ea6` | `train v2` | **`eval v4`** | `V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md` |
-| `qwen3-06b-lora-quality-live-004` | **`TRAINED_UNEVALUATED`** | `a105e01c…a1c3ecc67` | `train v2` | *not measured* | `V69_M62_S3V_CANDIDATE004_LIVE_TRAINING.md` |
+| `qwen3-06b-lora-quality-live-004` | **`EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`** | `a105e01c…a1c3ecc67` | `train v2` | **`eval v6`** | `V69_M62_S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md` |
 
 **Candidate 003 is MEASURED and NOT ELIGIBLE.** S3O designed it moving **exactly one** primary
 axis — training render reasoning policy `MODEL_DEFAULT` → `DISABLED`; S3P spent the one
@@ -179,22 +179,22 @@ its results are design input from then on (**D35**). The transition is **one-way
 verifier has no edge back, and a missing or unrecognised status is a **failure**, not a fresh
 corpus. (`FROZEN_UNSEEN`, S3J/S3K, is the same state, archive-only.)
 
-### `eval-v6` — the fresh holdout, frozen unspent (S3X.1)
+### `eval-v6` — SPENT ONCE on candidate 004 (S3X.1 froze it, S3Y spent it)
 
 ```
-dataset_id / version    m62-defensive-eval / v6      status  FROZEN_UNUSED   spent_by null
+dataset_id / version    m62-defensive-eval / v6      status  USED_IMMUTABLE
+spent_by                S3Y LIVE, candidate 004 (plan e2b591fe, report d708d721)
 manifest                413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6
 pack                    41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16
 parent                  e852f462…  (eval-v5, declared not discovered — D34)
 task / prompt / target  5dfbf21f…  ·  792d9e72…  ·  b86ef7fe…      set digests, body-free
 ```
 
-**The three set digests are how a future session binds `v6` without reading a body.**
-Freshness is **measured, not asserted**: 2,564 comparisons against `v1`–`v5`, **0 exact
-overlaps, 0 WARN, 0 BLOCK**, no ceiling; the 16-check analyser is `clean` against both
-training corpora (0 findings). Semantic leakage stays **UNAVAILABLE** — the result is exact
-and lexical only. Authored **candidate-blind**: 0 weight loads, 0 generations, 0
-candidate-004 output used, no `v1`–`v5` body read. Detail: `…S3X1_EVAL_V6_FREEZE.md`.
+**The three set digests bind `v6` without reading a body.** Freshness was **measured**
+before the spend — 2,564 comparisons against `v1`–`v5`, **0 overlaps, 0 WARN, 0 BLOCK**;
+analyser `clean`, 0 findings; semantic leakage **UNAVAILABLE**, so exact and lexical only
+— and it was authored **candidate-blind**. Sealed history: `…S3X1_EVAL_V6_FREEZE.md` ·
+`…S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md`. **No rerun or second look is possible.**
 
 ### `eval-v5` — frozen, never model-spent, RETIRED from eligibility use
 

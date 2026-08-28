@@ -240,6 +240,16 @@ def _evaluated_snapshot(sandbox: dict, **candidate_overrides) -> dict:
     snapshot["base_model"] = {**snapshot["base_model"],
                               "model_id": receipt["baseline"]["model_id"],
                               "revision": receipt["baseline"]["revision"]}
+    # SCOPED AT S3Y. The rewrite above deliberately makes the snapshot's baseline identity
+    # SYNTHETIC, which contradicts any REAL receipt measured against the real base
+    # revision. That was invisible while no real candidate carried an evaluation receipt;
+    # S3Y sealed one for candidate 004. Real evaluated candidates are dropped from this
+    # sandbox object rather than left to fail against a baseline this helper just
+    # falsified -- their receipts are checked against the REAL control plane by the live
+    # verifier and by their own milestone suites, which is where that check belongs.
+    snapshot["candidates"] = [c for c in snapshot["candidates"]
+                              if c["candidate_id"] == W.CANDIDATE_ID
+                              or not c.get("evaluation_receipt")]
     return snapshot
 
 

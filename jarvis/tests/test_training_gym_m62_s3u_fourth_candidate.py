@@ -638,15 +638,20 @@ def test_the_fourth_candidate_was_trained_exactly_once():
     assert len({e.get("plan_hash") for e in mine}) == 1
 
 
-def test_exactly_one_receipt_exists_for_the_fourth_candidate():
-    """RESCOPED AT S3V. A receipt is evidence of an operation, and now one has happened.
+def test_the_fourth_candidate_receipts_record_training_then_the_s3y_evaluation():
+    """RESCOPED AT S3Y. A receipt is evidence of an operation, and now two have happened.
 
-    It must be a TRAINING receipt and nothing more: an evaluation receipt for this
-    candidate would mean `eval-v5` had been spent, which no authority permits.
+    The guard that matters is unchanged and is asserted, not dropped: an evaluation
+    receipt for this candidate may not mean `eval-v5` was spent. S3Y spent `eval-v6`
+    under one explicit human EVAL authority; `eval-v5` was never model-spent.
     """
     receipts = REPO / "state/m62/receipts"
     mine = sorted(p.name for p in receipts.iterdir() if CANDIDATE_004_ID in p.name)
-    assert mine == [f"{CANDIDATE_004_ID}.train.json"]
+    assert mine == [f"{CANDIDATE_004_ID}.eval.json", f"{CANDIDATE_004_ID}.train.json"]
+    import json as _json
+    receipt = _json.loads(
+        (receipts / f"{CANDIDATE_004_ID}.eval.json").read_text("utf-8"))
+    assert receipt["holdout"]["dataset_version"] == "v6"
 
 
 def test_the_generator_carries_no_spendable_token_literal():

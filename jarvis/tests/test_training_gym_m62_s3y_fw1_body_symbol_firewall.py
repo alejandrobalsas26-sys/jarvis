@@ -58,6 +58,9 @@ import pytest
 from scripts import verify_m62_control_plane as V
 
 REPO = V.REPO_ROOT
+#: The generation S3Y.FW1 closed at. Pinned, not read live: see the
+#: milestone-state test for why reading it through current.json overclaimed.
+GEN13_SNAPSHOT_PATH = "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json"
 
 #: The registry exactly as it stood before S3Y.FW1, written out on purpose.
 HISTORICAL_PREFIX = (
@@ -282,11 +285,16 @@ def test_this_suite_imports_no_corpus_builder_and_materialises_no_pack():
 
 
 def test_this_milestone_spends_nothing_and_measures_nothing():
-    """S3Y.FW1 is security hardening: the scientific state must be exactly as it was."""
-    current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
-    assert current["state_generation"] == 13
+    """S3Y.FW1 is security hardening: the scientific state must be exactly as it was.
+
+    RESCOPED AT S3Y. Read through the SEALED generation 13 rather than `current.json`.
+    FW1 changed nothing scientific, and that is permanently a claim about generation 13;
+    read live it also asserted, silently, that no later generation existed, which S3Y's
+    authorised spend made false without making FW1 any less hardening-only.
+    """
     snapshot = json.loads(
-        (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+        (REPO / GEN13_SNAPSHOT_PATH).read_text(encoding="utf-8"))
+    assert snapshot["state_generation"] == 13
     candidate = next(c for c in snapshot["candidates"]
                      if c["candidate_id"] == V.CANDIDATE_004_ID)
     assert candidate["status"] == "TRAINED_UNEVALUATED"

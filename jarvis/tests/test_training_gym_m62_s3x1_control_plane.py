@@ -46,11 +46,15 @@ def _repo_root():
     return Path(__file__).resolve().parents[2]
 
 
+#: RESCOPED AT S3Y. Every assertion in this file is about the generation S3X.1 WROTE.
+#: Reading it through `current.json` silently added a second claim -- that no later
+#: generation exists -- which S3Y's authorised spend made false. Pinned to the sealed
+#: path, per the rescoping pattern S3Q.0 established.
+GEN13_SNAPSHOT_PATH = "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json"
+
+
 def _snapshot():
-    root = _repo_root()
-    current = json.loads((root / "state/m62/current.json").read_text("utf-8"))
-    return json.loads(
-        (root / current["latest_snapshot_path"]).read_text("utf-8"))
+    return json.loads((_repo_root() / GEN13_SNAPSHOT_PATH).read_text("utf-8"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,11 +103,18 @@ def test_candidate_004_is_still_trained_and_unevaluated():
     assert entry["ordinal"] == 4
 
 
-def test_no_evaluation_receipt_exists_for_candidate_004():
+def test_the_candidate_004_evaluation_receipt_records_the_v6_spend():
+    """RESCOPED AT S3Y. At S3X.1 no evaluation receipt existed and that was the point:
+    the milestone froze a corpus and measured nothing. S3Y then spent `eval-v6` under one
+    human EVAL authority. Both receipts are now real and neither may be removed; what
+    stays guarded is that the spend names v6 and never the retired v5."""
+    import json as _json
     receipts = _repo_root() / "state/m62/receipts"
-    assert not (receipts / f"{CANDIDATE_004}.eval.json").exists()
     assert (receipts / f"{CANDIDATE_004}.train.json").exists(), (
         "the TRAINING receipt is real and must not be removed by this milestone")
+    eval_path = receipts / f"{CANDIDATE_004}.eval.json"
+    assert eval_path.exists(), "S3Y sealed this receipt; it may not be removed"
+    assert _json.loads(eval_path.read_text("utf-8"))["holdout"]["dataset_version"] == "v6"
 
 
 def test_no_eval_or_promotion_authority_is_observed_in_the_repository():

@@ -28,6 +28,8 @@ from scripts import verify_m62_control_plane as V
 
 REPO = Path(__file__).resolve().parents[2]
 CANDIDATE = "qwen3-06b-lora-quality-live-004"
+#: eval-v5: retired, never model-spent. A candidate-004 receipt may never name it.
+EVAL_V5_MANIFEST = "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"
 RETIRED = ("m62-defensive-eval", "v5")
 RETIRED_LABEL = "m62-defensive-eval v5"
 
@@ -181,7 +183,11 @@ def test_the_recovery_generation_is_sealed_and_still_binds(recovery_snapshot, sn
     assert snapshot["state_generation"] >= RETIREMENT_GENERATION
 
 
-def test_candidate_004_is_trained_and_unevaluated(snapshot):
+def test_candidate_004_was_trained_and_unevaluated_before_the_spend():
+    """PINNED AT S3Y to generation 13, BY PATH -- the same reasoning the generation-12 pin
+    above records. The claim is permanently true of the last pre-spend generation."""
+    snapshot = json.loads(
+        (REPO / "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json").read_text(encoding="utf-8"))
     entry = next(c for c in snapshot["candidates"] if c["candidate_id"] == CANDIDATE)
     assert entry["status"] == "TRAINED_UNEVALUATED"
     assert entry["evaluation_corpus"] is None
@@ -189,8 +195,17 @@ def test_candidate_004_is_trained_and_unevaluated(snapshot):
     assert entry["training_receipt"] == f"state/m62/receipts/{CANDIDATE}.train.json"
 
 
-def test_no_candidate_004_evaluation_receipt_exists_on_disk():
-    assert not (REPO / f"state/m62/receipts/{CANDIDATE}.eval.json").exists()
+def test_the_candidate_004_evaluation_receipt_names_v6_and_never_v5():
+    """RESCOPED AT S3Y. This asserted no evaluation receipt existed, which was true while
+    none did. What it was protecting is that a receipt must never mean `eval-v5` was
+    spent. S3Y spent `eval-v6` under one human EVAL authority, so the receipt exists and
+    the protection is asserted directly instead of by absence."""
+    import json as _json
+    path = REPO / f"state/m62/receipts/{CANDIDATE}.eval.json"
+    assert path.exists(), "S3Y sealed this receipt; it may not be removed"
+    receipt = _json.loads(path.read_text("utf-8"))
+    assert receipt["holdout"]["dataset_version"] == "v6"
+    assert receipt["holdout"]["dataset_manifest_hash"] != EVAL_V5_MANIFEST
 
 
 def test_eval_v5_keeps_its_lifecycle_truth(snapshot):

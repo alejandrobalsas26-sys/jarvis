@@ -460,12 +460,14 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
     "m62-defensive-eval v5": (
         "FROZEN_UNUSED",
         "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"),
-    # S3X.1 froze v6 as the replacement the v5 ELIGIBILITY retirement requires. It is
-    # FRESH: no model has read it, and it is the corpus a future candidate-004 evaluation
-    # would be judged against. The one legal transition out is guarded by
-    # EVAL_AUTHORITY_CONSUMED, which no authority in this repository can supply.
+    # RE-QUOTED AT S3Y, from the milestone that sealed the transition. S3X.1 froze v6
+    # candidate-blind as the replacement the v5 ELIGIBILITY retirement requires; S3Y then
+    # spent it on candidate 004 under ONE external human EVAL authority, which is the only
+    # thing FROZEN_UNUSED -> USED_IMMUTABLE is guarded by (EVAL_AUTHORITY_CONSUMED). The
+    # digest is unchanged, there is no edge back, and USED_IMMUTABLE is terminal: no
+    # rerun, no second look, and no re-freezing a spent corpus as fresh.
     "m62-defensive-eval v6": (
-        "FROZEN_UNUSED",
+        "USED_IMMUTABLE",
         "413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6"),
     "m62-defensive-quality-train v1": (
         "USED_IMMUTABLE",
@@ -543,10 +545,14 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     # catch. `check_candidate_design` re-derives the single-axis design from the production
     # generator and `check_training_receipt` re-derives the trained claim from the portable
     # receipt, so this pair agreeing with the snapshot is not on its own a pass.
-    # TRAINED_UNEVALUATED, never EVALUATED_*: eval-v5 is untouched and no EVAL authority
-    # has ever existed for this candidate.
+    # RE-QUOTED AT S3Y. The candidate was measured ONCE against eval-v6 under one human
+    # EVAL authority and every deterministic gate passed, so it is
+    # EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW -- a REQUEST for a human decision, never one,
+    # and never a promotion. eval-v5 remains untouched and unspent: the corpus S3Y spent
+    # is v6. The adapter digest is unchanged, because an evaluation measures weights and
+    # does not alter them.
     "qwen3-06b-lora-quality-live-004": (
-        "TRAINED_UNEVALUATED",
+        "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
         "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67"),
 }
 

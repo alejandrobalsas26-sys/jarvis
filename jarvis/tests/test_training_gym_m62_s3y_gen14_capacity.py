@@ -50,10 +50,16 @@ ADAPTER_SHA256 = (
     "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67")
 
 
+#: RESCOPED AT S3Y. This projection is a claim about ONE parent: generation 13, the
+#: state capacity was proved against BEFORE eval-v6 was spent. It used to be read
+#: through `current.json`, which silently also asserted that no later generation
+#: existed -- true until S3Y recorded generation 14, and never what the test meant.
+#: Pinned to the sealed path, per the rescoping pattern S3Q.0 established.
+GEN13_SNAPSHOT_PATH = "state/m62/snapshots/0013-m62-s3x1-fresh-eval-v6-frozen.json"
+
+
 def _parent() -> dict:
-    current = json.loads((REPO / "state/m62/current.json").read_text("utf-8"))
-    return json.loads(
-        (REPO / current["latest_snapshot_path"]).read_bytes().decode("utf-8"))
+    return json.loads((REPO / GEN13_SNAPSHOT_PATH).read_bytes().decode("utf-8"))
 
 
 def _project(state: str, **kw) -> dict:
@@ -77,11 +83,9 @@ def _entry(payload: dict, surface: str, key: str, value: str) -> dict:
 # ── the parent this projection was written against ───────────────────────────────────
 def test_parent_is_generation_13_and_the_expected_bytes() -> None:
     """The projection is a claim about ONE parent. Anything else is a different claim."""
-    current = json.loads((REPO / "state/m62/current.json").read_text("utf-8"))
-    raw = (REPO / current["latest_snapshot_path"]).read_bytes()
-    assert current["state_generation"] == 13
+    raw = (REPO / GEN13_SNAPSHOT_PATH).read_bytes()
+    assert json.loads(raw.decode("utf-8"))["state_generation"] == 13
     assert V.sha256_bytes(raw) == CAP.EXPECTED_PARENT_SHA256
-    assert current["latest_snapshot_sha256"] == CAP.EXPECTED_PARENT_SHA256
     # The artefact on disk is authoritative. Historical prose reported both 33 783/1 033
     # and 33 788/1 028; the file settles it, and the file is byte-identical to its own
     # canonical serialisation, so there is no third answer.
@@ -382,7 +386,8 @@ def test_the_generation_and_its_parent_pointer_are_the_next_link_in_the_chain(
 # ── the emitter fails closed ─────────────────────────────────────────────────────────
 def test_emit_refuses_a_stand_in_digest(tmp_path: Path) -> None:
     target = tmp_path / "gen14.json"
-    code = CAP.main(["--terminal-state", "ELIGIBLE", "--subject-commit", "a" * 40,
+    code = CAP.main(["--parent", str(REPO / GEN13_SNAPSHOT_PATH),
+                     "--terminal-state", "ELIGIBLE", "--subject-commit", "a" * 40,
                      "--emit", str(target)])
     assert code == 1
     assert not target.exists()
@@ -390,7 +395,8 @@ def test_emit_refuses_a_stand_in_digest(tmp_path: Path) -> None:
 
 def test_emit_refuses_a_stand_in_subject_commit(tmp_path: Path) -> None:
     target = tmp_path / "gen14.json"
-    code = CAP.main(["--terminal-state", "ELIGIBLE", "--plan-digest", "abcdef12",
+    code = CAP.main(["--parent", str(REPO / GEN13_SNAPSHOT_PATH),
+                     "--terminal-state", "ELIGIBLE", "--plan-digest", "abcdef12",
                      "--report-digest", "34567890", "--emit", str(target)])
     assert code == 1
     assert not target.exists()
@@ -398,7 +404,8 @@ def test_emit_refuses_a_stand_in_subject_commit(tmp_path: Path) -> None:
 
 def test_emit_refuses_without_a_single_terminal_state(tmp_path: Path) -> None:
     target = tmp_path / "gen14.json"
-    code = CAP.main(["--subject-commit", "a" * 40, "--plan-digest", "abcdef12",
+    code = CAP.main(["--parent", str(REPO / GEN13_SNAPSHOT_PATH),
+                     "--subject-commit", "a" * 40, "--plan-digest", "abcdef12",
                      "--report-digest", "34567890", "--emit", str(target)])
     assert code == 1
     assert not target.exists()
@@ -412,16 +419,22 @@ def test_a_wrong_parent_is_refused_before_anything_is_measured(tmp_path: Path) -
 
 def test_the_cli_reports_pass_without_writing_anything(tmp_path: Path) -> None:
     before = sorted(p.name for p in (REPO / "state/m62/snapshots").iterdir())
-    assert CAP.main([]) == 0
+    current_before = (REPO / "state/m62/current.json").read_bytes()
+    # --parent explicitly: this projection is a claim about generation 13, and the CLI
+    # default follows `current.json`, which S3Y advanced past it.
+    assert CAP.main(["--parent", str(REPO / GEN13_SNAPSHOT_PATH)]) == 0
     after = sorted(p.name for p in (REPO / "state/m62/snapshots").iterdir())
     assert before == after
-    current = json.loads((REPO / "state/m62/current.json").read_text("utf-8"))
-    assert current["state_generation"] == 13
+    assert (REPO / "state/m62/current.json").read_bytes() == current_before
 
 
 # ── what the preflight has NOT done ──────────────────────────────────────────────────
-def test_the_capacity_proof_spent_nothing() -> None:
-    """The whole point of proving capacity FIRST: at this moment nothing has happened."""
+def test_the_capacity_proof_was_made_before_anything_was_spent() -> None:
+    """RESCOPED AT S3Y. The whole point of proving capacity FIRST is that at the moment
+    of the proof nothing had happened. That is a permanent fact about GENERATION 13, and
+    it is asserted against generation 13. It is NOT a claim that nothing has happened
+    since: S3Y spent eval-v6 under one human authority, and the receipt now on disk is
+    that spend recorded, not a breach of this test."""
     live = _parent()
     v6 = _entry(live, "datasets", "manifest_hash", EVAL_V6_MANIFEST)
     assert v6["status"] == "FROZEN_UNUSED" and v6["spent_by"] is None
@@ -429,7 +442,9 @@ def test_the_capacity_proof_spent_nothing() -> None:
     assert c4["status"] == "TRAINED_UNEVALUATED"
     assert c4["evaluation_corpus"] is None and c4["evaluation_receipt"] is None
     assert live["authority_observation"]["eval"] == "NONE_OBSERVED_IN_REPOSITORY"
-    assert not (REPO / CAP.EVAL_RECEIPT_PATH).exists()
+    assert CAP.EVAL_RECEIPT_PATH not in json.dumps(live), (
+        "generation 13 may not reference an evaluation receipt: at that generation "
+        "candidate 004 was unmeasured and eval-v6 was frozen unspent")
 
 
 # ── the stand-in must be a BOUND, not a fiction (S3Y.CAP1) ───────────────────────────
