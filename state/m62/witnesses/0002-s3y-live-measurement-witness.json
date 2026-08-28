@@ -1,0 +1,137 @@
+{
+  "candidate_id": "qwen3-06b-lora-quality-live-004",
+  "eval_corpus": {
+    "dataset_id": "m62-defensive-eval",
+    "dataset_manifest_hash": "413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6",
+    "dataset_version": "v6",
+    "hidden_target_store_hash": "49efb7215727218dd59ce630f407259282b7d39c82d22416a4cbf6652164dee0",
+    "pack_manifest_hash": "41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16",
+    "spent_once": true,
+    "status_claim": "USED_IMMUTABLE",
+    "task_pack_hash": "41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16"
+  },
+  "evaluation_generation": 1,
+  "evaluation_id": "m62-s3y-quality-heldout-live",
+  "evaluation_source": {
+    "derived_from_repository_head": true,
+    "evaluation_source_commit": "56b0498739a2b39045cef83b23ad692b33ede75e",
+    "evaluation_source_digest": "35c9c4ee841dcb9a780ec1cd7d0f87a2bfe00876bea841d26515dcd4496a68a6",
+    "evaluation_source_digest_method": "sha256(canonical_json({tracked_path: sha256(bytes)})) over every tracked file under jarvis/training_gym/",
+    "evaluation_source_file_count": 99,
+    "evaluation_source_tree_oid": "fa17fcb935242d8a35b00bd8e9187024245c4de6",
+    "evidence_level": "the witness was written in a clean worktree at this commit; it establishes repository provenance and does not prove which bytes executed",
+    "worktree_clean_at_witness": true
+  },
+  "evidence": {
+    "bootstrap_report_hash": "ed5aa3b39bfbce8f710b3fc37182b4233f30b7e41e82d89497af81838ebda604",
+    "comparison_manifest_hash": "edc9f9b409235139e0b74ecd79bea2b7ca24b3de99aca09e393e3cffab0cc5b4",
+    "evaluation_artifact_tree_hash": "02fdf79e269278342e56c8b4ef3c080533572bfd0ee69d7eef8035c77f576a32",
+    "evaluation_manifest_hash": "22994a5eb15317463180b547cc156421d496d7e29c2f78586324e9c9100ef595",
+    "files": {
+      "baseline-results.jsonl": {
+        "bytes": 34448,
+        "record_count": 36,
+        "sha256": "045fded0a7f3638e4df709b8e9aa05c30a66162305b1b26fc8fbc8f5eb2f5350"
+      },
+      "baseline-scores.jsonl": {
+        "bytes": 44717,
+        "record_count": 36,
+        "sha256": "9f31fe2ed60d065d006ae3ebedb3fea019db0273a916f6575a3bf5af62e3324f"
+      },
+      "candidate-results.jsonl": {
+        "bytes": 34421,
+        "record_count": 36,
+        "sha256": "d201c58b4154c43341d368ac812b6d038fcea2bc8ebf90fc171bed3f24bac03b"
+      },
+      "candidate-scores.jsonl": {
+        "bytes": 44699,
+        "record_count": 36,
+        "sha256": "1d685b56402be20468690e91ed08bfe5a6294c9950437b458516272c101970a5"
+      },
+      "paired-comparisons.jsonl": {
+        "bytes": 35697,
+        "record_count": 36,
+        "sha256": "014c2d230f52784deff8a8402e9e7cdeebe5fb08b59903c51dfc9d07551a4ab9"
+      },
+      "task-pack.jsonl": {
+        "bytes": 52153,
+        "record_count": 36,
+        "sha256": "254d1456330aaeb9d8848586bdc1166b124fb8e791f7d4d065683350509057bf"
+      }
+    },
+    "gate_report_hash": "bda87cdb5d94c870deb95091780fec7a115d74bccca0f20bc2bdfc5ba5c0e610",
+    "metrics_summary_hash": "f88e530e4b7f69e81ed3756963e3ae5b09de8d23584ce58b3336c699725333b5",
+    "report_hash": "d708d72162d9cf018a7e5065e1ccf860a20f94ee2f7a493b0d4f48ee532aa0af"
+  },
+  "grants": {
+    "activation": false,
+    "candidate_state": false,
+    "is_an_evaluation_receipt": false,
+    "note": "a witness records facts; it authorises nothing",
+    "promotion": false,
+    "registry_mutation": false,
+    "retry_or_rerun": false
+  },
+  "ledger": {
+    "holdout_commit_count": 1,
+    "holdout_commit_event_hash": "60b4874b3f65b7e3d066d143d52a2abbba671cdf570896aecce6d627a85bc0b9",
+    "plan_hash": "e2b591fe7e6cf749696f813d92cc192d967a0f2959de22d4337766708e6e06de",
+    "plan_started_count": 1,
+    "plan_started_event_hash": "14a34389ade58779d8dea6ba74c44d2c2648068516244a2d5073771dfb84a20d",
+    "terminal_count": 1,
+    "terminal_event": "completed",
+    "terminal_event_hash": "7339a300b996360c2435c4e75ef1776c857400abb8e0ccd9177e3407a815b3e3",
+    "unique_plan_hashes": 1,
+    "unrecognised_events": []
+  },
+  "milestone": "S3Y",
+  "outcome": {
+    "activates_model": false,
+    "canonical_eligibility": "eligible_for_human_review",
+    "decision_hash": "5456dfd4c2db0314b38eacb6706d9eabd7601f48f1fa29199e86abad3bb42825",
+    "human_review_required": true,
+    "mutates_model_registry": false,
+    "promotes_model": false,
+    "rederived_by": "training_gym.evaluation.reports.decision_from_evidence"
+  },
+  "plan": {
+    "evaluation_config_hash": "767cca2397cdc767bdce50cde05c758415593ed7ad02ebe512259f4947dc5118",
+    "expected_task_count": 36,
+    "order_assignment_hash": "80b1702301918121cd8ecc8701c6d1689543b21624def06eb68671eb878718ad",
+    "performs_inference": true,
+    "plan_hash": "e2b591fe7e6cf749696f813d92cc192d967a0f2959de22d4337766708e6e06de",
+    "plan_schema_version": "m62.evaluation_plan.2"
+  },
+  "purpose": "record, while the repository is still at the evaluation source commit, which existing runtime measurement belongs to that unchanged source state, so a later seal-recovery receipt can bind the evaluation source without deriving it from a repair-time HEAD",
+  "receipt_v2_seal_failure_classes": [
+    "three_way_verdict_partition_incompatible_with_four_verdict_production_vocabulary",
+    "ascii_only_receipt_contract_incompatible_with_canonical_unicode_decision_text",
+    "evaluation_source_conflated_with_receipt_build_source"
+  ],
+  "results": {
+    "baseline_result_count": 36,
+    "baseline_score_count": 36,
+    "candidate_result_count": 36,
+    "candidate_score_count": 36,
+    "measured_pairs": 36,
+    "missing_pairs": 0,
+    "numeric_delta_counts": {
+      "negative": 14,
+      "positive": 12,
+      "zero": 10
+    },
+    "paired_result_count": 36,
+    "task_count": 36,
+    "total_model_result_count": 72,
+    "verdict_counts": {
+      "improved": 9,
+      "regressed": 14,
+      "security_improvement": 3,
+      "unchanged": 10
+    }
+  },
+  "schema_version": "m62.measurement_witness.1",
+  "witness_hash": "bf5378d2328680cfb98b08f2edd32345faaa05ad39caccc4c8730844b6eeae7a",
+  "witness_kind": "pre_repair_measurement_witness",
+  "witness_version": "m62.measurement_witness.1"
+}
