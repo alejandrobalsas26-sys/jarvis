@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **14** |
+| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **15** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0014-m62-s3y-candidate004-evaluated-eligible.json` |
-| **Snapshot SHA256** | `9b995f4e562ddbda5737ebc1f06381c05394ec89249b1b0fc152d6a7b6a697a2` |
-| **Subject state commit** | `1fd8a2a48ef0381594c3a4a2577b89ab8cd193cc` (S3Y spent `eval-v6` on candidate 004 once, under one human `EVAL` authority) |
+| **Latest snapshot** | `state/m62/snapshots/0015-m62-s3z-candidate004-hold-decision.json` |
+| **Snapshot SHA256** | `bfbb6a5f5b60b6bb782cb19cddc8eef37db1f7428f5df31d452607ae544a7bf9` |
+| **Subject state commit** | `9953b07dbe0ca9b68adf21cc18be4bb5a7460387` (S3Z recorded the human **HOLD** decision; no scientific state moved) |
 | **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -42,7 +42,7 @@ asks Git — not prose — about the branch, the ancestry and `master`.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `6667cf06468b7e8115d3d8411f379c127f36cb69` — the commit the current snapshot describes |
+| Subject state commit | `9953b07dbe0ca9b68adf21cc18be4bb5a7460387` — the commit the current snapshot describes |
 | Training source commits | candidate 003 `bac49c4a49194d84fbc7f61656662fdcd54799ca`; candidate 004 `80565d32795fb276df202f6bef46ed38bb2bb7c5`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -64,13 +64,13 @@ subject rather than equal it.
 | | |
 |---|---|
 | Milestone | **V69 M62 — Training Gym** |
-| Last state-bearing milestone | **S3Y** — `eval-v6` **spent once** on candidate 004; every deterministic gate passed; `eval-v5` stays retired, unspent |
-| Last milestone | **S3Y** — `V69_M62_S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md`. **ONE** evaluation, **one** holdout spend, **one** `EVAL` authority consumed and not reusable. 36/36 pairs, 0 missing |
-| Phase | **Between milestones — AWAITING A HUMAN DECISION.** Candidates 001–003 `EVALUATED_NOT_ELIGIBLE`; **candidate 004 is `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`**; `eval-v6` is `USED_IMMUTABLE`; **no fresh eligibility corpus remains** |
+| Last state-bearing milestone | **S3Z** — the human **HOLD** decision recorded; **no scientific state moved** and nothing was promoted |
+| Last milestone | **S3Z** — `V69_M62_S3Z_CANDIDATE004_HOLD_DECISION.md`. Evidence chain and post-result integrity audits **both PASS**, body-blind. **0** weight loads, generations, eval attempts, holdout spends |
+| Phase | **HELD — the model-development loop is PAUSED.** Candidates 001–003 `EVALUATED_NOT_ELIGIBLE`; **candidate 004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`, not promoted**; `eval-v6` is `USED_IMMUTABLE`; **no fresh eligibility corpus remains** |
 | Live training since S3N | **two runs** — candidates 003 and 004, 40/40 optimizer steps each, both `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **two runs** — S3Q (003 × `eval-v4`) and S3Y (004 × `eval-v6`). One plan, one holdout commit and one terminal event each. Both corpora are `USED_IMMUTABLE`; **no rerun of either is possible** |
 | S3Q.0.2 | evidence only — **0 weights loaded, 0 generations, 0 new evaluation attempts, no plan consumed, no figure moved** |
-| Next | **S3Z** — an explicit human decision on candidate 004's ELIGIBLE measurement: promote, hold or reject. The measurement **requests** that decision and does not make it. **No promotion authority exists** |
+| Next | **A separate explicit human roadmap ruling.** The HOLD authorises **no** model-facing continuation — no promotion, training, evaluation, candidate 005 or `eval-v7`. **No promotion authority exists** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline that grades
 defensive task episodes, builds immutable leakage-checked datasets, runs a bounded LoRA
@@ -445,14 +445,16 @@ human operator decision, which no milestone since has moved, replaced or weakene
 ```
 invocation      pytest -k m62 --ignore=tests/test_live_brain_v61.py
 run from        jarvis/   (repository system interpreter)
-result          4437 passed · 20 skipped · 0 failed        [S3X.1]
+result          4613 passed · 20 skipped · 0 failed        [S3Z]
 ```
 
-S3X.1 added the `v6` freeze and control-plane suites and **rescoped three superseded
-assertions**: two pinned the corpus version list to `v1`–`v5` or `LATEST_DATASET_VERSION` to
-`v5`, and one probed the undeclared-lineage refusal using `v6`, which is declared now. Each
-still asserts the property it owns. Counts are **one** interpreter's; **never reconcile across
-interpreters.**
+S3Z added **no test and changed none**: it records a governance decision and moves no
+scientific state, so the count is S3Y's, re-measured on the generation-15 tree. S3Y's own
+post-result test edits were audited for post-hoc weakening; each mapped to a sealed-generation
+pin, a superseded absence assertion, a non-vacuity preservation, a strengthening or a fixture
+isolation — **0** threshold, gate, grader, policy, receipt or transition weakenings, **0**
+hidden failures, **0** vacuous mutations. Counts are **one** interpreter's; **never reconcile
+across interpreters.**
 
 **Rescoped assertions are not regressions.** An assertion comparing a *sealed* milestone's
 property against *live* state also asserts, silently, that no later generation exists — true
@@ -492,51 +494,49 @@ task-specific authority → *only then* writes.
 
 ## 12 — EXACT NEXT
 
-> **QUALIFY AND RUN THE CANDIDATE 004 EVALUATION AGAINST `eval-v6`, IN A NEW SESSION THAT DID
-> NOT AUTHOR `v6`.** Candidate 004 is **trained and unevaluated** — an adapter exists, **no
-> measurement does**. **No `EVAL` authority exists**, and a frozen holdout is readiness only.
+> **NOTHING MODEL-FACING. THE M62 DEVELOPMENT LOOP IS PAUSED BY AN EXPLICIT HUMAN `HOLD`.**
+> Candidate 004 is retained as **valid evaluated evidence** and is **not promoted**. The next
+> model-facing action requires a **separate explicit human roadmap ruling**, which the HOLD
+> deliberately does not make and does not pre-authorise.
 
-**The authoring session may not be the evaluating session.** Whoever has seen the exam cannot
-invigilate — the same rule that barred S3X.0 from authoring the `v6` it specified. The firewall
-is **procedural**: no check here can detect a breach. **`eval-v6` bodies stay out of every
-orchestration session:** only the evaluation runtime may render a task, **D44**'s gate applies
-unchanged, and `eval-v4`/`eval-v5` bodies stay unread permanently.
+**What the HOLD decided, and what it did not.** S3Y answered *did candidate 004 clear the
+frozen eligibility bar?* — **yes**. It did **not** answer *is candidate 004 better*, and it
+granted no promotion. The operator **accepted** the measurement, **preserved** the candidate
+unchanged and promoted nothing. It is not a rejection either: every preregistered
+deterministic gate passed and security regressions were **zero**. Deep authority:
+`…S3Z_CANDIDATE004_HOLD_DECISION.md`.
 
-**Three prior rulings are CLOSED.** One permitted candidate 004 to be **designed** at **5e-5**,
-superseding **one clause of one** generation-8 entry, **for candidate 004 only**; a plan-bound
-authority permitted **exactly one** training run and is **SPENT**; the S3X.0 ruling retired `v5`
-and migrated the snapshot budget **32,768 → 34,816 bytes**, and nothing else. None carries
-forward. **No retry is authorised**, and S3X.1 raised no budget.
+**`HOLD` is a governance decision, not a candidate state.** `CANDIDATE_STATES`,
+`CANDIDATE_TRANSITIONS` and every transition guard are **unchanged** — no `HOLD`, `HELD`,
+`DEFERRED` or `REJECTED_BY_OPERATOR` state was invented. Candidate 004 stays
+`EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`, and the only legal move out of it remains
+`-> PROMOTED` under `HUMAN_PROMOTION_AUTHORITY`, **which does not exist**.
 
-**What candidate 004 is: §4, in full.** One dial, everything else inherited. It remains a
-**hypothesis** — one point, not a dose-response curve — and S3S.1 rated the risk to candidate
-003's security gains from a weaker update as **HIGH**. **Its training and validation loss
-decide nothing**: diagnostic, never eligibility evidence, never a tuning signal.
+**Read the counts before the verdict.** **14 regressed against 9 improved**, 10 unchanged, 3
+security improvements, **0 security regressions**; paired mean delta **+0.0751**, CI95
+**[−0.0040, +0.1793]**, which does **not** exclude a regression (`regression_not_excluded`).
+General quality superiority is **NOT demonstrated**, and whether **1e-4 → 5e-5** helped is
+**unresolved** — and now unanswerable, because `eval-v6` is spent.
 
-**Candidate 003 is closed as `EVALUATED_NOT_ELIGIBLE`** — not approved, not promoted, not
-production-ready. That state is **terminal**, and `eval-v4` cannot be reused for an ablation, a
-re-score or any reason at all.
+**No second look, and no fresh corpus.** `eval-v6` is `USED_IMMUTABLE`: no rerun, re-score,
+alternate seed, partial replay, ablation, manual task inspection, qualitative review or
+threshold experimentation, and a result nobody likes is not permission to look again.
+`eval-v4` is spent, `eval-v5` is RETIRED unspent with `spent_by` null, and **no fresh
+eligibility corpus exists**.
 
-**The remaining sequence, every arrow a separate human decision:** a token-silent preflight → a
-fresh single-use `EVAL` authority `EVAL:<plan-hash>` bound to a plan from a post-S3X.1 HEAD →
-**one** paired run against `v6` → an `m62.eval_receipt.3` → a new generation. Promotion is a
-further decision no authority here grants.
+**Explicitly NOT authorised by the HOLD** — `next_milestone.ruled_out` in the
+**generation-15** snapshot is the authority and is longer than this list: promotion,
+activation, registry mutation, merge, tag, release or version bump · **candidate 005**,
+designed, named or configured · **`eval-v7`** or any replacement holdout · further training
+or evaluation of any candidate · retraining, resuming, re-seeding or patching candidate 003
+**or 004** · any epoch, rank, alpha, dropout or module change · a second axis or
+`ATTENTION_ONLY` · `train-v3` · changing gates, graders, thresholds or the refusal detector ·
+reading `v4`/`v5`/`v6` bodies · raising a reviewed budget or deleting recorded defects,
+limitations or invariants to make room · ranking 001–004 in one table · fixing **D39** as a rider.
 
-**Comparability.** 001, 002 and 003 were measured on `v2`, `v3` and `v4` — zero shared
-instances, so **they may not be ranked in one table:** each compares only against its own
-simultaneously measured baseline. **D28, D29 and D33 bound every one.**
-
-**Still explicitly ruled out** — `next_milestone.ruled_out` in the **generation-13** snapshot is
-the authority, and it is longer than this list: using `eval-v5` as eligibility evidence, or
-marking it `USED_IMMUTABLE` or `spent_by` non-null · the `v6`-authoring session evaluating
-candidate 004, or any session rendering a `v6` body outside the runtime · recording candidate
-004 as evaluated or eligible without a valid portable receipt · relaxing body-blindness or any
-preregistered gate now that one has failed · any **epoch, rank, alpha or dropout** change · a
-second axis or `ATTENTION_ONLY` · `train-v3` or any `train-v2` change · raising
-`max_new_tokens` · changing gates, graders, thresholds or the refusal detector · reusing
-`eval-v4` or reading `v4`/`v5` bodies · retraining candidate 003 **or 004** · raising a
-reviewed budget again or deleting recorded authority to make room · ranking 001-004 in one
-table · fixing **D39** as a rider · promotion, merge, tag or release.
+**PROSE_CANNOT_GRANT_AUTHORITY.** Neither this file, the snapshot nor a milestone document
+authorises any of the above. `PROMOTION_AUTHORITY`, `TRAIN_AUTHORITY` and `EVAL_AUTHORITY`
+are all **NONE**, and the spent S3Y `EVAL` authority is historical evidence, not a capability.
 
 ---
 
