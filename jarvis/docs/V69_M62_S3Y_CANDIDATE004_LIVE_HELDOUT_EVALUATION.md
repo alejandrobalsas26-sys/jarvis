@@ -500,6 +500,127 @@ final repository state.
 
 ---
 
-## 11. Machine block
+## 11. The measurement — executed under one human authority
 
-Recorded at the barrier; completed after execution only if an operator authorises it.
+An operator supplied `EVAL:<plan-hash>` naming exactly the plan §10 published. The token
+was passed **verbatim** to the canonical evaluator, which validated it against the plan it
+recomputed; no confirmation string was ever constructed, concatenated or displayed here,
+and the receipt records `token_literal_recorded false`.
+
+Before the spend, state was re-verified read-only and a **third** `--live-preflight` was
+run. It returned the preauthorised plan hash unchanged, `is_executable true`, zero
+blockers. Only then was `--execute --confirm` invoked, **exactly once**.
+
+```
+states_visited   preflight_verified -> starting -> running_baseline -> running_candidate
+                 -> scoring -> comparing -> artifact_validation -> completed
+measured_pairs   36 of 36        missing_pairs 0        interrupted False
+plan_consumed    True            rerun_permitted False  quarantined False
+holdout_model_facing_committed True     holdout_scientifically_spent True
+durability_problems 0           recovery_required False  terminal_ledger_recorded True
+```
+
+`eval-v6` is **spent**. It was single-use, and no rerun, ablation, re-score or second look
+is possible or permitted.
+
+### 11.1 The runtime had to be recovered first
+
+The reviewed evaluation venv had been orphaned by a system Python upgrade from 3.13 to
+3.14: its 95 packages are intact on disk, but `bin/python`, `bin/python3` and even
+`bin/python3.13` all resolve to the new interpreter, which finds no `site-packages`. The
+runtime was reached through `/usr/bin/python3.13` with the venv's `site-packages` on
+`PYTHONPATH` rather than by modifying the venv, because S3W.0 holds that tree immutable.
+
+That it is the SAME runtime is evidence, not assertion: `dependency_report_hash`
+`78312447…` and `hardware_report_hash` `6b717507…` both re-derive to the values recorded
+before this session. The receipt pins the backend as
+`transformers=5.14.1 peft=0.20.0 torch=2.13.0+cpu`.
+
+---
+
+## 12. The result — ELIGIBLE FOR HUMAN REVIEW, which is a request
+
+**Every deterministic gate passed.** `security`, `coverage`, `family`, `quality`,
+`statistical` and `operational` were all evaluated; `blocking_count` is 0 and
+`security_blocking_count` is 0. Candidate 004 is
+`EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`.
+
+| | |
+|---|---:|
+| measured pairs | 36 / 36 |
+| improved | 9 |
+| regressed | 14 |
+| unchanged | 10 |
+| security_improvement | 3 |
+| security_regression | **0** |
+| wins / ties / losses | 9 / 10 / 14 |
+
+```
+paired mean delta   +0.0751        median delta   0.0
+95% interval        [-0.0040, +0.1793]   (paired bootstrap percentile, 2000 iterations)
+excludes_regression_margin   False
+```
+
+**Read the table before the verdict.** The gates passed, and *more tasks regressed than
+improved* — 14 against 9. The observed mean delta is positive but its 95% interval
+**does not exclude a regression**, which the run records as the standing gate warning
+`regression_not_excluded`. The production decision text is explicit that this outcome
+"is not approval, not promotion and not activation".
+
+So the honest reading is: candidate 004 cleared the preregistered bar and produced no
+security regression, and it did **not** demonstrate a quality improvement. Whether the
+learning-rate change from 1e-4 to 5e-5 helped is **not** established by this measurement.
+
+### 12.1 What this result is not
+
+* Not a promotion, activation, registry mutation or release. `promotes_model false`,
+  `mutates_model_registry false`, `activates_model false`. **No promotion authority exists
+  or was requested.**
+* Not calibrated. `thresholds_are_calibrated` is false; every threshold is an initial
+  policy value.
+* Not a head-to-head ranking against candidates 001-003: each was measured on a DIFFERENT
+  holdout sharing zero task instances. The only valid comparison is against the baseline
+  measured simultaneously on eval-v6.
+* Not evidence about the six `tool_call_schema` tasks (D28 VACUOUS), about timeouts (D33
+  VACUOUS), or unbounded by D29's refusal-detector limits.
+* Not a dose-response curve. One learning-rate point on a CONFIGURATION axis.
+
+---
+
+## 13. Evidence identities
+
+```
+evaluation_id              m62-s3y-quality-heldout-live   generation 1
+plan_hash                  e2b591fe7e6cf749696f813d92cc192d967a0f2959de22d4337766708e6e06de
+evaluation_config_hash     767cca2397cdc767bdce50cde05c758415593ed7ad02ebe512259f4947dc5118
+report_hash                d708d72162d9cf018a7e5065e1ccf860a20f94ee2f7a493b0d4f48ee532aa0af
+evaluation_manifest_hash   22994a5eb15317463180b547cc156421d496d7e29c2f78586324e9c9100ef595
+artifact_tree_hash         02fdf79e269278342e56c8b4ef3c080533572bfd0ee69d7eef8035c77f576a32
+gate_report_hash           bda87cdb5d94c870deb95091780fec7a115d74bccca0f20bc2bdfc5ba5c0e610
+decision_hash              5456dfd4c2db0314b38eacb6706d9eabd7601f48f1fa29199e86abad3bb42825
+
+receipt                    state/m62/receipts/qwen3-06b-lora-quality-live-004.eval.json
+receipt_version            m62.eval_receipt.3          receipt verify PASS, problems 0
+receipt_hash               21c03e921ab37c996811ae99569d8c044e1a02325b252c45d56dec6ffa3fb109
+receipt sha256             94725228d6808177a816c36e5f40facadac7c48eb5ad804fb096b6a0bda84b44
+
+witness                    state/m62/witnesses/0002-s3y-live-measurement-witness.json
+witness_hash               bf5378d2328680cfb98b08f2edd32345faaa05ad39caccc4c8730844b6eeae7a
+witness sha256             0360e800554330a4684c559e0af8115dda31940df4eb8986b77a9bfd9a23c203
+
+evaluation_source_commit   56b0498739a2b39045cef83b23ad692b33ede75e   (the commit that MEASURED)
+seal_implementation_source f7a7d2cd14b8c65ebe08dbf5a7eb2a5048ac906c   (the commit that SEALED)
+```
+
+The two source commits differ, and the receipt records both separately. That split is
+exactly what D42 exists for: a post-live seal must never name the repair commit as the
+thing that measured. The witness was committed FIRST, while HEAD still stood at the
+evaluation source, which is why the receipt could bridge at all.
+
+The evaluation generation directory is gitignored runtime state. It holds the held-out
+prompts and both models' responses and is reviewed locally only; nothing in this document
+quotes it.
+
+---
+
+## 14. Machine block
