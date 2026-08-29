@@ -69,6 +69,18 @@ SUBJECT_STATE_COMMIT = "ec446e348995acb0c23a69b0c3efd574f821b1a0"
 MASTER_COMMIT = "3705114228edef2f665be349c5c4429b7b16777a"
 
 
+def _semantic_snapshot(root: Path, current: dict) -> dict:
+    """Load a snapshot and rehydrate it if it is a V3 generation."""
+    stored = json.loads(
+        (root / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    if stored.get("schema_version") != V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+        return stored
+    records = V.load_record_store(root / V.RECORD_DIR)
+    payload, problems = V.rehydrate_v3(stored, records)
+    assert not problems, f"rehydration failed: {problems}"
+    return payload
+
+
 # ── fixtures ─────────────────────────────────────────────────────────────────────────
 @pytest.fixture(scope="module")
 def current() -> dict:
@@ -77,8 +89,13 @@ def current() -> dict:
 
 @pytest.fixture(scope="module")
 def snapshot(current) -> dict:
-    return json.loads(
-        (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    """The SEMANTIC control-plane document.
+
+    V69 M63 moved the immutable blocks into content-addressed records, so a V3
+    generation is rehydrated here. Every assertion below is about the meaning of
+    the state, not its container, and rehydrating keeps them measuring that.
+    """
+    return _semantic_snapshot(REPO, current)
 
 
 @pytest.fixture(scope="module")
@@ -104,7 +121,7 @@ def sandbox(tmp_path, monkeypatch):
     """
     for rel in (V.CURRENT_PATH, V.MIGRATION_MANIFEST_PATH, V.ARCHIVE_PATH,
                 V.PROGRESS_PATH, V.HISTORY_INDEX_PATH, V.CURRENT_SCHEMA_PATH,
-                V.SNAPSHOT_SCHEMA_PATH):
+                V.SNAPSHOT_SCHEMA_PATH, V.SNAPSHOT_V3_SCHEMA_PATH):
         destination = tmp_path / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, destination)
@@ -112,6 +129,13 @@ def sandbox(tmp_path, monkeypatch):
         destination = tmp_path / V.SNAPSHOT_DIR / source.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    # V69 M63 — a V3 generation is unreadable without its records.
+    record_dir = REPO / V.RECORD_DIR
+    if record_dir.is_dir():
+        for source in record_dir.iterdir():
+            destination = tmp_path / V.RECORD_DIR / source.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
     return tmp_path
 
@@ -121,13 +145,21 @@ def _plane_from(root: Path) -> V.ControlPlane:
     snapshot_path = root / current["latest_snapshot_path"]
     snapshot_bytes = snapshot_path.read_bytes()
     migration_path = root / V.MIGRATION_MANIFEST_PATH
+    stored = json.loads(snapshot_bytes.decode("utf-8"))
+    records: dict = {}
+    problems: tuple = ()
+    semantic = stored
+    if stored.get("schema_version") == V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+        records = V.load_record_store(root / V.RECORD_DIR)
+        semantic, problems = V.rehydrate_v3(stored, records)
     return V.ControlPlane(
         current=current,
         current_bytes=(root / V.CURRENT_PATH).read_bytes(),
-        snapshot=json.loads(snapshot_bytes.decode("utf-8")),
+        snapshot=semantic,
         snapshot_bytes=snapshot_bytes,
         snapshot_path=snapshot_path,
-        migration=json.loads(migration_path.read_text(encoding="utf-8")))
+        migration=json.loads(migration_path.read_text(encoding="utf-8")),
+        snapshot_stored=stored, records=records, rehydration_problems=problems)
 
 
 def _categories(report: V.Report) -> set[str]:
@@ -338,7 +370,10 @@ def test_one_changed_byte_in_the_snapshot_breaks_the_pointer(sandbox):
 
 
 def test_the_snapshot_on_disk_is_already_in_canonical_form(plane):
-    assert plane.snapshot_bytes == V.canonical_bytes(plane.snapshot)
+    # Measured against the document AS STORED. Under V3 ``plane.snapshot`` is the
+    # rehydrated semantic form, which is deliberately not the bytes on disk.
+    assert plane.snapshot_bytes == V.canonical_bytes(
+        plane.snapshot_stored or plane.snapshot)
     assert plane.current_bytes == V.canonical_bytes(plane.current)
 
 
@@ -487,7 +522,10 @@ def test_the_snapshot_names_the_subject_commit_and_master(snapshot, current):
     assert snapshot["subject_state_commit"] == current["subject_state_commit"]
     assert re.fullmatch(r"[0-9a-f]{40}", snapshot["subject_state_commit"])
     assert snapshot["project"]["master_commit"] == MASTER_COMMIT
-    assert snapshot["project"]["branch"] == "jarvis-v69-m62-training-gym"
+    # S4A moved development off the completed M62 history branch. The control
+    # plane declares where work happens, and the verifier cross-checks it
+    # against the live branch, so this constant tracks that declaration.
+    assert snapshot["project"]["branch"] == "jarvis-v69-m63-world-state"
 
 
 def test_a_snapshot_claiming_the_wrong_master_fails_against_git(plane):

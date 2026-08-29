@@ -1,0 +1,12 @@
+{
+  "block": "policy_identities",
+  "value": {
+    "gate_policy_hash": "e50033194afeb7680815b1f11268cce4e0fe1549c4334c8257883603ea8f73c5",
+    "generation_policy_constructor_default_hash": "1b4696d6cc278f7a778f5c3917f015635efb076d81e5143235778ca8f8de2fc9",
+    "generation_policy_hash": "c6b0b682805898971618ae738bce3b0843484b541a66c67efc0c55aa6f37a2d7",
+    "max_new_tokens": 512,
+    "metric_policy_hash": "e07dd133419978396d7ada706bab20b35b6250982c21a0ea7933750e9cd72e1a",
+    "note": "generation_policy_hash is the CONFIGURED policy the sealed S3I and S3L config documents declare (timeout_s 300, seed 11, cpu, fp32). The constructor default carries library defaults and hashes differently. Both are correct; they are different objects. Do not read the difference as drift.",
+    "reasoning_policy": "DISABLED"
+  }
+}

@@ -7,12 +7,12 @@
 
 | | |
 |---|---|
-| **Control plane** | V2 · schema `m62.control_plane.1` · state generation **15** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **16** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0015-m62-s3z-candidate004-hold-decision.json` |
-| **Snapshot SHA256** | `bfbb6a5f5b60b6bb782cb19cddc8eef37db1f7428f5df31d452607ae544a7bf9` |
-| **Subject state commit** | `9953b07dbe0ca9b68adf21cc18be4bb5a7460387` (S3Z recorded the human **HOLD** decision; no scientific state moved) |
-| **Portable training receipts** | `state/m62/receipts/` — tracked, root-independent proof a candidate trained |
+| **Latest snapshot** | `state/m62/snapshots/0016-m63-control-plane-v3-and-branch.json` |
+| **Snapshot SHA256** | `2d7ee69db1e18a419b0f87867a7a943223bb8ff79592beb0f072aca80e284639` |
+| **Subject state commit** | `59818bc74e31f8446d1eba352d3460d034f7fca1` (S4A migrated to V3 and declared the M63 branch; no scientific state moved) |
+| **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
 | **History index** | `jarvis/docs/m62/HISTORY_INDEX.md` |
@@ -42,7 +42,7 @@ asks Git — not prose — about the branch, the ancestry and `master`.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m62-training-gym` |
-| Subject state commit | `9953b07dbe0ca9b68adf21cc18be4bb5a7460387` — the commit the current snapshot describes |
+| Subject state commit | `59818bc74e31f8446d1eba352d3460d034f7fca1` — the commit the current snapshot describes |
 | Training source commits | candidate 003 `bac49c4a49194d84fbc7f61656662fdcd54799ca`; candidate 004 `80565d32795fb276df202f6bef46ed38bb2bb7c5`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |

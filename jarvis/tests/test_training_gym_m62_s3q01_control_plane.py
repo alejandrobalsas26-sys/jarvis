@@ -50,9 +50,11 @@ def _live_current() -> dict:
 
 
 def _live_snapshot() -> dict:
-    current = _live_current()
-    return json.loads((REPO_ROOT / current["latest_snapshot_path"])
-                      .read_text(encoding="utf-8"))
+    # V69 M63 — the control plane stores generations in the V3
+    # content-addressed container. These assertions are about what the
+    # state MEANS, so they read the rehydrated semantic form.
+    import scripts.verify_m62_control_plane as _V
+    return _V.load_semantic_snapshot(REPO_ROOT)
 
 
 def _generation(number: int) -> dict:

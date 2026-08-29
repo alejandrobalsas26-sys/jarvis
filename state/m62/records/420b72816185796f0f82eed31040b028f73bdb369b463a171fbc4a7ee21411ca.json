@@ -1,0 +1,10 @@
+{
+  "block": "archive",
+  "value": {
+    "bytes": 516784,
+    "immutable": true,
+    "lines": 6089,
+    "path": "jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md",
+    "sha256": "e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf"
+  }
+}

@@ -1,0 +1,331 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "authority_observation": {
+      "additionalProperties": false,
+      "properties": {
+        "control_plane_can_grant_authority": {
+          "const": false
+        },
+        "eval": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        },
+        "note": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "promotion": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        },
+        "train": {
+          "enum": [
+            "NONE_OBSERVED_IN_REPOSITORY",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "control_plane_can_grant_authority",
+        "eval",
+        "note",
+        "promotion",
+        "train"
+      ],
+      "type": "object"
+    },
+    "control_plane_note": {
+      "maxLength": 320,
+      "minLength": 1,
+      "type": "string"
+    },
+    "generation_label": {
+      "pattern": "^[A-Z0-9_]{3,64}$",
+      "type": "string"
+    },
+    "next_milestone": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_required": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "evaluation_holdout": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "holdout_access": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "lora_scope": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "primary_axis": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "requires_new_session": {
+          "type": "boolean"
+        },
+        "ruled_out": {
+          "items": {
+            "maxLength": 320,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "training_corpus": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_required",
+        "evaluation_holdout",
+        "holdout_access",
+        "lora_scope",
+        "name",
+        "primary_axis",
+        "requires_new_session",
+        "ruled_out",
+        "training_corpus"
+      ],
+      "type": "object"
+    },
+    "parent_snapshot_sha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "master_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "merged_into_master": {
+          "const": false
+        },
+        "milestone": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "released": {
+          "const": false
+        },
+        "tagged": {
+          "const": false
+        }
+      },
+      "required": [
+        "branch",
+        "master_commit",
+        "merged_into_master",
+        "milestone",
+        "released",
+        "tagged"
+      ],
+      "type": "object"
+    },
+    "records": {
+      "additionalProperties": false,
+      "properties": {
+        "archive": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "base_model": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "candidates": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "datasets": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "defects": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "frozen_invariants": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "limitations": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "policy_identities": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "archive",
+        "base_model",
+        "candidates",
+        "datasets",
+        "defects",
+        "frozen_invariants",
+        "limitations",
+        "policy_identities"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "m62.control_plane.3"
+    },
+    "state_generation": {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "subject_state_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "subject_state_milestone": {
+      "pattern": "^S[0-9A-Z.]{1,10}$",
+      "type": "string"
+    },
+    "test_baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "failed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "invocation": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "known_invocation_artifact": {
+          "additionalProperties": false,
+          "properties": {
+            "failing_tests": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "file": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "invocation": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            },
+            "is_a_regression": {
+              "const": false
+            },
+            "is_defect_d39": {
+              "const": false
+            },
+            "note": {
+              "maxLength": 320,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "failing_tests",
+            "file",
+            "invocation",
+            "is_a_regression",
+            "is_defect_d39",
+            "note"
+          ],
+          "type": "object"
+        },
+        "milestone": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        },
+        "passed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "working_directory": {
+          "maxLength": 320,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "failed",
+        "invocation",
+        "known_invocation_artifact",
+        "milestone",
+        "passed",
+        "skipped",
+        "working_directory"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "authority_observation",
+    "control_plane_note",
+    "generation_label",
+    "next_milestone",
+    "parent_snapshot_sha256",
+    "project",
+    "records",
+    "schema_version",
+    "state_generation",
+    "subject_state_commit",
+    "subject_state_milestone",
+    "test_baseline"
+  ],
+  "type": "object"
+}

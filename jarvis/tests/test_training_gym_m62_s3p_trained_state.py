@@ -130,6 +130,16 @@ def sandbox(tmp_path, monkeypatch):
         destination = tmp_path / V.SNAPSHOT_DIR / source.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    # V69 M63 — a V3 generation is unreadable without its records.
+    if (REPO / V.RECORD_DIR).is_dir():
+        for source in (REPO / V.RECORD_DIR).iterdir():
+            destination = tmp_path / V.RECORD_DIR / source.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    for _schema in (V.SNAPSHOT_V3_SCHEMA_PATH,):
+        _dst = tmp_path / _schema
+        _dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / _schema, _dst)
     monkeypatch.setattr(V, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(V, "_git", _real_git)
     return tmp_path
@@ -146,14 +156,23 @@ def _plane_from(root: Path) -> V.ControlPlane:
     current = json.loads((root / V.CURRENT_PATH).read_text(encoding="utf-8"))
     snapshot_path = root / current["latest_snapshot_path"]
     snapshot_bytes = snapshot_path.read_bytes()
+    _stored = json.loads(snapshot_bytes.decode("utf-8"))
+    _records: dict = {}
+    _problems: tuple = ()
+    _semantic = _stored
+    if _stored.get("schema_version") == V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+        _records = V.load_record_store(root / V.RECORD_DIR)
+        _semantic, _problems = V.rehydrate_v3(_stored, _records)
     return V.ControlPlane(
         current=current,
         current_bytes=(root / V.CURRENT_PATH).read_bytes(),
-        snapshot=json.loads(snapshot_bytes.decode("utf-8")),
+        snapshot=_semantic,
         snapshot_bytes=snapshot_bytes,
         snapshot_path=snapshot_path,
         migration=json.loads(
-            (root / V.MIGRATION_MANIFEST_PATH).read_text(encoding="utf-8")))
+            (root / V.MIGRATION_MANIFEST_PATH).read_text(encoding="utf-8")),
+        snapshot_stored=_stored, records=_records,
+        rehydration_problems=_problems)
 
 
 def _categories(report: V.Report) -> set[str]:
@@ -223,9 +242,9 @@ def _receipt_report(plane: V.ControlPlane) -> V.Report:
 
 
 def _live_snapshot() -> dict:
-    current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
-    return json.loads(
-        (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    # V69 M63 — the SEMANTIC form. These assertions are about candidates,
+    # defects and policy identities, not about the storage container.
+    return V.load_semantic_snapshot(REPO)
 
 
 def _live_candidate(ordinal: int) -> dict:

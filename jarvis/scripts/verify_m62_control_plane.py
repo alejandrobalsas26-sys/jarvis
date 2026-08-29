@@ -78,6 +78,18 @@ _PACKAGE_ROOT = _SCRIPTS_DIR.parent                 # .../jarvis
 REPO_ROOT = _PACKAGE_ROOT.parent                    # repository root
 
 CONTROL_PLANE_SCHEMA_VERSION = "m62.control_plane.1"
+#: V69 M63 — the CONTENT-ADDRESSED generation format. V2 held every immutable
+#: block inline and re-serialised it each generation; at generation 15 that was
+#: 28 231 of 33 742 bytes (84%) of pure duplication, leaving 50 bytes of real
+#: slack under the policy floor. V3 references those blocks by digest instead.
+#:
+#: It is a REPRESENTATION change and nothing else. A V3 generation REHYDRATES to
+#: the byte-identical V2 document, which :func:`load` does before any check runs
+#: — so every check below is written against the V2 shape and is unaware the
+#: format changed. The budget is NOT raised; the snapshot simply got smaller.
+CONTROL_PLANE_V3_SCHEMA_VERSION = "m62.control_plane.3"
+CONTROL_PLANE_SCHEMA_VERSIONS = frozenset({
+    CONTROL_PLANE_SCHEMA_VERSION, CONTROL_PLANE_V3_SCHEMA_VERSION})
 
 #: S3P. The schema of the portable, tracked, root-independent receipt that a
 #: ``TRAINED_UNEVALUATED`` claim must be backed by. It is a SEPARATE contract from the
@@ -189,9 +201,14 @@ LEGACY_EVALUATION_CANDIDATES: frozenset[str] = frozenset({
 STATE_DIR = "state/m62"
 CURRENT_PATH = f"{STATE_DIR}/current.json"
 SNAPSHOT_DIR = f"{STATE_DIR}/snapshots"
+#: The V3 content-addressed record store. Each file is named for the sha256 of
+#: its own canonical bytes, so a record that is edited stops being findable
+#: rather than silently changing what a sealed generation meant.
+RECORD_DIR = f"{STATE_DIR}/records"
 SCHEMA_DIR = f"{STATE_DIR}/schema"
 CURRENT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-current.schema.json"
 SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
+SNAPSHOT_V3_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot-v3.schema.json"
 TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
 EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
 EVAL_RECEIPT_V2_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v2.schema.json"
@@ -914,7 +931,7 @@ def current_schema() -> dict:
             "prose, no history, no task material and no authority. It cannot grant TRAIN, "
             "EVAL, promotion, registry mutation or release."),
         **_obj({
-            "schema_version": {"const": CONTROL_PLANE_SCHEMA_VERSION},
+            "schema_version": {"enum": sorted(CONTROL_PLANE_SCHEMA_VERSIONS)},
             "state_generation": {"type": "integer", "minimum": 1, "maximum": 100_000},
             "latest_snapshot_path": _REPO_PATH,
             "latest_snapshot_sha256": _SHA256,
@@ -2091,6 +2108,29 @@ def _numeric_delta_counts_schema() -> dict:
     return _obj({"positive": _COUNT, "zero": _COUNT, "negative": _COUNT})
 
 
+def snapshot_v3_schema() -> dict:
+    """The CONTENT-ADDRESSED generation schema (V69 M63).
+
+    Strict and closed like the V2 schema. It describes the document AS STORED;
+    the rehydrated form is separately validated against :func:`snapshot_schema`,
+    so a V3 generation has to satisfy BOTH — the new container and the old
+    semantics. That is what makes the migration representation-only.
+    """
+    base = snapshot_schema()
+    inline = {k: v for k, v in base["properties"].items()
+              if k not in V3_RECORD_BLOCKS}
+    inline["schema_version"] = {"const": CONTROL_PLANE_V3_SCHEMA_VERSION}
+    inline["records"] = {
+        "type": "object", "additionalProperties": False,
+        "required": list(V3_RECORD_BLOCKS),
+        "properties": {name: _SHA256 for name in V3_RECORD_BLOCKS},
+    }
+    required = [k for k in base.get("required", []) if k not in V3_RECORD_BLOCKS]
+    return {"type": "object", "additionalProperties": False,
+            "required": sorted(set(required) | {"records", "schema_version"}),
+            "properties": inline}
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -2243,6 +2283,7 @@ CATEGORIES = (
     "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "EVALUATION_RECEIPT",
     "POLICY_IDENTITIES",
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
+    "RECORD_STORE",
     "CONTROL_PLANE_BUDGET",
 )
 
@@ -2284,10 +2325,27 @@ def _git(*args: str) -> "tuple[int, str]":
 class ControlPlane:
     current: dict
     current_bytes: bytes
+    #: ALWAYS the V2-shaped document. For a V3 generation this is the rehydrated
+    #: form, so every check below reads one shape regardless of what is on disk.
     snapshot: dict
+    #: The bytes actually on disk — what the budget is measured against and what
+    #: the next generation's parent digest covers.
     snapshot_bytes: bytes
     snapshot_path: Path
     migration: dict
+    #: The on-disk document as written. Identical to ``snapshot`` under V2.
+    snapshot_stored: dict = field(default_factory=dict)
+    #: digest -> record payload, for a V3 generation. Empty under V2.
+    records: dict = field(default_factory=dict)
+    #: Problems found while rehydrating. Non-empty means the generation could
+    #: not be read as it claims, and the run must fail rather than proceed on a
+    #: partially-reconstructed state.
+    rehydration_problems: tuple = ()
+
+    @property
+    def is_v3(self) -> bool:
+        return self.snapshot_stored.get(
+            "schema_version") == CONTROL_PLANE_V3_SCHEMA_VERSION
 
 
 def _load_json(path: Path, label: str) -> "tuple[dict, bytes]":
@@ -2299,6 +2357,100 @@ def _load_json(path: Path, label: str) -> "tuple[dict, bytes]":
     if not isinstance(payload, dict):
         raise SystemExit(f"S3N1_CONTROL_PLANE_UNREADABLE: {label} is not an object")
     return payload, raw
+
+
+#: The blocks a V3 generation references by digest instead of storing inline.
+#: Mirrors ``scripts/migrate_m62_control_plane_v3.RECORD_BLOCKS``; a test pins
+#: the two lists equal so they cannot drift into two different contracts.
+V3_RECORD_BLOCKS = (
+    "archive", "base_model", "candidates", "datasets", "defects",
+    "frozen_invariants", "limitations", "policy_identities",
+)
+
+
+def load_record_store(directory: Path) -> "dict[str, dict]":
+    """Read the content-addressed record store.
+
+    The filename is NOT trusted as the address: each record is re-hashed from
+    its own canonical bytes, so a file renamed to impersonate another record
+    simply does not resolve.
+    """
+    out: dict[str, dict] = {}
+    if not directory.is_dir():
+        return out
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_bytes().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            out[sha256_bytes(canonical_bytes(payload))] = payload
+    return out
+
+
+def rehydrate_v3(stored: dict, records: "dict[str, dict]") -> "tuple[dict, tuple]":
+    """Reconstruct the V2-shaped document from a V3 generation.
+
+    Returns ``(payload, problems)``. Fails closed and reports rather than
+    raising, so a broken record store produces a verifier FAILURE with a reason
+    instead of a traceback.
+    """
+    problems: list[str] = []
+    reference = stored.get("records")
+    if not isinstance(reference, dict):
+        return {}, ("a V3 generation carries no records map",)
+    if set(reference) != set(V3_RECORD_BLOCKS):
+        problems.append(
+            f"the records map names {sorted(reference)}, the contract names "
+            f"{sorted(V3_RECORD_BLOCKS)}")
+
+    out = {k: v for k, v in stored.items() if k != "records"}
+    out["schema_version"] = CONTROL_PLANE_SCHEMA_VERSION
+    for name in sorted(reference):
+        digest = reference[name]
+        if not isinstance(digest, str) or not SHA256_RE.match(digest):
+            problems.append(f"block {name!r} is referenced by {digest!r}, not a sha256")
+            continue
+        payload = records.get(digest)
+        if payload is None:
+            problems.append(f"record {digest} for block {name!r} is missing from "
+                            f"{RECORD_DIR}")
+            continue
+        # Re-hash rather than trust the key. ``load_record_store`` derives the key
+        # by hashing, so a tampered FILE already lands under a different address
+        # and shows up as missing — but this function also accepts a caller-built
+        # map, and there a mismatched key would otherwise be believed.
+        measured = sha256_bytes(canonical_bytes(payload))
+        if measured != digest:
+            problems.append(f"record for block {name!r} hashes to {measured} but "
+                            f"was referenced as {digest}")
+            continue
+        if payload.get("block") != name:
+            problems.append(f"record {digest} says it is block "
+                            f"{payload.get('block')!r} but was referenced as {name!r}")
+            continue
+        out[name] = payload.get("value")
+    return out, tuple(problems)
+
+
+def load_semantic_snapshot(root: "Path | None" = None) -> dict:
+    """The current generation in its V2 SEMANTIC shape, whatever the storage format.
+
+    V69 M63 introduced the content-addressed V3 container. Callers that care
+    about what the control plane MEANS — the candidates, the datasets, the
+    defects — should read through here rather than json-loading the snapshot
+    path, so a future container change does not reach them either.
+    """
+    root = root or REPO_ROOT
+    current = json.loads((root / CURRENT_PATH).read_text(encoding="utf-8"))
+    stored = json.loads(
+        (root / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    if stored.get("schema_version") != CONTROL_PLANE_V3_SCHEMA_VERSION:
+        return stored
+    payload, problems = rehydrate_v3(stored, load_record_store(root / RECORD_DIR))
+    if problems:
+        raise SystemExit(f"S3N1_CONTROL_PLANE_UNREADABLE: rehydration: {problems[0]}")
+    return payload
 
 
 def load(report: Report) -> "ControlPlane | None":
@@ -2329,8 +2481,20 @@ def load(report: Report) -> "ControlPlane | None":
         report.fail("ARCHIVE_INTEGRITY",
                     f"{MIGRATION_MANIFEST_PATH} is missing; the archive's pinned digest "
                     f"has only one witness")
+    # V69 M63 — a V3 generation is REHYDRATED here, before any check runs. Every
+    # check below therefore reads the same V2 shape it always did, and the
+    # format change is invisible to them by construction rather than by 60 edits.
+    stored = snapshot
+    records: dict = {}
+    problems: tuple = ()
+    if snapshot.get("schema_version") == CONTROL_PLANE_V3_SCHEMA_VERSION:
+        records = load_record_store(REPO_ROOT / RECORD_DIR)
+        snapshot, problems = rehydrate_v3(stored, records)
+        for problem in problems:
+            report.fail("SCHEMA", f"snapshot rehydration: {problem}")
     return ControlPlane(current, current_raw, snapshot, snapshot_raw, snapshot_file,
-                        migration)
+                        migration, snapshot_stored=stored, records=records,
+                        rehydration_problems=problems)
 
 
 def _is_inside(path: Path, root: Path) -> bool:
@@ -2344,9 +2508,14 @@ def _is_inside(path: Path, root: Path) -> bool:
 # ── Checks ───────────────────────────────────────────────────────────────────────────
 def check_schema(cp: ControlPlane, report: Report) -> None:
     """V1, V2, V28 — both documents strictly valid; unknown keys refused."""
-    for label, schema, payload in (
-            ("current.json", current_schema(), cp.current),
-            ("snapshot", snapshot_schema(), cp.snapshot)):
+    checks = [("current.json", current_schema(), cp.current),
+              ("snapshot", snapshot_schema(), cp.snapshot)]
+    if cp.is_v3:
+        # BOTH contracts must hold: the stored container AND the semantics it
+        # rehydrates to. Validating only one of them would let a well-formed V3
+        # document carry a malformed V2 meaning, or the reverse.
+        checks.append(("snapshot (stored v3)", snapshot_v3_schema(), cp.snapshot_stored))
+    for label, schema, payload in checks:
         for problem in validate_against_schema(schema, payload):
             report.fail("SCHEMA", f"{label}: {problem}")
 
@@ -2354,6 +2523,7 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
     # copies of one contract is how they drift.
     for rel, builder in ((CURRENT_SCHEMA_PATH, current_schema),
                          (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
+                         (SNAPSHOT_V3_SCHEMA_PATH, snapshot_v3_schema),
                          (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema),
                          (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema),
                          (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema),
@@ -2403,12 +2573,16 @@ def check_current_pointer(cp: ControlPlane, report: Report) -> None:
     if cp.current.get("subject_state_commit") != cp.snapshot.get("subject_state_commit"):
         report.fail("CURRENT_POINTER", "subject_state_commit differs between the pointer "
                                        "and the snapshot")
-    if cp.current.get("schema_version") != cp.snapshot.get("schema_version"):
+    stored_version = (cp.snapshot_stored or cp.snapshot).get("schema_version")
+    if cp.current.get("schema_version") != stored_version:
         report.fail("CURRENT_POINTER", "schema_version differs between the two documents")
 
     # The snapshot on disk must already BE in canonical form, so the digest above is the
     # digest of the file a human can read.
-    if cp.snapshot_bytes != canonical_bytes(cp.snapshot):
+    # Measured against the document AS STORED. Under V3 ``cp.snapshot`` is the
+    # rehydrated V2 shape, which is deliberately NOT what is on disk; comparing
+    # against that would report every V3 generation as non-canonical.
+    if cp.snapshot_bytes != canonical_bytes(cp.snapshot_stored or cp.snapshot):
         report.fail("SNAPSHOT_CHAIN",
                     "the snapshot file is not in canonical serialization; its digest "
                     "would depend on how it was written")
@@ -4583,6 +4757,90 @@ def _scan_leaks(text: str) -> list[str]:
     return [c for c in scan_for_leaks(text) if c != "reasoning"]
 
 
+def check_record_store(cp: ControlPlane, report: Report) -> None:
+    """V69 M63 — the V3 record store is complete, tracked and self-verifying.
+
+    Under V2 this is a no-op: there is no store, and its absence is correct.
+    """
+    if not cp.is_v3:
+        if (REPO_ROOT / RECORD_DIR).is_dir():
+            report.note(f"{RECORD_DIR} exists while the newest generation is V2; "
+                        f"records are inert until a V3 generation references them")
+        return
+
+    if cp.rehydration_problems:
+        # Already reported by load(); restated here so the category is right.
+        report.fail("RECORD_STORE",
+                    f"the generation did not rehydrate: "
+                    f"{cp.rehydration_problems[0]}")
+        return
+
+    directory = REPO_ROOT / RECORD_DIR
+    if directory.is_symlink():
+        report.fail("RECORD_STORE", f"{RECORD_DIR} is a symlinked directory")
+        return
+    if not directory.is_dir():
+        report.fail("RECORD_STORE", f"{RECORD_DIR} is missing but the generation "
+                                    f"references records")
+        return
+
+    referenced = set(cp.snapshot_stored.get("records", {}).values())
+    rel_paths = []
+    for digest in sorted(referenced):
+        rel = f"{RECORD_DIR}/{digest}.json"
+        path = REPO_ROOT / rel
+        rel_paths.append(rel)
+        if path.is_symlink():
+            report.fail("RECORD_STORE", f"{rel} is a symlink")
+            continue
+        if not path.is_file():
+            report.fail("RECORD_STORE", f"{rel} is referenced but is not a file")
+            continue
+        if os.access(path, os.X_OK):
+            report.fail("RECORD_STORE", f"{rel} carries an executable bit")
+        raw = path.read_bytes()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            report.fail("RECORD_STORE", f"{rel} is unreadable: {exc}")
+            continue
+        # The file must BE its own address, and it must be in the canonical
+        # serialization — a record stored with different whitespace would hash
+        # differently and silently stop resolving.
+        if raw != canonical_bytes(payload):
+            report.fail("RECORD_STORE",
+                        f"{rel} is not in the canonical serialization")
+            continue
+        measured = sha256_bytes(canonical_bytes(payload))
+        if measured != digest:
+            report.fail("RECORD_STORE",
+                        f"{rel} hashes to {measured}; it is referenced as {digest}")
+
+    code, tracked_out = _git("ls-files", "-z", "--", *rel_paths) if rel_paths else (0, "")
+    tracked = set(tracked_out.split("\0")) if code == 0 else set()
+    if code == 0:
+        for rel in rel_paths:
+            if rel not in tracked:
+                report.fail("RECORD_STORE",
+                            f"{rel} is not tracked by Git; an untracked record has "
+                            f"no history and no second witness")
+    else:
+        report.fail("RECORD_STORE", "git ls-files failed; record tracking "
+                                    "cannot be verified")
+
+    # A round-trip proof, run live rather than trusted from migration time.
+    restored, problems = rehydrate_v3(cp.snapshot_stored, cp.records)
+    if problems:
+        report.fail("RECORD_STORE", f"live rehydration failed: {problems[0]}")
+    elif canonical_bytes(restored) != canonical_bytes(cp.snapshot):
+        report.fail("RECORD_STORE",
+                    "live rehydration does not reproduce the loaded snapshot")
+    else:
+        report.note(f"V3 generation: {len(referenced)} records resolved, "
+                    f"snapshot {len(cp.snapshot_bytes)} bytes on disk vs "
+                    f"{len(canonical_bytes(cp.snapshot))} rehydrated")
+
+
 def check_budgets(cp: ControlPlane, report: Report) -> None:
     """The size guards that stop the control plane becoming monolithic again."""
     progress = REPO_ROOT / PROGRESS_PATH
@@ -4773,6 +5031,7 @@ def run() -> Report:
     check_operator_ruling(cp, report)
     check_holdout_firewall(cp, report)
     check_holdout_retirement(cp, report)
+    check_record_store(cp, report)
     check_budgets(cp, report)
     check_next(cp, report)
     return report

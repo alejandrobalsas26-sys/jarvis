@@ -15,7 +15,10 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "m62.control_plane.1"
+      "enum": [
+        "m62.control_plane.1",
+        "m62.control_plane.3"
+      ]
     },
     "state_generation": {
       "maximum": 100000,

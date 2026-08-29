@@ -48,7 +48,10 @@ def current() -> dict:
 
 @pytest.fixture(scope="module")
 def snapshot(current) -> dict:
-    return json.loads((REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    # V69 M63 — the control plane stores generations in the V3
+    # content-addressed container. These assertions are about what the
+    # state MEANS, so they read the rehydrated semantic form.
+    return V.load_semantic_snapshot(REPO)
 
 
 #: Generation 12 BY PATH, not by following ``current.json``.

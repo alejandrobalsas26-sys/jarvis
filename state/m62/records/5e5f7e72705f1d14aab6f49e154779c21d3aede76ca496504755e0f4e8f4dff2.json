@@ -1,0 +1,11 @@
+{
+  "block": "base_model",
+  "value": {
+    "chat_template_digest": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+    "evidence": "jarvis/scripts/build_quality_training_config.py",
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "revision_kind": "immutable_commit",
+    "training_precision": "FP32 on CPU for S3H and S3K. The S3E.2 evaluation load was observed at bfloat16 because the backend did not force FP32; that history is not rewritten."
+  }
+}

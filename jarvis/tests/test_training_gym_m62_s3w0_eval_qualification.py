@@ -90,9 +90,10 @@ def git(*args: str) -> str:
 
 @pytest.fixture(scope="module")
 def snapshot() -> dict:
-    current = json.loads((REPO_ROOT / "state/m62/current.json").read_text("utf-8"))
-    return json.loads(
-        (REPO_ROOT / current["latest_snapshot_path"]).read_text("utf-8"))
+    # V69 M63 — the control plane stores generations in the V3
+    # content-addressed container. These assertions are about what the
+    # state MEANS, so they read the rehydrated semantic form.
+    return V.load_semantic_snapshot(REPO_ROOT)
 
 
 @pytest.fixture(scope="module")

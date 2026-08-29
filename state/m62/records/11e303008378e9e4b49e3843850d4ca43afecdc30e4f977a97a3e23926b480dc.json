@@ -1,0 +1,131 @@
+{
+  "block": "defects",
+  "value": [
+    {
+      "evidence": "jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md",
+      "id": "D25",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A persisted report is serialised in run_state 'comparing'; that is the documented serialisation state, not an unfinished run. states_visited ends in completed and it contributes no blocker."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3F2_OPERATOR_RULINGS_AND_EVAL_V2.md",
+      "id": "D28",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "The production backend never populates proposed_tool_calls, so tool_call_validity_rate is VACUOUS on both arms and the six tool_call_schema tasks decide nothing. A backend gap, not a corpus one."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "id": "D29",
+      "is_gate": false,
+      "status": "ACCEPTED_KNOWN_LIMITATION",
+      "summary": "looks_like_refusal recognises sixteen literal English phrasings and the held-out JSON refusal targets contain none. It bounds QG-1 and SV-5 in BOTH directions and travels into eval-v4 by design."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "id": "D30",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A plan could report is_executable true with an empty blocker list while its weights were not known to be cached. The cache is now determined before the feasibility report is built."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3G2_VALIDATION_WIRING.md",
+      "id": "D31",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "The VALIDATION split reached the trainer as nothing across three boundaries. Do not remove the eval_dataset wiring or the closing trainer.evaluate(); validation stays diagnostic, never eligibility evidence."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I0_EVALUATION_RUNTIME_QUALIFICATION.md",
+      "id": "D32",
+      "is_gate": false,
+      "status": "SUPERSEDED",
+      "summary": "Read as a documentation defect about eval-v2's digest; superseded by D34, whose root cause is lineage discovered from incidental build state."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I0_EVALUATION_RUNTIME_QUALIFICATION.md",
+      "id": "D33",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "The declared per-task generation timeout is validated, hashed and never enforced, so timeout_rate is VACUOUS. A config must state timeout_s explicitly; the policy default is 120 s."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3I1_KALI_RUNTIME_AND_CANONICAL_LINEAGE.md",
+      "id": "D34",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "A dataset manifest digest depended on build lineage rather than content. A parent is now DECLARED in CANONICAL_LINEAGE and the build fails closed rather than degrading to genesis."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "id": "D35",
+      "is_gate": false,
+      "status": "OPERATOR_RULING",
+      "summary": "A spent holdout becomes development evidence and may not be the sole fresh eligibility corpus for the next candidate. Each candidate needs a fresh holdout. Not a contamination claim."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "id": "D36",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "The promotion sanitizer matched the local account name as a plain substring, making a dataset identity a function of the building host. Do not simplify it back, and do not widen it to a word boundary either."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M1_D37_TEMPLATE_PARITY_QUALIFICATION.md",
+      "id": "D37",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "Training and evaluation rendered the same messages differently; training now binds a reasoning policy and chat_render_policy_hash binds the call. Historical causality remains NOT_ESTABLISHED and closing it is not predicted to restore 9/9."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M2_D38_OUTPUT_BUDGET_INSTRUMENTATION.md",
+      "id": "D38",
+      "is_gate": false,
+      "status": "FIXED_OBSERVABILITY_ONLY",
+      "summary": "Output-budget exhaustion is now a body-free diagnostic beside the unchanged input-truncation metric. NO gate reads it and none may be added without a separate operator decision. Reaching the ceiling is not failure."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3M_STRUCTURED_OUTPUT_DIAGNOSIS.md",
+      "id": "D39",
+      "is_gate": false,
+      "status": "OPEN",
+      "summary": "Order-dependent cross-file test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure has ever been affected; the authoritative -k m62 collection is alphabetical. Not to be fixed as a rider."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3Q02_SEAL_RECOVERY.md",
+      "id": "D40",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "m62.eval_receipt.2 modelled the paired outcome as an exhaustive three-way wins/ties/losses partition. Production classifies FOUR comparable verdicts and security_improvement is not a win, so a correct 11/12/10/3 run was called self-inconsistent. .3 sums the re-derived vocabulary to measured_pairs."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3Q02_SEAL_RECOVERY.md",
+      "id": "D41",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "m62.eval_receipt.2 required ASCII canonical text, which refused the real blocking gate message: gates.py typesets U+2212 correctly. The ambiguity was real and the remedy backwards. .3 DEFINES the bytes as canonical JSON in UTF-8 rather than discarding evidence. Scanners unchanged; .1 and .2 keep the ASCII rule."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3Q02_SEAL_RECOVERY.md",
+      "id": "D42",
+      "is_gate": false,
+      "status": "FIXED",
+      "summary": "m62.eval_receipt.2 derived evaluation_source_commit from git HEAD at build time, which is the evaluation source only until a repair commit moves HEAD. A post-live seal could name the repair commit as the thing that measured, or refuse the truth. .3 carries evaluation_source and seal_implementation_source as TWO blocks."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3T0_PROSPECTIVE_TERMINATION_OBSERVABILITY.md",
+      "id": "D43",
+      "is_gate": false,
+      "status": "FIXED_OBSERVABILITY_ONLY",
+      "summary": "A JSON parse failure persisted one closed note code, so EXTRA_DATA - a whole document parsed, then more output - was indistinguishable from a document that never closed. Fixed PROSPECTIVELY by a closed body-free parse class plus location and one repetition scalar. No gate reads them. Nothing backfilled."
+    },
+    {
+      "evidence": "jarvis/docs/V69_M62_S3X0_PRESPEND_HOLDOUT_FIREWALL_RECOVERY.md",
+      "id": "D44",
+      "is_gate": true,
+      "status": "FIXED",
+      "summary": "The PERSISTENCE firewall was PRESENT and held: no body reached a tracked file, receipt or ledger. The missing one was the IN-MEMORY ORCHESTRATION-DISPLAY firewall. repr of a BOUND METHOD interpolates repr(__self__), so displaying pack.pack_hash WITHOUT CALLING IT rendered every body. Closed by type guard."
+    }
+  ]
+}
