@@ -77,6 +77,16 @@ _HUD_ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "cognitive_synthesis",   # M40 evidence-grounded narrative (degrades to deterministic)
     "decision_support",      # M43 transparent advisory over operator-supplied options
     "operational_state_health",  # M38 durable state honesty (durable vs volatile)
+    # V69 M63 — situational World State (ALL READ-ONLY, bounded, redacted).
+    # None of these is in _HIGH_RISK_HUD or _MEDIUM_RISK_HUD because none of
+    # them can cause an effect: they are pure reads over in-memory state.
+    "world_status",          # deterministic environment status, no LLM required
+    "world_changed",         # grounded state transitions
+    "world_impact",          # graph-derived dependency impact
+    "world_unhealthy",       # entities not currently healthy
+    "world_security",        # security controls and blind spots
+    "world_connectors",      # connector availability (incl. OPTIONAL_MISSING)
+    "world_doctor",          # runtime diagnosis; never repairs anything
 })
 _HIGH_RISK_HUD:   frozenset[str] = frozenset({
     "sliver_interact", "sliver_generate_implant", "emulate_chain",
@@ -352,6 +362,50 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             # non-blocking CPU/RAM sample, no self-test, no Ollama probe. Never blocks.
             from core.runtime_health import build_live_runtime_health
             return build_live_runtime_health()
+
+        # ── V69 M63: situational World State panels ──────────────────────
+        # Every branch below is a pure read. No connector is RUN from the HUD:
+        # "world_connectors" reports the last known availability rather than
+        # probing on demand, so a HUD client cannot use it to reach outward.
+        if cmd == "world_status":
+            from core.world_state import world
+            from core.world_status import jarvis_status
+            return jarvis_status(world)
+
+        if cmd == "world_changed":
+            from core.world_state import world
+            from core.world_status import what_changed
+            within = args.get("within_s", 3600.0)
+            try:
+                within = max(1.0, min(float(within), 86_400.0))
+            except (TypeError, ValueError):
+                within = 3600.0
+            return what_changed(world, within_s=within)
+
+        if cmd == "world_impact":
+            from core.world_state import world
+            from core.world_status import dependency_impact
+            return dependency_impact(world, str(args.get("entity", ""))[:200])
+
+        if cmd == "world_unhealthy":
+            from core.world_state import world
+            from core.world_status import unhealthy_report
+            return unhealthy_report(world)
+
+        if cmd == "world_security":
+            from core.world_state import world
+            from core.world_status import security_summary
+            return security_summary(world)
+
+        if cmd == "world_connectors":
+            from core.world_runtime import connector_snapshot
+            return connector_snapshot()
+
+        if cmd == "world_doctor":
+            from core.runtime_doctor import run_diagnostics
+            # include_network=False: the HUD path never triggers an outbound
+            # probe, not even to loopback.
+            return run_diagnostics(include_network=False).to_dict()
 
         if cmd == "collector_telemetry":
             # V68 M39 — bounded per-collector rate/lag/reliability + derived state. Pure

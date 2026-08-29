@@ -86,6 +86,16 @@ class AssetType(str, Enum):
     DATABASE = "database"
     SECURITY_SENSOR = "security_sensor"
     LAB_PLATFORM = "lab_platform"
+    # ── V69 M63: entity kinds the situational World State contract requires ──
+    # Added, never renumbered: these are ``str`` values that persist into saved
+    # graphs, so an existing snapshot keeps deserializing unchanged.
+    PROCESS = "process"                  # a running process on a host
+    SECURITY_CONTROL = "security_control"  # a firewall rule set, EDR agent, policy
+    ALERT_SOURCE = "alert_source"        # something that emits security alerts
+    DATASTORE = "datastore"              # a durable store that is not a DATABASE
+    PROJECT = "project"                  # an operator project this state serves
+    TOOL = "tool"                        # an installed/available capability
+    MODEL_RUNTIME = "model_runtime"      # Ollama, a local model server
     UNKNOWN = "unknown"
 
 
@@ -102,6 +112,10 @@ class RelationshipType(str, Enum):
     BACKED_BY = "backed_by"
     COMMUNICATES_WITH = "communicates_with"
     OBSERVED_BY = "observed_by"
+    # ── V69 M63: relations the System Graph contract requires ──
+    GENERATES = "generates"              # an alert source GENERATES observations
+    USES = "uses"                        # an entity USES a tool / model runtime
+    RESOLVES_TO = "resolves_to"          # a name RESOLVES_TO an address
 
 
 class ObservationSource(str, Enum):

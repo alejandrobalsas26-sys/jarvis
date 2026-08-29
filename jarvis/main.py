@@ -2402,6 +2402,39 @@ async def _main_async() -> None:
             except Exception as e:
                 logger.warning(f"Could not register network-baseline: {e}")
 
+            # V69 M63 — situational World State refresh loop.
+            # This is what makes the previously DORMANT read-only host/Docker
+            # discovery actually run. It is supervised by the same watchdog as
+            # every other long-lived producer, is bounded by core.world_bounds,
+            # and can cause no effect: the loop collects, ages staleness and
+            # produces PROPOSALS, and the bridge it uses cannot reach ACT.
+            try:
+                from core.world_runtime import attach_world_runtime
+
+                def _world_presence_signal():
+                    """The live posture the Presence ladder reasons over.
+
+                    Reads the SAME ``assistant_state`` the mode commands mutate
+                    and ``attach_presence`` already shares with the HUD, so the
+                    refresh loop honours a mode switch immediately rather than
+                    caching a mode from boot.
+                    """
+                    mode = assistant_state.mode
+                    from core.presence import PresenceSignal
+                    try:
+                        import psutil
+                        return PresenceSignal(mode=mode,
+                                              cpu_pct=psutil.cpu_percent(interval=None),
+                                              ram_pct=psutil.virtual_memory().percent)
+                    except Exception:  # noqa: BLE001
+                        return PresenceSignal(mode=mode)
+
+                attach_world_runtime(watchdog, signal_factory=_world_presence_signal)
+                logger.info("WORLD_STATE: situational refresh loop registered "
+                            "(read-only connectors, no remediation)…")
+            except Exception as e:
+                logger.warning(f"Could not register world-state refresh: {e}")
+
             # v34.0 — Paranoid Fortress
             # Run integrity check FIRST (before any code changes), then hardening
             asyncio.create_task(

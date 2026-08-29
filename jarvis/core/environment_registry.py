@@ -46,6 +46,12 @@ class EnvironmentType(str, Enum):
     VMWARE = "vmware"
     REMOTE_LINUX = "remote_linux"
     LAB_NODE = "lab_node"          # PNETLab / eve-ng / generic lab node
+    # ── V69 M63: environment kinds the M63 read-only connectors enroll ──
+    PROXMOX = "proxmox"            # a Proxmox VE API endpoint
+    WAZUH = "wazuh"                # a Wazuh manager API endpoint
+    ZEEK = "zeek"                  # a Zeek log directory / sensor
+    HTTP_SERVICE = "http_service"  # a service probed for HTTP liveness
+    TCP_SERVICE = "tcp_service"    # a service probed for TCP liveness
     UNKNOWN = "unknown"
 
 
