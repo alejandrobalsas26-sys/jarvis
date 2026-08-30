@@ -37,7 +37,19 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from loguru import logger
+# The doctor must be importable in the environment it is asked to diagnose, and a
+# broken or deliberately minimal environment is precisely where it earns its keep: a
+# training venv holding the pinned backend and nothing else has no `loguru`, so a
+# hard import here made the one module that detects interpreter/site-packages drift
+# the one module that could not run inside it. `logger` is used exactly once, for a
+# warning in an exception handler, and `logging.Logger.warning` is the same call, so
+# the fallback costs nothing but the module's stdlib-only import surface.
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover - covered by the stdlib-only test
+    import logging
+
+    logger = logging.getLogger("runtime_doctor")
 
 SCHEMA_VERSION = "runtime-doctor-1"
 
