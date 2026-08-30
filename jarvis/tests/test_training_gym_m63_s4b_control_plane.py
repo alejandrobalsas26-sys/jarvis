@@ -474,13 +474,26 @@ def test_no_tracked_file_carries_a_spendable_token():
 
 
 def test_the_project_block_did_not_move_master_or_merge():
-    project = V.load(V.Report()).snapshot["project"]
+    """RESCOPED AT S5A. The branch S4B declared is a property of generation 17;
+    generation 19 moved development to the M64 branch without touching one fact
+    below it. Read from the live pointer this also asserted, silently, that no
+    later generation redeclares the branch -- true by coincidence until S5A. The
+    invariants S4B owns (master untouched, unmerged, untagged, unreleased) are
+    unchanged and are checked here against BOTH generation 17 and whatever is
+    newest, so neither a rewrite of S4B nor a regression today can hide."""
+    project = _s4b_snapshot()["project"]
     assert project["branch"] == "jarvis-v69-m63-world-state"
     assert project["master_commit"] == \
         "3705114228edef2f665be349c5c4429b7b16777a"
     assert project["merged_into_master"] is False
     assert project["released"] is False
     assert project["tagged"] is False
+
+    live = V.load(V.Report()).snapshot["project"]
+    assert live["master_commit"] == project["master_commit"]
+    assert live["merged_into_master"] is False
+    assert live["released"] is False
+    assert live["tagged"] is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════

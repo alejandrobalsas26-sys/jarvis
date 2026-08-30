@@ -522,10 +522,19 @@ def test_the_snapshot_names_the_subject_commit_and_master(snapshot, current):
     assert snapshot["subject_state_commit"] == current["subject_state_commit"]
     assert re.fullmatch(r"[0-9a-f]{40}", snapshot["subject_state_commit"])
     assert snapshot["project"]["master_commit"] == MASTER_COMMIT
-    # S4A moved development off the completed M62 history branch. The control
-    # plane declares where work happens, and the verifier cross-checks it
-    # against the live branch, so this constant tracks that declaration.
-    assert snapshot["project"]["branch"] == "jarvis-v69-m63-world-state"
+    # S4A moved development off the completed M62 history branch and S5A moved it
+    # again to M64's. The control plane declares where work happens and the
+    # verifier cross-checks that declaration against the live branch, so what
+    # this file owns is that the declaration EXISTS and is the branch Git is
+    # actually on -- not which name it happens to carry this milestone. Pinning
+    # the name here would make every future branch move a test edit while
+    # proving nothing the verifier does not already prove.
+    branch = snapshot["project"]["branch"]
+    assert branch and re.fullmatch(r"[A-Za-z0-9._/-]{3,64}", branch)
+    live = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=REPO, capture_output=True, text=True, check=False)
+    assert live.returncode == 0 and live.stdout.strip() == branch
 
 
 def test_a_snapshot_claiming_the_wrong_master_fails_against_git(plane):

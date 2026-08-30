@@ -425,6 +425,17 @@ def test_no_candidate_006_and_no_second_run_directory():
 EXPECTED_GENERATION = 18
 S4B_SNAPSHOT = "0017-m63-s4b-candidate005-designed.json"
 
+#: The generation S4C wrote, addressed BY PATH rather than by following the live pointer.
+#:
+#: RESCOPED AT S5A, whose governance-only generation 19 declared the M64 branch and moved
+#: no science. Two assertions below are about what S4C ITSELF recorded -- that it landed at
+#: generation 18 chaining to 17, and the branch it declared. Read from the live pointer they
+#: also asserted, silently, that no later generation exists, which was true by coincidence
+#: until generation 19 was written. Every other assertion in this file is about candidate
+#: 005's state, which a later generation genuinely must not move, and deliberately still
+#: follows the pointer -- that is exactly what makes them worth running today.
+S4C_SNAPSHOT = "0018-m63-s4c-candidate005-trained.json"
+
 
 @pytest.fixture(scope="module")
 def snapshot() -> dict:
@@ -433,11 +444,25 @@ def snapshot() -> dict:
     return plane.snapshot
 
 
-def test_the_live_generation_is_eighteen_and_chains_to_seventeen(snapshot):
+def _s4c_snapshot() -> dict:
+    stored = json.loads(
+        (REPO / V.SNAPSHOT_DIR / S4C_SNAPSHOT).read_text(encoding="utf-8"))
+    payload, problems = V.rehydrate_v3(
+        stored, V.load_record_store(REPO / V.RECORD_DIR))
+    assert not problems, problems
+    return payload
+
+
+def test_the_s4c_generation_is_eighteen_and_chains_to_seventeen():
+    """RESCOPED AT S5A: which generation S4C wrote is S4C's own property, not a
+    claim that nothing has been written since. The chain is still verified
+    forward from here by check_snapshot_chain on every run."""
+    s4c = _s4c_snapshot()
     parent = (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_bytes()
-    assert snapshot["state_generation"] == EXPECTED_GENERATION
-    assert snapshot["parent_snapshot_sha256"] == V.sha256_bytes(parent)
-    assert snapshot["subject_state_milestone"] == "S4C"
+    assert s4c["state_generation"] == EXPECTED_GENERATION
+    assert s4c["parent_snapshot_sha256"] == V.sha256_bytes(parent)
+    assert s4c["subject_state_milestone"] == "S4C"
+    assert V.load(V.Report()).snapshot["state_generation"] >= EXPECTED_GENERATION
 
 
 def test_the_whole_verifier_passes_with_no_problems():
@@ -557,8 +582,11 @@ def test_the_recorded_axis_still_names_the_dial_and_both_ends(snapshot):
 
 
 def test_the_project_block_did_not_move_master(snapshot):
+    """The branch is S4C's own declaration (see S4C_SNAPSHOT); master staying
+    untouched, unmerged, untagged and unreleased is an invariant every later
+    generation inherits, so that half is asserted on the LIVE snapshot."""
+    assert _s4c_snapshot()["project"]["branch"] == "jarvis-v69-m63-world-state"
     project = snapshot["project"]
-    assert project["branch"] == "jarvis-v69-m63-world-state"
     assert project["master_commit"] == "3705114228edef2f665be349c5c4429b7b16777a"
     assert project["merged_into_master"] is False
     assert project["released"] is False
