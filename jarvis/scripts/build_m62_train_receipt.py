@@ -60,7 +60,11 @@ RECEIPT_SCHEMA_VERSION = "m62.train_receipt.1"
 #: The DESIGN milestone is not duplicated here at all: it is re-derived from the production
 #: generator's own ``CANDIDATES`` entry, so the receipt records a derivation rather than a
 #: second copy that could disagree with the design authority.
-TRAINING_MILESTONES: dict[str, str] = {"003": "S3P", "004": "S3V"}
+#: S4C is candidate 005's TRAINING milestone; S4B designed it. The two are kept apart
+#: for the reason S3U/S3V were: a design and the run that spends authority on it are
+#: separate events that fail separately, and a receipt that inherited the design
+#: milestone would misreport which one is being evidenced.
+TRAINING_MILESTONES: dict[str, str] = {"003": "S3P", "004": "S3V", "005": "S4C"}
 
 #: The authority form, WITHOUT the plan hash that completes it. Naming the shape is
 #: documentation; naming the instance would be handing over the capability.

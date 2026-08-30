@@ -529,6 +529,11 @@ FROZEN_ADAPTER_ARTIFACT_SETS: dict[str, str] = {
         "148e3ef15e9e3890e25f83ad1b7361192f08ed92c89741a043e4f3985cbf83da",
     "qwen3-06b-lora-quality-live-004":
         "326678618101eb4eec0a12b89a5e02f89340148111d5f4adf97d6a04f449b864",
+    # S4C's candidate. Sealed here because it cannot be re-derived without the gitignored
+    # run tree: the artifact-set hash covers the WHOLE directory, so it is the one
+    # identity that notices a file appearing or disappearing beside the weights.
+    "qwen3-06b-lora-quality-live-005":
+        "ce5f757cf0cc6d3e998aab8809b45ebb66edefdfb7ecaf0c2811840ca7ac79d9",
 }
 
 #: ``candidate_id -> (status, adapter_sha256 or None)``
@@ -651,6 +656,12 @@ CANDIDATE_003_TRAIN_RECEIPT = (
 #: from the receipt itself; this constant is the second witness, never the only one.
 CANDIDATE_004_TRAIN_RECEIPT = (
     f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-004.train.json")
+
+#: S4C. The portable receipt that backs candidate 005's TRAINED_UNEVALUATED claim. Named
+#: separately rather than derived from the id, so a receipt pointer that silently swapped
+#: to another candidate's file is a mismatch this file can state.
+CANDIDATE_005_TRAIN_RECEIPT = (
+    f"{RECEIPT_DIR}/qwen3-06b-lora-quality-live-005.train.json")
 
 #: S3Q.0.2. The portable receipt that backs candidate 003's EVALUATED_NOT_ELIGIBLE claim,
 #: and the pre-repair measurement witness it binds its evaluation source through.

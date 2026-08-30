@@ -1,0 +1,151 @@
+{
+  "adapter": {
+    "adapter_parameter_count": 10092544,
+    "artifact_set_hash": "ce5f757cf0cc6d3e998aab8809b45ebb66edefdfb7ecaf0c2811840ca7ac79d9",
+    "bytes": 40422168,
+    "dtypes": [
+      "F32"
+    ],
+    "file_names": [
+      "README.md",
+      "adapter_config.json",
+      "adapter_model.safetensors",
+      "backend_result.json",
+      "run.json",
+      "training_log.jsonl"
+    ],
+    "lora_a_tensors": 196,
+    "lora_alpha": 32,
+    "lora_b_tensors": 196,
+    "lora_dropout": 0.05,
+    "lora_rank": 16,
+    "lora_tensor_count": 392,
+    "manifest_hash": "7442246c3d85f1007fe6885714ffbdbe7c53c6bfd251e3c36ca29ab7b489f78f",
+    "non_lora_tensors": 0,
+    "sha256": "52d6da26dca20dce93de8845fa08e0b3e452d86472fd6e06d756a30e52688f2a",
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "total_bytes": 40434124,
+    "total_parameters": 606142464,
+    "trainable_parameters": 10092544
+  },
+  "authority": {
+    "bound_plan_hash": "5a786af98351e14ad231c138549b9db0206a5bd96263b7b0a94b4e625e403423",
+    "consumptions": 1,
+    "creations": 1,
+    "form": "TRAIN:<plan-hash>",
+    "retry_authorized": false,
+    "token_literal_recorded": false
+  },
+  "base_model": {
+    "chat_template_digest": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+    "identity_hash": "9701f4f3368dc13b815b7e6553d9ada462ad59fa179b6c93c625be7494bc3a72",
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "tokenizer_id": "Qwen/Qwen3-0.6B",
+    "tokenizer_revision": "c1899de289a04d12100db370d81485cdf75e47ca"
+  },
+  "candidate_id": "qwen3-06b-lora-quality-live-005",
+  "design_commit": "9e50a74c2f24cab905b9aaaac18e2970255db24e",
+  "design_milestone": "S4B",
+  "execution": {
+    "backend_status": "succeeded",
+    "backend_warnings": [],
+    "completed": true,
+    "converted_records": 154,
+    "early_stopping": false,
+    "epochs_completed": 2.0,
+    "epochs_configured": 2,
+    "error_category": "none",
+    "final_validation_loss": 3.483412742614746,
+    "final_validation_present": true,
+    "generation_performed": false,
+    "interrupted": false,
+    "load_best_model_at_end": false,
+    "optimizer_steps_completed": 40,
+    "optimizer_steps_planned": 40,
+    "optimizer_steps_requested": 40,
+    "run_state": "completed",
+    "seed": 42,
+    "terminal_status": "SUCCESS",
+    "train_loss": 3.762973,
+    "truncated_records": 0,
+    "validation_contributes_gradients": false,
+    "validation_evaluations": 2,
+    "validation_is_held_out_eligibility_evidence": false,
+    "validation_losses": [
+      3.5828990936279297,
+      3.483412742614746
+    ],
+    "validation_rows": 12
+  },
+  "holdout": {
+    "eval_authority_created": false,
+    "evaluation_corpus": null,
+    "held_out_evaluation_runs": 0,
+    "model_response_tokens_generated": 0
+  },
+  "ledger": {
+    "events": {
+      "completed": 1,
+      "started": 1
+    },
+    "plan_hashes": [
+      "5a786af98351e14ad231c138549b9db0206a5bd96263b7b0a94b4e625e403423"
+    ]
+  },
+  "model_cache_evidence": "f399355ef441e8ecab12f2b57db26f2f7d39371fce753d17eb6e486a9649823e",
+  "plan_hash": "5a786af98351e14ad231c138549b9db0206a5bd96263b7b0a94b4e625e403423",
+  "representation": {
+    "assistant_only_loss": true,
+    "chat_render_policy_hash": "8619f96c5ba84dab9afe19f8a0fcf385cb452680dd50374ba0e0b9a568490db0",
+    "full_sequence_render_policy_hash": "c5e83324ce311507de4c1ed5f450c7c13647dfc893e400a853f526ad12a1c6e0",
+    "masking_strategy": "manual_label_masking(-100)",
+    "reasoning_policy": "disabled"
+  },
+  "runtime": {
+    "deterministic_reproduction_claimed": false,
+    "device_category": "cpu",
+    "local_files_only": true,
+    "package_versions": {
+      "peft": "0.20.0",
+      "torch": "2.13.0+cpu",
+      "transformers": "5.14.1"
+    },
+    "precision": "fp32",
+    "trust_remote_code": false
+  },
+  "runtime_evidence_digest": "bcfde74647537c5f1a439c63355163743ef40b928ffd26b0c9904ef0701543b1",
+  "schema_version": "m62.train_receipt.1",
+  "training_config_hash": "5e37d615382cd2cc7ab0eabdc6eae2046f9fc778d38afac938f95e476e677703",
+  "training_config_hash_is_root_bound": true,
+  "training_dataset": {
+    "dataset_id": "m62-defensive-quality-train",
+    "export_manifest_hash": "82780fa0edc4c99198d0074a8a01b08507fa3eed54b4af50c3e045d5e07ae921",
+    "hidden_evaluation_hash": "b321d52ca1984fdcb45486962d187e63baaa83b06c0477b95c25767b992c8f91",
+    "manifest_hash": "24ceb1e0677b14aaccaea2b667e6d7388530e73f2df4d7a463368500d818fc0f",
+    "reference_hash": "b3e1be3ed7e41953f874493a398c2dc3bd2267321d32d45572a5b4ba95f54a5c",
+    "security_regression_hash": "705d5aedbfd66244df7dcee7763d77a004169ae430e211ad70e2d4fba255e312",
+    "train_shard_hash": "a02797f85d11498103918df9114ed4496e232a9a2c88b738f36f8326a72e1c7e",
+    "validation_shard_hash": "ae6ffe204df4d2b60b2215aa38a641331cf56d999cc022c24f538fba891bb764",
+    "version": "v2"
+  },
+  "training_milestone": "S4C",
+  "training_source_commit": "08a7e81f157184389ef14d54007478076314c434",
+  "verification": {
+    "adapter_problems": [],
+    "adapter_verifier": "valid",
+    "checkpoint_directories": 0,
+    "completed_run_problems": [],
+    "completed_run_verifier": "PASS",
+    "nested_directories": 0,
+    "symlinks": 0
+  }
+}
