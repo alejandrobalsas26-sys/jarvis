@@ -1,0 +1,47 @@
+{
+  "decision_kind": "HUMAN_OPERATOR_RULING",
+  "distinct_from_analysis": "No analysis in this repository ranked 2.5e-5. Generation 16's standing conclusion is RECOMMENDED_REMEDY = TOOLING and training is TRAINING_EXPERIMENTALLY_ALLOWED_NOT_PROVEN_NECESSARY. Both survive this ruling unchanged: a human authorised one experiment, which is not a finding that the experiment is indicated.",
+  "excluded_from_this_ruling": [
+    "evaluating candidate 005 or any candidate",
+    "creating, authoring, inspecting or freezing eval-v7 or any replacement holdout",
+    "reusing, reading or reconstructing eval-v4, eval-v5 or eval-v6",
+    "spending eval-v5, or setting its spent_by non-null",
+    "promotion, activation, registry mutation, merge, tag, release or version bump",
+    "promoting candidate 004, or reopening its HOLD",
+    "retraining, resuming, re-seeding or patching candidate 003, 004 or 005",
+    "any second experimental axis, or a dial slaved to the learning rate",
+    "modifying train-v2, or creating train-v3",
+    "changing gates, graders, thresholds, the refusal detector, the seed or the reasoning policy",
+    "creating a candidate 006",
+    "a sweep, a second seed or a second value of this axis"
+  ],
+  "m62_continues": true,
+  "milestone": "S4B",
+  "note": "The phrase itself is deliberately NOT stored, exactly as S3U-001 did not store its own. The digest binds WHICH ruling was given; it is not a secret and cannot be spent. The repository already holds that position for plan tokens, and a ruling digest grants strictly less than a token does, which is nothing.",
+  "primary_axis": "learning_rate",
+  "recorded_at": "2026-08-30T03:14:54Z",
+  "recorded_at_state_generation": 17,
+  "reference_candidate": "qwen3-06b-lora-quality-live-004",
+  "reference_value": "5e-5",
+  "ruled_value": "2.5e-5",
+  "ruling_id": "S4B-001",
+  "ruling_phrase_normalisation": "The five ruled fields, each written 'key = value', in the order candidate, parent, primary_axis, reference_value, ruled_value, joined by LF, UTF-8, no trailing newline. Recorded so a reader can re-derive the digest rather than take it on trust.",
+  "ruling_phrase_recorded": false,
+  "ruling_phrase_sha256": "1dcec70e2024626f0be0134f076adc2abd92f4a4d0ed41ae2d2c4ae42d265d9e",
+  "schema_version": "m62.operator_ruling.1",
+  "scope": "DESIGN_ONLY",
+  "subject_candidate": "qwen3-06b-lora-quality-live-005",
+  "supersedes": {
+    "at_state_generation": 16,
+    "clause": "designing, naming or configuring a candidate 005",
+    "clauses_untouched": [
+      "creating eval-v7 or any replacement holdout",
+      "any second look at eval-v6",
+      "using eval-v5 as eligibility evidence",
+      "promotion, activation, registry mutation, merge, tag, release or version bump"
+    ],
+    "entry": "creating eval-v7 or any replacement holdout, or designing, naming or configuring a candidate 005, without a separate explicit operator ruling",
+    "historical_entry_erased": false,
+    "scope": "candidate 005 only, prospectively, and only to 2.5e-5"
+  }
+}

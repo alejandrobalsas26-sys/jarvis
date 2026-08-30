@@ -1,0 +1,45 @@
+# V69 M63 S4B — the EXACT M62 training runtime, pinned.
+#
+# WHAT THIS IS
+# ------------
+# `requirements/training.txt` declares FLOORS (`>=`) and is the profile the installer
+# reads. Floors are the right contract for "can this host train at all"; they are the
+# wrong contract for "does this candidate train under the same backend the candidate it
+# is measured against trained under". A silently newer transformers would be a second,
+# unmeasured variable in a single-axis experiment, so the science needs exact releases
+# and this file is where they are written down.
+#
+# It is NOT a profile: `core/dependency_authority.py` mirrors `requirements/<profile>.txt`
+# against `pyproject.toml`, and adding a pin set to that contract would make an exact
+# release a hard install requirement for every user of the TRAINING extra. This file is
+# read by an operator building a candidate's training environment, and by nothing else.
+#
+# WHERE THE VERSIONS COME FROM
+# ----------------------------
+# Resolved in S3J.1 §5 from evidence, not from a brief, and re-derived here from the
+# sealed artefacts rather than re-typed from prose:
+#
+#   torch, transformers, peft   candidate 004's training receipt, `runtime.package_versions`
+#                               (state/m62/receipts/qwen3-06b-lora-quality-live-004.train.json)
+#   the remaining nine          the qualified `.venv-m62-train-linux` distribution
+#                               metadata, which is the environment that receipt was
+#                               produced in, and S3J.1 §5's resolution table
+#
+# `torch==2.13.0+cpu` carries a LOCAL VERSION and is not on PyPI: the `+cpu` build lives
+# on the official PyTorch CPU index. It is installed by its own command against
+# `--index-url https://download.pytorch.org/whl/cpu`, never by an `--extra-index-url`
+# line in this file — an extra index applies to EVERY name in the file and resolves by
+# highest version across indexes, which is the dependency-confusion shape. Two explicit
+# commands, each with one index, is the version of this that cannot be surprised.
+torch==2.13.0+cpu
+transformers==5.14.1
+peft==0.20.0
+datasets==5.0.1
+trl==1.9.2
+accelerate==1.14.0
+safetensors==0.8.0
+tokenizers==0.22.2
+sentencepiece==0.2.2
+numpy==2.5.2
+jsonschema==4.26.0
+huggingface-hub==1.27.0

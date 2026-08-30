@@ -398,22 +398,148 @@ CANDIDATE_SINGLE_AXIS: dict[str, tuple[str, frozenset[str]]] = {
 #: value: the value is the ruling.
 RULED_LEARNING_RATE: dict[str, float] = {"004": CANDIDATE_004_LEARNING_RATE}
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  V69 M63 S4B — the FIFTH quality candidate, the same dial, one step further
+# ══════════════════════════════════════════════════════════════════════════════
+#  Candidate 004 is `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` and the human decision on it
+#  is HOLD. Both facts stay exactly as they are: candidate 005 does not supersede 004,
+#  does not promote it, does not re-open its measurement and does not reinterpret its
+#  eligibility. A held candidate is retained evidence, and this is a NEW identity built
+#  against it, never a second attempt at it.
+#
+#  It exists because of a HUMAN OPERATOR RULING, not because this file recommends it.
+#  The ruling names one axis, one reference and one value; the generator's job is to
+#  refuse anything else, which `verify_single_axis` does below.
+#
+#  The preregistered question:
+#
+#      Holding candidate 004's reviewed training configuration constant, what artefact
+#      results from reducing the learning rate 5e-5 -> 2.5e-5 for exactly one controlled
+#      training experiment?
+#
+#  WHAT THIS FILE DOES NOT CLAIM, and the distinction is load-bearing:
+#
+#    * that 2.5e-5 is better than 5e-5. It is a third point on the dose-response line
+#      2e-4 -> 1e-4 -> 5e-5, and "moves nothing", "keeps the gains" and "loses the gains"
+#      are all live outcomes.
+#    * that training is the indicated remedy at all. The repository's standing body-free
+#      conclusion is `RECOMMENDED_REMEDY = TOOLING`, and this candidate is
+#      TRAINING_EXPERIMENTALLY_ALLOWED_NOT_PROVEN_NECESSARY. Both statements remain true
+#      and neither is weakened by an experiment being permitted.
+#
+#  Written as assignments against the existing tables rather than as new literals inside
+#  them, exactly as S3U wrote candidate 004's option and reasoning policy: a value that
+#  exists in one place cannot drift from itself, and the whole experiment then reads as
+#  one auditable block instead of six edits scattered through the file.
+RUN_ID_005 = "qwen3-06b-lora-quality-live-005"
+EXPERIMENT_NAME_005 = "m62-s4b-defensive-quality-005"
+#: The candidate 005 is measured AGAINST. Every dial below is inherited from it.
+CANDIDATE_005_REFERENCE_KEY = "004"
+#: Unchanged from candidate 004, which took it unchanged from 003, which took it
+#: unchanged from 002. `train-v2`, the same 182 promoted records, the same 154 TRAIN and
+#: 12 VALIDATION rows. S4B creates no `train-v3`, adds no row, deletes none, reorders
+#: none and rebalances nothing: a corpus change would be a second axis.
+TRAINING_DATASET_VERSION_005 = TRAINING_DATASET_VERSION_004
+
+#: THE axis. The same field name candidate 004 moved, moved again -- which is what makes
+#: this a dose-response reading rather than a new hypothesis.
+CANDIDATE_005_PRIMARY_AXIS = CANDIDATE_004_PRIMARY_AXIS
+#: What the operator ruled. Not a default, not a recommendation, not halving-by-habit,
+#: and not adjustable by this file: `verify_single_axis` refuses any other value.
+CANDIDATE_005_LEARNING_RATE = 2.5e-5
+
+CANDIDATES["005"] = {
+    "run_id": RUN_ID_005, "experiment_name": EXPERIMENT_NAME_005,
+    "dataset_version": TRAINING_DATASET_VERSION_005, "milestone": "S4B",
+    "notes_prefix": "M63 S4B fifth quality candidate"}
+
+#: Candidate 005 INHERITS candidate 004's render representation by ASSIGNMENT from the
+#: reference, which inherited it the same way from candidate 003. D37 is FIXED and is not
+#: reopened; re-typing the symbol here would give train/eval parity a second place to
+#: drift from.
+CANDIDATE_REASONING["005"] = CANDIDATE_REASONING[CANDIDATE_005_REFERENCE_KEY]
+
+#: The option candidate 005's is built FROM -- `S3U`, the dial set that actually trained
+#: the reference adapter, resolved through the table rather than named as a literal.
+S4B_REFERENCE_OPTION = CANDIDATE_OPTION[CANDIDATE_005_REFERENCE_KEY]
+
+#: Candidate 005's dials, DERIVED from the reference by dictionary expansion.
+#:
+#: This construction is the single-axis guarantee, not a comment claiming one. Rank,
+#: alpha, dropout, weight decay, warmup, epochs, optimizer steps and gradient
+#: accumulation are not re-typed, so there is no second place for them to drift to.
+#: Exactly one key is overridden.
+#:
+#: alpha is deliberately NOT slaved, for the reason S3U gave and which has not changed: a
+#: learning-rate change needs no compensating adjustment, `alpha/r` stays 32/16 = 2.0
+#: because neither term moves, and a "compensating" second dial would be a second axis
+#: wearing a justification.
+OPTIONS["S4B"] = {
+    **OPTIONS[S4B_REFERENCE_OPTION],
+    "label": "further reduced update magnitude",
+    "rationale":
+        "Candidate 004's dials, with the learning rate halved again and nothing else "
+        "touched. 2e-4 (001) -> 1e-4 (002, 003) -> 5e-5 (004) -> 2.5e-5 (005) is a "
+        "four-point dose-response line on the one dial the lineage has varied, and the "
+        "first three points are already measured. The operator ruled this value; this "
+        "file did not choose it and may not change it.",
+    CANDIDATE_005_PRIMARY_AXIS: CANDIDATE_005_LEARNING_RATE,
+    "overfitting_risk":
+        "lower again than candidate 004 on the same corpus and the same two passes; the "
+        "opposite risk is the live one -- an update too small to move anything at all",
+    "signal_expectation":
+        "UNKNOWN and deliberately unpredicted. This candidate is "
+        "TRAINING_EXPERIMENTALLY_ALLOWED_NOT_PROVEN_NECESSARY: the standing body-free "
+        "conclusion remains RECOMMENDED_REMEDY = TOOLING, and a permitted experiment is "
+        "not an indicated one",
+}
+
+#: Candidate 005 is the ONLY user of `S4B`. Candidates 001-004 keep the option keys they
+#: were measured under, so adding this one re-identifies nothing.
+CANDIDATE_OPTION["005"] = "S4B"
+
+#: One axis, declared and therefore checkable.
+CANDIDATE_SINGLE_AXIS["005"] = (
+    CANDIDATE_005_REFERENCE_KEY, frozenset({CANDIDATE_005_PRIMARY_AXIS}))
+
+#: Pinned by operator ruling. A candidate whose axis is the learning rate may not pick
+#: its own value: the value is the ruling.
+RULED_LEARNING_RATE["005"] = CANDIDATE_005_LEARNING_RATE
+
+
+#: How many fractional mantissa digits the prose notation may spend. ONE, and the bound
+#: is the point: `1e-4` and `5e-5` still render exactly as they always did, `2.5e-5`
+#: becomes representable, and `1.25e-4` is still a refusal. S4B widened this from a
+#: hard-coded zero because the operator ruled candidate 005 to 2.5e-5, a rate the old
+#: notation could not print -- it rounded to `3e-5` and then correctly refused its own
+#: output. Widening the NOTATION is not widening the science: no rate this function can
+#: now render is a rate any candidate may be configured at, which stays the exclusive
+#: business of `RULED_LEARNING_RATE` and `verify_single_axis`.
+MAX_LEARNING_RATE_MANTISSA_DIGITS = 1
+
 
 def format_learning_rate(value: float) -> str:
-    """``1e-4``, ``5e-5`` — the way this repository writes a learning rate in prose.
+    """``1e-4``, ``5e-5``, ``2.5e-5`` — how this repository writes a rate in prose.
 
     Derived from the number, never typed beside it, so a document or a control-plane
     string that quotes a rate cannot drift away from the rate the generator configures.
     Round-tripping is checked: a value this notation cannot represent exactly is a
     refusal rather than a rounded-off claim.
+
+    The SHORTEST faithful rendering wins. Precision is tried from zero fractional digits
+    upward and the first one that round-trips is returned, so every rate that rendered
+    before this function grew a second precision renders byte-identically now: `1e-4` is
+    still `1e-4`, and no sealed prose, document or control-plane string moves.
     """
-    mantissa, exponent = f"{value:.0e}".split("e")
-    text = f"{mantissa}e{int(exponent)}"
-    if float(text) != float(value):
-        raise ValueError(
-            f"learning rate {value!r} does not round-trip through {text!r}; refusing to "
-            f"print a rate that is not the rate")
-    return text
+    for digits in range(MAX_LEARNING_RATE_MANTISSA_DIGITS + 1):
+        mantissa, exponent = f"{value:.{digits}e}".split("e")
+        text = f"{mantissa}e{int(exponent)}"
+        if float(text) == float(value):
+            return text
+    raise ValueError(
+        f"learning rate {value!r} does not round-trip through this notation at "
+        f"{MAX_LEARNING_RATE_MANTISSA_DIGITS} fractional digit(s); refusing to print a "
+        f"rate that is not the rate")
 
 
 def single_axis_diff(candidate: str) -> frozenset[str]:
@@ -767,7 +893,9 @@ def main(argv: list[str] | None = None) -> int:
                              "(corpus v2, same option as 002, reasoning policy DISABLED "
                              "-- the single controlled axis); 004 is the S3U candidate "
                              "(corpus v2, candidate 003's dials with the learning rate "
-                             "as the single axis). Defaults to 001 so every existing "
+                             "as the single axis); 005 is the S4B candidate (corpus v2, "
+                             "candidate 004's dials with the learning rate as the single "
+                             "axis, ruled to 2.5e-5). Defaults to 001 so every existing "
                              "caller is unchanged")
     parser.add_argument("--option", default="", choices=["", *sorted(OPTIONS)],
                         help="defaults to the option the chosen candidate declares: "

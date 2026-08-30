@@ -169,7 +169,10 @@ def test_no_candidate_identity_or_ordinal_collides():
     ids = [spec["run_id"] for spec in QCFG.CANDIDATES.values()]
     assert len(ids) == len(set(ids))
     assert CANDIDATE_004_ID not in {CANDIDATE_001_ID, CANDIDATE_002_ID, CANDIDATE_003_ID}
-    assert sorted(QCFG.CANDIDATES) == ["001", "002", "003", "004"]
+    # S4B added candidate 005. The ROSTER is asserted, not its length, so a candidate
+    # appearing or disappearing is still a failure here; what changed is that there are
+    # five of them, and candidate 004's identity above is untouched by the addition.
+    assert sorted(QCFG.CANDIDATES) == ["001", "002", "003", "004", "005"]
 
 
 def test_the_fourth_candidate_has_its_own_experiment_name():
@@ -180,9 +183,16 @@ def test_the_fourth_candidate_has_its_own_experiment_name():
 
 
 def test_an_unknown_candidate_is_still_a_refusal():
-    """Fail-closed survived the addition: a typo is a refusal, never a run."""
+    """Fail-closed survived the addition: a typo is a refusal, never a run.
+
+    The witness moves from "005" to "006" because S4B made 005 a real candidate under an
+    operator ruling. The property is unchanged and is still the point: a candidate this
+    generator does not name cannot be configured, so a typo refuses instead of running
+    under an authoritative-looking id. "006" is chosen precisely because no ruling
+    authorises one.
+    """
     with pytest.raises(ValueError, match="unknown candidate"):
-        QCFG.candidate_spec("005")
+        QCFG.candidate_spec("006")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -212,12 +222,25 @@ def test_the_learning_rate_notation_round_trips():
     assert QCFG.format_learning_rate(2e-4) == "2e-4"
     for value in (REFERENCE_LEARNING_RATE, RULED_LEARNING_RATE, 2e-4):
         assert float(QCFG.format_learning_rate(value)) == value
+    # S4B. The widened notation is REQUIRED not to change any rendering that already
+    # existed: the shortest faithful form still wins, so one fractional digit is spent
+    # only when zero cannot represent the value.
+    assert QCFG.format_learning_rate(2.5e-5) == "2.5e-5"
 
 
 def test_a_rate_the_notation_cannot_represent_is_refused():
-    """Refusing beats rounding: a printed rate that is not the rate is a false claim."""
+    """Refusing beats rounding: a printed rate that is not the rate is a false claim.
+
+    S4B widened the notation by exactly one fractional mantissa digit, because the
+    operator ruled candidate 005 to 2.5e-5 -- a rate the old notation rounded to `3e-5`
+    and then correctly refused its own output for. The witness moves from `1.5e-4`,
+    which one digit now renders faithfully, to `1.25e-4`, which it still cannot. The
+    PROPERTY under test is unchanged and is the same property: a rate this notation
+    cannot represent exactly is a refusal, never a rounded-off claim. Every rate that
+    rendered before renders byte-identically now, which the test above pins.
+    """
     with pytest.raises(ValueError, match="does not round-trip"):
-        QCFG.format_learning_rate(1.5e-4)
+        QCFG.format_learning_rate(1.25e-4)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
