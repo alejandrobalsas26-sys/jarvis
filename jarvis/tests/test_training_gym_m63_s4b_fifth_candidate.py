@@ -514,18 +514,44 @@ def test_the_two_rulings_are_two_decisions():
 # ══════════════════════════════════════════════════════════════════════════════
 #  8. No capability, no artefact, no exam
 # ══════════════════════════════════════════════════════════════════════════════
-def test_no_adapter_run_or_ledger_entry_exists_for_the_fifth_candidate():
-    for runtime_dir in (REPO / "jarvis" / "training_runs" / "runs" / CANDIDATE_005_ID,
-                        REPO / "jarvis" / "training_adapters" / CANDIDATE_005_ID):
-        assert not runtime_dir.exists(), f"{runtime_dir} exists; the candidate is designed"
-    ledger = REPO / "jarvis" / "training_runs" / "training_runs.jsonl"
-    if ledger.is_file():
-        assert CANDIDATE_005_ID not in ledger.read_text(encoding="utf-8")
+#: The generation S4B wrote. RESCOPED AT S4C, which trained candidate 005 under one
+#: authorised TRAIN token and moved it to TRAINED_UNEVALUATED at generation 18.
+#:
+#: The two assertions below read the live FILESYSTEM for absent artefacts. That was the
+#: right reading while the candidate was designed and untrained, and it also asserted,
+#: silently, that no authorised run would ever happen -- which is not a property a design
+#: suite owns. What S4B owns is that DESIGNING created nothing, and that is a property of
+#: generation 17, which is where it is now checked. The design suite must not become a
+#: suite that fails the moment the experiment it preregistered is actually run.
+S4B_SNAPSHOT = "state/m62/snapshots/0017-m63-s4b-candidate005-designed.json"
 
 
-def test_no_receipt_exists_for_the_fifth_candidate():
+def _s4b_entry() -> dict:
+    from scripts.verify_m62_control_plane import load_record_store, rehydrate_v3, RECORD_DIR
+
+    stored = json.loads((REPO / S4B_SNAPSHOT).read_text(encoding="utf-8"))
+    payload, problems = rehydrate_v3(stored, load_record_store(REPO / RECORD_DIR))
+    assert not problems, problems
+    return next(c for c in payload["candidates"]
+                if c["candidate_id"] == CANDIDATE_005_ID)
+
+
+def test_designing_the_fifth_candidate_created_no_adapter_and_no_run():
+    entry = _s4b_entry()
+    assert entry["status"] == "DESIGNED_UNTRAINED"
+    assert entry["adapter_sha256"] is None
+    assert entry["adapter_manifest_hash"] is None
+    assert entry["training_receipt"] is None
+
+
+def test_designing_the_fifth_candidate_created_no_exam():
+    """The one absence that is NOT a moment: it must still hold, and it does."""
+    entry = _s4b_entry()
+    assert entry["evaluation_corpus"] is None
+    assert entry["evaluation_receipt"] is None
     receipts = REPO / "state" / "m62" / "receipts"
-    assert not list(receipts.glob(f"{CANDIDATE_005_ID}.*.json"))
+    assert not list(receipts.glob(f"{CANDIDATE_005_ID}.eval.json")), (
+        "an evaluation receipt exists for candidate 005; nothing authorised one")
 
 
 def test_no_eval_v7_exists():
