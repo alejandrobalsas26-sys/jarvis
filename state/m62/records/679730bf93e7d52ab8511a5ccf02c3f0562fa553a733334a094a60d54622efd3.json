@@ -1,0 +1,70 @@
+{
+  "block": "candidates",
+  "value": [
+    {
+      "adapter_manifest_hash": "1f76ccfbb8efc566c293ab6430d041dd24748035ed48aec6552d1e3bac24699f",
+      "adapter_sha256": "43213035c15cd38928d2d6a3bdbd9af96872a954801c6bfd0a9b82a8e22ac858",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-001",
+      "evaluation_corpus": "m62-defensive-eval v2",
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md",
+      "ordinal": 1,
+      "status": "EVALUATED_NOT_ELIGIBLE",
+      "training_corpus": "m62-defensive-quality-train v1",
+      "training_receipt": null
+    },
+    {
+      "adapter_manifest_hash": "11897e16b081cc4df2517f1c0c0904b7b7580ab4daf8fea0157e49ee4e2f6ca8",
+      "adapter_sha256": "319c252498ba51e01ed59f58fc20ae639e2d886bf67277d3aa6df2e9f9665409",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-002",
+      "evaluation_corpus": "m62-defensive-eval v3",
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md",
+      "ordinal": 2,
+      "status": "EVALUATED_NOT_ELIGIBLE",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": null
+    },
+    {
+      "adapter_manifest_hash": "3bf56ff85538a2651341ec45f48281f3a7c7e861d16b6260b3a686fe0fb5249f",
+      "adapter_sha256": "6ccd8fdc16c6f79d5d7965c1d30a42faecc226581a20f701c582588c76ce4ea6",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-003",
+      "evaluation_corpus": "m62-defensive-eval v4",
+      "evaluation_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-003.eval.json",
+      "evidence": "jarvis/docs/V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md",
+      "ordinal": 3,
+      "status": "EVALUATED_NOT_ELIGIBLE",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-003.train.json"
+    },
+    {
+      "adapter_manifest_hash": "162e93e36f284b651051a93e22cfc6cb15adef3f457038297ca72774e276b510",
+      "adapter_sha256": "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-004",
+      "evaluation_corpus": "m62-defensive-eval v6",
+      "evaluation_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-004.eval.json",
+      "evidence": "jarvis/docs/V69_M62_S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md",
+      "ordinal": 4,
+      "status": "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-004.train.json"
+    },
+    {
+      "adapter_manifest_hash": "7442246c3d85f1007fe6885714ffbdbe7c53c6bfd251e3c36ca29ab7b489f78f",
+      "adapter_sha256": "52d6da26dca20dce93de8845fa08e0b3e452d86472fd6e06d756a30e52688f2a",
+      "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "candidate_id": "qwen3-06b-lora-quality-live-005",
+      "evaluation_corpus": null,
+      "evaluation_receipt": null,
+      "evidence": "jarvis/docs/V69_M63_S4C_CANDIDATE005_LIVE_TRAINING.md",
+      "ordinal": 5,
+      "status": "TRAINED_UNEVALUATED",
+      "training_corpus": "m62-defensive-quality-train v2",
+      "training_receipt": "state/m62/receipts/qwen3-06b-lora-quality-live-005.train.json"
+    }
+  ]
+}

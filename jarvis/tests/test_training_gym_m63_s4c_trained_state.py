@@ -417,3 +417,157 @@ def test_no_candidate_006_and_no_second_run_directory():
         assert not [n for n in names if n.startswith(CANDIDATE_005_ID) and
                     n != CANDIDATE_005_ID]
     assert "006" not in QCFG.CANDIDATES
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  8. The control plane at generation 18
+# ══════════════════════════════════════════════════════════════════════════════
+EXPECTED_GENERATION = 18
+S4B_SNAPSHOT = "0017-m63-s4b-candidate005-designed.json"
+
+
+@pytest.fixture(scope="module")
+def snapshot() -> dict:
+    plane = V.load(V.Report())
+    assert plane is not None
+    return plane.snapshot
+
+
+def test_the_live_generation_is_eighteen_and_chains_to_seventeen(snapshot):
+    parent = (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_bytes()
+    assert snapshot["state_generation"] == EXPECTED_GENERATION
+    assert snapshot["parent_snapshot_sha256"] == V.sha256_bytes(parent)
+    assert snapshot["subject_state_milestone"] == "S4C"
+
+
+def test_the_whole_verifier_passes_with_no_problems():
+    """The one assertion that cannot be satisfied by agreeing with itself."""
+    report = V.run()
+    assert report.problems == [], " | ".join(m for _, m in report.problems)
+
+
+def test_candidate_005_is_trained_and_unevaluated(snapshot):
+    entry = next(c for c in snapshot["candidates"]
+                 if c["candidate_id"] == CANDIDATE_005_ID)
+    assert entry["status"] == "TRAINED_UNEVALUATED"
+    assert entry["adapter_sha256"] == ADAPTER_SHA256
+    assert entry["adapter_manifest_hash"] == ADAPTER_MANIFEST_HASH
+    assert entry["training_receipt"] == RECEIPT
+    assert entry["training_corpus"] == "m62-defensive-quality-train v2"
+    assert entry["base_model_revision"] == BASE_MODEL_REVISION
+    assert entry["evidence"] == EVIDENCE_DOC
+
+
+def test_a_trained_candidate_names_no_exam(snapshot):
+    """The state's whole content is that no held-out material has been spent on it."""
+    entry = next(c for c in snapshot["candidates"]
+                 if c["candidate_id"] == CANDIDATE_005_ID)
+    assert entry["evaluation_corpus"] is None
+    assert entry["evaluation_receipt"] is None
+
+
+def test_the_sealed_pair_moved_forward_exactly_once(snapshot):
+    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID] == (
+        "TRAINED_UNEVALUATED", ADAPTER_SHA256)
+    assert V.FROZEN_CANDIDATES[CANDIDATE_004_ID][1] == ADAPTER_SHA256_004
+
+
+def test_only_the_fifth_candidate_moved(snapshot):
+    """Generations advance one candidate. The other four are byte-identical."""
+    stored = json.loads(
+        (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_text(encoding="utf-8"))
+    before, problems = V.rehydrate_v3(
+        stored, V.load_record_store(REPO / V.RECORD_DIR))
+    assert not problems
+    assert before["candidates"][:4] == snapshot["candidates"][:4]
+    assert len(snapshot["candidates"]) == len(before["candidates"]) == 5
+    for block in ("datasets", "defects", "limitations", "frozen_invariants",
+                  "base_model", "policy_identities", "archive",
+                  "authority_observation"):
+        assert snapshot[block] == before[block], f"{block} moved during a training run"
+
+
+def test_candidate_004_keeps_its_hold(snapshot):
+    entry = next(c for c in snapshot["candidates"]
+                 if c["candidate_id"] == CANDIDATE_004_ID)
+    assert entry["status"] == "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW"
+    assert entry["adapter_sha256"] == ADAPTER_SHA256_004
+    assert "HOLD" in json.dumps(snapshot["next_milestone"]) or \
+        "HOLD" in snapshot["control_plane_note"] or \
+        "HOLD" in " ".join(str(v) for v in snapshot.values() if isinstance(v, str))
+
+
+def test_the_holdouts_did_not_move(snapshot):
+    datasets = {f"{d['dataset_id']} {d['version']}": d for d in snapshot["datasets"]}
+    assert datasets["m62-defensive-eval v6"]["status"] == "USED_IMMUTABLE"
+    v5 = datasets["m62-defensive-eval v5"]
+    assert v5["status"] == "FROZEN_UNUSED"
+    assert v5["spent_by"] is None
+    assert "m62-defensive-eval v7" not in datasets
+
+
+def test_the_training_corpus_was_reused_not_re_versioned(snapshot):
+    training = [d for d in snapshot["datasets"] if d["role"] == "TRAINING_CORPUS"]
+    assert sorted(d["version"] for d in training) == ["v1", "v2"]
+    v2 = next(d for d in training if d["version"] == "v2")
+    assert v2["manifest_hash"] == TRAIN_V2_MANIFEST
+    assert v2["task_count"] == 182
+
+
+def test_no_authority_is_observed(snapshot):
+    observation = snapshot["authority_observation"]
+    assert observation["control_plane_can_grant_authority"] is False
+    for kind in ("train", "eval", "promotion"):
+        assert observation[kind] == "NONE_OBSERVED_IN_REPOSITORY"
+
+
+def test_next_still_bars_everything_it_is_not_superseding(snapshot):
+    ruled_out = " | ".join(snapshot["next_milestone"]["ruled_out"])
+    for subject in V.REQUIRED_RULED_OUT_SUBJECTS:
+        assert subject in ruled_out, subject
+    for subject in ("eval-v7", "candidate 006", "second seed", "candidate 005b",
+                    "not an infrastructure failure"):
+        assert subject in ruled_out, subject
+    # The spent authority is recorded where a reader looks for authority, not in the
+    # prohibition list, so it is asserted against the whole NEXT block.
+    assert "never replayed" in json.dumps(snapshot["next_milestone"])
+
+
+def test_next_bars_reading_a_training_loss_as_evidence(snapshot):
+    ruled_out = " | ".join(snapshot["next_milestone"]["ruled_out"])
+    assert "eligibility evidence" in ruled_out
+    assert "diagnostic" in ruled_out
+    assert "never a verdict" in ruled_out
+
+
+def test_next_says_there_is_no_holdout_and_asks_for_a_fresh_session(snapshot):
+    nxt = snapshot["next_milestone"]
+    assert nxt["requires_new_session"] is True
+    assert "NONE AVAILABLE" in nxt["evaluation_holdout"]
+    assert "HOLDOUT AUTHOR IS NEVER ITS EVALUATOR" in nxt["holdout_access"]
+    assert "D35" in nxt["holdout_access"]
+    assert "unread" in nxt["holdout_access"]
+
+
+def test_the_recorded_axis_still_names_the_dial_and_both_ends(snapshot):
+    axis = snapshot["next_milestone"]["primary_axis"]
+    assert "learning_rate" in axis
+    assert QCFG.format_learning_rate(5e-5) in axis
+    assert QCFG.format_learning_rate(RULED_LEARNING_RATE) in axis
+
+
+def test_the_project_block_did_not_move_master(snapshot):
+    project = snapshot["project"]
+    assert project["branch"] == "jarvis-v69-m63-world-state"
+    assert project["master_commit"] == "3705114228edef2f665be349c5c4429b7b16777a"
+    assert project["merged_into_master"] is False
+    assert project["released"] is False
+    assert project["tagged"] is False
+
+
+def test_the_generation_stays_far_inside_its_budget():
+    plane = V.load(V.Report())
+    size = len(plane.snapshot_bytes)
+    assert size <= V.SNAPSHOT_MAX_BYTES
+    assert V.SNAPSHOT_MAX_BYTES - size >= 1024
+    assert V.SNAPSHOT_MAX_BYTES == 34_816, "the reviewed budget did not move"

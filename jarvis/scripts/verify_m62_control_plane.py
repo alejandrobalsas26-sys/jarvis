@@ -585,7 +585,20 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     #
     # Candidate 004's pair above is UNCHANGED and is re-quoted by no one: 005 is a new
     # identity built against 004, never a retry of it. The HOLD on 004 stands.
-    "qwen3-06b-lora-quality-live-005": ("DESIGNED_UNTRAINED", None),
+    # S4B designed candidate 005 after a SECOND explicit human operator ruling; S4C then
+    # spent ONE plan-bound single-use TRAIN authority on it and evaluated nothing. The
+    # digest is the adapter S4C actually produced, and it is NOT candidate 004's: a fifth
+    # candidate inheriting a fourth's weights digest is precisely the substitution this
+    # pair exists to catch. `check_candidate_design` re-derives the single-axis design
+    # from the production generator and `check_training_receipt` re-derives the trained
+    # claim from the portable receipt, so this pair agreeing with the snapshot is not on
+    # its own a pass.
+    #
+    # TRAINED is not EVALUATED and is emphatically not ELIGIBLE. Candidate 005 has no
+    # exam: eval-v6 is spent, eval-v5 is retired unspent, and no eval-v7 exists.
+    "qwen3-06b-lora-quality-live-005": (
+        "TRAINED_UNEVALUATED",
+        "52d6da26dca20dce93de8845fa08e0b3e452d86472fd6e06d756a30e52688f2a"),
 }
 
 #: The placeholder identity generation 1 carried, and what S3O resolved it to.

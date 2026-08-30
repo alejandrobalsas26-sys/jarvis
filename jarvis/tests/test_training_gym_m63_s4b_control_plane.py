@@ -60,6 +60,44 @@ CANDIDATE_004_ADAPTER = (
     "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67")
 
 
+#: The generation S4B wrote, addressed BY PATH rather than by following the live pointer.
+#:
+#: RESCOPED AT S4C, which trained candidate 005 and moved it to TRAINED_UNEVALUATED at
+#: generation 18. The assertions below are about what S4B RECORDED -- a designed candidate
+#: with no weights, no receipt and no exam. Read from the live pointer they also asserted,
+#: silently, that no later generation exists, which was true by coincidence until S4C wrote
+#: one. The property S4B owns is unchanged and is now addressed as such; the checks that
+#: are genuinely about whatever is newest still follow the pointer.
+S4B_SNAPSHOT = "0017-m63-s4b-candidate005-designed.json"
+
+
+def _s4b_snapshot(root: Path = REPO) -> dict:
+    stored = json.loads(
+        (root / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_text(encoding="utf-8"))
+    payload, problems = V.rehydrate_v3(
+        stored, V.load_record_store(root / V.RECORD_DIR))
+    assert not problems, problems
+    return payload
+
+
+def _s4b_entry(field: str = "") -> dict:
+    entry = next(c for c in _s4b_snapshot()["candidates"]
+                 if c["candidate_id"] == CANDIDATE_005_ID)
+    return entry[field] if field else entry
+
+
+@pytest.fixture()
+def s4b_sandbox(sandbox):
+    """The sandbox, repointed at generation 17 so S4B's own state is what is mutated."""
+    current = json.loads((sandbox / V.CURRENT_PATH).read_text(encoding="utf-8"))
+    path = f"{V.SNAPSHOT_DIR}/{S4B_SNAPSHOT}"
+    current["latest_snapshot_path"] = path
+    current["latest_snapshot_sha256"] = V.sha256_bytes((sandbox / path).read_bytes())
+    current["state_generation"] = 17
+    (sandbox / V.CURRENT_PATH).write_bytes(V.canonical_bytes(current))
+    return sandbox
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A writable copy of the whole control plane, records included.
@@ -110,17 +148,20 @@ def _entry(snapshot: dict, ordinal: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #  1. The generation itself
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_live_generation_is_seventeen_and_chains_to_sixteen():
-    plane = V.load(V.Report())
-    assert plane is not None
-    assert plane.snapshot["state_generation"] == EXPECTED_GENERATION
-    assert plane.snapshot["parent_snapshot_sha256"] == EXPECTED_PARENT_SHA
-    assert plane.current["state_generation"] == EXPECTED_GENERATION
-    # The CONTAINER is V3; `plane.snapshot` is the rehydrated V2 semantic shape, which is
-    # the whole point of the V3 split, so the stored bytes are what carries the version.
-    stored = json.loads(plane.snapshot_bytes.decode("utf-8"))
+def test_the_s4b_generation_is_seventeen_and_chains_to_sixteen():
+    stored = json.loads(
+        (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_text(encoding="utf-8"))
+    assert stored["state_generation"] == EXPECTED_GENERATION
+    assert stored["parent_snapshot_sha256"] == EXPECTED_PARENT_SHA
+    assert stored["subject_state_milestone"] == "S4B"
     assert stored["schema_version"] == V.CONTROL_PLANE_V3_SCHEMA_VERSION
     assert set(stored["records"]) == set(V.V3_RECORD_BLOCKS)
+
+
+def test_the_live_generation_descends_from_the_s4b_one():
+    plane = V.load(V.Report())
+    assert plane is not None
+    assert plane.snapshot["state_generation"] >= EXPECTED_GENERATION
 
 
 def test_the_whole_verifier_passes_with_no_problems():
@@ -146,11 +187,13 @@ def test_a_v3_parent_is_rehydrated_before_the_transition_table_reads_it(sandbox)
     Read raw, it has no ``candidates`` key, and every sealed ordinal would look absent
     from the parent. This asserts the parent comes back with its candidates.
     """
-    parent = V._parent_snapshot(_plane(sandbox))
-    assert parent is not None, "generation 16 did not resolve as a parent at all"
-    assert parent["state_generation"] == 16
+    plane = _plane(sandbox)
+    parent = V._parent_snapshot(plane)
+    assert parent is not None, "the V3 parent did not resolve at all"
+    assert parent["state_generation"] == plane.snapshot["state_generation"] - 1
     ordinals = sorted(c["ordinal"] for c in parent["candidates"])
-    assert ordinals == [1, 2, 3, 4]
+    assert ordinals, "the parent came back with no candidates; it was read RAW"
+    assert ordinals == sorted(range(1, len(ordinals) + 1))
 
 
 def test_the_sealed_ordinals_are_not_reported_as_fresh_entries(sandbox):
@@ -208,7 +251,7 @@ def test_an_illegal_transition_out_of_the_held_reference_is_refused(sandbox):
 #  3. Candidate 005 in the control plane
 # ══════════════════════════════════════════════════════════════════════════════
 def test_candidate_005_appears_exactly_once_and_is_designed():
-    candidates = V.load(V.Report()).snapshot["candidates"]
+    candidates = _s4b_snapshot()["candidates"]
     mine = [c for c in candidates if c["candidate_id"] == CANDIDATE_005_ID]
     assert len(mine) == 1
     entry = mine[0]
@@ -217,20 +260,23 @@ def test_candidate_005_appears_exactly_once_and_is_designed():
     assert entry["training_corpus"] == "m62-defensive-quality-train v2"
     assert entry["base_model_revision"] == QCFG.BASE_MODEL_REVISION
     assert entry["evidence"] == DESIGN_DOC
+    assert [c["candidate_id"] for c in candidates].count(CANDIDATE_005_ID) == 1
 
 
 @pytest.mark.parametrize("field", [
     "adapter_sha256", "adapter_manifest_hash", "training_receipt",
     "evaluation_corpus", "evaluation_receipt",
 ])
-def test_candidate_005_carries_no_artefact_and_no_evidence_of_measurement(field):
-    entry = next(c for c in V.load(V.Report()).snapshot["candidates"]
-                 if c["candidate_id"] == CANDIDATE_005_ID)
-    assert entry[field] is None
+def test_candidate_005_carried_no_artefact_and_no_measurement_when_designed(field):
+    assert _s4b_entry(field) is None
 
 
-def test_candidate_005_is_pinned_in_the_sealed_pairs():
-    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID] == ("DESIGNED_UNTRAINED", None)
+def test_candidate_005_was_designed_with_no_weights_at_generation_17():
+    """The sealed pair moved forward at S4C; what S4B RECORDED did not."""
+    assert _s4b_entry("status") == "DESIGNED_UNTRAINED"
+    assert _s4b_entry("adapter_sha256") is None
+    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID][0] in (
+        "DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED")
 
 
 def test_the_design_is_re_derived_from_the_production_generator():
@@ -239,12 +285,12 @@ def test_the_design_is_re_derived_from_the_production_generator():
     assert report.problems == [], _messages(report)
 
 
-def test_a_designed_candidate_carrying_an_adapter_is_refused(sandbox):
+def test_a_designed_candidate_carrying_an_adapter_is_refused(s4b_sandbox):
     def mutate(payload: dict) -> None:
         _entry(payload, 5)["adapter_sha256"] = "a" * 64
 
     report = V.Report()
-    V.check_candidate_state(_mutate(sandbox, mutate), report)
+    V.check_candidate_state(_mutate(s4b_sandbox, mutate), report)
     assert "designed candidate has a configuration and no weights" in _messages(report)
 
 

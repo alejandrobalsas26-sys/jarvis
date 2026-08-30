@@ -105,6 +105,11 @@ _SANDBOX_FILES = (
     # reports a missing file for 004 and this file's candidate-003 assertions fail for a
     # reason that has nothing to do with candidate 003.
     V.CANDIDATE_004_TRAIN_RECEIPT,
+    # S4C. Same reason again, for candidate 005: the live generation records it as
+    # TRAINED_UNEVALUATED, so a sandbox without its receipt fails the check for a
+    # candidate this file makes no claim about. The list grows with the lineage by
+    # design -- naming each receipt is what keeps the omission loud instead of silent.
+    V.CANDIDATE_005_TRAIN_RECEIPT,
 )
 
 
