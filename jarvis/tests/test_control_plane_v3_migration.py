@@ -36,6 +36,25 @@ def _current_snapshot() -> dict:
         (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
 
 
+#: The generation S4A actually wrote, pinned BY PATH rather than by following the live
+#: pointer.
+#:
+#: RESCOPED AT S4B. Three assertions in this file are about the MIGRATION -- the chain
+#: crossing the version boundary, the representation change moving no science, and the
+#: state of the world at the moment it happened. Read from the live pointer they also
+#: asserted, silently, that no later generation exists, which was true by coincidence
+#: until generation 17 was written. They are properties of generation 16 and are now
+#: addressed as such. Every other `_current_snapshot()` caller below is genuinely about
+#: whatever the newest V3 generation is -- content addressing, tamper evidence,
+#: rehydration, headroom -- and deliberately still follows the pointer.
+MIGRATION_SNAPSHOT = "0016-m63-control-plane-v3-and-branch.json"
+
+
+def _migration_snapshot() -> dict:
+    return json.loads(
+        (SNAPSHOT_DIR / MIGRATION_SNAPSHOT).read_text(encoding="utf-8"))
+
+
 # ── the equivalence proof ────────────────────────────────────────────────────
 @pytest.mark.parametrize("path", _v2_snapshots(), ids=lambda p: p.name[:9])
 def test_round_trip_is_byte_identical_for_every_v2_snapshot(path):
@@ -186,14 +205,14 @@ def test_the_v2_history_is_still_v2_and_unrewritten():
 def test_the_chain_crosses_the_version_boundary():
     """Generation 16's parent digest is the sha256 of generation 15's bytes."""
     gen15 = SNAPSHOT_DIR / "0015-m62-s3z-candidate004-hold-decision.json"
-    stored = _current_snapshot()
+    stored = _migration_snapshot()
     assert stored["state_generation"] == 16
     assert stored["parent_snapshot_sha256"] == V.sha256_bytes(gen15.read_bytes())
 
 
 # ── the migration changes representation, never science ──────────────────────
 def test_the_migration_moved_no_scientific_state():
-    stored = _current_snapshot()
+    stored = _migration_snapshot()
     records = V.load_record_store(RECORD_DIR)
     now, _ = V.rehydrate_v3(stored, records)
     before = json.loads(
@@ -215,10 +234,20 @@ def test_candidate_004_is_still_on_hold_and_unpromoted():
     assert "HOLD" in now["control_plane_note"] or "HOLD" in json.dumps(now["next_milestone"])
 
 
-def test_no_candidate_005_exists_yet():
-    stored = _current_snapshot()
+def test_the_migration_created_no_candidate_005():
+    """S4A moved a container, not a candidate.
+
+    RESCOPED AT S4B, which designed candidate 005 under operator ruling S4B-001 and
+    recorded it at generation 17. The property S4A owns is that ITS OWN generation
+    created no candidate -- a representation change that quietly minted one would be the
+    failure this asserts against -- and that property is unchanged and still checked,
+    against generation 16. It never owned "no candidate 005 will ever exist"; that was a
+    fact about the world at the time, and a human has since ruled otherwise.
+    """
+    stored = _migration_snapshot()
     now, _ = V.rehydrate_v3(stored, V.load_record_store(RECORD_DIR))
     assert not any("005" in c["candidate_id"] for c in now["candidates"])
+    assert [c["ordinal"] for c in now["candidates"]] == [1, 2, 3, 4]
 
 
 def test_eval_v6_is_spent_and_eval_v5_is_retired_unspent():
