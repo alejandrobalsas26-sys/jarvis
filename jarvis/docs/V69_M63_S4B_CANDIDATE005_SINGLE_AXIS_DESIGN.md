@@ -354,11 +354,25 @@ TRAIN_ATTEMPTS              0
 ADAPTER_ARTIFACTS           0
 ```
 
-The plan hash is derived through a token-silent surface —
-`build_quality_training_config.py --plan`, which computes `plan_hash()` and never calls
-`to_record()` or `confirmation_token()`, so no `TRAIN:` string is ever constructed. A
-focused test asserts that property by making `confirmation_token` raise and requiring the
-plan path to still succeed.
+The plan hash is derived through token-silent surfaces only. The canonical executor's
+`--dry-run` and `--print-plan` are **not** token-silent: both call
+`TrainingPlan.to_record()`, which calls `confirmation_token()` and prints the literal
+`TRAIN:<plan-hash>`. Two surfaces avoid that and are the only ones used before authority:
+
+* `build_quality_training_config.py --plan` — computes `plan_hash()` and the blocker
+  list, and never calls `to_record()` or `confirmation_token()`.
+* `scripts/qualify_m62_train_runtime.py` — `--runtime-report` emits the deterministic,
+  path-normalised runtime identity and its digest; `--plan` emits the immutable train
+  plan binding the frozen source commit, the candidate and its parent, the ruling and its
+  digest, the axis and both values, every dial that may not move, the dataset and base
+  model identities, the runtime digest, the config digest, the output root, the expected
+  artefact rules and receipt path, and the canonical `plan_hash`. It refuses outright if
+  a dial that is not the axis has moved.
+
+The property is asserted, not asserted about: focused tests monkeypatch
+`confirmation_token`, `to_record` and `expected_effects` to raise, and require both
+surfaces to still succeed and emit a plan hash. The qualifier's call graph is separately
+checked to contain none of the three.
 
 ---
 

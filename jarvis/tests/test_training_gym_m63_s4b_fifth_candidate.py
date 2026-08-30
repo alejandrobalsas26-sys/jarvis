@@ -556,6 +556,182 @@ def test_the_generator_imports_no_training_framework_at_module_scope():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  8b. THE PREAUTH SURFACE IS TOKEN-SILENT
+# ══════════════════════════════════════════════════════════════════════════════
+#  A plan hash must be derivable BEFORE a human is asked for authority, and deriving it
+#  must not put the single-use authorisation string into console scrollback. The
+#  repository's own executor is explicit that `--dry-run` and `--print-plan` DO
+#  materialise it, via `TrainingPlan.to_record()` -> `confirmation_token()`. The
+#  generator's `--plan` path deliberately reads `plan_hash()` and the blocker list
+#  instead, and never calls either.
+#
+#  Asserted by making the token surfaces EXPLODE. A comment claiming "we do not call it"
+#  is not evidence; a run that succeeds while calling it is impossible is.
+def test_the_generator_plan_path_never_materialises_a_token(roots, monkeypatch, capsys):
+    from training_gym.training.plan import TrainingPlan
+
+    def detonate(self, *args, **kwargs):  # pragma: no cover - it must not be reached
+        raise AssertionError("the preauth surface materialised a TRAIN token")
+
+    monkeypatch.setattr(TrainingPlan, "confirmation_token", detonate)
+    monkeypatch.setattr(TrainingPlan, "to_record", detonate)
+    monkeypatch.setattr(TrainingPlan, "expected_effects", detonate)
+
+    dataset_root, output_root = roots
+    code = QCFG.main([
+        "--dataset-root", str(dataset_root), "--output-root", str(output_root),
+        "--candidate", "005", "--plan"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0, payload
+    assert payload["status"] == "ok"
+    assert len(payload["plan_hash"]) == 64
+    assert payload["train_token_created"] is False
+    assert payload["train_token_consumed"] is False
+    assert payload["training_executed"] is False
+    assert payload["trained_anything"] is False
+    assert payload["wrote_adapter"] is False
+
+
+def test_the_plan_output_contains_no_token_shaped_string(roots, capsys):
+    from scripts.verify_m62_control_plane import TOKEN_LITERAL_RE
+
+    dataset_root, output_root = roots
+    QCFG.main(["--dataset-root", str(dataset_root), "--output-root", str(output_root),
+               "--candidate", "005", "--plan"])
+    out = capsys.readouterr().out
+    assert not TOKEN_LITERAL_RE.search(out)
+    assert "TRAIN:" not in out
+
+
+def test_the_plan_hash_is_reproducible_across_calls(roots, capsys):
+    """A plan hash a human is asked to authorise must not move between two readings."""
+    dataset_root, output_root = roots
+    hashes = []
+    for _ in range(2):
+        QCFG.main(["--dataset-root", str(dataset_root), "--output-root",
+                   str(output_root), "--candidate", "005", "--plan"])
+        hashes.append(json.loads(capsys.readouterr().out)["plan_hash"])
+    assert hashes[0] == hashes[1]
+
+
+def test_the_plan_binds_the_ruled_learning_rate(roots, capsys):
+    """A plan whose config is not the ruled one is not the plan a token should bind."""
+    dataset_root, output_root = roots
+    QCFG.main(["--dataset-root", str(dataset_root), "--output-root", str(output_root),
+               "--candidate", "005", "--plan"])
+    payload = json.loads(capsys.readouterr().out)
+    config = QCFG.build_config("S4B", dataset_root=dataset_root,
+                               output_root=output_root, candidate="005")
+    assert payload["config_hash"] == config.config_hash()
+    assert config.learning_rate == RULED_LEARNING_RATE
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  8c. THE RUNTIME QUALIFIER AND THE TRAIN PLAN
+# ══════════════════════════════════════════════════════════════════════════════
+#  `qualify_m62_train_runtime.py` is used as authoritative evidence in the preauth
+#  block, so it is tested before it is believed: token-silent, deterministic, honest
+#  about what it did not do, and carrying no private path into a digest.
+def test_the_runtime_report_is_deterministic_and_body_safe(roots, capsys):
+    from scripts import qualify_m62_train_runtime as Q
+    from scripts.verify_m62_control_plane import PRIVATE_PATH_RE, TOKEN_LITERAL_RE
+
+    dataset_root, output_root = roots
+    seen = []
+    for _ in range(2):
+        assert Q.main(["--dataset-root", str(dataset_root), "--output-root",
+                       str(output_root), "--candidate", "005",
+                       "--runtime-report"]) == 0
+        out = capsys.readouterr().out
+        seen.append(json.loads(out))
+        assert not PRIVATE_PATH_RE.findall(out), "the report carries a private path"
+        assert not TOKEN_LITERAL_RE.search(out)
+    assert seen[0] == seen[1], "the runtime report is not deterministic"
+    assert len(seen[0]["runtime_report_sha256"]) == 64
+    assert seen[0]["candidate"] == CANDIDATE_005_ID
+
+
+def test_the_runtime_report_states_what_it_did_not_do():
+    from scripts import qualify_m62_train_runtime as Q
+
+    assert Q.CANONICAL_PACKAGES[:3] == ("torch", "transformers", "peft")
+    tree = ast.parse(Path(Q.__file__).read_text(encoding="utf-8"))
+    called = {ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    for forbidden in ("confirmation_token", "to_record", "expected_effects"):
+        assert not [c for c in called if c.endswith(forbidden)], (
+            f"the qualifier calls {forbidden}; the preauth surface must stay "
+            f"token-silent")
+    source = Path(Q.__file__).read_text(encoding="utf-8")
+    assert "CONFIRMATION_PREFIX" not in source
+    assert "TRAIN:<plan-hash>" in source, "the FORM is named; the token is not built"
+
+
+def test_the_train_plan_binds_the_experiment_and_stays_token_silent(roots, capsys,
+                                                                    monkeypatch):
+    from scripts import qualify_m62_train_runtime as Q
+    from training_gym.training.plan import TrainingPlan
+
+    def detonate(self, *args, **kwargs):  # pragma: no cover - it must not be reached
+        raise AssertionError("the plan surface materialised a TRAIN token")
+
+    monkeypatch.setattr(TrainingPlan, "confirmation_token", detonate)
+    monkeypatch.setattr(TrainingPlan, "to_record", detonate)
+    monkeypatch.setattr(TrainingPlan, "expected_effects", detonate)
+
+    dataset_root, output_root = roots
+    assert Q.main(["--dataset-root", str(dataset_root), "--output-root",
+                   str(output_root), "--candidate", "005", "--plan",
+                   "--source-head", "0" * 40]) == 0
+    plan = json.loads(capsys.readouterr().out)
+
+    assert plan["candidate"] == CANDIDATE_005_ID
+    assert plan["parent"] == CANDIDATE_004_ID
+    assert plan["train_plan_source_head"] == "0" * 40
+    assert plan["human_ruling"]["ruling_id"] == "S4B-001"
+    assert plan["human_ruling"]["ruling_phrase_sha256"] == _json(
+        RULING)["ruling_phrase_sha256"]
+    assert plan["science"]["primary_axis"] == PRIMARY_AXIS
+    assert plan["science"]["reference_value"] == "5e-5"
+    assert plan["science"]["ruled_value"] == "2.5e-5"
+    assert plan["science"]["scientific_diff_count"] == 1
+    assert plan["science"]["seed"] == 42
+    assert plan["material"]["dataset_manifest_hash"] == TRAIN_V2_MANIFEST
+    assert plan["material"]["dataset_record_count"] == TRAIN_V2_RECORDS
+    assert plan["material"]["base_model_revision"] == BASE_MODEL_REVISION
+    assert plan["expected_artifacts"]["expected_receipt"] == \
+        f"state/m62/receipts/{CANDIDATE_005_ID}.train.json"
+    assert plan["authority"] == {
+        "form": "TRAIN:<plan-hash>", "single_use": True, "created_here": False,
+        "consumed_here": False, "token_materialised": False}
+    assert len(plan["execution"]["plan_hash"]) == 64
+    assert len(plan["plan_document_sha256"]) == 64
+
+
+def test_the_plan_records_every_dial_that_may_not_move(roots, capsys):
+    from scripts import qualify_m62_train_runtime as Q
+
+    dataset_root, output_root = roots
+    Q.main(["--dataset-root", str(dataset_root), "--output-root", str(output_root),
+            "--candidate", "005", "--plan"])
+    unchanged = json.loads(capsys.readouterr().out)["science"]["unchanged_dials"]
+    assert set(unchanged) == set(QCFG.OPTION_DIALS) - {PRIMARY_AXIS}
+    reference = QCFG.OPTIONS[QCFG.CANDIDATE_OPTION["004"]]
+    for dial, value in unchanged.items():
+        assert reference[dial] == value
+
+
+def test_the_plan_refuses_to_describe_a_second_axis(roots, throwaway, capsys):
+    """Non-vacuity: the plan builder is not a passive transcriber of whatever it finds."""
+    from scripts import qualify_m62_train_runtime as Q
+
+    dataset_root, output_root = roots
+    throwaway.OPTIONS["S4B"] = {**throwaway.OPTIONS["S4B"], "lora_rank": 32}
+    assert Q.main(["--dataset-root", str(dataset_root), "--output-root",
+                   str(output_root), "--candidate", "005", "--plan"]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "refused"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  9. The design document and the pinned runtime
 # ══════════════════════════════════════════════════════════════════════════════
 def test_the_design_document_is_tracked_and_body_free():
