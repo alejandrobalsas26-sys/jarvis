@@ -406,11 +406,28 @@ human roadmap ruling — none of which exist.
 2. **`plan_hash` and `config_hash` are root-bound.** They bind `output_root_id`, a digest
    of a resolved absolute path, so they reproduce in one clone at one location and are
    re-derived on the executing host rather than pinned in the control plane.
-3. **A training result would be an artefact, not a verdict.** Train and validation loss
+3. **`plan_hash` binds the host's available-memory CATEGORY, and this host sits on the
+   boundary.** `HardwareCapabilityReport.identity()` deliberately excludes the raw
+   `available_ram_gb` and `output_disk_free_gb` — a token that expired between being
+   printed and being typed would teach an operator to paste confirmations without reading
+   them — but it keeps `available_ram_category`, because crossing a memory class is a real
+   change that should invalidate a plan. Measured on this host, the two states are:
+
+   ```
+   available >= 8 GB   available_ram_category 8_to_16gb   plan_hash 5a786af9…e5403423
+   available <  8 GB   available_ram_category under_8gb   plan_hash fa8f1dff…fe738384
+   ```
+
+   The machine currently reports 8 GB available, so it flips under load. **This is not
+   plan nondeterminism:** two derivations in separate processes under the same host state
+   are byte-identical, measured three times. It does mean an authorised token can go
+   STALE, and the response to a stale token is to STOP and re-derive — never to train on
+   a plan the token does not bind, and never to reconstruct the token for the operator.
+4. **A training result would be an artefact, not a verdict.** Train and validation loss
    are diagnostic. `VALIDATION` is steering material and appears in no gate; it is never
    held-out eligibility evidence.
-4. **`RECOMMENDED_REMEDY` is still `TOOLING`.** Nothing here re-ranks that.
-5. **Runtime presence is host-local.** The absence of a run directory for candidate 005 is
+5. **`RECOMMENDED_REMEDY` is still `TOOLING`.** Nothing here re-ranks that.
+6. **Runtime presence is host-local.** The absence of a run directory for candidate 005 is
    checked on this host and inherits the PARTIAL stale-state limitation.
 
 ---
