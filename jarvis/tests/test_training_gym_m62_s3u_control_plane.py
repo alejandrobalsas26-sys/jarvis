@@ -314,14 +314,20 @@ def test_a_fresh_ordinal_may_not_enter_already_trained_or_measured(sandbox, stat
 
 def test_a_fresh_ordinal_entering_designed_is_still_re_derived(sandbox):
     """Admitting DESIGNED_UNTRAINED is safe only because the design is checked. A
-    candidate at a fresh ordinal the generator cannot produce is refused."""
+    candidate at a fresh ordinal the generator cannot produce is refused.
+
+    S4B moved the witness from ordinal 5 to ordinal 6. Candidate 005 became a REAL
+    designed candidate under operator ruling S4B-001, so the generator now produces it
+    and it stopped being an example of a candidate the generator cannot produce. The
+    property under test is unchanged; 006 is the identity no ruling authorises.
+    """
     def mutate(payload: dict) -> None:
         payload["candidates"].append({
             "adapter_manifest_hash": None, "adapter_sha256": None,
             "base_model_revision": QCFG.BASE_MODEL_REVISION,
-            "candidate_id": "qwen3-06b-lora-quality-live-005",
+            "candidate_id": "qwen3-06b-lora-quality-live-006",
             "evaluation_corpus": None, "evaluation_receipt": None,
-            "evidence": V.CANDIDATE_004_EVIDENCE, "ordinal": 5,
+            "evidence": V.CANDIDATE_004_EVIDENCE, "ordinal": 6,
             "status": "DESIGNED_UNTRAINED",
             "training_corpus": "m62-defensive-quality-train v2",
             "training_receipt": None})

@@ -571,6 +571,16 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     "qwen3-06b-lora-quality-live-004": (
         "EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW",
         "a105e01ca99d9b47d45c408a614b78aa9ec22df83ad32b321df57b1a1c3ecc67"),
+    # S4B designed candidate 005 after a SECOND explicit human operator ruling, and
+    # trained nothing. `None` is the assertion, not a placeholder: a DESIGNED_UNTRAINED
+    # candidate that has grown an adapter digest has stopped being designed and started
+    # being trained, and this pair is what notices. The value moves exactly once, at the
+    # generation that records a training receipt, and `check_training_receipt` re-derives
+    # the trained claim from that receipt rather than from this line.
+    #
+    # Candidate 004's pair above is UNCHANGED and is re-quoted by no one: 005 is a new
+    # identity built against 004, never a retry of it. The HOLD on 004 stands.
+    "qwen3-06b-lora-quality-live-005": ("DESIGNED_UNTRAINED", None),
 }
 
 #: The placeholder identity generation 1 carried, and what S3O resolved it to.
@@ -608,6 +618,27 @@ CANDIDATE_004_EVIDENCE = (
 #: the phrase: a control plane that stored a replayable authorisation string would be
 #: minting the capability it is forbidden to hold.
 OPERATOR_RULING_S3U = f"{STATE_DIR}/rulings/0001-s3u-candidate004-learning-rate.json"
+
+#: S4B. Candidate 005: designed, untrained, and the subject of a SECOND narrow operator
+#: ruling, recorded at generation 17. Like candidate 004's, its axis, its reference and
+#: its ruled learning rate are NOT restated here -- they are read from the production
+#: generator, because a verifier constant agreeing with a snapshot while the generator
+#: disagrees with both is the circular pass this file exists to refuse.
+CANDIDATE_005_ID = "qwen3-06b-lora-quality-live-005"
+CANDIDATE_005_KEY = "005"
+CANDIDATE_005_EVIDENCE = (
+    "jarvis/docs/V69_M63_S4B_CANDIDATE005_SINGLE_AXIS_DESIGN.md")
+OPERATOR_RULING_S4B = f"{STATE_DIR}/rulings/0002-s4b-candidate005-learning-rate.json"
+
+#: ``candidate id -> (generator key, the tracked ruling its design rests on)``.
+#:
+#: A MAP rather than a second hard-coded block. S3U checked one ruling by name; a second
+#: candidate resting on a second ruling made "the ruling" a category, and a category with
+#: one member spelled out in the function body is how the second member goes unchecked.
+OPERATOR_RULINGS: dict[str, tuple[str, str]] = {
+    CANDIDATE_004_ID: (CANDIDATE_004_KEY, OPERATOR_RULING_S3U),
+    CANDIDATE_005_ID: (CANDIDATE_005_KEY, OPERATOR_RULING_S4B),
+}
 
 #: S3P. The portable receipt that backs candidate 003's training history.
 CANDIDATE_003_TRAIN_RECEIPT = (
@@ -4323,6 +4354,20 @@ def transition_problems(before: str, after: str, table: dict, label: str) -> lis
 
 
 def _parent_snapshot(cp: ControlPlane) -> "dict | None":
+    """The previous generation, in its V2 SEMANTIC shape whatever its container.
+
+    S4B. The rehydration here is not a nicety: the transition table reads
+    ``parent["candidates"]``, and a V3 generation stores candidates as a content-addressed
+    RECORD, so a raw read of a V3 parent yields a document with no ``candidates`` key at
+    all. Every ordinal then looks ABSENT from the parent, which reads as four sealed
+    candidates entering the control plane for the first time at ``EVALUATED_*`` -- a
+    failure with an actively misleading message, and, for a check whose entire job is to
+    refuse illegal transitions, the first generation with a V3 parent would have had its
+    transition table quietly reduced to the fresh-ordinal rule.
+
+    It failed CLOSED rather than passing, which is why it was found rather than shipped.
+    The fix is to read the parent the way :func:`load` reads the current generation.
+    """
     generation = cp.snapshot.get("state_generation", 1)
     if generation <= 1:
         return None
@@ -4330,7 +4375,16 @@ def _parent_snapshot(cp: ControlPlane) -> "dict | None":
     for path in sorted(directory.iterdir()):
         if path.suffix == ".json" and path.name.startswith(f"{generation - 1:04d}-"):
             payload, _ = _load_json(path, path.name)
-            return payload
+            if payload.get("schema_version") != CONTROL_PLANE_V3_SCHEMA_VERSION:
+                return payload
+            rehydrated, problems = rehydrate_v3(
+                payload, load_record_store(REPO_ROOT / RECORD_DIR))
+            # A parent that cannot be rehydrated is NOT treated as "no parent": that
+            # would skip the transition table entirely, which is the one outcome a
+            # broken record store must never buy. `None` here means the caller reports
+            # nothing, so the missing-parent branch is deliberately not reused; the
+            # RECORD_STORE check fails independently on the same store.
+            return None if problems else rehydrated
     return None
 
 
@@ -4470,7 +4524,7 @@ def _authority_shaped(payload: object, label: str, path: str = "$") -> list[str]
 
 
 def check_operator_ruling(cp: ControlPlane, report: Report) -> None:
-    """S3U — a candidate whose design rests on an operator ruling shows that ruling.
+    """S3U, S4B — a candidate whose design rests on an operator ruling shows that ruling.
 
     The failure this prevents is a supersession nobody can audit: a candidate appears at
     an axis a standing entry forbade, the snapshot's prose says a human allowed it, and
@@ -4481,79 +4535,103 @@ def check_operator_ruling(cp: ControlPlane, report: Report) -> None:
     The one thing it must NOT contain is the authorisation phrase itself. A control plane
     holding a replayable string would be holding a capability, so the record carries a
     digest and says so; a record that stored the literal is a FAILURE, not a convenience.
-    """
-    designed = [c for c in cp.snapshot.get("candidates", [])
-                if c.get("candidate_id") == CANDIDATE_004_ID]
-    if not designed:
-        return
-    path = REPO_ROOT / OPERATOR_RULING_S3U
-    if not path.is_file():
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{CANDIDATE_004_ID} is recorded, but the operator ruling it rests "
-                    f"on ({OPERATOR_RULING_S3U}) is not a file in this tree")
-        return
-    code, out = _git("ls-files", "--error-unmatch", "--", OPERATOR_RULING_S3U)
-    if code != 0 or not out:
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} is untracked; a ruling with no history has "
-                    f"no second witness")
-    payload, raw = _load_json(path, OPERATOR_RULING_S3U)
-    if raw != canonical_bytes(payload):
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} is not in the canonical serialization every "
-                    f"control-plane digest is taken over")
-    if payload.get("ruling_phrase_recorded") is not False:
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} does not state that the authorisation phrase "
-                    f"is withheld")
-    if not SHA256_RE.match(str(payload.get("ruling_phrase_sha256", ""))):
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} carries no digest of the phrase it records, "
-                    f"so which decision was given is unauditable")
-    if payload.get("scope") != "DESIGN_ONLY":
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} claims scope {payload.get('scope')!r}; the "
-                    f"ruling recorded at this generation authorised a DESIGN and "
-                    f"nothing else")
 
-    # The ruling and the repository must name the SAME experiment. Re-derived from the
-    # production generator, so a ruling that drifted from what was built is a failure
-    # rather than a second opinion.
+    S4B made this a LOOP over :data:`OPERATOR_RULINGS`. S3U's version named candidate 004
+    and its one ruling directly, which was correct while there was one; a second candidate
+    resting on a second ruling turns that shape into a check that silently covers the
+    first and ignores the rest. Each ruling is re-derived independently against the
+    production generator, so two rulings cannot vouch for each other.
+    """
     if str(_PACKAGE_ROOT) not in sys.path:
         sys.path.insert(0, str(_PACKAGE_ROOT))
-    try:
-        from scripts import build_quality_training_config as generator
-    except Exception as exc:
-        report.fail("AUTHORITY_SEPARATION",
-                    f"the production candidate generator could not be imported ({exc}); "
-                    f"the operator ruling is therefore UNVERIFIED")
-        return
-    key = CANDIDATE_004_KEY
-    reference_key, declared = generator.CANDIDATE_SINGLE_AXIS[key]
-    expected = {
-        "subject_candidate": generator.CANDIDATES[key]["run_id"],
-        "reference_candidate": generator.CANDIDATES[reference_key]["run_id"],
-        "primary_axis": sorted(declared)[0],
-        "reference_value": generator.format_learning_rate(
-            generator.OPTIONS[generator.CANDIDATE_OPTION[reference_key]][
-                "learning_rate"]),
-        "ruled_value": generator.format_learning_rate(
-            generator.OPTIONS[generator.CANDIDATE_OPTION[key]]["learning_rate"]),
-    }
-    for field, value in expected.items():
-        if payload.get(field) != value:
+    generator = None
+    recorded = {c.get("candidate_id") for c in cp.snapshot.get("candidates", [])}
+
+    for cid, (key, rel) in sorted(OPERATOR_RULINGS.items()):
+        if cid not in recorded:
+            continue
+        path = REPO_ROOT / rel
+        if not path.is_file():
             report.fail("AUTHORITY_SEPARATION",
-                        f"{OPERATOR_RULING_S3U} records {field}="
-                        f"{payload.get(field)!r}; the repository builds {value!r}")
-    superseded = payload.get("supersedes", {})
-    if superseded.get("historical_entry_erased") is not False:
-        report.fail("AUTHORITY_SEPARATION",
-                    f"{OPERATOR_RULING_S3U} does not state that the historical entry it "
-                    f"supersedes remains factual at the generation that made it")
-    report.note(f"{CANDIDATE_004_ID}: operator ruling {payload.get('ruling_id')} "
-                f"verified body-free - {expected['primary_axis']} "
-                f"{expected['reference_value']} -> {expected['ruled_value']}, scope "
-                f"DESIGN_ONLY, phrase withheld and carried as a digest")
+                        f"{cid} is recorded, but the operator ruling it rests on "
+                        f"({rel}) is not a file in this tree")
+            continue
+        code, out = _git("ls-files", "--error-unmatch", "--", rel)
+        if code != 0 or not out:
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} is untracked; a ruling with no history has no second "
+                        f"witness")
+        payload, raw = _load_json(path, rel)
+        if raw != canonical_bytes(payload):
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} is not in the canonical serialization every "
+                        f"control-plane digest is taken over")
+        if payload.get("ruling_phrase_recorded") is not False:
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} does not state that the authorisation phrase is "
+                        f"withheld")
+        if not SHA256_RE.match(str(payload.get("ruling_phrase_sha256", ""))):
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} carries no digest of the phrase it records, so which "
+                        f"decision was given is unauditable")
+        if payload.get("scope") != "DESIGN_ONLY":
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} claims scope {payload.get('scope')!r}; the ruling "
+                        f"recorded at that generation authorised a DESIGN and nothing "
+                        f"else")
+
+        # The ruling and the repository must name the SAME experiment. Re-derived from
+        # the production generator, so a ruling that drifted from what was built is a
+        # failure rather than a second opinion.
+        if generator is None:
+            try:
+                from scripts import build_quality_training_config as generator
+            except Exception as exc:
+                report.fail("AUTHORITY_SEPARATION",
+                            f"the production candidate generator could not be imported "
+                            f"({exc}); the operator rulings are therefore UNVERIFIED")
+                return
+        reference_key, declared = generator.CANDIDATE_SINGLE_AXIS[key]
+        expected = {
+            "subject_candidate": generator.CANDIDATES[key]["run_id"],
+            "reference_candidate": generator.CANDIDATES[reference_key]["run_id"],
+            "primary_axis": sorted(declared)[0],
+            "reference_value": generator.format_learning_rate(
+                generator.OPTIONS[generator.CANDIDATE_OPTION[reference_key]][
+                    "learning_rate"]),
+            "ruled_value": generator.format_learning_rate(
+                generator.OPTIONS[generator.CANDIDATE_OPTION[key]]["learning_rate"]),
+        }
+        for field, value in expected.items():
+            if payload.get(field) != value:
+                report.fail("AUTHORITY_SEPARATION",
+                            f"{rel} records {field}={payload.get(field)!r}; the "
+                            f"repository builds {value!r}")
+        superseded = payload.get("supersedes", {})
+        if superseded.get("historical_entry_erased") is not False:
+            report.fail("AUTHORITY_SEPARATION",
+                        f"{rel} does not state that the historical entry it supersedes "
+                        f"remains factual at the generation that made it")
+        report.note(f"{cid}: operator ruling {payload.get('ruling_id')} verified "
+                    f"body-free - {expected['primary_axis']} "
+                    f"{expected['reference_value']} -> {expected['ruled_value']}, scope "
+                    f"DESIGN_ONLY, phrase withheld and carried as a digest")
+
+    # Two rulings may not share a digest, an id or a subject. A copied ruling record is
+    # the cheapest way to make a second candidate look independently decided.
+    seen: dict[str, list[str]] = {}
+    for cid, (_key, rel) in sorted(OPERATOR_RULINGS.items()):
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        payload, _raw = _load_json(path, rel)
+        for field in ("ruling_id", "ruling_phrase_sha256", "subject_candidate"):
+            seen.setdefault(f"{field}={payload.get(field)}", []).append(rel)
+    for marker, owners in sorted(seen.items()):
+        if len(owners) > 1:
+            report.fail("AUTHORITY_SEPARATION",
+                        f"operator rulings {owners} share {marker}; a ruling copied "
+                        f"from another is not a second human decision")
 
 
 def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
