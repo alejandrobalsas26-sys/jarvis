@@ -1,0 +1,79 @@
+{
+  "authority_observation": {
+    "control_plane_can_grant_authority": false,
+    "eval": "NONE_OBSERVED_IN_REPOSITORY",
+    "note": "An OBSERVATION, never a grant. Tokens live outside the repository, so this is measured as 'no tracked file carries one' and is not proof none exists elsewhere. Every authority stays governed by the single-use plan-token mechanism plus an explicit human decision.",
+    "promotion": "NONE_OBSERVED_IN_REPOSITORY",
+    "train": "NONE_OBSERVED_IN_REPOSITORY"
+  },
+  "control_plane_note": "S4D declares the eval-v7 exam-authoring branch and nothing else. GIT_AUTHORITY pins the branch, so moving needs a generation; this one is GOVERNANCE-ONLY. No candidate, dataset, receipt, record digest, policy identity or authority moves. test_baseline is CARRIED at its S5B value: this generation measured nothing.",
+  "generation_label": "M62_S4D_EVAL_V7_DESIGN_BRANCH",
+  "next_milestone": {
+    "authority_required": [
+      "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, before candidate 005 is measured; none exists, and no fresh holdout exists to spend one on",
+      "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before any further training; the S4C one is consumed and is never replayed",
+      "a separate explicit human decision before any promotion, which no result implies"
+    ],
+    "evaluation_holdout": "NONE AVAILABLE. eval-v6 is USED_IMMUTABLE, spent by S3Y on candidate 004; eval-v4 is spent; eval-v5 is RETIRED unspent. Candidate 005 is TRAINED and has NO eligibility corpus; none is authorised here.",
+    "holdout_access": "No holdout may be rendered to any model or session and every spent one stays unread; under D35 a spent holdout is development evidence and may never decide eligibility again. A HOLDOUT AUTHOR IS NEVER ITS EVALUATOR: the session that designed and trained candidate 005 may not author or run its exam.",
+    "lora_scope": "ATTENTION_AND_MLP",
+    "name": "Candidate 005 is TRAINED_UNEVALUATED: a valid artefact exists and is scientifically UNMEASURED. Measuring it needs a fresh eligibility holdout, a fresh independent session that did not design or train it, and a separate human roadmap ruling. None of the three exists.",
+    "primary_axis": "OPEN and UNMEASURED. Candidate 005's axis is learning_rate 5e-5 -> 2.5e-5 against candidate 004, alpha not slaved, trained once on train-v2 under the DISABLED render policy. Training produced an artefact and no evidence; candidate 004's own axis stays MEASURED and CLOSED.",
+    "requires_new_session": true,
+    "ruled_out": [
+      "any second look at eval-v6: rerun, ablation, re-score, alternate seed, partial re-measurement, or reading, quoting or reconstructing one of its bodies. It is USED_IMMUTABLE and single-use, and a missing result is not permission to look again",
+      "using eval-v5 as eligibility evidence, marking it USED_IMMUTABLE or setting spent_by non-null; or reusing, reading or reconstructing eval-v4, eval-v5 or leaked material in any session",
+      "creating, authoring, inspecting or freezing eval-v7 or any replacement holdout in the session that designed or trained candidate 005, or designing, naming or configuring a candidate 006, without a separate explicit operator ruling",
+      "recording candidate 005 as evaluated, eligible or promoted: it has no exam, no evaluation corpus and no evaluation receipt, and no result may be inferred from a training loss",
+      "reading candidate 005's train_loss 3.762973 or eval_loss 3.483413 as eligibility evidence. Both are diagnostic, VALIDATION is steering material that appears in no gate, and a clean run creates an artefact and never a verdict",
+      "relaxing body-blindness, or any preregistered gate, grader or threshold, now that candidate 004's result is known, which is post-hoc weakening",
+      "any epoch, rank, alpha, dropout or module-surface change, a dial slaved to the learning rate, a second axis, ATTENTION_ONLY, train-v3, structured rows, a stronger response schema, or a changed refusal detector, max_new_tokens, seed or reasoning policy, or creating a D38 gate or a D43 gate",
+      "reading candidate 004's learning-rate permission as general: the S3U ruling superseded the generation-8 clause for candidate 004 only, prospectively, and only to 5e-5",
+      "reading the S4B ruling as general, or as still live: it was DESIGN_ONLY, for candidate 005 only, prospectively, and only to 2.5e-5. It is spent. It is not a sweep, a second seed, a third value of the axis, or standing permission to retrain",
+      "a second candidate 005 run under any justification: another seed, a candidate 005b, a resume, or a retry because a number looks bad. A poor validation loss is not an infrastructure failure",
+      "raising a reviewed budget, or deleting recorded defects, limitations or invariants to make room",
+      "retraining, resuming, re-seeding or patching candidate 003, 004 or 005, calling any of them production-ready, or fixing D39 as a rider",
+      "promotion, activation, registry mutation, merge, tag, release or version bump without a separate explicit human authority, which no result implies"
+    ],
+    "training_corpus": "m62-defensive-quality-train v2, spent on candidates 003, 004 and 005 and reused UNCHANGED each time. No train-v3 exists and none is authorised."
+  },
+  "parent_snapshot_sha256": "50e0c28e8bda1be303af310d2fb8e8172304ecdf5c2e9aa4a4f9273598af7372",
+  "project": {
+    "branch": "jarvis-v69-eval-v7-design",
+    "master_commit": "3705114228edef2f665be349c5c4429b7b16777a",
+    "merged_into_master": false,
+    "milestone": "V69 M62 S4D - Reference-Adapter Protocol V4 and eval-v7 Authoring",
+    "released": false,
+    "tagged": false
+  },
+  "records": {
+    "archive": "420b72816185796f0f82eed31040b028f73bdb369b463a171fbc4a7ee21411ca",
+    "base_model": "5e5f7e72705f1d14aab6f49e154779c21d3aede76ca496504755e0f4e8f4dff2",
+    "candidates": "679730bf93e7d52ab8511a5ccf02c3f0562fa553a733334a094a60d54622efd3",
+    "datasets": "10732f014b986870ac155da6bf9008e9e3623878854be8cb05c451d6f8bd8c80",
+    "defects": "11e303008378e9e4b49e3843850d4ca43afecdc30e4f977a97a3e23926b480dc",
+    "frozen_invariants": "c8120ba1aa7e0fe312d8f8c352afa2381112c3ac540d4ee58546b7777cd44b32",
+    "limitations": "89f3ce649860ec5e75156afcf8d93a46bb52f9773c55dcc43c7d09d683ab3d0a",
+    "policy_identities": "663655cff3b1dc0f24b4a0f804d6d84d7865d62d9a6c8080178689dba9ef79a6"
+  },
+  "schema_version": "m62.control_plane.3",
+  "state_generation": 21,
+  "subject_state_commit": "dafcbe5cf55cb1a1b7ba7b16209174c5faff38ea",
+  "subject_state_milestone": "S4D",
+  "test_baseline": {
+    "failed": 0,
+    "invocation": "pytest -k m62 --ignore=tests/test_live_brain_v61.py",
+    "known_invocation_artifact": {
+      "failing_tests": 8,
+      "file": "jarvis/tests/test_training_gym_m62_s3g2_validation_wiring.py",
+      "invocation": "pytest run from the repository root instead of jarvis/",
+      "is_a_regression": false,
+      "is_defect_d39": false,
+      "note": "Cause measured in S3N.1: those tests read production source by a path relative to the working directory, so they resolve only from jarvis/. The file is unchanged since the subject commit. DISTINCT from D39, which fails four tests in the dataset-exports file. Not a rider fix."
+    },
+    "milestone": "S5B",
+    "passed": 4628,
+    "skipped": 20,
+    "working_directory": "jarvis/ (repository system interpreter)"
+  }
+}

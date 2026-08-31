@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **20** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **21** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0020-m64-1-live-mesh-branch.json` |
-| **Snapshot SHA256** | `50e0c28e8bda1be303af310d2fb8e8172304ecdf5c2e9aa4a4f9273598af7372` |
-| **Subject state commit** | `c315d9fd41aca5536ac7d91cef4c6874e2b10aad` (M64 closed; nothing trained, evaluated or promoted since) |
+| **Latest snapshot** | `state/m62/snapshots/0021-m62-s4d-eval-v7-design-branch.json` |
+| **Snapshot SHA256** | `a03f7612655a52f8de358ec783f875f96a420cfc409226927361098be6d98e01` |
+| **Subject state commit** | `dafcbe5cf55cb1a1b7ba7b16209174c5faff38ea` (M64.1 sealed; nothing trained, evaluated or promoted since) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -41,8 +41,8 @@ asks Git — not prose — about the branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-m64-cognitive-mesh` — declared by generation 19 (governance-only) |
-| Subject state commit | `c315d9fd41aca5536ac7d91cef4c6874e2b10aad` — the commit the current snapshot describes |
+| Branch | `jarvis-v69-eval-v7-design` — declared by generation 21 (governance-only) |
+| Subject state commit | `dafcbe5cf55cb1a1b7ba7b16209174c5faff38ea` — the commit the current snapshot describes |
 | Training source commits | 003 `bac49c4a…`; 004 `80565d32…`; 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -65,7 +65,7 @@ subject rather than equal it.
 |---|---|
 | Milestone | **V69 M64.1 — Live Mesh Hardening** (runtime + security; the M62 Training Gym science is unchanged and unmeasured) |
 | Last state-bearing milestone | **S4C** — candidate 005 `TRAINED_UNEVALUATED`; ONE authorised run, **0** generations, **0** holdout spends, nothing evaluated or promoted |
-| Last milestone | **S5B** — generation 20, GOVERNANCE-ONLY: it declares the M64.1 branch and moves no science. Preceded by **S5A** (gen 19, M64 branch) and **S4C** (`V69_M63_S4C_CANDIDATE005_LIVE_TRAINING.md`, 40/40 steps, one verified 392-tensor adapter) |
+| Last milestone | **S4D** — generation 21, GOVERNANCE-ONLY: it declares the eval-v7 exam-authoring branch and moves no science. Preceded by **S5B** (gen 20, M64.1 branch) and the last state-bearing **S4C** |
 | Phase | **TRAINED, UNMEASURED.** Candidates 001–003 `EVALUATED_NOT_ELIGIBLE`; **candidate 004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; candidate 005 `TRAINED_UNEVALUATED`; `eval-v6` `USED_IMMUTABLE`; **no eligibility corpus exists for it** |
 | Live training since S3N | **two runs** — candidates 003 and 004, 40/40 optimizer steps each, both `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **two runs** — S3Q (003 × `eval-v4`) and S3Y (004 × `eval-v6`). One plan, one holdout commit and one terminal event each. Both corpora are `USED_IMMUTABLE`; **no rerun of either is possible** |
