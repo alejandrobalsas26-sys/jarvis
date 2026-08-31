@@ -26,7 +26,6 @@ Every address is loopback, RFC-1918 or a documentation range (RFC 5737).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -622,6 +621,53 @@ async def test_the_ledger_ages_out_so_a_later_repeat_is_not_refused_forever(live
     assert ex._effect_ledger_get(key) == {"killed": ["x.exe"]}
 
 
+async def test_a_read_only_call_is_never_keyed_or_deduplicated(live):
+    """§13 — repeating a read is not an effect, and must stay cheap."""
+    ex = live.executor
+    ex.begin_effect_epoch("turn:readonly")
+    before = len(ex._effect_ledger)
+    setattr(ex, "_tool_get_datetime", lambda **kw: {"now": "2026-01-01"})
+    await ex.aexecute("get_datetime", {}, "read")
+    await ex.aexecute("get_datetime", {}, "read again")
+    assert len(ex._effect_ledger) == before, "a read-only call entered the ledger"
+
+
+async def test_a_failed_effect_is_not_recorded_as_a_successful_one(live):
+    """§13 — a failed call left the world unchanged, so a retry is legitimate.
+
+    Recording it would turn one transient failure into a permanent refusal to
+    ever attempt that action again this turn.
+    """
+    ex = live.executor
+    ex.begin_effect_epoch("turn:failure")
+    setattr(ex, "_tool_kill_process", lambda **kw: {"error": "no such process"})
+    await ex.aexecute("kill_process", {"name": "ghost.exe"}, "fails")
+    key = ex._effect_key("turn:failure", "kill_process", {"name": "ghost.exe"})
+    assert ex._effect_ledger_get(key) is None
+
+
+async def test_a_new_epoch_is_never_blocked_by_an_earlier_turns_effect(live):
+    """§12 — dedupe protects one turn; it does not outlaw the action forever."""
+    live.add_effect_tool("kill_process", {"killed": ["evil.exe"]})
+    ex = live.executor
+    ex.begin_effect_epoch("turn:one")
+    await ex.aexecute("kill_process", {"name": "evil.exe"}, "first")
+    await ex.aexecute("kill_process", {"name": "evil.exe"}, "replay — suppressed")
+    assert live.effects["kill_process"] == 1
+    ex.begin_effect_epoch("turn:two")
+    await ex.aexecute("kill_process", {"name": "evil.exe"}, "a later, separate request")
+    assert live.effects["kill_process"] == 2, (
+        "a legitimate later action was permanently suppressed")
+
+
+async def test_a_fast_turn_runs_no_second_model_generation(live):
+    """§11 — the fast transport answers; the /v1 client is never called."""
+    live.fast_text = "Four."
+    r = await live.ask("2+2")
+    assert r.route.mode is RouteMode.FAST_PATH
+    assert live.client.calls == [], "a fast turn also ran a /v1 generation"
+
+
 async def test_argument_order_cannot_manufacture_a_second_effect_identity(live):
     ex = live.executor
     ex.begin_effect_epoch("turn:x")
@@ -649,8 +695,8 @@ async def test_an_unscoped_active_red_request_is_refused_and_asks_for_scope(live
 async def test_an_authorized_local_lab_validation_is_permitted_by_the_scope(live):
     SCOPES.register(lab_scope())
     live.client.say("Validated safely.")
-    r = await live.ask("Safely validate the vulnerability on my authorized lab "
-                       "target 127.0.0.1")
+    await live.ask("Safely validate the vulnerability on my authorized lab "
+                   "target 127.0.0.1")
     from core.security_effects import authorize_active_security
     decision = authorize_active_security(
         activity=ActivityClass.ACTIVE_SERVICE_VALIDATION, target="127.0.0.1")

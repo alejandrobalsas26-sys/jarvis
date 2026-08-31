@@ -121,8 +121,8 @@ async def isolate_ip(ip: str, broadcast_fn, ttl_minutes: int = 60) -> None:
                 authorized=False,
                 reason="no operator ContainmentAuthorization covers this target",
             ))
-        except Exception:  # noqa: BLE001 — a notification never blocks a refusal
-            pass
+        except Exception as exc:  # noqa: BLE001 — never blocks a refusal
+            logger.debug(f"mitigation: refusal notification skipped ({exc})")
         return
 
     rule_name     = f"JARVIS_BLOCK_{ip}"

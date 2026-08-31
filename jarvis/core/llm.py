@@ -2607,8 +2607,12 @@ class LLM:
                 try:
                     self.tool_executor.begin_effect_epoch(
                         _mesh_live.effect_epoch(_mesh, str(id(task_decision))))
-                except Exception:
-                    pass
+                except Exception as _ep_e:  # noqa: BLE001
+                    # Without an epoch the ledger simply does not deduplicate;
+                    # it never fails OPEN into a duplicate effect, because every
+                    # effect still passes the executor's own gates. Log it so a
+                    # silently unbounded ledger is visible rather than assumed.
+                    logger.warning(f"MESH: effect epoch not opened ({_ep_e})")
         except Exception as _mesh_e:  # noqa: BLE001 — the mesh never breaks a turn
             logger.warning(f"MESH: planning skipped ({_mesh_e})")
             _mesh = None
@@ -3329,8 +3333,8 @@ class LLM:
                             from tools.executor import _aura_broadcast as _bcast_mesh
                             asyncio.create_task(_bcast_mesh(
                                 {"type": "mesh_turn", **_t}))
-                        except Exception:
-                            pass
+                        except Exception as _bc_e:  # noqa: BLE001
+                            logger.debug(f"MESH: telemetry broadcast skipped ({_bc_e})")
                     except Exception as _mesh_fin_e:  # noqa: BLE001
                         logger.warning(f"MESH: finish skipped ({_mesh_fin_e})")
 
@@ -3547,8 +3551,11 @@ class LLM:
                             output=json.dumps(result, ensure_ascii=False,
                                               default=str)[:1200],
                         )
-                    except Exception:
-                        pass
+                    except Exception as _ev_e:  # noqa: BLE001
+                        # Losing an evidence binding weakens ARGUS's basis; it
+                        # must be visible, never silent, or a turn could look
+                        # better-evidenced than it is.
+                        logger.warning(f"MESH: evidence binding failed ({_ev_e})")
 
                 # V68.1 M46 — on failure: record it, and append recovery guidance
                 # that pins the model to THIS tool/topic and forbids switching to an

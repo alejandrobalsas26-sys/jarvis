@@ -57,7 +57,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from core.cognitive_mesh import REGISTRY, AutonomyLevel, SpecialistId
+from core.cognitive_mesh import REGISTRY, AutonomyLevel
 from core.mesh_contracts import (
     EvidenceGraph,
     EvidenceRef,
