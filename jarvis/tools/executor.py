@@ -731,6 +731,56 @@ class ToolExecutor:
         self.authority: AuthorityState = authority if authority is not None else default_authority()
         from core.governance import TacticAuditLogger
         self._audit = TacticAuditLogger()
+        # V69 M64.1 — THE effect ledger. Before M64.1 nothing in this class,
+        # in core/task_graph.py or in the chat tool loop remembered that an
+        # effect had already run, so wiring a second reasoning path (the mesh)
+        # on top of the existing one would have made a duplicate block, kill or
+        # scan possible with no component able to notice. There is exactly ONE
+        # ledger and it lives here, because this is the one method every effect
+        # path funnels through — a ledger in a caller only protects that caller.
+        #
+        # Scope is deliberate: only EFFECTFUL risk classes are recorded. A
+        # repeated read is harmless and must stay cheap, so read-only tools are
+        # never keyed. See `_effect_key` for the identity.
+        self._effect_ledger: dict[str, dict] = {}
+        self._effect_epoch: str = ""
+
+    # ── exactly-once effect semantics (§17) ──────────────────────────────────
+    @staticmethod
+    def _effect_key(epoch: str, tool_name: str, tool_input: dict) -> str:
+        """Identity of one effect: (epoch, tool, canonical arguments).
+
+        Canonical JSON with sorted keys, so argument ORDER cannot manufacture a
+        second identity for the same call. The epoch is the turn/task the caller
+        declared; two genuinely separate operator requests to block the same
+        address are different effects and both must be able to run.
+        """
+        try:
+            args = json.dumps(tool_input, sort_keys=True, ensure_ascii=False,
+                              default=str)
+        except (TypeError, ValueError):
+            args = repr(sorted(tool_input.items())) if tool_input else "{}"
+        return f"{epoch}|{tool_name}|{args}"
+
+    def begin_effect_epoch(self, epoch: str) -> None:
+        """Open a new effect epoch (one operator turn, or one mesh task).
+
+        Called once per turn by the caller that owns it. Changing the epoch
+        clears the ledger, so it bounds memory to a single turn and can never
+        block a legitimate repeat in a later one.
+        """
+        if epoch != self._effect_epoch:
+            self._effect_epoch = epoch
+            self._effect_ledger.clear()
+
+    def effect_count(self, tool_name: str | None = None) -> int:
+        """How many effects this epoch actually executed. Derived from the
+        ledger, never incremented by a caller — a path cannot under-report by
+        forgetting to count."""
+        if tool_name is None:
+            return len(self._effect_ledger)
+        return sum(1 for k in self._effect_ledger
+                   if k.split("|", 2)[1:2] == [tool_name])
 
     def _consent_error(self, surface: str, grant_phrase: str) -> dict:
         return {
@@ -1003,6 +1053,26 @@ class ToolExecutor:
         # exactly for every known tool (verified at import time above); this is
         # not a parallel decorative check, it IS the check now.
         risk_class = classify_tool(tool_name)
+
+        # V69 M64.1 §17 — exactly-once effect semantics. Checked AFTER authority
+        # (an out-of-scope call must be refused as out-of-scope, never quietly
+        # deduplicated) and BEFORE the challenge, so a replayed effect never asks
+        # the operator a second time for something already done. Read-only calls
+        # are never keyed: repeating a read is not an effect.
+        _effect_key = None
+        if risk_class is not RiskClass.READ_ONLY:
+            _effect_key = self._effect_key(self._effect_epoch, tool_name, tool_input)
+            _prior = self._effect_ledger.get(_effect_key)
+            if _prior is not None:
+                logger.warning(
+                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
+                    f"returning the recorded result instead of repeating the effect"
+                )
+                self._audit.log_action(
+                    tool_name, reasoning, "deduplicated", "blocked",
+                    "duplicate effect suppressed by the effect ledger",
+                )
+                return dict(_prior)
         if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
             self._audit.log_action(
                 tool_name, reasoning, "blocked:lab_only", "blocked",
@@ -1051,6 +1121,13 @@ class ToolExecutor:
             output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
             result = self._check_pii_output(result)
             self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
+
+            # V69 M64.1 §17 — the effect happened; record it so no other path in
+            # this epoch can repeat it. Only a SUCCESSFUL effect is recorded: a
+            # failed call left the world unchanged, so retrying it is legitimate
+            # and the existing per-turn retry ledger still governs that.
+            if _effect_key is not None and status == "success" and isinstance(result, dict):
+                self._effect_ledger[_effect_key] = dict(result)
 
             # Broadcast: tool result
             await _aura_broadcast({
@@ -1168,6 +1245,26 @@ class ToolExecutor:
                 return {"error": err}
 
         risk_class = classify_tool(tool_name)
+
+        # V69 M64.1 §17 — exactly-once effect semantics. Checked AFTER authority
+        # (an out-of-scope call must be refused as out-of-scope, never quietly
+        # deduplicated) and BEFORE the challenge, so a replayed effect never asks
+        # the operator a second time for something already done. Read-only calls
+        # are never keyed: repeating a read is not an effect.
+        _effect_key = None
+        if risk_class is not RiskClass.READ_ONLY:
+            _effect_key = self._effect_key(self._effect_epoch, f"mcp:{tool_name}", tool_input)
+            _prior = self._effect_ledger.get(_effect_key)
+            if _prior is not None:
+                logger.warning(
+                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
+                    f"returning the recorded result instead of repeating the effect"
+                )
+                self._audit.log_action(
+                    tool_name, reasoning, "deduplicated", "blocked",
+                    "duplicate effect suppressed by the effect ledger",
+                )
+                return dict(_prior)
         if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
             self._audit.log_action(
                 tool_name, reasoning, "blocked:lab_only", "blocked",
@@ -1224,6 +1321,11 @@ class ToolExecutor:
         result = self._check_pii_output(result)
         output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
         self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
+
+        # V69 M64.1 §17 — same ledger, same epoch, one keyspace. An MCP effect
+        # and a local effect are both effects.
+        if _effect_key is not None and status == "success" and isinstance(result, dict):
+            self._effect_ledger[_effect_key] = dict(result)
 
         await _aura_broadcast({
             "type": "tool_result",
@@ -1654,6 +1756,55 @@ class ToolExecutor:
             except Exception:
                 pass
         return {"killed": killed}
+
+    # ── V69 M64.1 — containment handlers (D-M64-1) ───────────────────────────
+    # These are deliberately NOT declared in core/llm.py's TOOLS array: handler
+    # lookup in aexecute is `getattr(self, f"_tool_{name}")`, so the containment
+    # path is reachable by the correlator through the full gate while staying
+    # invisible to the model's tool surface. Both classify as HIGH_IMPACT (the
+    # fail-closed default for a tool absent from TOOL_RISK_CLASS), so the NATO
+    # challenge fires unless the operator pre-authorized unattended execution.
+    def _tool_network_quarantine(self, ip: str, reason: str = "containment",
+                                 authorization_id: str = "") -> dict:
+        """Block one address at the host firewall, through the ONE gate.
+
+        The RBAC actor is constructed HERE and nowhere upstream, and it names the
+        operator authorization that permitted this call. That is the whole
+        difference from D-M64-1: before, the correlator wrote its own permit and
+        then called the guarded function; now the permit is the operator's, it
+        was validated before this handler was reached, and the identity recorded
+        in the RBAC log is the authorization, not "jarvis-system".
+        """
+        import asyncio as _a
+        from core import network_quarantine as _nq
+        from core.rbac_manager import ActorContext, ClearanceLevel
+
+        if not authorization_id:
+            return {"error": "network_quarantine requires the authorization_id "
+                             "that permitted it; refusing (fail-closed)"}
+        actor = ActorContext(f"operator-authorization:{authorization_id}",
+                             ClearanceLevel.L3_Hunter, "explicit")
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            return {"error": "no running loop bound; refusing"}
+        fut = _a.run_coroutine_threadsafe(
+            _nq.quarantine(ip, reason=reason, actor=actor), loop)
+        try:
+            return dict(fut.result(timeout=60))
+        except Exception as exc:  # noqa: BLE001 — never raise into the gate
+            return {"error": f"quarantine failed: {exc}"}
+
+    def _tool_host_firewall_rule(self, port: int, proto: str = "TCP",
+                                 authorization_id: str = "") -> dict:
+        """Block one local port at the host firewall, through the ONE gate."""
+        from core import security_auditor as _sa
+
+        if not authorization_id:
+            return {"error": "host_firewall_rule requires the authorization_id "
+                             "that permitted it; refusing (fail-closed)"}
+        ok = _sa._block_port_firewall(int(port), str(proto))
+        return {"blocked": bool(ok), "port": int(port), "proto": str(proto),
+                "authorization_id": authorization_id}
 
     def _tool_run_shell_command(self, command: str) -> dict:
         """

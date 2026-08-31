@@ -213,9 +213,26 @@ class TemporalCorrelator:
         # V57.0 NEXUS — optional hardware containment + PCAP forensics
         self._cisco_controller  = None  # core.cisco_controller.CiscoController | None
         self._pcap_orchestrator = None  # core.pcap_capture.PCAPCaptureOrchestrator | None
+        # V69 M64.1 — the ONE executor. The correlator holds a reference so an
+        # operator-pre-authorized containment has somewhere to go; it holds no
+        # firewall, no subprocess and no clearance of its own. When this is None
+        # a pre-authorized containment simply does not happen.
+        self._tool_executor = None      # tools.executor.ToolExecutor | None
+        #: Last containment decision, exposed for the HUD and for test. It is a
+        #: RECORD of a refusal or an approval, never a permission.
+        self._last_containment_decision = None
 
     def attach(self, broadcast_fn) -> None:
         self._broadcast_fn = broadcast_fn
+
+    def attach_tool_executor(self, tool_executor) -> None:
+        """V69 M64.1: wire the ONE ToolExecutor for pre-authorized containment.
+
+        Attaching an executor grants nothing. Containment still requires an
+        operator-registered ContainmentAuthorization that covers the target and
+        the action class and has not expired.
+        """
+        self._tool_executor = tool_executor
 
     def attach_persistence(self, db_manager, siem_forwarder=None) -> None:
         """V55.0: wire DBManager and SIEMForwarder for persistent alert state."""
@@ -279,6 +296,24 @@ class TemporalCorrelator:
                 return
             sev = float(event.get("severity", 0) or 0)
             if sev < 9.5:
+                return
+            # V69 M64.1 §51 — the same rule as _maybe_quarantine, for the same
+            # reason. A severity of 9.5 was the only thing standing between a
+            # correlated alert and a MAC blackhole or a deny ACL pushed over SSH
+            # to production switching. Bare-metal containment is HOST ISOLATION;
+            # it needs an operator authorization naming the target, not a score.
+            target = str(event.get("src_ip") or event.get("source_ip")
+                         or event.get("ip") or "").strip()
+            decision = self._authorize_containment(
+                target, "NETWORK_ISOLATE_HOST",
+                f"cisco containment for {event.get('type', 'incident')} at "
+                f"severity {sev}", event)
+            if not (decision.allowed and decision.unattended):
+                logger.warning(
+                    "CORRELATOR: bare-metal containment of {} RECOMMENDED but "
+                    "NOT authorized — {}", target or "(no target)",
+                    decision.reason)
+                self._notify_containment_recommended(decision, sev, event)
                 return
             _safe_schedule(
                 self._cisco_controller.contain_alert(event),
@@ -418,24 +453,132 @@ class TemporalCorrelator:
                       any(str(t).upper().split(".")[0] in ("T1021", "T1046", "T1018")
                           for t in attck))
             if ip and sev >= 9.0 and is_net:
-                import asyncio
-                from core import network_quarantine
-
-                async def _auto_quarantine(ip_: str, reason_: str, corr_) -> None:
-                    try:
-                        from core.rbac_manager import ActorContext, ClearanceLevel
-                        import core.rbac_manager as _rbac_mgr
-                        _rbac_mgr.set_current_actor(
-                            ActorContext("jarvis-system", ClearanceLevel.L3_Hunter, "contextvar")
-                        )
-                        await network_quarantine.quarantine(ip_, reason=reason_, correlator=corr_)
-                    except Exception:
-                        pass
-
-                asyncio.create_task(_auto_quarantine(
-                    str(ip), f"correlator:{etype}", self))
+                self._propose_containment(str(ip), etype, sev, event)
         except Exception:
             pass
+
+    # ── V69 M64.1 — D-M64-1 closure ──────────────────────────────────────────
+    def _authorize_containment(self, target: str, action_name: str,
+                               evidence_text: str, event: dict):
+        """Build the evidence, the typed request, and ask the ONE gate.
+
+        Shared by every containment class the correlator can recommend, so there
+        is one decision procedure rather than one per effect class.
+        """
+        from core.cognitive_mesh import SpecialistId
+        from core.mesh_contracts import EvidenceGraph, EvidenceRef, Provenance
+        from core.security_effects import (
+            CONTAINMENT, DefensiveActionClass, authorize_effect, propose_effect,
+        )
+
+        graph = EvidenceGraph()
+        ref = graph.add_evidence(EvidenceRef(
+            content=evidence_text, provenance=Provenance.TELEMETRY,
+            source=str(event.get("source", "correlator")),
+            specialist=SpecialistId.GUARDIAN))
+        request = propose_effect(
+            action=DefensiveActionClass[action_name], target=target,
+            justification=evidence_text, requested_by=SpecialistId.GUARDIAN,
+            evidence_ids=(ref,) if ref else (),
+            rollback_plan="core.network_quarantine.release(ip) removes both rules")
+        decision = authorize_effect(request, registry=CONTAINMENT, graph=graph)
+        self._last_containment_decision = decision
+        return decision
+
+    def _propose_containment(self, ip: str, etype: str, sev: float,
+                             event: dict) -> None:
+        """Recommend containment. This method CANNOT cause one.
+
+        Before M64.1 this path built its own ``ActorContext`` at
+        ``ClearanceLevel.L3_Hunter`` and installed it in the RBAC context var
+        immediately before calling ``network_quarantine.quarantine``. The
+        ``@requires_clearance`` guard then resolved that context var -- the
+        caller's own assertion -- and passed. A severity of 9.0 was, in effect,
+        the authorization.
+
+        Now the correlator does what a correlator is for: it classifies, it
+        correlates and it RECOMMENDS. The typed ActionRequest it emits goes to
+        :func:`core.security_effects.authorize_effect`, which refuses unless an
+        operator registered a matching, unexpired, target-scoped,
+        action-class-specific ContainmentAuthorization in advance. No severity,
+        no alert count and no ATT&CK technique changes that answer.
+
+        The correlator no longer constructs an RBAC actor anywhere.
+        """
+        decision = self._authorize_containment(
+            ip, "FIREWALL_BLOCK_ADDRESS",
+            f"correlated {etype} from {ip} at severity {sev} "
+            f"(source={event.get('source', 'unknown')}); containment recommended",
+            event)
+
+        if not decision.allowed:
+            logger.warning(
+                "CORRELATOR: containment of {} RECOMMENDED but NOT authorized "
+                "({}) — {}", ip,
+                decision.denial.value if decision.denial else "denied",
+                decision.reason,
+            )
+            self._notify_containment_recommended(decision, sev, event)
+            return
+        if not decision.unattended:
+            logger.warning(
+                "CORRELATOR: containment of {} is in scope under {} and awaits "
+                "human confirmation", ip, decision.authorization_id)
+            self._notify_containment_recommended(decision, sev, event)
+            return
+
+        # Pre-authorized unattended. Even here the correlator does not perform
+        # the effect: it hands the approved request to the ONE ToolExecutor,
+        # whose capability, authority, risk and HITL gates all still run.
+        self._execute_authorized_containment(decision, etype)
+
+    def _notify_containment_recommended(self, decision, sev: float,
+                                        event: dict) -> None:
+        """Raise the operator's attention. Urgency, never permission."""
+        try:
+            if self._broadcast_fn is None:
+                return
+            payload = {
+                "type": "containment_recommended",
+                "severity": "CRITICAL" if sev >= 9.5 else "HIGH",
+                "target": decision.target,
+                "action": decision.action.value,
+                "authorized": decision.allowed,
+                "reason": decision.reason,
+                "denial": decision.denial.value if decision.denial else None,
+                "incident_type": str(event.get("type", "")),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            _safe_schedule(self._broadcast_fn(payload), name="containment-notify")
+        except Exception as exc:  # noqa: BLE001 — a notification never breaks detection
+            logger.debug("CORRELATOR: containment notification skipped ({})", exc)
+
+    def _execute_authorized_containment(self, decision, etype: str) -> None:
+        from core.security_effects import execute_effect
+
+        executor = self._tool_executor
+        if executor is None:
+            logger.warning(
+                "CORRELATOR: containment of {} is pre-authorized but no "
+                "ToolExecutor is attached; there is no other path to an effect",
+                decision.target)
+            return
+
+        async def _run() -> None:
+            try:
+                result = await execute_effect(
+                    decision, tool_executor=executor,
+                    tool_name="network_quarantine",
+                    tool_input={"ip": decision.target,
+                                "reason": f"correlator:{etype}",
+                                "authorization_id": decision.authorization_id or ""},
+                    reasoning=decision.reason)
+                logger.critical("CORRELATOR: containment result for {}: {}",
+                                decision.target, result.get("executed"))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("CORRELATOR: containment execution failed: {}", exc)
+
+        _safe_schedule(_run(), name=f"containment-{decision.target}")
 
     def _maybe_soar_then_report(self, event: dict) -> None:
         """V50.0: enrich criticals with external CTI, THEN emit IR report."""

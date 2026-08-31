@@ -91,6 +91,59 @@ def _interpolate_params(params: dict, incident: dict, config: dict) -> dict:
 
 # ── Step executor ─────────────────────────────────────────────────────────────
 
+async def _request_isolation(ip: str, ttl: int, incident: dict, broadcast_fn,
+                            tool_executor) -> dict:
+    """Propose host isolation through the ONE gate. Executes nothing itself.
+
+    A playbook is a RECOMMENDATION ENGINE. Firing one is evidence that a pattern
+    matched, and a pattern matching is not an operator deciding. Without a
+    registered ContainmentAuthorization covering this address, the isolation is
+    refused and the operator is told — which is the same answer the correlator
+    now gives, from the same gate, for the same reason.
+    """
+    from core.security_effects import (
+        CONTAINMENT, DefensiveActionClass, authorize_effect, execute_effect,
+        propose_effect,
+    )
+    from core.mesh_contracts import EvidenceGraph, EvidenceRef, Provenance
+    from core.cognitive_mesh import SpecialistId
+
+    graph = EvidenceGraph()
+    ref = graph.add_evidence(EvidenceRef(
+        content=(f"playbook incident {incident.get('incident_id', '?')}: "
+                 f"{incident.get('kill_chain_phase', 'unknown phase')} involving {ip}"),
+        provenance=Provenance.TELEMETRY, source="playbook_engine",
+        specialist=SpecialistId.GUARDIAN))
+    request = propose_effect(
+        action=DefensiveActionClass.FIREWALL_BLOCK_ADDRESS, target=ip,
+        justification=f"playbook containment, ttl {ttl} minutes",
+        requested_by=SpecialistId.GUARDIAN,
+        evidence_ids=(ref,) if ref else (),
+        rollback_plan=f"rule expires after {ttl} minutes; release() removes it now")
+    decision = authorize_effect(request, registry=CONTAINMENT, graph=graph)
+
+    if not (decision.allowed and decision.unattended):
+        logger.warning(
+            "PLAYBOOK: isolation of {} RECOMMENDED but NOT executed — {}",
+            ip, decision.reason)
+        if broadcast_fn:
+            await broadcast_fn({
+                "type": "containment_recommended", "target": ip,
+                "action": decision.action.value, "authorized": decision.allowed,
+                "reason": decision.reason,
+                "incident_id": incident.get("incident_id", ""),
+                "severity": "HIGH",
+            })
+        return {"executed": False, "reason": decision.reason,
+                "denial": decision.denial.value if decision.denial else None}
+
+    return await execute_effect(
+        decision, tool_executor=tool_executor, tool_name="network_quarantine",
+        tool_input={"ip": ip, "reason": "playbook",
+                    "authorization_id": decision.authorization_id or ""},
+        reasoning=decision.reason)
+
+
 async def _execute_step(
     step: dict,
     incident: dict,
@@ -113,13 +166,19 @@ async def _execute_step(
             })
 
         elif action == "isolate_ip":
-            from core.mitigation import isolate_ip
+            # V69 M64.1 §51 — this is D-M64-1's sibling and it was WORSE: it
+            # fired at the playbook's own severity_min (6.5 for c2_beacon, below
+            # the correlator's 9.0), the target came from attacker-influenced
+            # telemetry, and `Playbook.auto_authorize` — parsed at load time and
+            # declared `false` by all four shipped playbooks — was never read, so
+            # every step executed regardless. It now goes through the ONE gate.
             ip  = params.get("ip", "")
             ttl = int(params.get("ttl_minutes", 60))
             if ip:
-                asyncio.create_task(
-                    asyncio.shield(isolate_ip(ip, broadcast_fn, ttl))
-                )
+                result["isolation"] = await _request_isolation(
+                    ip, ttl, incident, broadcast_fn, tool_executor)
+                if not result["isolation"].get("executed"):
+                    result["status"] = "refused"
 
         elif action == "snapshot_vm":
             from tools.forensic_volatility import trigger_forensic_capture

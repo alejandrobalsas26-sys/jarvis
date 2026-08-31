@@ -493,11 +493,25 @@ async def execute_macro(
                             "What is the target IP address?"
                         ))
                 else:
-                    asyncio.create_task(
-                        ares_operator.start_campaign(
-                            target_ip, params.get("name", "")
+                    # V69 M64.1 — D-M64-2: start_campaign now returns "" when no
+                    # AuthorizedSecurityScope covers the target. Fire-and-forget
+                    # would swallow that refusal and leave the operator believing
+                    # a campaign was running, so the result is awaited and spoken.
+                    async def _start(_ip: str, _name: str) -> None:
+                        campaign_id = await ares_operator.start_campaign(_ip, _name)
+                        if campaign_id:
+                            return
+                        logger.warning(
+                            f"MACRO: ARES campaign against {_ip} refused — no "
+                            f"authorized security scope covers that target"
                         )
-                    )
+                        if tts:
+                            await tts.speak_async(
+                                "Refused. No authorized security scope covers "
+                                f"{_ip}. Register an engagement scope first."
+                            )
+
+                    asyncio.create_task(_start(target_ip, params.get("name", "")))
             except Exception as e:
                 logger.debug(f"MACRO: ares_start_campaign error: {e}")
 

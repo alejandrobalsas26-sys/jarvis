@@ -1480,6 +1480,8 @@ async def _main_async() -> None:
     from core.severity_calibrator import start_calibration_loop
     # v34.0 — Paranoid Fortress & Cognitive Self-Optimization
     from core.security_auditor    import start_security_auditor
+    # V69 M64.1 — the ONE containment authorization registry (operator-only).
+    from core.security_effects    import CONTAINMENT as _m641_containment
     from core.windows_hardener    import apply_host_hardening
     from core.integrity_baseline  import run_integrity_check
     from core.cognitive_optimizer import start_cognitive_monitor
@@ -2017,6 +2019,22 @@ async def _main_async() -> None:
         logger.info("V36: correlator LLM/TTS refs attached for autonomous narration")
     except Exception as e:
         logger.debug(f"V36: correlator.attach_llm failed: {e}")
+
+    # V69 M64.1 — D-M64-1: the autonomous containment paths get the ONE executor,
+    # so an operator-PRE-AUTHORIZED containment has a canonical route to an effect.
+    # Attaching grants nothing: without a registered ContainmentAuthorization
+    # covering the target and the action class, every one of these paths refuses.
+    try:
+        v36_correlator.attach_tool_executor(executor)
+        from core.security_auditor import attach_tool_executor as _attach_auditor
+        _attach_auditor(executor)
+        logger.info(
+            "V69 M64.1: containment paths wired to ToolExecutor — "
+            "{} containment authorization(s) registered",
+            len(_m641_containment.authorizations),
+        )
+    except Exception as e:
+        logger.debug(f"V69 M64.1: containment executor attach failed: {e}")
 
     # v42.0 — ARES Red Team Operator attach (llm + tts + executor refs)
     try:

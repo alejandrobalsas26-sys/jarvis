@@ -26,6 +26,7 @@ Windows system ports (expected, do not block):
 """
 
 import asyncio
+import platform
 import socket
 import subprocess
 import time
@@ -301,6 +302,65 @@ def _block_port_firewall(port: int, proto: str = "TCP") -> bool:
         return False
 
 
+#: The ONE ToolExecutor, wired at boot. None means a pre-authorized block has
+#: nowhere to go, which is the safe state and not an error.
+_TOOL_EXECUTOR = None
+
+
+def attach_tool_executor(tool_executor) -> None:
+    """V69 M64.1: wire the executor for operator-pre-authorized port blocking.
+
+    Attaching grants nothing: a block still requires a registered, unexpired
+    ContainmentAuthorization covering this host and FIREWALL_BLOCK_PORT.
+    """
+    global _TOOL_EXECUTOR
+    _TOOL_EXECUTOR = tool_executor
+
+
+async def _request_port_block(port: int, proto: str, entry: dict) -> bool:
+    """Propose one host-firewall port block through the ONE gate.
+
+    Returns True only when the effect ACTUALLY executed. A refusal is reported
+    as a recommendation, never silently swallowed and never retried into an
+    effect.
+    """
+    from core.security_effects import (
+        CONTAINMENT, DefensiveActionClass, authorize_effect, execute_effect,
+        propose_effect,
+    )
+    from core.mesh_contracts import EvidenceGraph, EvidenceRef, Provenance
+    from core.cognitive_mesh import SpecialistId
+
+    target = f"{platform.node() or 'localhost'}"
+    graph = EvidenceGraph()
+    ref = graph.add_evidence(EvidenceRef(
+        content=(f"security_auditor: unrecognised listener {proto}/{port} owned "
+                 f"by {entry.get('process', '?')} (pid {entry.get('pid', '?')})"),
+        provenance=Provenance.TELEMETRY, source="security_auditor",
+        specialist=SpecialistId.GUARDIAN))
+    request = propose_effect(
+        action=DefensiveActionClass.FIREWALL_BLOCK_PORT, target=target,
+        justification=f"unrecognised non-ephemeral listener {proto}/{port}",
+        requested_by=SpecialistId.GUARDIAN,
+        evidence_ids=(ref,) if ref else (),
+        rollback_plan="Remove-NetFirewallRule with the generated rule name")
+    decision = authorize_effect(request, registry=CONTAINMENT, graph=graph)
+
+    if not (decision.allowed and decision.unattended):
+        logger.warning(
+            "SECURITY_AUDITOR: block of {}/{} RECOMMENDED but NOT executed — {}",
+            proto, port, decision.reason)
+        return False
+
+    result = await execute_effect(
+        decision, tool_executor=_TOOL_EXECUTOR, tool_name="host_firewall_rule",
+        tool_input={"port": int(port), "proto": str(proto),
+                    "authorization_id": decision.authorization_id or ""},
+        reasoning=decision.reason)
+    return bool(result.get("executed")) and bool(
+        (result.get("result") or {}).get("blocked"))
+
+
 async def run_port_audit(broadcast_fn) -> dict:
     """
     Full port audit. Returns audit report dict.
@@ -371,11 +431,18 @@ async def run_port_audit(broadcast_fn) -> dict:
             # EXPECTED/KNOWN_SERVICE by the operator; BLOCKED is honored as block.
             silence_block = classification in _SILENCING_CLASSES
             if port < 49152 and port not in _blocked_ports and not silence_block:
-                blocked = await loop.run_in_executor(
-                    None, _block_port_firewall, port, p["proto"]
-                )
+                # V69 M64.1 §51 — this was the only firewall-mutation path in the
+                # repository with NO configuration gate of any kind: it ran at
+                # boot and on every scan interval and blocked any unrecognised
+                # non-ephemeral port on the operator's own host. It now goes
+                # through the ONE gate, so an unattended block requires an
+                # operator-registered ContainmentAuthorization naming this host
+                # and FIREWALL_BLOCK_PORT.
+                blocked = await _request_port_block(port, p["proto"], entry)
                 if blocked:
                     report["blocked"].append(entry)
+                else:
+                    report.setdefault("recommended_blocks", []).append(entry)
 
     _audit_history.append(report)
     # cap memory — keep last 24 reports (4h at 10-min cadence)

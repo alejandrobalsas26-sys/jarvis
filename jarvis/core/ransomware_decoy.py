@@ -252,8 +252,57 @@ def _resolve_offenders(path: str) -> list[int]:
     return ordered
 
 
+def _authorize_kill(pid: int, name: str, evidence_text: str):
+    """Ask the ONE gate whether this termination is pre-authorized.
+
+    Synchronous by necessity (see the note at the call site). Returns an
+    :class:`~core.security_effects.EffectDecision`; a refusal is the default.
+    """
+    import platform as _platform
+
+    from core.cognitive_mesh import SpecialistId
+    from core.mesh_contracts import EvidenceGraph, EvidenceRef, Provenance
+    from core.security_effects import (
+        CONTAINMENT, DefensiveActionClass, authorize_effect, propose_effect,
+    )
+
+    graph = EvidenceGraph()
+    ref = graph.add_evidence(EvidenceRef(
+        content=evidence_text, provenance=Provenance.TELEMETRY,
+        source=__name__, specialist=SpecialistId.GUARDIAN))
+    request = propose_effect(
+        action=DefensiveActionClass.PROCESS_TERMINATE,
+        target=_platform.node() or "localhost",
+        justification=f"pid {pid} ({name or 'unknown'}): {evidence_text}",
+        requested_by=SpecialistId.GUARDIAN,
+        evidence_ids=(ref,) if ref else (),
+        rollback_plan="NONE — process termination is not reversible")
+    return authorize_effect(request, registry=CONTAINMENT, graph=graph)
+
+
 def _neutralize(pid: int) -> dict:
     out = {"pid": pid, "killed": False, "name": None, "reason": None}
+    # V69 M64.1 §51 — process termination for security response is one of the
+    # effect classes the hardening roadmap names, and this path had none of the
+    # canonical gates: `_AUTO_KILL_ENABLED = True` was a module constant, so a
+    # detection killed a process outright. It now asks the ONE gate first, and
+    # refuses by default.
+    #
+    # NOTE, recorded rather than hidden: this runs in a worker/observer thread
+    # with no event loop and must stay synchronous, so it does NOT take the
+    # ToolExecutor hop that the correlator and playbook paths take. The
+    # authorization requirement is identical; the interactive NATO challenge is
+    # not available here, which is precisely why an unattended authorization is
+    # required rather than assumed.
+    _decision = _authorize_kill(pid, "", "ransomware decoy tripped; pid holds a handle on a decoy file")
+    if not (_decision.allowed and _decision.unattended):
+        out["reason"] = f"kill NOT authorized — {_decision.reason}"
+        out["authorized"] = False
+        logger.warning(
+            f"RANSOMWARE_DECOY: termination of pid {pid} RECOMMENDED but "
+            f"NOT authorized — {_decision.reason}")
+        return out
+    out["authorization_id"] = _decision.authorization_id
     if not _AUTO_KILL_ENABLED:
         out["reason"] = "auto-kill disabled"
         return out

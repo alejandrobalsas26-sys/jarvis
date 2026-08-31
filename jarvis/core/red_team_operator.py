@@ -74,12 +74,19 @@ class AresCampaign:
         campaign_id: str,
         target_ip: str,
         target_name: str = "",
-        authorized: bool = False,
+        scope_id: str = "",
     ):
         self.campaign_id  = campaign_id
         self.target_ip    = target_ip
         self.target_name  = target_name or target_ip
-        self.authorized   = authorized
+        # V69 M64.1 — D-M64-2 closure. The old `authorized: bool` was written
+        # once and read NOWHERE in the repository, so every campaign carried
+        # `authorized=False` and scanned anyway. A boolean nobody consults is
+        # not an authorization; it is a comment with a type. What replaces it is
+        # the id of the AuthorizedSecurityScope that actually permitted this
+        # campaign, re-validated before EVERY active stage rather than trusted
+        # once at construction — a scope can expire mid-campaign.
+        self.scope_id     = scope_id
         self.stage        = "RECON"
         self.findings:    dict = {}
         self.action_log:  list[dict] = []
@@ -91,6 +98,7 @@ class AresCampaign:
             "campaign_id":  self.campaign_id,
             "target_ip":    self.target_ip,
             "target_name":  self.target_name,
+            "scope_id":     self.scope_id,
             "stage":        self.stage,
             "findings":     self.findings,
             "action_log":   self.action_log[-5:],
@@ -131,22 +139,89 @@ class AresOperator:
         self._tool_executor = tool_executor
         self._tts           = tts
 
+    # ── V69 M64.1 — D-M64-2: ONE authorization truth, SPECTER's ─────────────
+    def _authorize(self, target: str, activity, *, risk: str = "read_only"):
+        """Resolve this target against the canonical security scope registry.
+
+        This is the same function, against the same registry, that SPECTER uses
+        (:func:`core.security_effects.authorize_active_security` delegating to
+        :func:`core.security_scope.authorize_security_activity`). ARES keeps no
+        idea of its own about what "authorized" means — that was the defect.
+        """
+        from core.security_effects import authorize_active_security
+
+        return authorize_active_security(activity=activity, target=target,
+                                         risk=risk)
+
+    async def _refuse(self, decision, stage: str) -> dict:
+        logger.warning(
+            f"ARES: {stage} REFUSED — {decision.reason}"
+        )
+        if self._broadcast_fn:
+            await self._broadcast_fn({
+                "type":      "ares_refused",
+                "stage":     stage,
+                "target":    decision.target,
+                "denial":    decision.denial.value if decision.denial else "denied",
+                "reason":    decision.reason,
+                "severity":  "HIGH",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        return {"refused": True, "stage": stage, "reason": decision.reason,
+                "denial": decision.denial.value if decision.denial else "denied"}
+
     async def start_campaign(
         self,
         target_ip: str,
         target_name: str = "",
     ) -> str:
         """
-        Initialize a new red team campaign.
-        Returns campaign_id.
+        Initialize a new red team campaign against an AUTHORIZED target.
+
+        There is deliberately NO ``scope=`` parameter. A caller that could hand
+        ARES a scope object would be a caller that could mint one; the scope is
+        looked up in the operator's registry, by target, every time.
+
+        BREAKING vs the pre-M64.1 signature, deliberately: a campaign now
+        requires a canonical :class:`~core.security_scope.AuthorizedSecurityScope`
+        covering ``target_ip``, resolved through the same registry SPECTER uses.
+        With no covering scope the campaign is REFUSED and no campaign object is
+        created, so there is nothing for a later stage to resume.
+
+        The old behaviour — construct a campaign for any address and start
+        scanning — was reachable from a voice macro. Preserving it safely was
+        not possible, so it is broken on purpose and the caller was updated.
+
+        Returns the campaign_id, or "" when refused.
         """
+        from core.security_scope import ActivityClass
+
+        decision = self._authorize(target_ip,
+                                   ActivityClass.READ_ONLY_ENUMERATION)
+        if not decision.allowed:
+            logger.warning(
+                f"ARES: campaign against {target_ip} REFUSED — {decision.reason}"
+            )
+            if self._broadcast_fn:
+                await self._broadcast_fn({
+                    "type":      "ares_refused",
+                    "stage":     "START",
+                    "target":    target_ip,
+                    "denial":    decision.denial.value if decision.denial else "denied",
+                    "reason":    decision.reason,
+                    "severity":  "HIGH",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+            return ""
+
         campaign_id = str(uuid.uuid4())[:8].upper()
-        campaign    = AresCampaign(campaign_id, target_ip, target_name)
+        campaign    = AresCampaign(campaign_id, target_ip, target_name,
+                                   scope_id=decision.scope_id or "")
         self._campaigns[campaign_id] = campaign
 
         logger.warning(
             f"ARES: campaign {campaign_id} started → "
-            f"target={target_ip}"
+            f"target={target_ip} scope={decision.scope_id}"
         )
 
         if self._broadcast_fn:
@@ -251,7 +326,17 @@ class AresOperator:
         return {}
 
     async def _stage_recon(self, target: str) -> dict:
-        """Passive recon: WHOIS, reverse DNS, OSINT."""
+        """Passive recon: WHOIS, reverse DNS, OSINT.
+
+        Scope-gated too. PASSIVE_RECON does not touch the target, but it still
+        names one, and querying a third-party OSINT service about an address is
+        an act with consequences for whoever owns it.
+        """
+        from core.security_scope import ActivityClass
+
+        decision = self._authorize(target, ActivityClass.PASSIVE_RECON)
+        if not decision.allowed:
+            return await self._refuse(decision, "RECON")
         try:
             from tools.osint_engine import enrich_ip
             enrichment = await enrich_ip(target, self._broadcast_fn)
@@ -261,8 +346,22 @@ class AresOperator:
             return {"target": target, "note": "OSINT module unavailable"}
 
     async def _stage_scan(self, target: str) -> dict:
-        """Active scan: nmap top ports + OS detection."""
-        logger.info(f"ARES SCAN: nmap -sV -O --top-ports 1000 {target}")
+        """Active scan: nmap top ports + OS detection.
+
+        V69 M64.1 — the scope is re-resolved HERE, immediately before the active
+        operation, and not inherited from whatever was true when the campaign
+        started. A scope that expired, was revoked or never covered this exact
+        target stops the scan; there is no fallback path that scans anyway.
+        """
+        from core.security_scope import ActivityClass
+
+        decision = self._authorize(target, ActivityClass.ACTIVE_SERVICE_VALIDATION,
+                                   risk="high_impact")
+        if not decision.allowed:
+            return await self._refuse(decision, "SCAN")
+
+        logger.info(f"ARES SCAN: nmap -sV -O --top-ports 1000 {target} "
+                    f"(scope={decision.scope_id})")
         if self._tool_executor:
             try:
                 result = await self._tool_executor.aexecute(
