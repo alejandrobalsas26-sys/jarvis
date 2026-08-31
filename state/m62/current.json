@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0019-m64-cognitive-mesh-branch.json",
-  "latest_snapshot_sha256": "4d15ba59e763c8855cf6ed135d4a4e30382a8f684dc60e79b79a914dbd48abb0",
+  "latest_snapshot_path": "state/m62/snapshots/0020-m64-1-live-mesh-branch.json",
+  "latest_snapshot_sha256": "50e0c28e8bda1be303af310d2fb8e8172304ecdf5c2e9aa4a4f9273598af7372",
   "schema_version": "m62.control_plane.3",
-  "state_generation": 19,
-  "subject_state_commit": "e564bfc2bd69e6f03859b51499379bf38ef1891e",
+  "state_generation": 20,
+  "subject_state_commit": "c315d9fd41aca5536ac7d91cef4c6874e2b10aad",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
