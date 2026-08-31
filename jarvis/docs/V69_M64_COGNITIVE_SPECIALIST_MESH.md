@@ -406,6 +406,11 @@ and read its own `authorized` flag before any stage runs.
 
 ## 12b — Wiring status, stated plainly
 
+> **SUPERSEDED BY M64.1.** The mesh is now on the live operator turn; see
+> `V69_M64_1_LIVE_MESH_HARDENING.md`. The section below records the state as
+> M64 closed it and is kept because the reasoning for stopping there — and the
+> intended wiring it describes — is what M64.1 was measured against.
+
 **The mesh is complete, tested, and NOT yet on the live chat turn.** No module
 outside `core/mesh_*.py`, `core/cognitive_mesh.py` and `core/security_scope.py`
 imports any of them — verified by grep across `core/`, `tools/`, `aura/` and
