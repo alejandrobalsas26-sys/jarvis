@@ -794,6 +794,45 @@ async def test_ordinary_assistant_turns_stay_ordinary(live, prompt, forbidden):
 # ══════════════════════════════════════════════════════════════════════════════
 #  29-31  ARGUS on the live turn (§36)
 # ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("prompt,primary", [
+    ("Triage this critical SOC alert about ransomware on the file server and "
+     "tell me what to contain", "guardian"),
+    ("This host looks compromised — investigate it and preserve any volatile "
+     "evidence before remediating", "trace"),
+    ("Run a purple team exercise: emulate T1003 in the lab and validate the "
+     "detection", "violet"),
+    ("Safely validate the vulnerability on my authorized lab target 127.0.0.1",
+     "specter"),
+])
+async def test_each_security_discipline_owns_its_own_live_turn(live, prompt, primary):
+    """§28/§31/§32/§33 — the right specialist owns the turn, on the LIVE path.
+
+    Routed by speech act, not by subject matter: the DFIR request and the SOC
+    request share vocabulary and go to different owners, and the purple request
+    goes to VIOLET rather than to either the blue or the red specialist.
+    """
+    live.client.say("Understood.")
+    r = await live.ask(prompt)
+    assert r.route.primary.value == primary, (
+        f"{prompt[:40]!r} routed to {r.route.primary.value}, expected {primary}")
+    assert r.specialists <= 4
+    assert r.effect_count() == 0, "a security turn executed an effect with no scope"
+
+
+async def test_purple_emulation_still_needs_a_scope_on_the_live_turn(live):
+    """§33 — no authority is created by framing something as an exercise."""
+    from core.security_effects import authorize_active_security
+
+    live.client.say("I need an authorized lab scope first.")
+    r = await live.ask("Run a purple team exercise: emulate T1003 in the lab "
+                       "and validate the detection")
+    assert r.route.primary.value == "violet"
+    decision = authorize_active_security(
+        activity=ActivityClass.PURPLE_EMULATION, target="127.0.0.1")
+    assert decision.allowed is False
+    assert r.effect_count() == 0
+
+
 async def test_argus_actually_executes_when_policy_requires_it(live):
     """Not a flag — a verdict object, produced on the real turn."""
     live.client.say("The host is compromised and I have contained it.")

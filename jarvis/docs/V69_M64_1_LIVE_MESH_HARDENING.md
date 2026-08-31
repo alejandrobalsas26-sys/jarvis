@@ -12,7 +12,7 @@
 | Control plane | V3, generation **20** (governance-only branch declaration) |
 | Closes | `MESH_WIRED_TO_LIVE_TURN = NO`, **D-M64-1**, **D-M64-2**, four §51 siblings |
 | New production modules | 2 — `core/security_effects.py`, `core/mesh_live.py` |
-| New tests | 100 across two files, all offline |
+| New tests | 105 across two files, all offline |
 | Reused, not rebuilt | the whole M64 mesh, `ScopePolicy`, `AuthorityState`, `RiskClass`, `ToolExecutor`, the NATO HITL gate, `EvidenceGraph`, `ActionRequest` |
 
 ---
@@ -334,9 +334,9 @@ is no path on which a fallback could replay an effect.
 
 ## 13 — The gauntlet
 
-100 tests across two files, all offline.
+105 tests across two files, all offline.
 
-* `tests/test_mesh_live_turn_v69_m64_1.py` — 59 LIVE-INTEGRATION scenarios.
+* `tests/test_mesh_live_turn_v69_m64_1.py` — 64 LIVE-INTEGRATION scenarios.
   Every one enters through `chat_stream`, the same generator `main` drives,
   because a test that calls `plan()` directly proves the mesh works and says
   nothing about whether JARVIS uses it (§50). **Only the two model transports
