@@ -331,6 +331,56 @@ async def test_a_playbook_isolate_step_runs_only_under_an_authorization():
     assert ex.calls[0][0] == "network_quarantine"
 
 
+async def test_the_shared_isolation_primitive_refuses_without_authorization(
+        monkeypatch):
+    """§51 — gated at the PRIMITIVE, so the next caller inherits the gate.
+
+    core.mitigation.isolate_ip sits behind three independent callers (the SOAR
+    hook after a blocked shell command, the RF out-of-band `isolate:` command,
+    and the playbook engine). Counting PowerShell invocations rather than return
+    values is what makes this a measurement.
+    """
+    import asyncio as _a
+
+    from core import mitigation
+
+    launched: list = []
+
+    async def _never(*args, **kwargs):
+        launched.append(args)
+        raise AssertionError("a firewall subprocess launched with no authorization")
+
+    monkeypatch.setattr(_a, "create_subprocess_exec", _never)
+    events: list = []
+
+    async def _bcast(payload):
+        events.append(payload)
+
+    await mitigation.isolate_ip("203.0.113.9", _bcast, 60)
+    assert launched == [], "a firewall subprocess launched with no authorization"
+    # The refusal is still REPORTED. The broadcaster signs and wraps the event
+    # (`__src`/`__sig`/`__payload`), so the assertion reads the payload rather
+    # than the envelope.
+    assert events, "the refusal was silent"
+    payload = events[0].get("__payload", events[0])
+    assert payload.get("type") == "containment_recommended"
+    assert payload.get("authorized") is False
+
+
+async def test_the_shared_isolation_primitive_fails_closed_on_a_broken_gate(
+        monkeypatch):
+    """An authorization check that raises has not authorized anything."""
+    from core import mitigation
+
+    monkeypatch.setattr(mitigation, "authorize_effect", None, raising=False)
+
+    def _boom(*a, **k):
+        raise RuntimeError("gate unavailable")
+
+    monkeypatch.setattr("core.security_effects.authorize_effect", _boom)
+    assert mitigation._isolation_authorized("203.0.113.9") is False
+
+
 async def test_the_security_auditor_cannot_block_a_port_by_itself(monkeypatch):
     from core import security_auditor as sa
 

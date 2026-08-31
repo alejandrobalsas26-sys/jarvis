@@ -49,14 +49,80 @@ def should_isolate(triage: dict) -> list[str]:
     return [ip for ip in triage.get("extracted_ips", []) if _is_public_ip(ip)]
 
 
+def _isolation_authorized(ip: str) -> bool:
+    """Ask the ONE gate. Synchronous, fail-closed, and never self-satisfied.
+
+    Evidence is built here because the primitive is what has it: the caller
+    established that this address is worth blocking, and the gate refuses a
+    request that cites nothing. Fail-closed on ANY error — an authorization
+    check that crashes has not authorized anything.
+    """
+    try:
+        from core.cognitive_mesh import SpecialistId
+        from core.mesh_contracts import EvidenceGraph, EvidenceRef, Provenance
+        from core.security_effects import (
+            CONTAINMENT, DefensiveActionClass, authorize_effect, propose_effect,
+        )
+
+        graph = EvidenceGraph()
+        ref = graph.add_evidence(EvidenceRef(
+            content=f"mitigation: {ip} selected for outbound isolation",
+            provenance=Provenance.TELEMETRY, source="mitigation",
+            specialist=SpecialistId.GUARDIAN))
+        request = propose_effect(
+            action=DefensiveActionClass.FIREWALL_BLOCK_ADDRESS, target=ip,
+            justification="automated outbound isolation",
+            requested_by=SpecialistId.GUARDIAN,
+            evidence_ids=(ref,) if ref else (),
+            rollback_plan="the rule carries a TTL and is removed on expiry")
+        decision = authorize_effect(request, registry=CONTAINMENT, graph=graph)
+        return bool(decision.allowed and decision.unattended)
+    except Exception as exc:  # noqa: BLE001 — fail CLOSED, always
+        logger.warning(f"mitigation: authorization check failed ({exc}) — refusing")
+        return False
+
+
 async def isolate_ip(ip: str, broadcast_fn, ttl_minutes: int = 60) -> None:
-    """Block outbound traffic to ip via Windows Defender Firewall with TTL auto-expiry."""
+    """Block outbound traffic to ip via Windows Defender Firewall with TTL auto-expiry.
+
+    V69 M64.1 §51 — GATED AT THE PRIMITIVE.
+
+    This function is the shared firewall-mutation primitive behind three
+    independent callers, and every one of them reached it with no operator in
+    the loop: the SOAR hook in ``tools/executor.py`` after a *blocked* shell
+    command, the RF out-of-band ``isolate:<ip>`` command in ``tools/rf_oob.py``,
+    and (until M64.1) the playbook engine. The playbook path is now gated at its
+    own call site; gating the other two individually would leave the primitive
+    itself open to the next caller.
+
+    So the check lives HERE, where it cannot be forgotten. Without a registered,
+    unexpired, target-scoped ContainmentAuthorization granting
+    FIREWALL_BLOCK_ADDRESS unattended, this returns having mutated nothing and
+    having told the operator what it would have done.
+    """
     from core.telemetry_auth import make_signed_broadcaster
     broadcast_fn = make_signed_broadcaster(broadcast_fn, "mitigation")
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         logger.warning(f"mitigation: invalid IP '{ip}' — isolation aborted")
+        return
+
+    if not _isolation_authorized(ip):
+        logger.warning(
+            f"mitigation: isolation of {ip} RECOMMENDED but NOT authorized — "
+            f"no operator ContainmentAuthorization covers it"
+        )
+        try:
+            await broadcast_fn(make_event(
+                "containment_recommended",
+                target=ip,
+                action="firewall_block_address",
+                authorized=False,
+                reason="no operator ContainmentAuthorization covers this target",
+            ))
+        except Exception:  # noqa: BLE001 — a notification never blocks a refusal
+            pass
         return
 
     rule_name     = f"JARVIS_BLOCK_{ip}"
