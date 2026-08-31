@@ -404,6 +404,37 @@ and read its own `authorized` flag before any stage runs.
 
 ---
 
+## 12b — Wiring status, stated plainly
+
+**The mesh is complete, tested, and NOT yet on the live chat turn.** No module
+outside `core/mesh_*.py`, `core/cognitive_mesh.py` and `core/security_scope.py`
+imports any of them — verified by grep across `core/`, `tools/`, `aura/` and
+`main.py`. In the vocabulary of this repository's own audits, M64 is
+`EXISTS_NOT_WIRED`.
+
+That is a deliberate stopping point, not an oversight:
+
+* Wiring the orchestrator into `LLM.chat_stream` changes the behaviour of
+  **every turn**, including the fast path. That is a materially larger and
+  riskier change than an architecture milestone authorises, and it belongs to a
+  milestone that can measure the latency and quality impact on a live turn.
+* It is also not honestly testable in this environment: `core/llm.py` imports
+  `openai`, which is not installed here, so 59 pre-existing broad-suite failures
+  already come from that import. Wiring against a module that cannot be imported
+  would produce a change nobody could exercise.
+* The structural consequence is worth stating because it is exactly the defect
+  this repository has caught before — `core/research_runtime.py` is attached at
+  boot and has zero callers. M64 is in the same state **by choice and with it
+  written down**, rather than by accident and undiscovered.
+
+The intended wiring, for the milestone that does it: `assemble_task_decision()`
+already runs on every turn, so `route_task()` takes that `TaskDecision` and adds
+the specialist dimension; `CognitiveOrchestrator.plan()` is the entry point, and
+`finish()` returns the `MeshAnswer` whose `answer` field is what the operator
+reads. Everything below it — team execution, blackboard, tool broker, executor —
+is already the machinery `chat_stream` uses today.
+
+
 ## 13 — The gauntlet
 
 111 offline tests across two files. Not a candidate evaluation — it measures the
