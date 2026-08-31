@@ -199,8 +199,13 @@ def specialist_directive(turn: MeshTurn, *, memory_items: "tuple[str, ...]" = ()
             blackboard_digest=blackboard_digest)
         turn.world_state_consulted = bool(
             getattr(compiled, "world_state_consulted", False))
-        turn.memory_items_used = len(_bounded_memory(memory_items))
         text = (compiled.text or "").strip()
+        # Report what the compiler ASSEMBLED, not what was offered. Only four
+        # roles declare ContextSlice.MEMORY, so a role that does not want memory
+        # receives none — and telemetry claiming otherwise would misdescribe the
+        # very context bound the mesh exists to enforce.
+        turn.memory_items_used = (
+            len(_bounded_memory(memory_items)) if "RELEVANT MEMORY" in text else 0)
         if len(text) > MAX_DIRECTIVE_CHARS:
             text = text[:MAX_DIRECTIVE_CHARS]
         turn.directive_chars = len(text)

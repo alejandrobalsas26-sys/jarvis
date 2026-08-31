@@ -105,6 +105,14 @@ _HIGH_IMPACT_TOOLS: frozenset[str] = frozenset({
                              # tools/executor.py._tool_take_screenshot; kept
                              # HIGH_IMPACT pending a dedicated path-safety
                              # review rather than silently loosening it here
+    # V69 M64.1 — the containment handlers. They are NOT declared in the model's
+    # TOOLS array (aexecute resolves handlers by name, so the correlator can
+    # reach them while the model cannot), but they are still local tool handlers
+    # and every local handler must carry an EXPLICIT classification — classify_tool
+    # would default them to HIGH_IMPACT anyway, and an invariant that holds only
+    # by accident is not an invariant.
+    "network_quarantine",   # netsh firewall block of a remote address
+    "host_firewall_rule",   # host firewall block of a local listening port
 })
 
 # No local or MCP tool name is LAB_ONLY today — that concept currently

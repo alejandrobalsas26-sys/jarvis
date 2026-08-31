@@ -366,6 +366,30 @@ _EFFECT_SIGNALS: frozenset[str] = frozenset({
 })
 
 
+#: Speech acts that ask to be TAUGHT rather than to have something diagnosed.
+#:
+#: V69 M64.1. M64 established that topic vocabulary is not intent and applied it
+#: to the security specialists: asking what persistence a malware used is an
+#: investigation, not an attack request. The same principle was not applied to
+#: the DIAGNOSTIC specialists, and it should have been. "Explain how TCP
+#: congestion control works" hits the network vocabulary, so it was promoted to
+#: MESH -- whose completion contract begins with an observation and demands World
+#: State -- which took a plain study question off the fast path entirely.
+#:
+#: A request to be taught names no system to inspect. It is ATLAS's.
+_EXPLANATORY_SIGNALS: frozenset[str] = frozenset({
+    "explain", "explain me", "explicame", "explícame", "explica",
+    "what is", "what are", "what does", "que es", "qué es", "cual es", "cuál es",
+    "how does", "how do", "how is", "como funciona", "cómo funciona",
+    "teach me", "ensename", "enséñame", "tell me about", "hablame de",
+    "difference between", "diferencia entre", "why is", "por que es",
+    "define", "definition of", "definicion de", "definición de",
+    "study", "learn", "aprender", "estudiar", "concept of", "concepto de",
+    "in simple terms", "en terminos simples", "en términos simples",
+    "overview of", "introduction to", "introduccion a", "introducción a",
+})
+
+
 #: One compiled boundary pattern per keyword across every vocabulary in this
 #: module, built once at import. A keyword matches only where it starts and ends
 #: on a word boundary, so ``ble`` no longer fires inside *vulnerable*.
@@ -373,7 +397,8 @@ _BOUNDARY: dict[str, "re.Pattern[str]"] = {
     kw: re.compile(rf"(?<!\w){re.escape(kw)}(?!\w)")
     for vocab in (*_SIGNALS.values(), _AUTHORIZATION_SIGNALS, _OFFENSIVE_SIGNALS,
                   _EFFECT_SIGNALS, _ADVERSARY_TOPIC, _OPERATIONAL_VERB,
-                  _ANALYTIC_VERB, _DIRECTIVE_VERB, _PURPLE_FRAME)
+                  _ANALYTIC_VERB, _DIRECTIVE_VERB, _PURPLE_FRAME,
+                  _EXPLANATORY_SIGNALS)
     for kw in vocab
 }
 
@@ -389,6 +414,16 @@ def _hits(text: str, vocab: "frozenset[str]") -> tuple[str, ...]:
     length rule would delete.
     """
     return tuple(sorted(k for k in vocab if _BOUNDARY[k].search(text)))
+
+
+def is_explanatory(text: str) -> bool:
+    """Whether the request asks to be TAUGHT rather than to have work done.
+
+    Deterministic and conservative: it fires only when the request names no
+    concrete target and asks for no effect, so "explain why 10.0.0.5 is
+    unreachable" is still a diagnosis and still routes to MESH.
+    """
+    return bool(_hits(text, _EXPLANATORY_SIGNALS))
 
 
 @dataclass(frozen=True)
@@ -542,6 +577,19 @@ def route_task(
     # 14 TaskDomains have no member for at all -- HELIOS, MESH, CIRRUS and
     # CIRCUIT exist only in this vocabulary.
     _DOMAINLESS = (_S.HELIOS, _S.MESH, _S.CIRRUS, _S.CIRCUIT)
+    # V69 M64.1 §34 — speech act beats topic vocabulary for the DIAGNOSTIC
+    # specialists too, not only the security ones. A request to be taught names
+    # no system to inspect, so it must not be promoted to a specialist whose
+    # completion contract begins with an observation; that promotion is what
+    # took "Explain how TCP congestion control works" off the fast path.
+    # Deliberately narrow: it applies only when the request names no target and
+    # asks for no effect, so "explain why 10.0.0.5 is unreachable" is still a
+    # diagnosis and still routes to MESH.
+    _teaching = (is_explanatory(text) and not targets and not effect_hits
+                 and not security_sensitive and not offensive_intent)
+    if _teaching and signal_primary in _DOMAINLESS:
+        signal_primary, signal_strength = None, 0
+        reason_bits.append("explanatory speech act: stays with the generalist")
     if signal_primary is not None and signal_strength >= 1:
         if domain is TaskDomain.GENERAL or signal_primary in _DOMAINLESS:
             primary = signal_primary

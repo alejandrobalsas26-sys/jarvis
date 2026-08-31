@@ -2756,6 +2756,30 @@ class LLM:
             logger.warning(f"RESPONSE_CONTRACT: skipped ({_rc_e})")
             _shape, _gen = None, None
 
+        # V69 M64.1 §8 — ONE fast-path definition, and it is the mesh's.
+        #
+        # `decide_fast_route` and the mesh route were computed independently and
+        # DISAGREED in practice: "Diagnose why the nginx service will not start
+        # on this host" is DIRECT_FAST / GREETING_SMALLTALK to the legacy turn
+        # classifier and complexity 0.01 to the router, so it took the tool-free
+        # native transport — while the mesh correctly routed it to HELIOS as a
+        # SINGLE turn that needs World State and may need tools. The specialist
+        # directive was compiled and then never applied, because that transport
+        # never reaches the system-prompt assembly.
+        #
+        # Two fast-path definitions is two authorities. The mesh's wins: it is
+        # the one that knows whether the turn needs evidence. This can only
+        # narrow the fast path, never widen it — a turn the mesh calls FAST_PATH
+        # still has to satisfy every pre-existing native-transport condition.
+        if _mesh is not None and not _mesh.is_fast and _fast_route is not None \
+                and _fast_route.use_native:
+            logger.info(
+                "FAST_ROUTE: overridden — mesh routed {} to {} ({}), which needs "
+                "the full path".format(
+                    _mesh.mode, _mesh.route.primary.value,
+                    "evidence" if _mesh.route.required_evidence else "tools"))
+            _fast_route = None
+
         if _fast_route is not None and _fast_route.use_native:
             # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
             # transport-selected (classification + language + route). Measured at the
