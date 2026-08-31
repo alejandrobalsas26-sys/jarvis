@@ -602,6 +602,26 @@ async def test_a_replayed_identical_action_does_not_execute_twice(live):
         "the same effect executed twice in one turn")
 
 
+async def test_the_ledger_ages_out_so_a_later_repeat_is_not_refused_forever(live):
+    """Deduplication is a safety net for a replay, never a permanent refusal.
+
+    Only the chat turn declares an epoch; AURA's task graph, the incident
+    workspace and the runbook engine all reach aexecute without one, so between
+    two chat turns they inherit a stale epoch. The TTL bounds that window to
+    roughly the life of a turn.
+    """
+    ex = live.executor
+    ex.begin_effect_epoch("turn:ttl")
+    key = ex._effect_key("turn:ttl", "kill_process", {"name": "x.exe"})
+    ex._effect_ledger[key] = (0.0, {"killed": ["x.exe"]})   # recorded long ago
+    assert ex._effect_ledger_get(key) is None, "an aged entry still suppressed a repeat"
+    assert key not in ex._effect_ledger, "the aged entry was not evicted"
+
+    import time as _t
+    ex._effect_ledger[key] = (_t.monotonic(), {"killed": ["x.exe"]})
+    assert ex._effect_ledger_get(key) == {"killed": ["x.exe"]}
+
+
 async def test_argument_order_cannot_manufacture_a_second_effect_identity(live):
     ex = live.executor
     ex.begin_effect_epoch("turn:x")

@@ -28,6 +28,7 @@ import shutil
 import http.server
 import socketserver
 import threading
+import time
 import webbrowser
 import tempfile
 import unicodedata
@@ -743,8 +744,20 @@ class ToolExecutor:
         # Scope is deliberate: only EFFECTFUL risk classes are recorded. A
         # repeated read is harmless and must stay cheap, so read-only tools are
         # never keyed. See `_effect_key` for the identity.
-        self._effect_ledger: dict[str, dict] = {}
+        self._effect_ledger: dict[str, tuple[float, dict]] = {}
         self._effect_epoch: str = ""
+
+    #: How long a recorded effect suppresses an identical repeat, in seconds.
+    #:
+    #: The ledger exists to stop ONE reasoning pass executing the same effect
+    #: twice, and `chat_stream` opens a fresh epoch per turn. But only the chat
+    #: turn declares an epoch: AURA's task graph, the incident workspace and the
+    #: runbook engine all reach `aexecute` without one, so between two chat turns
+    #: they would inherit a stale epoch and a legitimate repeat could be
+    #: suppressed minutes later. The TTL bounds that window to roughly the life
+    #: of a turn. Deduplication is a safety net for a replay, never a permanent
+    #: refusal to ever do the same thing again.
+    EFFECT_LEDGER_TTL_S: float = 180.0
 
     # ── exactly-once effect semantics (§17) ──────────────────────────────────
     @staticmethod
@@ -773,6 +786,17 @@ class ToolExecutor:
         if epoch != self._effect_epoch:
             self._effect_epoch = epoch
             self._effect_ledger.clear()
+
+    def _effect_ledger_get(self, key: str) -> "dict | None":
+        """The recorded result for *key*, or None once it has aged out."""
+        entry = self._effect_ledger.get(key)
+        if entry is None:
+            return None
+        recorded_at, result = entry
+        if (time.monotonic() - recorded_at) > self.EFFECT_LEDGER_TTL_S:
+            self._effect_ledger.pop(key, None)
+            return None
+        return result
 
     def effect_count(self, tool_name: str | None = None) -> int:
         """How many effects this epoch actually executed. Derived from the
@@ -1063,7 +1087,7 @@ class ToolExecutor:
         _effect_key = None
         if risk_class is not RiskClass.READ_ONLY:
             _effect_key = self._effect_key(self._effect_epoch, tool_name, tool_input)
-            _prior = self._effect_ledger.get(_effect_key)
+            _prior = self._effect_ledger_get(_effect_key)
             if _prior is not None:
                 logger.warning(
                     f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
@@ -1128,7 +1152,7 @@ class ToolExecutor:
             # failed call left the world unchanged, so retrying it is legitimate
             # and the existing per-turn retry ledger still governs that.
             if _effect_key is not None and status == "success" and isinstance(result, dict):
-                self._effect_ledger[_effect_key] = dict(result)
+                self._effect_ledger[_effect_key] = (time.monotonic(), dict(result))
 
             # Broadcast: tool result
             await _aura_broadcast({
@@ -1255,7 +1279,7 @@ class ToolExecutor:
         _effect_key = None
         if risk_class is not RiskClass.READ_ONLY:
             _effect_key = self._effect_key(self._effect_epoch, f"mcp:{tool_name}", tool_input)
-            _prior = self._effect_ledger.get(_effect_key)
+            _prior = self._effect_ledger_get(_effect_key)
             if _prior is not None:
                 logger.warning(
                     f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
@@ -1326,7 +1350,7 @@ class ToolExecutor:
         # V69 M64.1 §17 — same ledger, same epoch, one keyspace. An MCP effect
         # and a local effect are both effects.
         if _effect_key is not None and status == "success" and isinstance(result, dict):
-            self._effect_ledger[_effect_key] = dict(result)
+            self._effect_ledger[_effect_key] = (time.monotonic(), dict(result))
 
         await _aura_broadcast({
             "type": "tool_result",
