@@ -447,10 +447,20 @@ class CognitiveOrchestrator:
         return self._scopes
 
     def plan(self, user_message: str, *, tool_names: "list[str] | None" = None,
-             task_id: str = "") -> MeshRoute:
-        """Route without running anything. Pure and deterministic."""
+             task_id: str = "", task_decision=None) -> MeshRoute:
+        """Route without running anything. Pure and deterministic.
+
+        V69 M64.1 — ``task_decision`` is forwarded rather than re-derived. The
+        live turn already ran ``assemble_task_decision`` once, and it is the
+        authoritative per-turn decision: domain, complexity, security
+        sensitivity, planning and verification requirements all come from it.
+        Letting ``route_task`` re-classify the same message would create a
+        second, silently divergent opinion about the same turn — the exact
+        failure the single-decision design exists to prevent. Omitting it stays
+        supported for the offline tests, which have no turn to inherit from.
+        """
         return route_task(user_message, task_id=task_id, tool_names=tool_names,
-                          budget=self._budget)
+                          task_decision=task_decision, budget=self._budget)
 
     def build_handoff(self, route: MeshRoute, to: SpecialistId, objective: str,
                       *, from_specialist: SpecialistId | None = None,

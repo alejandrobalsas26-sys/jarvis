@@ -34,6 +34,10 @@ from core.model_router import (
     ModelRole,
 )
 from core.verification import should_verify, verify_answer
+# V69 M64.1 — the mesh adapter. Imported at module level so the finish
+# and verifier-arbitration paths cannot reference an unbound name when
+# planning was skipped; it pulls in no model, no socket and no tool.
+from core import mesh_live as _mesh_live
 # V69 M54.3/M54.4/M54.8 — deterministic pre-tool + verification policy, text-loop
 # language continuity, and host-clock grounding. Extends the existing per-turn
 # decision without forking routing or the security gate.
@@ -967,6 +971,31 @@ _PARTIAL_STREAM_EN = (
 #  Three tiny, fully guarded helpers. They are the ONLY place the inference path
 #  touches durable session state, and every one of them fails silently by design:
 #  a journal problem must cost continuity, never an answer the runtime could give.
+def _mesh_tool_status(result):
+    """Map an executor result envelope onto a typed :class:`ToolCallStatus`.
+
+    V69 M64.1 — read from the envelope the executor actually returned, so the
+    evidence graph records the truth about the call rather than an optimistic
+    default. There is deliberately no SUCCESS fallback for a shape we do not
+    recognise: an unreadable result is a FAILURE, not a success we assume.
+    """
+    from core.mesh_contracts import ToolCallStatus
+
+    if not isinstance(result, dict):
+        return ToolCallStatus.SUCCESS if result else ToolCallStatus.FAILURE
+    error = str(result.get("error", "") or "")
+    if error:
+        low = error.lower()
+        if "cancel" in low or "denegada" in low or "alcance autorizado" in low:
+            return ToolCallStatus.DENIED
+        if "timeout" in low or "timed out" in low:
+            return ToolCallStatus.TIMEOUT
+        return ToolCallStatus.FAILURE
+    if result.get("denial"):
+        return ToolCallStatus.DENIED
+    return ToolCallStatus.SUCCESS
+
+
 def _journal_turn_pair(user_message: str):
     """Journal the completed USER turn and open the assistant turn as ACTIVE.
 
@@ -2550,6 +2579,48 @@ class LLM:
         )
         decision = task_decision.model_decision
         _routed_model = resolve_inference_model(decision)
+
+        # ── V69 M64.1 — THE COGNITIVE MESH, ON THE LIVE TURN ─────────────────
+        # This is the wiring M64 documented as MESH_WIRED_TO_LIVE_TURN = NO.
+        # It runs HERE because this is the only point where the canonical
+        # TaskDecision exists and nothing has been generated yet, so the mesh
+        # can influence the turn without a second reasoning pass.
+        #
+        # `plan()` is pure Python — vocabulary matching and set arithmetic, no
+        # model and no I/O — and it is handed the TaskDecision rather than the
+        # raw message, so the turn keeps ONE classification of itself.
+        #
+        # Nothing below this point generates twice. The mesh decides WHO owns
+        # the turn and how far they may go; the one generation that was always
+        # going to happen then happens under that decision.
+        _mesh_t0 = _time.monotonic()
+        _mesh = None
+        try:
+            _mesh = _mesh_live.plan_turn(
+                user_message, task_decision=task_decision,
+                task_id=str(getattr(_journal, "turn_id", "") or ""),
+            )
+            if _mesh is not None:
+                _mesh_live.record_operator_request(_mesh, user_message)
+                # §17 — open this turn's effect epoch on the ONE executor, so a
+                # replayed or duplicated effect within the turn is impossible.
+                try:
+                    self.tool_executor.begin_effect_epoch(
+                        _mesh_live.effect_epoch(_mesh, str(id(task_decision))))
+                except Exception:
+                    pass
+        except Exception as _mesh_e:  # noqa: BLE001 — the mesh never breaks a turn
+            logger.warning(f"MESH: planning skipped ({_mesh_e})")
+            _mesh = None
+        _mesh_plan_ms = round((_time.monotonic() - _mesh_t0) * 1000.0, 2)
+        if _mesh is not None:
+            logger.info(
+                "MESH: route={} primary={} support={} verifier={} plan_ms={}".format(
+                    _mesh.mode, _mesh.route.primary.value,
+                    len(_mesh.route.supporting), _mesh.verifier_required,
+                    _mesh_plan_ms,
+                )
+            )
         logger.debug(
             "ROUTE: role={} domain={} provider={} model={} complexity={:.2f} "
             "requires_verification={} planning={} reason={!r}".format(
@@ -2764,6 +2835,22 @@ class LLM:
                         shape=_shape, question=user_message, state=_state, language=_fast_lang)
                     if _status:
                         yield _status
+                    # V69 M64.1 — the fast path is a MESH turn too. finish()
+                    # here is pure Python: route.verifier_required is False on
+                    # the fast path, so ARGUS does NOT run, no support
+                    # specialist exists to consult and no tool outcome exists to
+                    # bind. What it produces is the MeshAnswer of record and the
+                    # turn's telemetry — at zero extra generations and zero
+                    # tokens. Nothing is appended to what the operator already
+                    # read, because a fast turn has no verdict to qualify it.
+                    if _mesh is not None:
+                        try:
+                            _mesh_live.finish_turn(
+                                _mesh, str(_fast_result.get("text") or ""))
+                            logger.info("MESH: fast path — {}".format(
+                                _mesh_live.autonomy_summary(_mesh)))
+                        except Exception as _mfe:  # noqa: BLE001
+                            logger.debug(f"MESH: fast finish skipped ({_mfe})")
                     unregister_operation("llm_stream")
                     return
             except GeneratorExit:
@@ -2831,6 +2918,8 @@ class LLM:
         # truncated to enforce it.
         from core.tool_loop import ToolLoopBudget, publish_tool_metrics, validate_tool_call
         _tool_budget = ToolLoopBudget()
+        # V69 M64.1 — compiled once per turn, reused across every tool round.
+        _mesh_directive: str | None = None
 
         # V61 Phase 4 — only consult long-term/episodic memory when it helps:
         # explicit recall/project intent (should_use_memory) or a deep/security
@@ -2872,6 +2961,21 @@ class LLM:
                 _sys_content = _sys_content + "\n\n" + self.language_context.directive()
             except Exception:
                 pass
+            # V69 M64.1 — the primary specialist's COMPILED context. This is
+            # where the mesh actually shapes the answer: the role's mission,
+            # completion contract, stop conditions, evidence policy, autonomy
+            # ceiling, authorized scope (or the explicit statement that there is
+            # none), the relevant World State slice and bounded Memory — all
+            # assembled by core.mesh_context, which screens untrusted content
+            # through the injection firewall and omits any slice the role does
+            # not declare. It is compiled ONCE per turn, not once per tool round.
+            if _mesh is not None and _mesh_directive is None:
+                _mesh_directive = _mesh_live.specialist_directive(
+                    _mesh,
+                    memory_items=((_incident_prefix,) if _incident_prefix else ()),
+                )
+            if _mesh_directive:
+                _sys_content = _sys_content + "\n\n" + _mesh_directive
             messages_for_api = [
                 {"role": "system", "content": _sys_content},
                 *self.history,
@@ -3169,6 +3273,53 @@ class LLM:
                     and self.history[-1].get("role") == "assistant"
                     and not self.history[-1].get("tool_calls")
                 )
+
+                # ── V69 M64.1 — ARGUS, on the real turn ──────────────────────
+                # finish() binds the trace, runs the verifier when
+                # route.verifier_required (the orchestrator does that itself, so
+                # a caller cannot forget), and synthesises the MeshAnswer whose
+                # `answer` field is the operator-facing result of record.
+                #
+                # The body already streamed, so what is emitted here is only what
+                # the VERDICT adds — using the same post-stream augmentation
+                # contract V61 established for the model verifier. A passing
+                # verdict emits nothing: silence is what "verified" looks like.
+                if _mesh is not None and is_plain_assistant:
+                    try:
+                        _mesh_answer = _mesh_live.finish_turn(_mesh, full_text)
+                        _mesh_suffix = _mesh_live.verdict_suffix(_mesh_answer, full_text)
+                        if _mesh_suffix:
+                            yield _mesh_suffix
+                            final_answer = full_text + _mesh_suffix
+                            self.history[-1]["content"] = final_answer
+                        _t = _mesh.telemetry()
+                        logger.info(
+                            "MESH: task={} route={} primary={} argus={} tools={} "
+                            "evidence={} latency_ms={}".format(
+                                _t["task_id"], _t["route"], _t["primary_specialist"],
+                                _t["argus_verdict"], _t["tools_executed"],
+                                _t["evidence_count"], _t["latency_ms"],
+                            )
+                        )
+                        try:
+                            from tools.executor import _aura_broadcast as _bcast_mesh
+                            asyncio.create_task(_bcast_mesh(
+                                {"type": "mesh_turn", **_t}))
+                        except Exception:
+                            pass
+                    except Exception as _mesh_fin_e:  # noqa: BLE001
+                        logger.warning(f"MESH: finish skipped ({_mesh_fin_e})")
+
+                # V69 M64.1 — ONE verification authority per turn. On a turn
+                # ARGUS verified, the model verifier does not also run: two
+                # independently authoritative passes over one answer is the
+                # duplicated-authority shape this milestone removes, and it
+                # would pay for a second model swap on the turns least able to
+                # afford one.
+                if is_plain_assistant and not _mesh_live.should_run_llm_verifier(_mesh):
+                    logger.debug("VERIFIER: skipped — ARGUS is this turn's verifier")
+                    is_plain_assistant = False
+
                 if is_plain_assistant:
                     try:
                         final_answer = await self._maybe_verify_final_answer(
@@ -3356,6 +3507,24 @@ class LLM:
                     result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
 
                 logger.debug(f"Result: {result}")
+
+                # V69 M64.1 §15/§47 — bind what ACTUALLY happened into the
+                # evidence graph. The status is derived from the executor's own
+                # result envelope, never from what the model later says about
+                # it, so a denied, failed or timed-out call yields a reference
+                # that is RECORDED and NOT corroborating. That is what makes a
+                # fabricated "the command showed..." visible to ARGUS instead of
+                # merely unlikely.
+                if _mesh is not None:
+                    try:
+                        _mesh_live.record_tool_outcome(
+                            _mesh, tool_name,
+                            status=_mesh_tool_status(result),
+                            output=json.dumps(result, ensure_ascii=False,
+                                              default=str)[:1200],
+                        )
+                    except Exception:
+                        pass
 
                 # V68.1 M46 — on failure: record it, and append recovery guidance
                 # that pins the model to THIS tool/topic and forbids switching to an

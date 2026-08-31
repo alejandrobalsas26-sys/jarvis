@@ -2024,6 +2024,25 @@ async def _main_async() -> None:
     # so an operator-PRE-AUTHORIZED containment has a canonical route to an effect.
     # Attaching grants nothing: without a registered ContainmentAuthorization
     # covering the target and the action class, every one of these paths refuses.
+    # V69 M64.1 — bind the ONE cognitive orchestrator to the live runtime.
+    # World State becomes real EVIDENCE for specialists, the existing V63 team
+    # runtime becomes the executive the mesh reuses instead of growing its own,
+    # and the scope registry is the SAME object the effect gate reads — so there
+    # is exactly one answer to "is this target authorized?" in the process.
+    try:
+        from core import mesh_live as _m641_mesh
+        from core.security_effects import SCOPES as _m641_scopes
+        from core.specialist_runtime import team_runtime as _m641_team
+        from core.world_state import world as _m641_world
+        _m641_mesh.attach_live_runtime(
+            team_runtime = _m641_team,
+            world_state  = _m641_world,
+            scopes       = _m641_scopes,
+        )
+        logger.info("V69 M64.1: cognitive mesh is LIVE on the operator turn")
+    except Exception as e:
+        logger.warning(f"V69 M64.1: mesh live attach failed ({e}) — turns run unrouted")
+
     try:
         v36_correlator.attach_tool_executor(executor)
         from core.security_auditor import attach_tool_executor as _attach_auditor

@@ -217,7 +217,35 @@ class ContainmentAuthorization:
         return self.policy.expires_at
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        return self.policy.is_expired(now)
+        """Expiry, decided strictly here rather than inherited.
+
+        Two deliberate differences from :meth:`ScopePolicy.is_expired`, both
+        fail-closed:
+
+        * **No expiry means EXPIRED, not eternal.** ``ScopePolicy`` treats
+          ``expires_at=None`` as never-expiring, which is defensible for a scope
+          granted under its own ceremony. A standing permission to mutate the
+          firewall *unattended* may not be open-ended: §21 requires time-bound,
+          so an authorization that names no deadline authorizes nothing.
+
+        * **An unparseable expiry is EXPIRED, not a race.**
+          ``core.authority._parse_ts`` maps an unparseable timestamp to "now",
+          which is correct in isolation but fails OPEN here: the caller reads the
+          clock first and the parser reads it a few microseconds later, so
+          ``now >= exp`` is False and a malformed authorization is treated as
+          live. Measured, not theorised — it is what the M64.1 CASE E test
+          caught. Deciding it here removes the comparison entirely.
+        """
+        raw = (self.policy.expires_at or "").strip()
+        if not raw:
+            return True
+        try:
+            deadline = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except (ValueError, AttributeError, TypeError):
+            return True
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        return (now or _now()) >= deadline
 
     def permits_action(self, action: DefensiveActionClass) -> bool:
         """Prohibition beats permission, always. An authorization that both
@@ -593,7 +621,13 @@ def containment_authorization(
 ) -> ContainmentAuthorization:
     """Operator-facing builder. Convenience only — it grants nothing on its own;
     the authorization must still be registered, and registering is an operator
-    act that no detector performs."""
+    act that no detector performs.
+
+    ``expires_at`` is not optional in effect: leaving it ``None`` produces an
+    authorization that :meth:`ContainmentAuthorization.is_expired` reports as
+    already expired, so it permits nothing. That is deliberate — §21 requires
+    time-bound, and the safe reading of "no deadline" is "not yet authorized",
+    never "authorized forever"."""
     return ContainmentAuthorization(
         authorization_id=authorization_id,
         policy=ScopePolicy(

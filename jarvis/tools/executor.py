@@ -43,6 +43,7 @@ import dns.resolver
 from core.authority import AuthorityState, authorize_action, default_authority
 from core.ironman_mode import SessionConsent, default_consent
 from core.risk_classes import (
+    RiskClass,
     classify_tool,
     requires_hitl,
     requires_trusted_lab,
