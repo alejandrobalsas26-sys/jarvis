@@ -193,6 +193,145 @@ _SIGNAL_PRIORITY: tuple[SpecialistId, ...] = (
     _S.CIRRUS, _S.CIRCUIT, _S.FORGE, _S.HELIOS,
 )
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Security intent (§11, §12) — the semantic layer the domain classifier lacks
+# ══════════════════════════════════════════════════════════════════════════════
+# The problem this solves, found by the M64 gauntlet:
+#
+#   "A suspicious process is beaconing from an infected endpoint"
+#
+# routed to the RED TEAM. Not because the gate was weak, but because the
+# classification underneath it was wrong. ``core.task_domain``'s CYBER_PURPLE
+# vocabulary is {beacon, persistence, lateral movement, c2, exploit, payload,
+# shellcode, privilege escalation} -- which is the daily vocabulary of a SOC
+# analyst describing what an intruder DID. Those words are SUBJECT MATTER. They
+# say what the conversation is about; they say nothing about who owns it.
+#
+# What actually separates red from blue is the SPEECH ACT: is the operator asking
+# me to PERFORM a technique against a target, or to UNDERSTAND, DETECT or RESPOND
+# to one? "Investigate this exploit attempt" and "exploit this host" share a
+# noun and share nothing else.
+#
+# So intent is modelled in three frames, over verbs rather than topics. The
+# offensive-scope gate downstream is untouched -- SPECTER still requires a real
+# AuthorizedSecurityScope for anything active. This fixes what a request MEANS,
+# not what is permitted once it is understood.
+
+class SecurityIntent(str, Enum):
+    """What the operator is asking for in a security-bearing request."""
+
+    NONE = "none"                # not a security request at all
+    ANALYTIC = "analytic"        # understand / detect / investigate / defend
+    PURPLE = "purple"            # measure whether a detection actually fired
+    OPERATIONAL = "operational"  # perform a technique against a target
+
+
+#: TOPIC. Adversary subject matter. Establishes that a request is
+#: security-bearing and NOTHING else -- every one of these appears as often in an
+#: incident report as in an engagement plan.
+_ADVERSARY_TOPIC: frozenset[str] = frozenset({
+    "beacon", "beaconing", "persistence", "persistencia", "lateral movement",
+    "movimiento lateral", "c2", "command and control", "exploit", "exploits",
+    "payload", "shellcode", "privilege escalation", "escalada de privilegios",
+    "malware", "ransomware", "backdoor", "puerta trasera", "rootkit",
+    "credential dumping", "webshell", "implant", "dropper", "intrusion",
+    "compromise", "compromiso", "attacker", "atacante", "adversary", "adversario",
+    "vulnerability", "vulnerabilidad", "vulnerable", "cve", "attack",
+})
+
+#: OPERATIONAL VERBS. A request to ACT against something. These are the only
+#: vocabulary that can put a request in front of SPECTER.
+_OPERATIONAL_VERB: frozenset[str] = frozenset({
+    "pentest", "pen test", "penetration test", "prueba de penetración",
+    "attack", "atacar", "exploit it", "exploit this", "exploit the",
+    "explotar", "brute force", "fuerza bruta", "crack", "crackear",
+    "get a shell", "reverse shell", "gain access", "obtener acceso",
+    "break into", "entrar en", "hack", "hackear", "scan", "escanear",
+    "enumerate", "enumerar", "fuzz", "bypass", "evadir", "own the",
+    "pwn", "compromise the", "take over", "red team", "equipo rojo",
+    "adversary emulation", "emulación de adversario", "attack simulation",
+    "simulación de ataque", "test the security", "security test",
+    "probar la seguridad", "recon", "reconnaissance", "reconocimiento",
+    "attack surface", "superficie de ataque", "proof of concept",
+})
+
+#: ANALYTIC VERBS. A request to UNDERSTAND or DEFEND. These govern a sentence
+#: even when adversary topic words are all over it.
+_ANALYTIC_VERB: frozenset[str] = frozenset({
+    "investigate", "investigar", "triage", "triaje", "analyze", "analyse",
+    "analizar", "detect", "detectar", "detection", "detección", "deteccion",
+    "hunt", "hunting", "cazar", "correlate", "correlacionar", "review",
+    "revisar", "explain", "explicar", "respond", "responder", "contain",
+    "contener", "preserve", "preservar", "identify", "identificar", "assess",
+    "evaluar", "what is", "qué es", "que es", "how do i detect", "how do we",
+    "why did", "por qué", "por que", "is this", "es esto", "harden",
+    "endurecer", "mitigate", "mitigar", "remediate", "remediar", "monitor",
+    "monitorizar", "audit", "auditar", "timeline", "cronología", "forensic",
+    "forense", "enrich", "enriquecer", "attribute", "atribuir", "report",
+})
+
+#: DIRECTIVE VERBS. Ordinary imperatives that become operational ONLY in the
+#: presence of adversary subject matter and the absence of an analytic verb.
+#: "Test my code" is not a security request; "test my vulnerable lab" is. Keeping
+#: these separate from `_OPERATIONAL_VERB` is what lets the same word mean
+#: different things in the two sentences without either reading leaking.
+_DIRECTIVE_VERB: frozenset[str] = frozenset({
+    "test", "probar", "try", "intentar", "check", "comprobar", "verify",
+    "verificar", "validate", "validar", "run", "ejecutar", "perform", "realizar",
+})
+
+#: PURPLE FRAME. Retrospective measurement of whether an emulation was seen.
+#: Checked FIRST: "did our detection catch the lateral movement we emulated" is
+#: neither a request to attack nor a plain investigation.
+_PURPLE_FRAME: frozenset[str] = frozenset({
+    "purple team", "equipo púrpura", "did our detection", "did we detect",
+    "did the detection", "was it detected", "was it caught", "detection catch",
+    "detection coverage", "cobertura de detección", "detection gap",
+    "brecha de detección", "atomic red team", "caldera", "emulation plan",
+    "plan de emulación", "retest", "reprobar", "validate the detection",
+    "validar la detección", "coverage gap",
+})
+
+
+def classify_security_intent(text: str) -> SecurityIntent:
+    """Which speech act a security-bearing request performs.
+
+    Deterministic and ordered:
+
+      1. A purple FRAME wins outright -- measuring a detection is its own act.
+      2. Otherwise the request must be security-bearing at all: an adversary
+         topic, an operational verb, or an analytic verb about security. "Test
+         my code" is not a security request and must never be read as one.
+      3. An ANALYTIC verb governs the sentence when one is present. "Investigate
+         this exploit attempt" is an investigation; the noun does not make it an
+         attack. This is the conservative direction: a misread request lands on
+         the defensive specialist, where the worst case is a wasted consultation
+         rather than an unwanted operation.
+      4. An OPERATIONAL verb with no analytic verb governing it is a request to
+         act, and only then does SPECTER own the request.
+    """
+    if _hits(text, _PURPLE_FRAME):
+        return SecurityIntent.PURPLE
+
+    operational = _hits(text, _OPERATIONAL_VERB)
+    analytic = _hits(text, _ANALYTIC_VERB)
+    topic = _hits(text, _ADVERSARY_TOPIC)
+    directive = _hits(text, _DIRECTIVE_VERB)
+
+    if not (operational or topic):
+        return SecurityIntent.NONE
+    if analytic:
+        return SecurityIntent.ANALYTIC
+    if operational:
+        return SecurityIntent.OPERATIONAL
+    if directive and topic:
+        # "test my vulnerable lab", "check whether this host is exploitable":
+        # settling these needs the target touched, which is SPECTER's question
+        # and needs a scope.
+        return SecurityIntent.OPERATIONAL
+    return SecurityIntent.ANALYTIC
+
+
 #: Explicit authorization vocabulary. Presence is NECESSARY for an offensive
 #: route; it is never SUFFICIENT — a real ``AuthorizedSecurityScope`` still has
 #: to exist and cover the target, which ``core.security_scope`` decides. This set
@@ -233,7 +372,8 @@ _EFFECT_SIGNALS: frozenset[str] = frozenset({
 _BOUNDARY: dict[str, "re.Pattern[str]"] = {
     kw: re.compile(rf"(?<!\w){re.escape(kw)}(?!\w)")
     for vocab in (*_SIGNALS.values(), _AUTHORIZATION_SIGNALS, _OFFENSIVE_SIGNALS,
-                  _EFFECT_SIGNALS)
+                  _EFFECT_SIGNALS, _ADVERSARY_TOPIC, _OPERATIONAL_VERB,
+                  _ANALYTIC_VERB, _DIRECTIVE_VERB, _PURPLE_FRAME)
     for kw in vocab
 }
 
@@ -275,6 +415,7 @@ class MeshRoute:
     effectful: bool
     risk: str
     security_sensitive: bool
+    security_intent: SecurityIntent
     offensive_intent: bool
     authorization_signalled: bool
     target_scope: tuple[str, ...]
@@ -310,6 +451,7 @@ class MeshRoute:
             "domains": [d.value for d in self.domains],
             "complexity": round(self.complexity, 2),
             "effectful": self.effectful, "risk": self.risk,
+            "security_intent": self.security_intent.value,
             "offensive_intent": self.offensive_intent,
             "authorization_signalled": self.authorization_signalled,
             "specialist_count": self.specialist_count,
@@ -387,14 +529,8 @@ def route_task(
     targets = _extract_targets(user_message)
     signal_primary, signal_hits, signal_strength = _signal_primary(text)
 
-    # Offensive intent is EXPLICIT vocabulary, never a guess. The distinction
-    # matters: an explicit unscoped attack request is not ambiguous, so SPECTER
-    # owns it and its execution is denied for want of a scope (§42.13). An
-    # *ambiguous* request is a different thing and must never reach SPECTER at
-    # all (§12) -- which is why `_OFFENSIVE_SIGNALS` and the SPECTER signal set
-    # are the only two ways in.
-    offensive_intent = bool(offensive_hits) or domain is TaskDomain.CYBER_PURPLE or (
-        signal_primary is _S.SPECTER and signal_strength >= 1)
+    intent = classify_security_intent(text)
+    offensive_intent = intent is SecurityIntent.OPERATIONAL
     authorized_shape = bool(auth_hits) and bool(targets)
 
     # ── primary ──────────────────────────────────────────────────────────────
@@ -417,7 +553,13 @@ def route_task(
 
     # ── the offensive gate (§12, §42.13) ─────────────────────────────────────
     clarifying = ""
-    if offensive_intent:
+    if intent is SecurityIntent.PURPLE:
+        # Measuring whether a detection fired is VIOLET's act, and it is neither
+        # an attack nor a plain investigation. It still needs a scope for any
+        # emulation, which `requires_security_scope` enforces below.
+        primary = _S.VIOLET
+        reason_bits.append("purple frame: retrospective detection measurement")
+    elif offensive_intent:
         primary = _S.VIOLET if (signal_primary is _S.VIOLET) else _S.SPECTER
         if authorized_shape:
             reason_bits.append("explicit offensive intent with an authorization "
@@ -433,10 +575,12 @@ def route_task(
                 "which environment is this, and which target and activity does your "
                 "authorization actually cover?")
     elif primary in (_S.SPECTER, _S.VIOLET):
-        # Reached without explicit offensive vocabulary -- ambiguity, not intent.
+        # Reached by domain or signal without an OPERATIONAL or PURPLE speech act
+        # -- adversary subject matter, not a request to act. The defensive
+        # specialist owns it; ambiguity never routes offensive (§12).
         primary = _S.GUARDIAN
-        reason_bits.append("red/purple primary reached without explicit offensive "
-                           "intent -> GUARDIAN (ambiguity never routes offensive)")
+        reason_bits.append(f"red/purple primary reached under intent={intent.value} "
+                           f"-> GUARDIAN (subject matter is not intent)")
 
     record = REGISTRY.get(primary)
 
@@ -542,7 +686,8 @@ def route_task(
         scoped_autonomy_ceiling=scoped_ceiling,
         confidence=confidence, domains=(domain,), complexity=round(complexity, 2),
         urgency=_urgency(text, security_sensitive), effectful=effectful, risk=risk,
-        security_sensitive=security_sensitive, offensive_intent=offensive_intent,
+        security_sensitive=security_sensitive, security_intent=intent,
+        offensive_intent=offensive_intent,
         authorization_signalled=bool(auth_hits), target_scope=targets,
         requested_activities=activities, required_evidence=required_evidence,
         uncertainty=tuple(uncertainty),
