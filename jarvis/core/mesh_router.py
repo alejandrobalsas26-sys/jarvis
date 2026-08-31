@@ -639,8 +639,8 @@ def route_task(
         reason_bits.append("fast path: generalist, low complexity, no tools, no risk")
     else:
         want = 0
-        if complexity >= COMPLEX_COMPLEXITY or offensive_intent or _SECURITY_PRIMARY \
-                .__contains__(primary):
+        if (complexity >= COMPLEX_COMPLEXITY or offensive_intent
+                or primary in _SECURITY_PRIMARY):
             want = 2
         elif complexity >= TEAM_COMPLEXITY or security_sensitive or effectful:
             want = 1
