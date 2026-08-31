@@ -12,7 +12,7 @@
 | Control plane | V3, generation **20** (governance-only branch declaration) |
 | Closes | `MESH_WIRED_TO_LIVE_TURN = NO`, **D-M64-1**, **D-M64-2**, four §51 siblings |
 | New production modules | 2 — `core/security_effects.py`, `core/mesh_live.py` |
-| New tests | 88 across two files, all offline |
+| New tests | 100 across two files, all offline |
 | Reused, not rebuilt | the whole M64 mesh, `ScopePolicy`, `AuthorityState`, `RiskClass`, `ToolExecutor`, the NATO HITL gate, `EvidenceGraph`, `ActionRequest` |
 
 ---
@@ -334,9 +334,9 @@ is no path on which a fallback could replay an effect.
 
 ## 13 — The gauntlet
 
-88 tests across two files, all offline.
+100 tests across two files, all offline.
 
-* `tests/test_mesh_live_turn_v69_m64_1.py` — 47 LIVE-INTEGRATION scenarios.
+* `tests/test_mesh_live_turn_v69_m64_1.py` — 59 LIVE-INTEGRATION scenarios.
   Every one enters through `chat_stream`, the same generator `main` drives,
   because a test that calls `plan()` directly proves the mesh works and says
   nothing about whether JARVIS uses it (§50). **Only the two model transports
@@ -377,7 +377,8 @@ transcripts through a file on disk.
 * **Three pre-existing broad-suite failures** in
   `test_bandit_low_baseline_v69_m618.py` are untouched. They fail identically at
   the parent commit: the recorded baseline of 488 was measured with a different
-  analyzer version. M64.1 *reduced* Bandit LOW from 490 to 489. Raising the
+  analyzer version. Measured at close, M64.1 leaves Bandit LOW at **489**
+  against a parent-commit **490** — one below where it found it. Raising the
   baseline to make them green would be the post-hoc weakening §60 forbids.
 
 ---
