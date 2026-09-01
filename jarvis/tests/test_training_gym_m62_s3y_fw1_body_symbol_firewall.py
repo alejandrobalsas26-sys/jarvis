@@ -67,12 +67,27 @@ HISTORICAL_PREFIX = (
     "corpus_v4_material", "corpus_v4(",
     "corpus_v5_material", "corpus_v5(",
 )
-#: What S3Y.FW1 appended, and all it appended.
+#: What S3Y.FW1 appended, and all it appended. This suite OWNS this pair.
 APPENDED_SUFFIX = (
     "corpus_v6_material",
     "corpus_v6(",
 )
 V6_MATERIAL_SYMBOL, V6_WRAPPER_SYMBOL = APPENDED_SUFFIX
+
+#: What S4E appended, for the live v7 exam. Declared here so this suite's structural
+#: rules (append-only, ordered prefix, material+wrapper per generation, no duplicates)
+#: keep covering the registry as it grows, WITHOUT this suite claiming to own the entry.
+#:
+#: RESCOPE, ON THE S3N / S3S / S3X.1 / S4D PRECEDENT: the assertions below were written
+#: as "the registry is exactly v4-v6". That pinned the state of the world at S3Y.FW1, not
+#: the property this suite owns. Each now asserts that its own pair is still present, in
+#: order, at its own position, and that growth is append-only. No property is weakened:
+#: a reorder, a deletion, a duplicate or a half-added generation still fails.
+S4E_APPENDED_SUFFIX = (
+    "corpus_v7_material",
+    "corpus_v7(",
+)
+EXPECTED_REGISTRY = HISTORICAL_PREFIX + APPENDED_SUFFIX + S4E_APPENDED_SUFFIX
 
 #: A path string only. This suite never opens it, by any mechanism: the registry is
 #: checked against the registry, never against the exam it protects.
@@ -133,13 +148,29 @@ def test_the_first_slot_is_unchanged_because_a_sealed_suite_indexes_it():
     assert V.FORBIDDEN_BODY_SYMBOLS[0] == "corpus_v4_material"
 
 
-def test_the_appended_suffix_is_exactly_the_two_v6_symbols():
-    assert tuple(V.FORBIDDEN_BODY_SYMBOLS[len(HISTORICAL_PREFIX):]) == APPENDED_SUFFIX
+def test_the_v6_suffix_this_suite_owns_still_sits_at_its_own_position():
+    """The pair S3Y.FW1 appended, still in order, still immediately after the prefix."""
+    start = len(HISTORICAL_PREFIX)
+    window = tuple(V.FORBIDDEN_BODY_SYMBOLS[start:start + len(APPENDED_SUFFIX)])
+    assert window == APPENDED_SUFFIX
 
 
-def test_the_registry_grew_by_two_entries_and_by_nothing_else():
-    assert len(V.FORBIDDEN_BODY_SYMBOLS) == len(HISTORICAL_PREFIX) + len(APPENDED_SUFFIX)
-    assert V.FORBIDDEN_BODY_SYMBOLS == HISTORICAL_PREFIX + APPENDED_SUFFIX
+def test_the_registry_only_ever_grows_at_the_end():
+    """Append-only, checked as a prefix relation rather than as a fixed length."""
+    prefix = HISTORICAL_PREFIX + APPENDED_SUFFIX
+    assert tuple(V.FORBIDDEN_BODY_SYMBOLS[:len(prefix)]) == prefix
+    assert len(V.FORBIDDEN_BODY_SYMBOLS) >= len(prefix)
+
+
+def test_the_registry_is_exactly_the_generations_this_repository_has_frozen():
+    """v4, v5, v6 and the live v7. Pinned, so an unreviewed entry is a red test."""
+    assert V.FORBIDDEN_BODY_SYMBOLS == EXPECTED_REGISTRY
+
+
+def test_the_live_exam_generation_is_protected_at_all():
+    """The load-bearing one: v7 is FROZEN_UNUSED and about to be measured against."""
+    assert "corpus_v7_material" in V.FORBIDDEN_BODY_SYMBOLS
+    assert "corpus_v7(" in V.FORBIDDEN_BODY_SYMBOLS
 
 
 def test_the_registry_is_still_an_immutable_tuple_with_no_duplicates():
@@ -148,13 +179,23 @@ def test_the_registry_is_still_an_immutable_tuple_with_no_duplicates():
 
 
 def test_every_generation_occupies_a_material_slot_and_a_wrapper_slot():
-    """The shape that makes one-sided protection visible as a gap."""
+    """The shape that makes one-sided protection visible as a gap.
+
+    RESCOPED in S4E: the counts were pinned at 3 because three generations existed at
+    S3Y.FW1. The property is the PAIRING -- no generation may be protected on one side
+    only -- so it is now asserted as a set equality over versions, which is what makes a
+    half-added generation fail. The v4/v5/v6 versions this suite owns are still required
+    to be present by name, so the rescope cannot hide their removal.
+    """
     materials = [s for s in V.FORBIDDEN_BODY_SYMBOLS if s.endswith("_material")]
     wrappers = [s for s in V.FORBIDDEN_BODY_SYMBOLS if s.endswith("(")]
-    assert len(materials) == len(wrappers) == 3
-    assert ({V.body_symbol_version(s) for s in materials}
-            == {V.body_symbol_version(s) for s in wrappers}
-            == {"v4", "v5", "v6"})
+    material_versions = {V.body_symbol_version(s) for s in materials}
+    wrapper_versions = {V.body_symbol_version(s) for s in wrappers}
+    assert len(materials) == len(wrappers)
+    assert material_versions == wrapper_versions
+    assert material_versions >= {"v4", "v5", "v6"}
+    # Every entry in the registry belongs to one of the two slots; nothing else may hide.
+    assert len(materials) + len(wrappers) == len(V.FORBIDDEN_BODY_SYMBOLS)
 
 
 def test_each_new_symbol_resolves_to_the_v6_generation():
@@ -237,7 +278,7 @@ def test_the_historical_generations_are_still_refused_too(sandbox):
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("harmless", [
     "corpus_v6",                 # the stem alone is neither entry
-    "corpus_v7_material",        # a generation that does not exist
+    "corpus_v8_material",        # a generation that does not exist
     "build_corpus_v6_manifest",  # a name that merely contains the stem
     "corpus_v6 (spaced)",        # the stem without the call punctuation
 ])

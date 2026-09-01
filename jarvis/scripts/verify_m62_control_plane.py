@@ -131,6 +131,8 @@ EVAL_RECEIPT_V2_SCHEMA_VERSION = "m62.eval_receipt.2"
 #: `.2` is not mutated: it is a tracked, qualified contract whose synthetic receipts
 #: already hash against it. The version moves instead.
 EVAL_RECEIPT_V3_SCHEMA_VERSION = "m62.eval_receipt.3"
+#: V69 M62 S4E. The reference-adapter contract: two adapter arms, one spend.
+EVAL_RECEIPT_V4_SCHEMA_VERSION = "m62.eval_receipt.4"
 
 #: The receipt versions a MODERN (non-legacy) EVALUATED_* candidate may present. `.2` is
 #: still accepted -- it is a real contract that real evidence can satisfy, and removing it
@@ -138,7 +140,11 @@ EVAL_RECEIPT_V3_SCHEMA_VERSION = "m62.eval_receipt.3"
 #: `.1` receipt for a run measured after S3Q.0.1 would be evidence deliberately written to
 #: a weaker contract, and accepting one would make the upgrade optional.
 MODERN_EVAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
-    EVAL_RECEIPT_V2_SCHEMA_VERSION, EVAL_RECEIPT_V3_SCHEMA_VERSION})
+    EVAL_RECEIPT_V2_SCHEMA_VERSION, EVAL_RECEIPT_V3_SCHEMA_VERSION,
+    # S4E. Without this a Protocol V4 receipt -- the only shape that can truthfully
+    # record an adapter-bearing reference arm -- is refused as "not modern", and the
+    # only accepted alternative is a `.3` document asserting a bare base model ran.
+    EVAL_RECEIPT_V4_SCHEMA_VERSION})
 
 #: The receipt versions whose canonical bytes are DEFINED as canonical JSON encoded
 #: UTF-8, so non-ASCII production decision text is preserved exactly rather than refused.
@@ -146,7 +152,7 @@ MODERN_EVAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
 #: existing receipts were hashed under, and relaxing it in place would change what those
 #: documents mean.
 UTF8_CANONICAL_RECEIPT_VERSIONS: frozenset[str] = frozenset({
-    EVAL_RECEIPT_V3_SCHEMA_VERSION})
+    EVAL_RECEIPT_V3_SCHEMA_VERSION, EVAL_RECEIPT_V4_SCHEMA_VERSION})
 
 #: How `.3` states its own encoding, so no "encoding choice" is left open. The digest is
 #: SHA-256 over exactly these bytes.
@@ -213,6 +219,7 @@ TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
 EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
 EVAL_RECEIPT_V2_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v2.schema.json"
 EVAL_RECEIPT_V3_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v3.schema.json"
+EVAL_RECEIPT_V4_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v4.schema.json"
 MEASUREMENT_WITNESS_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-measurement-witness.schema.json"
 RECEIPT_DIR = f"{STATE_DIR}/receipts"
 MIGRATION_DIR = f"{STATE_DIR}/migrations"
@@ -281,7 +288,14 @@ FORBIDDEN_BODY_SOURCES = (
 #: APPENDED to, never reordered: two sealed test files index this tuple positionally.
 FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(",
                           "corpus_v5_material", "corpus_v5(",
-                          "corpus_v6_material", "corpus_v6(")
+                          "corpus_v6_material", "corpus_v6(",
+                          # S4E. v7 is the LIVE exam: FROZEN_UNUSED, and the corpus the
+                          # first reference-adapter comparison will be judged against.
+                          # Its builder symbols existed from the S4D freeze onward while
+                          # this registry still stopped at v6, so a control-plane surface
+                          # could cite the live exam's body source and pass. Appended,
+                          # never reordered: sealed suites index the prefix positionally.
+                          "corpus_v7_material", "corpus_v7(")
 
 
 def body_symbol_version(symbol: str) -> str:
@@ -2030,6 +2044,218 @@ def eval_receipt_v3_schema() -> dict:
     }
 
 
+
+
+#: The properties `.4` adds. Written out here rather than read from the published file,
+#: for the reason every other schema in this module is: the verifier must ENFORCE a
+#: contract, and one that loads its contract from the document it is checking has
+#: checked nothing.
+_V4_ADDED_PROPERTIES: dict = {'candidate_arm': {'additionalProperties': False,
+                   'description': 'The CANDIDATE arm: the same base model, revision, '
+                                  'tokenizer and chat template as the reference arm, '
+                                  'with the declared candidate adapter attached.',
+                   'properties': {'adapter_artifact_set_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                                'type': 'string'},
+                                  'adapter_attached': {'const': True},
+                                  'adapter_manifest_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                            'type': 'string'},
+                                  'adapter_sha256': {'pattern': '^[0-9a-f]{64}$',
+                                                     'type': 'string'},
+                                  'arm_hash': {'pattern': '^[0-9a-f]{64}$',
+                                               'type': 'string'},
+                                  'arm_type': {'const': 'ADAPTER'},
+                                  'base_model_id': {'maxLength': 320,
+                                                    'minLength': 1,
+                                                    'type': 'string'},
+                                  'base_model_identity_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                               'type': 'string'},
+                                  'base_model_revision': {'pattern': '^[0-9a-f]{40}$',
+                                                          'type': 'string'},
+                                  'candidate_id': {'maxLength': 320,
+                                                   'minLength': 1,
+                                                   'type': 'string'},
+                                  'evaluation_arm_role': {'const': 'candidate'},
+                                  'identity_source': {'const': 'training_receipt'},
+                                  'run_id': {'maxLength': 320,
+                                             'minLength': 1,
+                                             'type': 'string'},
+                                  'tokenizer_chat_template_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                                   'type': 'string'},
+                                  'tokenizer_identity_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                              'type': 'string'},
+                                  'training_receipt_sha256': {'pattern': '^[0-9a-f]{64}$',
+                                                              'type': 'string'}},
+                   'required': ['adapter_artifact_set_hash',
+                                'adapter_attached',
+                                'adapter_manifest_hash',
+                                'adapter_sha256',
+                                'arm_hash',
+                                'arm_type',
+                                'base_model_id',
+                                'base_model_identity_hash',
+                                'base_model_revision',
+                                'candidate_id',
+                                'evaluation_arm_role',
+                                'identity_source',
+                                'run_id',
+                                'tokenizer_chat_template_hash',
+                                'tokenizer_identity_hash',
+                                'training_receipt_sha256'],
+                   'type': 'object'},
+ 'pairing': {'additionalProperties': False,
+             'description': 'Binds both arms and the accounting of ONE paired attempt. '
+                            'holdout_spends is const 1: two arms are one evaluation, '
+                            'so frozen invariant 20 needs no amendment.',
+             'properties': {'candidate_arm_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                   'type': 'string'},
+                            'expected_generations': {'maximum': 200000,
+                                                     'minimum': 2,
+                                                     'type': 'integer'},
+                            'generations_per_task': {'const': 2},
+                            'holdout_spends': {'const': 1},
+                            'pairing_hash': {'pattern': '^[0-9a-f]{64}$',
+                                             'type': 'string'},
+                            'protocol_version': {'const': 'm62.evaluation_protocol.4'},
+                            'reference_arm_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                   'type': 'string'},
+                            'retry_authorized': {'const': False},
+                            'shared_base_model_id': {'maxLength': 320,
+                                                     'minLength': 1,
+                                                     'type': 'string'},
+                            'shared_base_model_revision': {'pattern': '^[0-9a-f]{40}$',
+                                                           'type': 'string'},
+                            'task_count': {'maximum': 100000,
+                                           'minimum': 1,
+                                           'type': 'integer'}},
+             'required': ['candidate_arm_hash',
+                          'expected_generations',
+                          'generations_per_task',
+                          'holdout_spends',
+                          'pairing_hash',
+                          'protocol_version',
+                          'reference_arm_hash',
+                          'retry_authorized',
+                          'shared_base_model_id',
+                          'shared_base_model_revision',
+                          'task_count'],
+             'type': 'object'},
+ 'protocol_version': {'const': 'm62.evaluation_protocol.4'},
+ 'reference_arm': {'additionalProperties': False,
+                   'description': 'The REFERENCE arm: a base model with the declared '
+                                  'reference adapter attached. adapter_attached is '
+                                  'const true and arm_type is const ADAPTER, so a V4 '
+                                  'receipt cannot truthfully serialise a reference arm '
+                                  'while claiming a bare base model ran.',
+                   'properties': {'adapter_artifact_set_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                                'type': 'string'},
+                                  'adapter_attached': {'const': True},
+                                  'adapter_manifest_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                            'type': 'string'},
+                                  'adapter_sha256': {'pattern': '^[0-9a-f]{64}$',
+                                                     'type': 'string'},
+                                  'arm_hash': {'pattern': '^[0-9a-f]{64}$',
+                                               'type': 'string'},
+                                  'arm_type': {'const': 'ADAPTER'},
+                                  'base_model_id': {'maxLength': 320,
+                                                    'minLength': 1,
+                                                    'type': 'string'},
+                                  'base_model_identity_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                               'type': 'string'},
+                                  'base_model_revision': {'pattern': '^[0-9a-f]{40}$',
+                                                          'type': 'string'},
+                                  'candidate_id': {'maxLength': 320,
+                                                   'minLength': 1,
+                                                   'type': 'string'},
+                                  'evaluation_arm_role': {'const': 'reference'},
+                                  'identity_source': {'const': 'training_receipt'},
+                                  'run_id': {'maxLength': 320,
+                                             'minLength': 1,
+                                             'type': 'string'},
+                                  'tokenizer_chat_template_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                                   'type': 'string'},
+                                  'tokenizer_identity_hash': {'pattern': '^[0-9a-f]{64}$',
+                                                              'type': 'string'},
+                                  'training_receipt_sha256': {'pattern': '^[0-9a-f]{64}$',
+                                                              'type': 'string'}},
+                   'required': ['adapter_artifact_set_hash',
+                                'adapter_attached',
+                                'adapter_manifest_hash',
+                                'adapter_sha256',
+                                'arm_hash',
+                                'arm_type',
+                                'base_model_id',
+                                'base_model_identity_hash',
+                                'base_model_revision',
+                                'candidate_id',
+                                'evaluation_arm_role',
+                                'identity_source',
+                                'run_id',
+                                'tokenizer_chat_template_hash',
+                                'tokenizer_identity_hash',
+                                'training_receipt_sha256'],
+                   'type': 'object'}}
+
+_V4_REQUIRED: tuple = ('authority', 'candidate', 'candidate_arm', 'canonical_encoding', 'decision_evidence', 'evaluation_generation', 'evaluation_id', 'evaluation_milestone', 'evaluation_source', 'evidence', 'execution', 'holdout', 'holdout_commit', 'ledger', 'measurement_witness', 'outcome', 'pairing', 'plan', 'policies', 'protocol_version', 'receipt_hash', 'receipt_version', 'reference_arm', 'results', 'schema_version', 'seal_implementation_source', 'seal_milestone', 'training_receipt')
+
+_V4_TITLE = 'M62 portable evaluation receipt v3'
+
+_V4_DESCRIPTION = (
+    'Root-independent, tracked evidence that TWO identified LoRA adapters -- one bound as R'
+    'EFERENCE and one as CANDIDATE, each rooted in its own sealed training receipt -- answe'
+    'red ONE identified frozen holdout exactly once per task, in ONE paired attempt, under '
+    'ONE spent single-use authority, and that the resulting EVALUATED_* claim is REDERIVABL'
+    'E from the body-free decision evidence it carries. v4 is ADDITIVE: it neither replaces'
+    ' nor migrates v1-v3, which keep their meaning and their receipts unchanged. It exists '
+    "because v3's `baseline` is closed over base-model identity with nowhere to record an a"
+    'dapter, so binding a reference adapter there would seal a receipt claiming a bare base'
+    ' model ran when one did not. Both arms share base model, revision, tokenizer and chat '
+    'template by schema and by construction, so the measured delta has a single axis: the a'
+    'dapter. It is EVIDENCE OF AN OPERATION and never AUTHORITY FOR ANOTHER: it grants no r'
+    'etry, no second evaluation, no promotion, no activation, no registry mutation and no r'
+    'elease.')
+
+
+def eval_receipt_v4_schema() -> dict:
+    """S4E -- ONE paired attempt, TWO adapter arms, ONE spend.
+
+    Derived from `.3` by an EXPLICIT DELTA rather than copied, so the two contracts
+    cannot drift apart in the half nobody re-read. What changes:
+
+    * ``baseline`` is REMOVED. It is closed over five base-model identity fields with
+      nowhere to record an adapter digest, so binding a reference adapter there would
+      seal a receipt claiming a bare base model answered when one did not. The
+      impossibility is by ABSENCE: `.4` has no field to put the false claim in.
+    * ``reference_arm`` and ``candidate_arm`` are ADDED, symmetric, each carrying
+      ``arm_type`` const ``ADAPTER`` and ``adapter_attached`` const ``true``.
+    * ``pairing`` is ADDED, with ``holdout_spends`` const 1 and ``generations_per_task``
+      const 2: two arms are ONE evaluation, which is why frozen invariant 20 needed no
+      amendment.
+    * ``protocol_version`` is ADDED and pinned to the V4 protocol.
+
+    Everything else -- authority, ledger, holdout commit, decision evidence, outcome,
+    policies, results, the measurement witness -- is `.3`'s, unchanged and unweakened.
+
+    KNOWN COSMETIC DEFECT, RECORDED RATHER THAN SILENTLY REPAIRED: the published file's
+    ``title`` still reads "v3", a copy-paste slip from the S4D authoring session. It is
+    reproduced here EXACTLY, because this builder's job is to be byte-identical to the
+    tracked artefact. Correcting it is a schema edit and belongs to a milestone that
+    declares it, not to a wiring change that would quietly move a tracked file.
+    """
+    schema = eval_receipt_v3_schema()
+    properties = dict(schema["properties"])
+    properties.pop("baseline", None)
+    properties.update(_V4_ADDED_PROPERTIES)
+    properties["receipt_version"] = {"const": EVAL_RECEIPT_V4_SCHEMA_VERSION}
+    properties["schema_version"] = {"const": EVAL_RECEIPT_V4_SCHEMA_VERSION}
+    return {
+        **schema,
+        "$id": "m62-eval-receipt-v4.schema.json",
+        "title": _V4_TITLE,
+        "description": _V4_DESCRIPTION,
+        "properties": properties,
+        "required": list(_V4_REQUIRED),
+    }
+
 def measurement_witness_schema() -> dict:
     """S3Q.0.2 -- the pre-repair measurement witness.
 
@@ -2611,6 +2837,7 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
                          (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema),
                          (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema),
                          (EVAL_RECEIPT_V3_SCHEMA_PATH, eval_receipt_v3_schema),
+                         (EVAL_RECEIPT_V4_SCHEMA_PATH, eval_receipt_v4_schema),
                          (MEASUREMENT_WITNESS_SCHEMA_PATH,
                           measurement_witness_schema)):
         path = REPO_ROOT / rel
@@ -3842,9 +4069,10 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
         # The VERSION decides the contract. `.2` and `.3` are both real, both tracked
         # and both satisfiable; validating a `.3` against `.2`'s shape would report the
         # repair as a violation.
-        schema = (eval_receipt_v3_schema()
-                  if version == EVAL_RECEIPT_V3_SCHEMA_VERSION
-                  else eval_receipt_v2_schema())
+        schema = {
+            EVAL_RECEIPT_V4_SCHEMA_VERSION: eval_receipt_v4_schema,
+            EVAL_RECEIPT_V3_SCHEMA_VERSION: eval_receipt_v3_schema,
+        }.get(version, eval_receipt_v2_schema)()
         for problem in validate_against_schema(schema, receipt):
             report.fail("EVALUATION_RECEIPT", f"{cid}: receipt {problem}")
 
