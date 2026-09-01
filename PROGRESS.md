@@ -7,10 +7,10 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **24** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **25** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0024-m62-s4e-preauth.json` |
-| **Snapshot SHA256** | `fdca01b4d34bc42089819874f3b9311d0107c7fd8010a6fbd814ba9b1b3871ac` |
+| **Latest snapshot** | `state/m62/snapshots/0025-m62-s4e-sep.json` |
+| **Snapshot SHA256** | `568dab2c51243c6778d416b15de7b9ac892c509608ecae90bf9444e935b92ed2` |
 | **Subject state commit** | `aabbda94c37d7496c0357dce5113bc0e8b6f68a3` (eval-v7 frozen; nothing trained, evaluated or promoted since) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
@@ -41,7 +41,7 @@ asks Git — not prose — about the branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-eval-v7-run` — declared by generation 23; generation 24 qualified Protocol V4 |
+| Branch | `jarvis-v69-eval-v7-run` — declared by generation 23; generation 25 qualified Protocol V4 |
 | Subject state commit | `aabbda94c37d7496c0357dce5113bc0e8b6f68a3` — the commit the current snapshot describes |
 | Training source commits | 003 `bac49c4a…`; 004 `80565d32…`; 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |

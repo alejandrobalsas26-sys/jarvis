@@ -322,14 +322,46 @@ def test_the_root_gitignore_covers_every_generated_evaluation_root():
         assert rule in body, rule
 
 
+#: Reviewed, hand-authored files the output tree may track. A CONFIG is source: it is
+#: read like any other source file and its digest is inside the plan hash an operator
+#: authorises. A GENERATED artefact is not, and none of them may ever appear here.
+_REVIEWED_EVALUATION_FILES = frozenset({
+    "jarvis/evaluation/.gitignore",
+    "jarvis/evaluation/README.md",
+    "jarvis/evaluation/configs/qwen3-0.6b-adapter-eval.json",
+    # V69 M62 S4E. Tracked DELIBERATELY: its digest is inside the Protocol V4 plan hash
+    # that an operator's EVAL token authorises, so a scientific result whose
+    # configuration lived only on one machine could never be re-derived by a reviewer.
+    # It names adapter runs and dataset digests -- identifiers, never task bodies.
+    "jarvis/evaluation/configs/m62-s4e-reference-pair-live.json",
+})
+
+
 def test_no_generated_evaluation_artifact_is_tracked():
-    """The output tree must contain only the reviewed template, its README and its
-    ignore file."""
+    """RESCOPED AT S4E: the property is "nothing GENERATED is tracked", not a file count.
+
+    The old assertion was a fixed three-element list, which is the state of the world at
+    its own milestone rather than the rule it protects. It is now asserted two ways, and
+    both are stricter than the list was:
+
+      * every tracked file is on the reviewed allowlist -- so a NEW tracked file fails
+        here until somebody adds it deliberately, exactly as before;
+      * and no tracked path has the SHAPE of a generated artefact, which the list could
+        never check. A generation directory, a results/scores/comparison stream, a
+        report, a manifest or a ledger is refused by shape whatever it is named.
+    """
     tracked = subprocess.run(  # noqa: S603 — fixed argv, no shell
         ["git", "ls-files", "jarvis/evaluation"], cwd=_repo_root(),
         capture_output=True, text=True, check=False).stdout.split()
-    assert sorted(tracked) == [
-        "jarvis/evaluation/.gitignore",
-        "jarvis/evaluation/README.md",
-        "jarvis/evaluation/configs/qwen3-0.6b-adapter-eval.json",
-    ], tracked
+    unexpected = sorted(set(tracked) - _REVIEWED_EVALUATION_FILES)
+    assert not unexpected, (
+        f"tracked evaluation files that are not on the reviewed allowlist: {unexpected}")
+
+    generated_shapes = ("/evaluations/", "/quarantine/", "/proposals/", "/reports/",
+                        "-results.jsonl", "-scores.jsonl", "paired-comparisons",
+                        "evaluation-report.json", "evaluation-manifest.json",
+                        "evaluation-plan.json", "task-pack", "metrics.json",
+                        "evaluation_runs.jsonl", "protocol-v4-attempts.jsonl")
+    for path in tracked:
+        for shape in generated_shapes:
+            assert shape not in path, f"a generated evaluation artefact is tracked: {path}"
