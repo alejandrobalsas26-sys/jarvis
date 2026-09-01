@@ -74,6 +74,9 @@ from scripts.verify_m62_control_plane import (
     COMPARISON_VERDICTS,
     EVAL_RECEIPT_V2_SCHEMA_VERSION,
     EVAL_RECEIPT_V3_SCHEMA_PATH,
+    EVAL_RECEIPT_V4_SCHEMA_PATH,
+    EVAL_RECEIPT_V4_SCHEMA_VERSION,
+    eval_receipt_v4_schema,
     EVAL_RECEIPT_V3_SCHEMA_VERSION,
     MEASUREMENT_WITNESS_SCHEMA_PATH,
     MODERN_EVAL_RECEIPT_VERSIONS,
@@ -177,11 +180,45 @@ def test_v2_still_builds_and_still_verifies_its_own_evidence(world):
     assert verify_receipt_payload(payload) == ()
 
 
-def test_only_v3_redefines_its_canonical_bytes_as_utf8():
-    """The UTF-8 definition is scoped to `.3`; `.1` and `.2` keep the ASCII rule."""
-    assert UTF8_CANONICAL_RECEIPT_VERSIONS == {EVAL_RECEIPT_V3_SCHEMA_VERSION}
+def test_the_utf8_redefinition_is_scoped_and_v1_v2_keep_the_ascii_rule():
+    """The property this test owns: the UTF-8 definition is SCOPED, not global.
+
+    RESCOPED in S4E on the S3N / S3S / S3X.1 / S4D precedent. The assertions were
+    written as set equalities pinning "exactly v2 and v3", which was the state of the
+    world at S3Q.0.2 rather than the property being protected. Protocol V4 adds
+    `m62.eval_receipt.4`, which defines its canonical bytes exactly as `.3` does.
+
+    What may never change, and is asserted directly rather than implied by a count:
+    `.1` and `.2` are NOT in the UTF-8 set, so they keep the ASCII rule their documents
+    were written and hashed under. A future version that quietly moved `.2` into the
+    UTF-8 set would still fail here.
+    """
+    assert EVAL_RECEIPT_V3_SCHEMA_VERSION in UTF8_CANONICAL_RECEIPT_VERSIONS
+    assert EVAL_RECEIPT_V4_SCHEMA_VERSION in UTF8_CANONICAL_RECEIPT_VERSIONS
+    assert "m62.eval_receipt.1" not in UTF8_CANONICAL_RECEIPT_VERSIONS
+    assert EVAL_RECEIPT_V2_SCHEMA_VERSION not in UTF8_CANONICAL_RECEIPT_VERSIONS
+    # A `.1` receipt is still not a modern one; `.2`, `.3` and `.4` are.
     assert MODERN_EVAL_RECEIPT_VERSIONS == {EVAL_RECEIPT_V2_SCHEMA_VERSION,
-                                            EVAL_RECEIPT_V3_SCHEMA_VERSION}
+                                            EVAL_RECEIPT_V3_SCHEMA_VERSION,
+                                            EVAL_RECEIPT_V4_SCHEMA_VERSION}
+    assert "m62.eval_receipt.1" not in MODERN_EVAL_RECEIPT_VERSIONS
+
+
+def test_the_published_v4_schema_is_the_one_the_verifier_enforces():
+    """S4E. The v4 file was an unenforced orphan until the verifier learned it."""
+    assert (REPO_ROOT / EVAL_RECEIPT_V4_SCHEMA_PATH).read_bytes() == \
+        canonical_bytes(eval_receipt_v4_schema())
+
+
+def test_the_v4_contract_has_no_field_a_bare_base_claim_could_occupy():
+    """`.3`'s `baseline` object is REMOVED, not repurposed. Impossibility by absence."""
+    schema = eval_receipt_v4_schema()
+    assert "baseline" not in schema["properties"]
+    assert "baseline" not in schema["required"]
+    for arm in ("reference_arm", "candidate_arm"):
+        properties = schema["properties"][arm]["properties"]
+        assert properties["adapter_attached"] == {"const": True}
+        assert properties["arm_type"] == {"const": "ADAPTER"}
 
 
 def test_the_published_v3_schema_is_the_one_the_verifier_enforces():

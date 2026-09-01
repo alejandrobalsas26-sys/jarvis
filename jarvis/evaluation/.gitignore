@@ -24,3 +24,8 @@ evaluation_runs.jsonl
 !README.md
 !.gitignore
 !configs/qwen3-0.6b-adapter-eval.json
+# V69 M62 S4E. The Protocol V4 configuration is TRACKED, deliberately. Its digest is
+# inside the V4 plan hash that an operator's EVAL token authorises, so a scientific
+# result whose configuration lived only on one machine could never be re-derived by a
+# reviewer. It names adapter runs and dataset digests -- identifiers, never task bodies.
+!configs/m62-s4e-reference-pair-live.json

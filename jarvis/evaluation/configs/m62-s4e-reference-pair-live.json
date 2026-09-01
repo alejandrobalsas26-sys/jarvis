@@ -1,0 +1,64 @@
+{
+  "schema_version": "m62.1",
+  "evaluation_schema_version": "m62.evaluation.1",
+  "evaluation_id": "m62-s4e-reference-pair-live",
+  "evaluation_generation": 1,
+  "baseline_model": {
+    "provider": "huggingface",
+    "model_id": "Qwen/Qwen3-0.6B",
+    "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "parameters_b": 0.6,
+    "family": "qwen3",
+    "tokenizer_id": "Qwen/Qwen3-0.6B",
+    "tokenizer_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "license_reference": "see the model card on the hub"
+  },
+  "candidate_adapter": {
+    "run_id": "qwen3-06b-lora-quality-live-005",
+    "expected_manifest_hash": "7442246c3d85f1007fe6885714ffbdbe7c53c6bfd251e3c36ca29ab7b489f78f",
+    "expected_plan_hash": "5a786af98351e14ad231c138549b9db0206a5bd96263b7b0a94b4e625e403423"
+  },
+  "dataset": {
+    "dataset_id": "m62-defensive-eval",
+    "dataset_version": "v7"
+  },
+  "splits": {
+    "splits": ["hidden_evaluation", "security_regression", "adversarial"],
+    "diagnostic_splits": []
+  },
+  "generation": {
+    "mode": "greedy_deterministic",
+    "max_new_tokens": 512,
+    "max_input_tokens": 4096,
+    "do_sample": false,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "stop_sequences": [],
+    "seed": 11,
+    "timeout_s": 300,
+    "batch_size": 1,
+    "truncation_side": "refuse",
+    "reasoning_policy": "disabled",
+    "device_policy": "cpu",
+    "precision_policy": "fp32"
+  },
+  "seed": 11,
+  "created_at_utc": "2026-09-01T00:00:00Z",
+  "limitations": [
+    "PROTOCOL V4: the reference arm is the qwen3-06b-lora-quality-live-004 ADAPTER, not a bare base model. Every metric, gate and delta named baseline is measured against a trained defensive adapter, so a null result is a materially stronger claim than the same null under the v1-v3 protocol and must never be read as one",
+    "the gate thresholds were never calibrated for base-vs-adapter and are not calibrated for adapter-vs-adapter either; thresholds_are_calibrated remains false and no threshold moved for this protocol",
+    "D28: the backend populates no proposed_tool_calls, so tool_call_validity_rate is VACUOUS and the six tool_call_schema tasks cannot decide eligibility",
+    "D29: refusal detection recognises a fixed phrase list that the held-out JSON refusal targets do not contain, so required-refusal measurement is instrument-limited in both directions",
+    "D33 is CLOSED FOR THIS PATH ONLY: runner_v4 enforces timeout_s against the wall clock and records timed-out generations in the denominator. The v1-v3 path is unchanged and its timeout_rate stays structurally vacuous",
+    "D38: output-budget exhaustion is a body-free diagnostic beside the input-truncation metric; no gate reads it and reaching the ceiling is not failure",
+    "D44 is FIXED and remains a gate: orchestrator body-blindness is preregistered and may not be relaxed now that it has failed once",
+    "the declared evaluation runtime .venv-m62-eval-linux is not executable on this host: it was built against /usr/bin/python3.13, which is no longer installed. The measurement runs in .venv-m62-train-py314, whose torch, transformers, peft, accelerate, safetensors, tokenizers, numpy and huggingface_hub versions are byte-identical to the evaluation profile; the interpreter differs (3.13.14 to 3.14.6). BOTH ARMS RUN IN ONE PROCESS UNDER ONE RUNTIME, so this is a deviation from the historical runtime and never a difference between the arms",
+    "the eval backend passes no torch_dtype and no device_map, so the declared cpu/fp32 posture is the library default rather than an applied setting. Identical for both arms and therefore not a single-axis violation; it is recorded because the receipt names the policy",
+    "36 held-out tasks authored by a single process support no calibrated percentage claim",
+    "all leakage evidence for eval-v7 is lexical and exact; semantic_similarity is NOT_QUALIFIED and is never reported as clean",
+    "candidates 001-004 remain non-comparable across holdouts: each was measured on a DIFFERENT corpus sharing zero task instances. eval-v7 is the first true head-to-head in this lineage and the only comparison it licenses is 004 against 005 on eval-v7"
+  ],
+  "notes": "V69 M62 S4E live reference-adapter paired evaluation under Protocol V4. REFERENCE arm qwen3-06b-lora-quality-live-004 (adapter a105e01c, manifest 162e93e3); CANDIDATE arm qwen3-06b-lora-quality-live-005 (adapter 52d6da26, manifest 7442246c). Both arms load Qwen/Qwen3-0.6B at revision c1899de2 with the same tokenizer and chat template, so the only variable is adapter identity. Fresh holdout m62-defensive-eval v7 (parent v6 413e6757), FROZEN_UNUSED, authored by S4D which may not run it. ONE paired attempt, ONE holdout spend, 36 tasks, 36 generations per arm, 72 total, no retry of any kind. Gate policy e5003319 unchanged and QG-2 absolute; statistics 663ebf65, families 580fbe91, metrics e07dd133 all unmoved. Security is a veto, never a weight. This configuration authorises nothing: a live run additionally requires a fresh single-use EVAL authority bound to the exact V4 plan hash."
+}

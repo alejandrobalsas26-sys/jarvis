@@ -37,6 +37,7 @@ from .comparison import (
     refusal_counts,
 )
 from .config import EvaluationRunState
+from .backends import PRODUCTION_BACKEND_IDS
 from .gates import GateFinding, GateKind, GateReport, GateSeverity
 from .plan import EvaluationPlan
 from .policy import EvaluationPolicySet
@@ -46,10 +47,28 @@ from .references import AdapterEvaluationReference, BaseModelEvaluationReference
 #: Bumped when the report's shape changes.
 REPORT_SCHEMA_VERSION = "m62.evaluation_report.1"
 
-#: Backends whose output is synthetic by construction. Listed by id so a report cannot
-#: claim to be live merely because a caller said so.
+#: Backends whose output is synthetic by construction. Kept for its exact message: these
+#: are the doubles this repository shipped, named so a report about one says so.
 SYNTHETIC_BACKEND_IDS: frozenset[str] = frozenset({
     "fake_evaluation", "fake_deterministic", "mock", "stub"})
+
+#: V69 M62 S4E. The ALLOWLIST that actually decides whether a run was live.
+#:
+#: This used to be decided by :data:`SYNTHETIC_BACKEND_IDS` alone, which is a DENYLIST of
+#: four names — so any double whose id was not one of those four classified as
+#: ``LIVE_MEASURED``, and ``decide_eligibility`` would then let synthetic numbers reach
+#: ``eligible_for_human_review``. The failure was open by construction: a new double is
+#: written far more often than this list is edited, and the S4E marker double
+#: (``marker_double``) reproduced it immediately.
+#:
+#: Live measurement is now a POSITIVE claim: a run is live only if every backend that
+#: answered is a reviewed production backend. Anything else — an unknown id, a new
+#: double, an empty string — is SYNTHETIC_ONLY, which is the safe direction and the one
+#: that cannot be reached by forgetting to update a list.
+#:
+#: This changes no historical classification: S3Q and S3Y both ran ``transformers_peft``
+#: alone and stay ``LIVE_MEASURED``.
+LIVE_BACKEND_IDS: frozenset[str] = frozenset(PRODUCTION_BACKEND_IDS)
 
 
 class ReportError(SchemaError):
@@ -95,7 +114,8 @@ def classify_empirical_status(*, backend_ids: Sequence[str], task_count: int,
     ids = {str(b).strip().lower() for b in backend_ids if str(b).strip()}
     if not ids:
         return EmpiricalStatus.INSUFFICIENT_EVIDENCE
-    if ids & SYNTHETIC_BACKEND_IDS:
+    # An ALLOWLIST, not a denylist. "Not a known double" is not evidence of a model.
+    if ids - LIVE_BACKEND_IDS:
         return EmpiricalStatus.SYNTHETIC_ONLY
     if measured_pairs <= 0:
         return EmpiricalStatus.INSUFFICIENT_EVIDENCE
@@ -270,12 +290,16 @@ class EvaluationReport:
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.decision.empirical_status.supports_eligibility and (
-                set(self.backend_ids) & SYNTHETIC_BACKEND_IDS):
+        non_live = sorted({str(b).strip().lower() for b in self.backend_ids
+                           if str(b).strip()} - LIVE_BACKEND_IDS)
+        if self.decision.empirical_status.supports_eligibility and non_live:
+            doubles = sorted(set(non_live) & SYNTHETIC_BACKEND_IDS)
+            # A known double is named as one; anything else is named as what it is —
+            # not a reviewed production backend. Both are refused identically.
+            reason = (f"backend(s) {doubles} are test doubles" if doubles else
+                      f"backend(s) {non_live} are not reviewed production backends")
             raise ReportError(
-                f"evaluation report: backend(s) "
-                f"{sorted(set(self.backend_ids) & SYNTHETIC_BACKEND_IDS)} are test "
-                f"doubles, so this report may not claim "
+                f"evaluation report: {reason}, so this report may not claim "
                 f"{self.decision.empirical_status.value}")
         if self.decision.eligibility.permits_human_review and \
                 not self.decision.empirical_status.supports_eligibility:
@@ -641,6 +665,7 @@ def decision_from_evidence(*, gate_report: object, bootstrap: object,
 
 
 __all__ = [
+    "LIVE_BACKEND_IDS",
     "REPORT_SCHEMA_VERSION", "REPORT_SERIALISATION_STATES", "SYNTHETIC_BACKEND_IDS",
     "CandidateEligibility",
     "EligibilityDecision", "EmpiricalStatus", "EvaluationReport", "ReportError",

@@ -49,9 +49,9 @@ which.
 
 The slot is named ``baseline`` because that is what the frozen scorer calls arm 0. It
 does NOT mean "a bare base model answered". :class:`V4ArmBinding` is returned alongside
-and says, in digests, exactly which adapter occupied which slot; the V4 receipt and the
-``protocol-v4-arms.json`` artefact carry it. A reader is never left to infer it from a
-filename.
+and says, in digests, exactly which adapter occupied which slot; the durable
+paired-attempt record and the sealed v4 receipt both carry it, and the report carries it
+in prose. A reader is never left to infer it from a filename.
 
 WHAT IS COUNTED, AND WHERE
 --------------------------
@@ -65,7 +65,7 @@ import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -666,6 +666,28 @@ def run_paired_v4_evaluation(
             except Exception as exc:  # noqa: BLE001 — the message IS the finding
                 blockers.append(str(exc))
 
+        # ── request role -> ARM SLOT, after the request check and never before ──
+        # Two different things share the name "role" and this is where they part.
+        #
+        # On the REQUEST it means "what kind of arm is this", and under Protocol V4 both
+        # arms are CANDIDATE because both are adapter-bearing. That is what lets both
+        # arms take the identical backend branch, and ``check_result_matches_request``
+        # above has just used it to prove each backend answered the request it was given.
+        #
+        # On the RESULT, every downstream consumer reads it as WHICH SLOT OF THE
+        # COMPARISON this is: ``compare_pair`` fills ``baseline_score``/``candidate_score``
+        # from it, ``build_arm_metrics`` labels the bundle with it, and
+        # ``build_score_evidence`` REFUSES to file a score whose role disagrees with its
+        # slot -- correctly, because that refusal is what stops one arm's answer being
+        # attributed to the other.
+        #
+        # So arm 0 is relabelled to BASELINE here, meaning "arm 0", which is exactly what
+        # the frozen measurement layer means by the word. It is not a claim that no
+        # adapter was attached: that claim lives in ``V4ArmBinding``, which records
+        # ``baseline_slot_is_a_bare_base_model: False`` and both arms' digests.
+        ref_result = _as_arm_slot(ref_result, EvaluationRole.BASELINE)
+        cand_result = _as_arm_slot(cand_result, EvaluationRole.CANDIDATE)
+
         status, pair_warnings = _classify(ref_result, cand_result, ceilings)
         if blockers:
             status = PairedStatus.INSUFFICIENT_EVIDENCE
@@ -708,6 +730,17 @@ def run_paired_v4_evaluation(
         abandoned_workers=abandoned, parity_proved_tasks=parity_proved,
         cross_arm_context_checks=context_checks)
     return run, evidence
+
+
+def _as_arm_slot(result: EvaluationResult, slot: EvaluationRole) -> EvaluationResult:
+    """Stamp the comparison SLOT onto a result, changing nothing else.
+
+    Rebuilt through the dataclass rather than mutated, so every field keeps its
+    validation and the parity hash the backend recorded travels with it untouched.
+    """
+    if result.role is slot:
+        return result
+    return replace(result, role=slot)
 
 
 def _release_both_v4(*backends: object) -> CleanupStatus:
