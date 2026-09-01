@@ -311,6 +311,12 @@ def test_the_task_order_hash_refuses_a_repeated_id():
 
 
 def test_the_task_order_hash_names_no_task():
-    """It binds the sequence exactly while publishing none of it."""
-    digest = task_order_hash(("he7-report-01", "he7-report-02"))
-    assert "he7" not in digest and len(digest) == 64
+    """It binds the sequence exactly while publishing none of it.
+
+    The probe ids are SYNTHETIC. An earlier draft of this test used two real eval-v7
+    ids to make the point, which wrote the live exam's contents list into a tracked
+    file -- the precise thing the id firewall exists to prevent. A synthetic pair
+    proves the property identically and leaks nothing.
+    """
+    digest = task_order_hash(("synthetic-report-01", "synthetic-report-02"))
+    assert "synthetic" not in digest and len(digest) == 64
