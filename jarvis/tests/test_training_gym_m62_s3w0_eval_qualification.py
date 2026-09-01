@@ -369,17 +369,53 @@ def test_candidate_004_evaluation_evidence_exists_only_under_the_s3y_generation(
         f"{CANDIDATE}.eval.json", f"{CANDIDATE}.train.json"]
 
     permitted = f"evaluations/{S3Y_EVALUATION_ID}/"
+    # RESCOPED AGAIN AT S4E, on the precedent this test's own docstring sets.
+    #
+    # Protocol V4 creates a category that did not exist when the gate was written:
+    # candidate 004 appearing in ANOTHER candidate's evaluation as the declared REFERENCE
+    # ARM. That is not candidate-004 evaluation evidence -- no measurement of candidate
+    # 004 is produced, its eval-v6 provenance is untouched, and its HOLD is unchanged --
+    # but it is candidate 004's identifier in this tree, which is what the gate scans for.
+    #
+    # So the S4E configuration is permitted BY NAME, and the property that actually
+    # matters is asserted directly below: it may name 004 as a reference and may never
+    # name it as the candidate under measurement. Everything else the gate owns is
+    # unchanged, including the part that was never about candidate 004 -- no eval-v5 pack
+    # or manifest may appear anywhere in this tree, spent or not.
+    s4e_config = "configs/m62-s4e-reference-pair-live.json"
     evaluation_root = JARVIS_ROOT / "evaluation"
     if evaluation_root.is_dir():
         for path in evaluation_root.rglob("*"):
             if path.is_file():
                 text = path.read_text("utf-8", errors="ignore")
+                posix = path.as_posix()
                 if CANDIDATE in text:
-                    assert permitted in path.as_posix(), (
+                    assert permitted in posix or posix.endswith(s4e_config), (
                         f"candidate-004 evaluation evidence outside the authorised S3Y "
                         f"generation: {path}")
                 assert V5_PACK not in text, path
                 assert V5_MANIFEST not in text, path
+
+
+def test_the_s4e_config_binds_candidate_004_as_a_reference_and_never_as_the_subject():
+    """The property the S4E rescope above must not have given away.
+
+    Candidate 004 may appear in the Protocol V4 configuration as the REFERENCE arm. It
+    may never appear as ``candidate_adapter``, because that would be a second measurement
+    of a candidate whose evaluation is sealed and whose decision is HOLD.
+    """
+    import json
+
+    path = JARVIS_ROOT / "evaluation/configs/m62-s4e-reference-pair-live.json"
+    if not path.is_file():
+        pytest.skip("the S4E configuration is not present on this host")
+    config = json.loads(path.read_text("utf-8"))
+    assert config["candidate_adapter"]["run_id"] != CANDIDATE
+    assert config["candidate_adapter"]["run_id"] == "qwen3-06b-lora-quality-live-005"
+    # 004 appears only in prose that declares it the reference arm.
+    for value in (config.get("notes", ""), *config.get("limitations", ())):
+        if CANDIDATE in value:
+            assert "REFERENCE" in value or "reference" in value, value
 
 
 # ── 5. the policies the next ceremony must run under are the recorded ones ───────────

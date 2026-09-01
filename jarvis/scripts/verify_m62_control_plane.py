@@ -4684,6 +4684,30 @@ def _parent_snapshot(cp: ControlPlane) -> "dict | None":
     return None
 
 
+#: V69 M62 S4E. The four frozen scorer digests, pinned HERE as well as in the suites.
+#:
+#: ``policy_identities`` in the snapshot carries only the gate and metric digests, and its
+#: schema is closed, so the statistics and family policies were re-derived by NOTHING the
+#: verifier runs -- they were pinned only by pytest, which an evaluation does not gate on.
+#: A change to ``StatisticalPolicy.min_pairs_for_claim`` or ``regression_margin``, or to
+#: ``TaskFamilyPolicy``, would therefore have moved what the gates mean while the control
+#: plane reported PASS.
+#:
+#: Pinned as verifier constants rather than added to the snapshot because that is the
+#: pattern ``FROZEN_DATASETS`` and ``EVAL_V7_PACK_HASH`` already set: an INDEPENDENT
+#: ANCHOR, not a second writable copy of the state.
+FROZEN_POLICY_DIGESTS: dict[str, str] = {
+    "gate_policy_hash":
+        "e50033194afeb7680815b1f11268cce4e0fe1549c4334c8257883603ea8f73c5",
+    "metric_policy_hash":
+        "e07dd133419978396d7ada706bab20b35b6250982c21a0ea7933750e9cd72e1a",
+    "statistical_policy_hash":
+        "663ebf65b73536fe3bd41043568a1f737ff751a43a964d14ff67c4e12662bf18",
+    "family_policy_hash":
+        "580fbe9104cbe684f702cba016e1191c83745fb8502642636c3fc885135065b1",
+}
+
+
 def check_policy_identities(cp: ControlPlane, report: Report) -> None:
     """V21 — re-derive the policy digests from the production classes, do not read them."""
     declared = cp.snapshot.get("policy_identities", {})
@@ -4693,13 +4717,28 @@ def check_policy_identities(cp: ControlPlane, report: Report) -> None:
         from training_gym.evaluation.gates import GatePolicy
         from training_gym.evaluation.generation import (
             DevicePolicy, PrecisionPolicy, eligibility_generation_policy)
-        from training_gym.evaluation.policy import MetricPolicy
+        from training_gym.evaluation.policy import (
+            MetricPolicy, StatisticalPolicy, TaskFamilyPolicy)
     except Exception as exc:  # pragma: no cover - environment failure, reported not hidden
         report.fail("POLICY_IDENTITIES",
                     f"the production policy classes could not be imported ({exc}); the "
                     f"declared digests are therefore UNVERIFIED, which is a failure and "
                     f"not a pass")
         return
+
+    # All FOUR scorer digests, re-derived from the production classes and compared with
+    # the frozen anchor. The two the snapshot cannot carry are checked here or nowhere.
+    for name, derived in (
+            ("gate_policy_hash", GatePolicy().policy_hash()),
+            ("metric_policy_hash", MetricPolicy().policy_hash()),
+            ("statistical_policy_hash", StatisticalPolicy().policy_hash()),
+            ("family_policy_hash", TaskFamilyPolicy().policy_hash())):
+        if derived != FROZEN_POLICY_DIGESTS[name]:
+            report.fail("POLICY_IDENTITIES",
+                        f"{name}: the production class re-derives {derived}, the frozen "
+                        f"anchor is {FROZEN_POLICY_DIGESTS[name]}. A scorer that moved is "
+                        f"a different instrument, and every gate threshold it carries was "
+                        f"calibrated against the old one")
 
     configured = eligibility_generation_policy(
         seed=11, timeout_s=300, device_policy=DevicePolicy.CPU,
