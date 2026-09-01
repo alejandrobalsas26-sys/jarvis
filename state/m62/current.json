@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0021-m62-s4d-eval-v7-design-branch.json",
-  "latest_snapshot_sha256": "a03f7612655a52f8de358ec783f875f96a420cfc409226927361098be6d98e01",
+  "latest_snapshot_path": "state/m62/snapshots/0022-m62-s4d-eval-v7-frozen.json",
+  "latest_snapshot_sha256": "1ee9a932ab26a341236d4867da46de28753d06b36d4e4757bbea28454ede0c7b",
   "schema_version": "m62.control_plane.3",
-  "state_generation": 21,
-  "subject_state_commit": "dafcbe5cf55cb1a1b7ba7b16209174c5faff38ea",
+  "state_generation": 22,
+  "subject_state_commit": "43dd284e21b745adf926285e3ccd3fd2beab1efa",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

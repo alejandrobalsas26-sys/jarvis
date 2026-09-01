@@ -151,8 +151,19 @@ def _snapshot():
 #  1-4. v6 exists as a NEW version, with a declared lineage
 # ══════════════════════════════════════════════════════════════════════════════
 def test_v6_is_a_new_version_and_the_old_ones_still_exist():
-    assert sorted(BC.CORPUS_VERSIONS) == ["v1", "v2", "v3", "v4", "v5", "v6"]
-    assert BC.LATEST_DATASET_VERSION == "v6"
+    """RESCOPED at S4D, on the precedent S3N, S3S and S3X.1 each set and documented.
+
+    The sealed spelling pinned "the version list is exactly v1-v6" and
+    ``LATEST_DATASET_VERSION == "v6"``. Both asserted the state of the world at S3X.1
+    rather than the property this test owns: **v6 is a new version and no earlier one was
+    replaced by it.** ``LATEST_DATASET_VERSION`` names the version a FUTURE evaluation must
+    bind, so it moves by design the moment a successor is frozen -- S4D froze ``v7``.
+    Pinning it here would have made every later freeze a failure of this file.
+    """
+    assert "v6" in BC.CORPUS_VERSIONS
+    for earlier in ("v1", "v2", "v3", "v4", "v5"):
+        assert earlier in BC.CORPUS_VERSIONS
+    assert len(BC.CORPUS_VERSIONS["v6"]()) == 36
 
 
 def test_v6_declares_an_explicit_lineage_onto_v5_rather_than_discovering_one():
@@ -330,7 +341,11 @@ def test_v6_is_one_of_the_held_out_versions_the_training_corpus_is_checked_again
     material it contains would still be contamination.
     """
     assert "v6" in QC.HELD_OUT_VERSIONS
-    assert sorted(QC.HELD_OUT_VERSIONS) == ["v1", "v2", "v3", "v4", "v5", "v6"]
+    # RESCOPED at S4D. The exact tuple was the roster at S3X.1, not the property owned
+    # here: every holdout that exists must be checked against, and none may leave. A
+    # successor being added is the tuple working, not the tuple breaking.
+    for earlier in ("v1", "v2", "v3", "v4", "v5"):
+        assert earlier in QC.HELD_OUT_VERSIONS
 
 
 @pytest.mark.parametrize("train_version", ("v1", "v2"))
