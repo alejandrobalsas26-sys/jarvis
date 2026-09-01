@@ -252,6 +252,49 @@ requires.
 
 ---
 
+## 6.5 — Arm order, and the retry matrix
+
+### Arm order is the frozen rule, reported in V4 vocabulary
+
+The S4D preregistration freezes generation order as "a property of the plan, not of a
+choice made after results exist", and does not name a policy. S4E therefore binds the
+**existing** rule rather than inventing a second one:
+
+```
+ORDER_POLICY  balanced_by_task_hash_and_seed
+RULE          sha256(f"{task_hash}:{seed}")  -- the byte-identical v1-v3 arithmetic
+BALANCE       18 reference-first / 18 candidate-first over the 36 frozen tasks
+BOUND AS      arm_order_assignment_hash, inside the plan hash
+```
+
+Always running the reference first would make "first" and "reference" the same variable.
+The rule is derived from the task hash and the seed — never from position, difficulty, or
+anything correlated with the expected answer — and the full assignment is re-derived and
+compared at the TOCTOU seam **before** the holdout is touched. A test asserts the order
+depends on the task hash and seed and on nothing else.
+
+### The retry matrix, stated finitely
+
+| Class | Example | Holdout | What is permitted |
+|---|---|---|---|
+| **PRE-SPEND failure** | blocked plan, TOCTOU drift, wrong reference adapter, reordered pack, unrecordable spend | **UNSPENT** | the fault is fixed and a NEW plan is derived. Nothing is carried over — the source head moved, so the old hash is dead |
+| **POST-SPEND resumable** | infrastructure interruption where continuation identity is provable | **SPENT** | `SAME_ATTEMPT` recovery only, and only where the evaluator proves identity preservation. Never a fresh attempt |
+| **POST-SPEND non-resumable** | crash, quarantine, durability failure | **SPENT** | nothing automatic. An explicit operator recovery ruling, or the loss is recorded |
+| **QUALITY result** | a regression, a wide interval, a number nobody likes | **SPENT** | **NOTHING. Ever.** |
+
+The last row is the load-bearing one and it is enforced structurally rather than promised:
+there is no retry loop anywhere under `training_gym/evaluation/`; `_invoke` calls
+`backend.generate` exactly once and converts a crash into a recorded failure that stays in
+the denominator; scoring runs only after the entire pack completes, so no score can reach
+a generation; and `GenerationLedger` refuses any run that produced a second answer to one
+task, naming it a retry. `PairedSpendPlan` and the v4 receipt both carry
+`retry_authorized: false` as a constant, not a field.
+
+A poor validation loss is not an infrastructure failure. A disliked result is not a
+recoverable one.
+
+---
+
 ## 7 — Capacity, proved before the spend
 
 Discovering *after* `eval-v7` is spent that the repository cannot record what it measured
