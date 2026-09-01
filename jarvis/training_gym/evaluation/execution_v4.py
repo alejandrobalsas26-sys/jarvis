@@ -175,6 +175,8 @@ class V4ExecutionRequest:
     limitations: Sequence[str] = ()
     mandatory_families: Sequence[str] = ()
     extra_blockers: Sequence[str] = field(default_factory=tuple)
+    #: Body-free per-arm progress. Receives task index, task id, arm, status, latency.
+    on_arm_complete: "Callable[[dict], None] | None" = None
 
 
 def execute_v4_evaluation(request: V4ExecutionRequest) -> V4ExecutionOutcome:
@@ -305,7 +307,8 @@ def _run(request: V4ExecutionRequest, outcome: V4ExecutionOutcome, directory: Pa
         model_cache_root=request.model_cache_root,
         before_first_model_facing_invoke=_spend_callback(
             request, outcome, identity=identity,
-            backend_id=str(getattr(candidate_backend, "backend_id", ""))))
+            backend_id=str(getattr(candidate_backend, "backend_id", ""))),
+        on_arm_complete=request.on_arm_complete)
     outcome.evidence = evidence
     outcome.reference_generations = evidence.ledger.reference
     outcome.candidate_generations = evidence.ledger.candidate

@@ -455,7 +455,8 @@ def run_paired_v4_evaluation(
         resources: ResourceCeilings | None = None,
         model_cache_root: Path | None = None,
         cancellation: CancellationToken | None = None,
-        before_first_model_facing_invoke: "Callable[[dict], None] | None" = None
+        before_first_model_facing_invoke: "Callable[[dict], None] | None" = None,
+        on_arm_complete: "Callable[[dict], None] | None" = None
         ) -> tuple[PairedRun, V4RunEvidence]:
     """Answer every frozen task with BOTH adapters, exactly once each.
 
@@ -467,6 +468,11 @@ def run_paired_v4_evaluation(
     requests exist and their parity is proved, and immediately before the first backend
     call. It is where a caller makes the holdout spend durable. If it raises, no backend
     is called and nothing is spent.
+
+    ``on_arm_complete`` fires after each arm answers, with BODY-FREE facts only: the task
+    index, the task id, which arm, the status and the latency. There is no field it could
+    put a prompt or a response in, so a progress display cannot leak the exam even if a
+    caller prints everything it is handed.
     """
     reference_backend = require_backend(reference_backend)
     candidate_backend = require_backend(candidate_backend)
@@ -565,6 +571,17 @@ def run_paired_v4_evaluation(
         if outcome.abandoned_worker:
             abandoned += 1
         result = outcome.result
+        if on_arm_complete is not None:
+            # Body-free by construction: five fields, none of which can hold text a
+            # model produced or a task asked.
+            on_arm_complete({
+                "task_index": len(generations) + 1,
+                "task_count": len(pack),
+                "task_id": request.task.task_id,
+                "arm": arm.value,
+                "status": getattr(getattr(result, "status", None), "value", "unknown"),
+                "latency_ms": int(getattr(result, "latency_ms", 0) or 0),
+            })
         if not isinstance(result, EvaluationResult):
             return EvaluationResult(
                 backend_id=str(getattr(backend, "backend_id", "unknown")),

@@ -322,6 +322,66 @@ is **not** raised.
 
 ---
 
+## 7.5 — D-S4E-5 · the plan nobody could execute
+
+**Found after the operator's token arrived, with the holdout still unspent.**
+
+The first preauth reported `V4_REAL_EXECUTOR: PASS`. That was true of the MODULE and
+false of the COMMAND. `execute_v4_evaluation` was complete and proven against doubles,
+and a grep for its production callers returned only tests:
+
+```
+jarvis/tests/..._s4e_fault_injection.py:210    return execute_v4_evaluation(request), plan
+jarvis/training_gym/evaluation/execution_v4.py:180   def execute_v4_evaluation(...)
+```
+
+`evaluate_reference_pair.py` registered `--check-artifacts`, `--print-plan` and
+`--derive-plan`. It accepted a `--confirm` argument that **nothing consumed**. So the
+frozen plan described a source state in which no tracked entry point could take an
+operator's token and run the exam.
+
+### Why the run stopped instead of improvising
+
+The measurement could have been driven by an ad-hoc script importing the frozen modules.
+That was refused for four reasons, any one of which is sufficient:
+
+1. the receipt binds `evaluation_source_commit`, and code outside that commit is code a
+   reviewer cannot obtain;
+2. `build_receipt_v3` refuses to seal from a dirty worktree in exactly these words — *"a
+   receipt built from uncommitted code names a seal implementation source that nobody
+   else can obtain"* — so the run would have measured and then been unable to seal, with
+   the holdout already spent;
+3. the token authorises a PLAN, and the plan's entire purpose is to bind the state of the
+   world that will do the measuring. Measuring with something else means the token
+   authorised something other than what happened;
+4. writing a private runner to avoid re-deriving a hash is precisely the shortcut this
+   milestone was told to assume is a bug.
+
+This is a **PRE-SPEND failure** in the retry matrix of §6.5: the fault is fixed, a NEW
+plan is derived, and nothing is carried over. `eval-v7` was never opened.
+
+### What was added
+
+`--execute`, which is now the only mode that can reach a model, and which:
+
+* re-derives the plan from the state of the world and checks the token against **that**,
+  never against a remembered hash;
+* refuses a blocked plan before the authority is even examined;
+* asks the CONTROL PLANE, independently of any ledger, whether this holdout is still
+  `FROZEN_UNUSED` with `spent_by` null — because a ledger lives in an output root a
+  caller chooses, and the recorded scientific state does not;
+* emits body-free progress: a closed six-field record with no slot a prompt or a response
+  could occupy, and the printed line names the arm and the index but **not** the task,
+  since a per-task id printed 72 times is the exam's contents list read aloud.
+
+`tests/..._s4e_execute_cli.py` (28 tests) asserts the command exists, that `_execute`
+actually calls both `check_v4_confirmation` and `execute_v4_evaluation`, that no other
+mode can reach the orchestrator, that 16 token shapes are refused, and that the
+control-plane guard refuses spent `eval-v6` while passing unspent `eval-v7` — so the
+guard is not vacuous.
+
+---
+
 ## 8 — What this milestone did not do
 
 - did not train anything, and created no candidate 006

@@ -498,6 +498,118 @@ def _args_dict(args) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  --execute : the ONLY mode that may load a weight
+# ══════════════════════════════════════════════════════════════════════════════
+def _control_plane_blockers(dataset_id: str, dataset_version: str) -> list[str]:
+    """Refuse unless the CONTROL PLANE still says this holdout is unspent.
+
+    The ledger guard in ``store_v4`` protects against a second attempt in the same
+    output root. This is the independent second opinion: the recorded scientific state
+    of the repository. If the control plane says the corpus is spent, no ledger anywhere
+    makes it unspent, and the run stops before an authority is consumed.
+    """
+    from scripts.verify_m62_control_plane import load_semantic_snapshot
+
+    problems: list[str] = []
+    snapshot = load_semantic_snapshot(REPO_ROOT)
+    entry = next((d for d in snapshot.get("datasets", ())
+                  if d.get("dataset_id") == dataset_id
+                  and d.get("version") == dataset_version), None)
+    if entry is None:
+        return [f"the control plane does not record {dataset_id} {dataset_version}; a "
+                f"holdout the state machine has never heard of is not one to spend"]
+    if entry.get("status") != "FROZEN_UNUSED":
+        problems.append(
+            f"the control plane records {dataset_id} {dataset_version} as "
+            f"{entry.get('status')!r}, not FROZEN_UNUSED. A spent holdout is never "
+            f"re-spent")
+    if entry.get("spent_by") is not None:
+        problems.append(
+            f"{dataset_id} {dataset_version} already names a spender: "
+            f"{entry.get('spent_by')!r}")
+    return problems
+
+
+def _progress(body: dict) -> None:
+    """BODY-FREE progress. Prints five fields, none of which can hold task material."""
+    print(f"TASK {body['task_index']:02d}/{body['task_count']:02d} "
+          f"{body['arm'].upper():9s} {body['status']:9s} "
+          f"{body['latency_ms'] // 1000:4d}s", flush=True)
+
+
+def _execute(args) -> int:
+    """Consume ONE authority and run ONE paired attempt. Everything else has refused."""
+    from training_gym.evaluation.execution_v4 import (
+        V4ExecutionRequest,
+        execute_v4_evaluation,
+    )
+    from training_gym.evaluation.execution import production_backend_factory
+    from training_gym.evaluation.plan_v4 import check_v4_confirmation
+
+    config, baseline, reference, candidate, plan, _identity = build_v4_plan(args)
+    if plan is None:
+        return _fail("no pairing could be built; both arms need a sealed training receipt",
+                     code=EXIT_PLAN)
+    if not plan.is_executable:
+        return _fail(f"the plan carries blockers and authorises nothing: "
+                     f"{list(plan.blockers) or list(plan.inner.blockers)}", code=EXIT_PLAN)
+
+    # THE AUTHORITY GATE. Checked before anything else reaches for a model, and against
+    # the plan just re-derived from the state of the world rather than a remembered one.
+    try:
+        check_v4_confirmation(args.confirm, plan)
+    except Exception as exc:  # noqa: BLE001 — the refusal IS the answer
+        return _fail(f"{type(exc).__name__}: {exc}", code=EXIT_CONFIRMATION)
+
+    blockers = _control_plane_blockers(plan.holdout_dataset_id,
+                                       plan.holdout_dataset_version)
+    if blockers:
+        return _fail("; ".join(blockers), code=EXIT_PLAN)
+
+    print(f"EVAL_AUTHORITY_CONSUMED plan={plan.plan_hash()[:12]} "
+          f"arms=2 tasks={plan.spend.task_count} "
+          f"generations={plan.expected_total_generations} spends=1", flush=True)
+
+    outcome = execute_v4_evaluation(V4ExecutionRequest(
+        config=config, plan=plan, baseline=baseline,
+        reference_adapter=reference, candidate_adapter=candidate,
+        reference_adapter_directory=Path(args.training_root) / "runs"
+        / args.reference_run_id,
+        candidate_adapter_directory=Path(args.training_root) / "runs"
+        / config.candidate_adapter.run_id,
+        output_root=Path(args.output_root), dataset_root=Path(args.dataset_root),
+        backend_factory=production_backend_factory(BACKEND_ID),
+        model_cache_root=Path(args.model_cache_root) if args.model_cache_root else None,
+        actor=args.actor, at=_utc_now(), backend_version=_backend_version(),
+        limitations=config.limitations,
+        on_arm_complete=_progress))
+
+    _emit({
+        "status": "completed" if outcome.ok else outcome.state.value,
+        "plan_hash": plan.plan_hash(),
+        **outcome.to_dict(),
+        "generation_directory": (outcome.directory.name if outcome.directory else ""),
+    })
+    return EXIT_OK if outcome.ok else EXIT_REFUSED
+
+
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _backend_version() -> str:
+    import importlib.metadata as meta
+    parts = []
+    for package in ("transformers", "peft", "torch"):
+        try:
+            parts.append(f"{package}={meta.version(package)}")
+        except Exception:  # noqa: BLE001
+            parts.append(f"{package}=absent")
+    return " ".join(parts)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Protocol V4 reference-adapter paired evaluation.")
@@ -519,6 +631,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--check-artifacts", action="store_true")
     mode.add_argument("--print-plan", action="store_true")
     mode.add_argument("--derive-plan", action="store_true")
+    mode.add_argument("--execute", action="store_true",
+                      help="consume ONE authority and run ONE paired attempt")
+    parser.add_argument("--actor", default="local-operator")
     parser.add_argument("--confirm", default="",
                         help="EVAL:<full-plan-hash>; required by --execute")
     return parser
@@ -533,6 +648,8 @@ def main(argv: list[str] | None = None) -> int:
             return _print_plan(args)
         if args.derive_plan:
             return _derive_plan(args)
+        if args.execute:
+            return _execute(args)
     except Exception as exc:  # noqa: BLE001 — the refusal IS the answer, never a traceback
         return _fail(f"{type(exc).__name__}: {exc}")
     return EXIT_REFUSED
