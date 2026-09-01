@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **22** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **23** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0022-m62-s4d-eval-v7-frozen.json` |
-| **Snapshot SHA256** | `1ee9a932ab26a341236d4867da46de28753d06b36d4e4757bbea28454ede0c7b` |
-| **Subject state commit** | `43dd284e21b745adf926285e3ccd3fd2beab1efa` (eval-v7 frozen; nothing trained, evaluated or promoted since) |
+| **Latest snapshot** | `state/m62/snapshots/0023-m62-s4e-run-branch.json` |
+| **Snapshot SHA256** | `1fcd3028b56670545e4dfca59d1b41631bbf9f4ecbfad65613d7f5195fca91a5` |
+| **Subject state commit** | `4b74ddaa7c28ef885945ec12a3b257faf35026a1` (eval-v7 frozen; nothing trained, evaluated or promoted since) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -41,8 +41,8 @@ asks Git — not prose — about the branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-eval-v7-design` — declared by generation 21; generation 22 froze `eval-v7` |
-| Subject state commit | `43dd284e21b745adf926285e3ccd3fd2beab1efa` — the commit the current snapshot describes |
+| Branch | `jarvis-v69-eval-v7-run` — declared by generation 23; generation 22 froze `eval-v7` |
+| Subject state commit | `4b74ddaa7c28ef885945ec12a3b257faf35026a1` — the commit the current snapshot describes |
 | Training source commits | 003 `bac49c4a…`; 004 `80565d32…`; 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
