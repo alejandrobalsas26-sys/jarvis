@@ -344,12 +344,31 @@ def _eval_v6_task_ids() -> tuple[str, ...]:
 
 EVAL_V6_TASK_IDS = _eval_v6_task_ids()
 
+
+#: The 36 `eval-v7` task ids, from the body-free convention recorded in
+#: `V69_M62_S4D_EVAL_V7_FREEZE.md`. Now the most load-bearing set of the four: `v7` is
+#: FROZEN_UNUSED, fresh, and is the corpus the FIRST reference-adapter comparison will
+#: actually be judged against, so a surface naming one of its tasks leaks the live exam
+#: for BOTH arms at once.
+def _eval_v7_task_ids() -> tuple[str, ...]:
+    groups = (
+        ("he7-report-", 4), ("he7-evidence-", 4), ("he7-tool-", 2), ("he7-refusal-", 2),
+        ("sr7-refusal-", 6), ("sr7-safe-", 6),
+        ("adv7-refusal-", 4), ("adv7-report-", 3), ("adv7-evidence-", 3),
+        ("adv7-tool-", 2),
+    )
+    return tuple(f"{stem}{n:02d}" for stem, count in groups for n in range(1, count + 1))
+
+
+EVAL_V7_TASK_IDS = _eval_v7_task_ids()
+
 #: `version -> its task ids`. Every holdout whose ids a scanned surface must not name.
 #: A version missing from this map is a version no firewall check ever looks for.
 HELD_OUT_TASK_IDS: dict[str, tuple[str, ...]] = {
     "v4": EVAL_V4_TASK_IDS,
     "v5": EVAL_V5_TASK_IDS,
     "v6": EVAL_V6_TASK_IDS,
+    "v7": EVAL_V7_TASK_IDS,
 }
 
 # ── Closed vocabularies ──────────────────────────────────────────────────────────────
@@ -449,6 +468,7 @@ DATASET_ROLES = ("TRAINING_CORPUS", "EVALUATION_HOLDOUT")
 EVAL_V4_PACK_HASH = "95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7"
 EVAL_V5_PACK_HASH = "287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6"
 EVAL_V6_PACK_HASH = "41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16"
+EVAL_V7_PACK_HASH = "e6d8d0b28aa0c5e6c9d186ccc9f2c52371617ee46133199f73e25cbaf1750838"
 
 #: ``"<dataset_id> <version>" -> (status, manifest_hash)``
 FROZEN_DATASETS: dict[str, tuple[str, str]] = {
@@ -477,6 +497,14 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
     "m62-defensive-eval v5": (
         "FROZEN_UNUSED",
         "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"),
+    # S4D froze v7 candidate-blind, for the FIRST reference-adapter comparison: candidate
+    # 004 as the REFERENCE arm and candidate 005 as the CANDIDATE arm, one paired attempt,
+    # ONE spend. FROZEN_UNUSED is a scientific claim and not a label: no model has ever
+    # read it. The one legal transition out is guarded by EVAL_AUTHORITY_CONSUMED, and
+    # there is no edge back.
+    "m62-defensive-eval v7": (
+        "FROZEN_UNUSED",
+        "e80cc46fa0b2c1ec020ed02f9565d778772d8e76dd208f2ba49349ab199b369a"),
     # RE-QUOTED AT S3Y, from the milestone that sealed the transition. S3X.1 froze v6
     # candidate-blind as the replacement the v5 ELIGIBILITY retirement requires; S3Y then
     # spent it on candidate 004 under ONE external human EVAL authority, which is the only
@@ -2967,6 +2995,22 @@ def check_dataset_state(cp: ControlPlane, report: Report) -> None:
         if v6.get("task_count") != 36:
             report.fail("DATASET_STATE",
                         f"eval-v6 declares {v6.get('task_count')} tasks, not 36")
+
+    v7 = by_key.get("m62-defensive-eval v7", {})
+    if v7:
+        if v7.get("parent_manifest_hash") != FROZEN_DATASETS["m62-defensive-eval v6"][1]:
+            report.fail("DATASET_STATE",
+                        "eval-v7's parent is not eval-v6's frozen manifest; the D34 "
+                        "lineage rule is that a parent is DECLARED, never discovered, and "
+                        "a SPENT parent is still a parent -- spending rules on what may "
+                        "be measured against, not on where a corpus came from")
+        if v7.get("pack_hash") != EVAL_V7_PACK_HASH:
+            report.fail("DATASET_STATE",
+                        f"eval-v7's pack_hash {v7.get('pack_hash')} != the frozen S4D "
+                        f"value {EVAL_V7_PACK_HASH}")
+        if v7.get("task_count") != 36:
+            report.fail("DATASET_STATE",
+                        f"eval-v7 declares {v7.get('task_count')} tasks, not 36")
 
     for entry in datasets:
         role = entry.get("role")
