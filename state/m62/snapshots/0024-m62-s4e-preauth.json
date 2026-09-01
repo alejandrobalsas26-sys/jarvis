@@ -1,0 +1,82 @@
+{
+  "authority_observation": {
+    "control_plane_can_grant_authority": false,
+    "eval": "NONE_OBSERVED_IN_REPOSITORY",
+    "note": "An OBSERVATION, never a grant. Tokens live outside the repository, so this is measured as 'no tracked file carries one' and is not proof none exists elsewhere. Every authority stays governed by the single-use plan-token mechanism plus an explicit human decision.",
+    "promotion": "NONE_OBSERVED_IN_REPOSITORY",
+    "train": "NONE_OBSERVED_IN_REPOSITORY"
+  },
+  "control_plane_note": "S4E wired and qualified the Protocol V4 execution path and MEASURED NOTHING. Zero weight loads, zero generations, zero attempts, zero holdout spends, no EVAL authority. eval-v7 stays FROZEN_UNUSED with spent_by null; candidate 004 keeps its HOLD; candidate 005 stays TRAINED_UNEVALUATED. Readiness is never authority.",
+  "generation_label": "M62_S4E_REFERENCE_PAIR_PREAUTH",
+  "next_milestone": {
+    "authority_required": [
+      "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, before either arm is measured. eval-v7 exists and is frozen; a corpus is readiness, never authority, and none has been created or requested.",
+      "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before any further training; the S4C one is consumed and is never replayed",
+      "a separate explicit human decision before any promotion, which no result implies"
+    ],
+    "evaluation_holdout": "eval-v7: FROZEN_UNUSED, spent_by null, 36 tasks, manifest e80cc46f, pack e6d8d0b2, parent v6. ONE paired attempt, ONE spend, 72 generations. eval-v4 and eval-v6 are USED_IMMUTABLE; eval-v5 is FROZEN_UNUSED and RETIRED. No authority to spend v7 exists.",
+    "holdout_access": "No holdout may be rendered to any model or session and every spent one stays unread; under D35 a spent holdout is development evidence and may never decide eligibility again. A HOLDOUT AUTHOR IS NEVER ITS EVALUATOR: the S4D session authored eval-v7 and may not run it.",
+    "lora_scope": "ATTENTION_AND_MLP",
+    "name": "Candidate 005 is TRAINED_UNEVALUATED and the instrument that would measure it now exists and is qualified: Protocol V4 is wired, both arms are verifiable, and one paired attempt spends eval-v7 exactly once. Running it needs a fresh single-use EVAL authority bound to the exact V4 plan hash. None exists.",
+    "primary_axis": "OPEN and UNMEASURED. Candidate 005's axis is learning_rate 5e-5 -> 2.5e-5 against candidate 004, alpha not slaved, trained once on train-v2 under the DISABLED render policy. Training produced an artefact and no evidence; eval-v7 is the instrument and has not been run.",
+    "requires_new_session": false,
+    "ruled_out": [
+      "reading readiness as authority. S4E built and qualified an instrument; it created no EVAL authority, requested none, and spent nothing. A qualified execution path is a precondition for measuring, never permission to measure",
+      "weakening the v1-v3 protocol to make Protocol V4 fit: the baseline arm still may not carry an adapter, the frozen execution machinery stays byte-identical to b928f9d4, and the score-evidence arm-attribution guard is never relaxed",
+      "any second look at eval-v6: rerun, ablation, re-score, alternate seed, partial re-measurement, or reading, quoting or reconstructing one of its bodies. It is USED_IMMUTABLE and single-use, and a missing result is not permission to look again",
+      "using eval-v5 as eligibility evidence, marking it USED_IMMUTABLE or setting spent_by non-null; or reusing, reading or reconstructing eval-v4, eval-v5 or leaked material in any session",
+      "evaluating eval-v7 in the session that authored it or that designed or trained candidate 005; editing, re-authoring or re-freezing eval-v7 now that it is frozen; or designing, naming or configuring a candidate 006 without a separate explicit operator ruling",
+      "recording candidate 005 as evaluated, eligible or promoted: it has no exam, no evaluation corpus and no evaluation receipt, and no result may be inferred from a training loss",
+      "reading candidate 005's train_loss 3.762973 or eval_loss 3.483413 as eligibility evidence. Both are diagnostic, VALIDATION is steering material that appears in no gate, and a clean run creates an artefact and never a verdict",
+      "relaxing body-blindness, or any preregistered gate, grader or threshold, now that candidate 004's result is known, which is post-hoc weakening",
+      "any epoch, rank, alpha, dropout or module-surface change, a dial slaved to the learning rate, a second axis, ATTENTION_ONLY, train-v3, structured rows, a stronger response schema, or a changed refusal detector, max_new_tokens, seed or reasoning policy, or creating a D38 gate or a D43 gate",
+      "reading candidate 004's learning-rate permission as general: the S3U ruling superseded the generation-8 clause for candidate 004 only, prospectively, and only to 5e-5",
+      "reading the S4B ruling as general, or as still live: it was DESIGN_ONLY, for candidate 005 only, prospectively, and only to 2.5e-5. It is spent. It is not a sweep, a second seed, a third value of the axis, or standing permission to retrain",
+      "a second candidate 005 run under any justification: another seed, a candidate 005b, a resume, or a retry because a number looks bad. A poor validation loss is not an infrastructure failure",
+      "raising a reviewed budget, or deleting recorded defects, limitations or invariants to make room",
+      "retraining, resuming, re-seeding or patching candidate 003, 004 or 005, calling any of them production-ready, or fixing D39 as a rider",
+      "promotion, activation, registry mutation, merge, tag, release or version bump without a separate explicit human authority, which no result implies",
+      "spending eval-v7 twice, running one arm without the other, binding a bare base model as the v7 reference, or recording a Protocol V4 result in a v1-v3 receipt schema. Two arms are one evaluation with one spend"
+    ],
+    "training_corpus": "m62-defensive-quality-train v2, spent on candidates 003, 004 and 005 and reused UNCHANGED each time. No train-v3 exists and none is authorised."
+  },
+  "parent_snapshot_sha256": "1fcd3028b56670545e4dfca59d1b41631bbf9f4ecbfad65613d7f5195fca91a5",
+  "project": {
+    "branch": "jarvis-v69-eval-v7-run",
+    "master_commit": "3705114228edef2f665be349c5c4429b7b16777a",
+    "merged_into_master": false,
+    "milestone": "V69 M62 S4E - Reference-Adapter Paired Execution Qualification",
+    "released": false,
+    "tagged": false
+  },
+  "records": {
+    "archive": "420b72816185796f0f82eed31040b028f73bdb369b463a171fbc4a7ee21411ca",
+    "base_model": "5e5f7e72705f1d14aab6f49e154779c21d3aede76ca496504755e0f4e8f4dff2",
+    "candidates": "679730bf93e7d52ab8511a5ccf02c3f0562fa553a733334a094a60d54622efd3",
+    "datasets": "6115156bc335267721c66e9e6feb7becea9e52ce3f3080f26e470c3ecbc115ce",
+    "defects": "11e303008378e9e4b49e3843850d4ca43afecdc30e4f977a97a3e23926b480dc",
+    "frozen_invariants": "0f0a06aea75df9a4d7a16b00c7dbb627c5a2e448e07351092260980bfaa00ac4",
+    "limitations": "02958d413f9a624c3f2a51f016b805474014b62407101367fd47988e82696d06",
+    "policy_identities": "663655cff3b1dc0f24b4a0f804d6d84d7865d62d9a6c8080178689dba9ef79a6"
+  },
+  "schema_version": "m62.control_plane.3",
+  "state_generation": 24,
+  "subject_state_commit": "aabbda94c37d7496c0357dce5113bc0e8b6f68a3",
+  "subject_state_milestone": "S4E",
+  "test_baseline": {
+    "failed": 0,
+    "invocation": "pytest -k m62 --ignore=tests/test_live_brain_v61.py",
+    "known_invocation_artifact": {
+      "failing_tests": 8,
+      "file": "jarvis/tests/test_training_gym_m62_s3g2_validation_wiring.py",
+      "invocation": "pytest run from the repository root instead of jarvis/",
+      "is_a_regression": false,
+      "is_defect_d39": false,
+      "note": "Cause measured in S3N.1: those tests read production source by a path relative to the working directory, so they resolve only from jarvis/. The file is unchanged since the subject commit. DISTINCT from D39, which fails four tests in the dataset-exports file. Not a rider fix."
+    },
+    "milestone": "S4D",
+    "passed": 4728,
+    "skipped": 24,
+    "working_directory": "jarvis/ (repository system interpreter)"
+  }
+}
