@@ -1079,6 +1079,22 @@ def redact_held_out_task_ids(text: object) -> str:
     return out
 
 
+def redact_tree(value: object) -> object:
+    """`redact_held_out_task_ids` over every string in a nested structure.
+
+    The gate report and the canonical decision are copied into the receipt wholesale, and
+    a blocker's message travels inside both. Redacting only the outcome's copy would leave
+    the same id in the evidence block two keys away.
+    """
+    if isinstance(value, dict):
+        return {k: redact_tree(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_tree(v) for v in value]
+    if isinstance(value, str):
+        return redact_held_out_task_ids(value)
+    return value
+
+
 def production_verdicts() -> tuple[str, ...]:
     """The canonical paired-comparison vocabulary, from the production enum itself.
 
@@ -1719,6 +1735,26 @@ def build_receipt_v3(generation_directory: str | Path, *,
             "the canonical decision rederived from this report's own gate, bootstrap, "
             "empirical-status and serialisation-state evidence is not the decision the "
             "report recorded; one of the two is describing a different run")
+
+    # D-S4F-4. The check above is made against the UNREDACTED report, because that is what
+    # the run actually produced and agreement with it is the point. What the receipt then
+    # CARRIES is the redacted form, re-derived from the redacted gate report so that every
+    # copy of a blocker in the document says the same thing and a verifier re-deriving the
+    # decision from `decision_evidence` reaches exactly this decision. Redaction touches
+    # message text only; the counts, gates and thresholds a verdict is computed from are
+    # untouched, so the verdict is the same by construction -- asserted, not assumed.
+    redacted_gate_report = redact_tree(report["gate_report"])
+    redacted_decision = decision_from_evidence(
+        gate_report=redacted_gate_report, bootstrap=report["bootstrap"],
+        empirical_status=report["empirical_status"], run_state=report["run_state"])
+    if redacted_decision.eligibility is not decision.eligibility or \
+            len(redacted_decision.blockers) != len(decision.blockers) or \
+            bool(redacted_decision.human_review_required) != \
+            bool(decision.human_review_required):
+        raise ReceiptError(
+            "redacting held-out task identifiers changed the decision; redaction may "
+            "rewrite what a blocker SAYS and never which blockers there are")
+
     status_claim = _status_claim(decision.eligibility.value)
     if not status_claim:
         raise ReceiptError(
@@ -1910,10 +1946,10 @@ def build_receipt_v3(generation_directory: str | Path, *,
         "decision_evidence": {
             "empirical_status": str(report["empirical_status"]),
             "report_serialization_state": str(report["run_state"]),
-            "gate_report": report["gate_report"],
+            "gate_report": redacted_gate_report,
             "bootstrap": report["bootstrap"],
-            "canonical_decision": decision.to_dict(),
-            "decision_hash": decision.decision_hash(),
+            "canonical_decision": redacted_decision.to_dict(),
+            "decision_hash": redacted_decision.decision_hash(),
             "rederived_by": DECISION_REDERIVER,
             "carries_non_ascii_decision_text": bool(non_ascii),
             "non_ascii_codepoints": non_ascii,
