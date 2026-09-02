@@ -2625,6 +2625,40 @@ class LLM:
                     _mesh_plan_ms,
                 )
             )
+
+        # ── V69 M65A — ONE supporting specialist actually RUNS ────────────────
+        # M64.1 wired the mesh's judgement onto this turn; a supporting
+        # specialist was still only a name in a route. Here it executes: it
+        # reasons on its own model role, any tool it requests passes the same
+        # preflight and the SAME ToolExecutor (one effect path, one ledger), and
+        # it returns a typed result that reaches ARGUS and synthesis.
+        #
+        # `run_support_specialist` decides for itself whether this turn deserves
+        # one — TEAM routes only, never the fast path — so a greeting still costs
+        # one generation and this call costs nothing on the turns that dominate
+        # (§26). It never raises and never blocks the answer: a failed or denied
+        # consultation degrades the turn's judgement, never its ability to
+        # answer at all.
+        _mesh_support = None
+        if _mesh is not None:
+            _support_t0 = _time.monotonic()
+            try:
+                _mesh_support = await _mesh_live.run_support_specialist(_mesh)
+            except Exception as _sup_e:  # noqa: BLE001
+                logger.warning(f"MESH: support execution skipped ({_sup_e})")
+            if _mesh_support is not None:
+                logger.info(
+                    "MESH: support={} status={} role={} effects={} ms={}".format(
+                        _mesh_support.specialist_id.value,
+                        _mesh_support.status.value,
+                        (_mesh_support.model_selection.selected_role.value
+                         if _mesh_support.model_selection
+                         and _mesh_support.model_selection.selected_role
+                         else "none"),
+                        _mesh_support.executed_effects,
+                        round((_time.monotonic() - _support_t0) * 1000.0, 1),
+                    )
+                )
         logger.debug(
             "ROUTE: role={} domain={} provider={} model={} complexity={:.2f} "
             "requires_verification={} planning={} reason={!r}".format(

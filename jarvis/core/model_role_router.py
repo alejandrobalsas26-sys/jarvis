@@ -358,7 +358,15 @@ class ModelRoleRouter:
 #: The module singleton every runtime component routes through. A second
 #: instance is constructible in a test and grants nothing, exactly as
 #: ``SpecialistRegistry`` intends: enforcement reads this one.
-router = ModelRoleRouter()
+#:
+#: Seeded with CONFIG-ONLY availability (``installed=None``), which touches no
+#: socket and pulls nothing: every role resolves through the same env-override
+#: ladder the rest of the runtime uses, and ``probed`` stays False to say so.
+#: Boot replaces it via :meth:`ModelRoleRouter.bind` with a probed availability
+#: once the host's pulled models are known. Seeding rather than starting empty
+#: matters for the doctor: an unbooted process should report the roles it is
+#: configured for, not claim that none resolve.
+router = ModelRoleRouter(availability=ModelRoleRouter.probe())
 
 
 __all__ = [

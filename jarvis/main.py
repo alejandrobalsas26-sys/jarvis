@@ -2034,12 +2034,37 @@ async def _main_async() -> None:
         from core.security_effects import SCOPES as _m641_scopes
         from core.specialist_runtime import team_runtime as _m641_team
         from core.world_state import world as _m641_world
+        # V69 M65A — the same call now also wires the specialist EXECUTION core:
+        # the shared inference callable the V63 team runtime already built (one
+        # client, no second model fan-out), the SAME protected ToolExecutor, the
+        # SAME World State and the SAME scope registry. One boot point for the
+        # whole spine, so no two components can disagree about which of them is
+        # live. `role_availability` is probed from the models this host actually
+        # has pulled, so a model role resolves to a backend that exists or the
+        # execution is refused rather than run on an unidentified model.
+        from core.model_role_router import ModelRoleRouter as _m65a_router
+        try:
+            # The repository's one probe for "what is actually pulled". A host
+            # that cannot be probed passes None, which resolves every role from
+            # config alone — the honest answer for an unprobed host, and never a
+            # claim that a model is loaded.
+            from core.dependency_guardian import _get_pulled_models
+            _m65a_installed = sorted(_get_pulled_models()) or None
+        except Exception:
+            _m65a_installed = None
         _m641_mesh.attach_live_runtime(
             team_runtime = _m641_team,
             world_state  = _m641_world,
             scopes       = _m641_scopes,
+            infer        = getattr(_m641_team, "_infer", None),
+            tool_executor= executor,
+            role_availability = _m65a_router.probe(installed=_m65a_installed),
         )
-        logger.info("V69 M64.1: cognitive mesh is LIVE on the operator turn")
+        logger.info(
+            "V69 M64.1/M65A: cognitive mesh is LIVE on the operator turn "
+            "(specialist execution available: {})",
+            _m641_mesh.specialist_core_status().get("available"),
+        )
     except Exception as e:
         logger.warning(f"V69 M64.1: mesh live attach failed ({e}) — turns run unrouted")
 

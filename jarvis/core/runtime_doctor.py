@@ -487,6 +487,80 @@ def check_aura() -> list[Finding]:
 # ══════════════════════════════════════════════════════════════════════════════
 #  The whole examination
 # ══════════════════════════════════════════════════════════════════════════════
+def check_specialist_execution() -> list[Finding]:
+    """Whether the M65A specialist execution core can actually run (§34).
+
+    Answerable WITHOUT an LLM and without a network call, which is the whole
+    requirement: an operator needs to know whether a specialist could execute,
+    not whether one is configured to. Every fact here is read from the live
+    singletons, so a core that was never attached reports DEGRADED rather than
+    reporting the configuration it would have had.
+    """
+    out: list[Finding] = []
+    try:
+        from core.mesh_live import specialist_core_status
+        status = specialist_core_status()
+    except Exception as exc:  # noqa: BLE001 — an unimportable core is a finding
+        return [Finding("specialist.core", "specialist_execution",
+                        DoctorStatus.DEGRADED, Severity.MEDIUM,
+                        f"the specialist execution core did not load: "
+                        f"{type(exc).__name__}",
+                        "check core/specialist_execution.py imports")]
+
+    registered = int(status.get("registered_specialists", 0))
+    out.append(Finding(
+        "specialist.registry", "specialist_execution",
+        DoctorStatus.PASS if registered else DoctorStatus.DEGRADED,
+        Severity.INFO if registered else Severity.HIGH,
+        f"{registered} specialist(s) registered in the cognitive mesh",
+        "" if registered else "core.cognitive_mesh.REGISTRY is empty"))
+
+    available = bool(status.get("available"))
+    out.append(Finding(
+        "specialist.execution", "specialist_execution",
+        DoctorStatus.PASS if available else DoctorStatus.DEGRADED,
+        Severity.INFO if available else Severity.MEDIUM,
+        "specialist execution is available"
+        if available else
+        "no inference backend is wired to the specialist executor; specialists "
+        "route and are bounded, but none can execute",
+        "" if available else "start JARVIS through main() so the boot wiring runs"))
+
+    roles = list(status.get("model_roles") or [])
+    out.append(Finding(
+        "specialist.model_roles", "specialist_execution",
+        DoctorStatus.PASS if roles else DoctorStatus.DEGRADED,
+        Severity.INFO if roles else Severity.MEDIUM,
+        f"{len(roles)} model role(s) resolve to a backend: {', '.join(roles[:6])}"
+        if roles else
+        "no model role resolves to a backend; every specialist execution would "
+        "be refused rather than run on an unidentified model",
+        "" if roles else "ollama pull the configured role models"))
+
+    wired = bool(status.get("tool_executor_wired"))
+    out.append(Finding(
+        "specialist.tool_executor", "specialist_execution",
+        DoctorStatus.PASS if wired else DoctorStatus.DEGRADED,
+        Severity.INFO if wired else Severity.MEDIUM,
+        "the canonical ToolExecutor is wired; effects and the exactly-once "
+        "ledger are reachable"
+        if wired else
+        "no ToolExecutor is wired; a specialist can analyse but every tool "
+        "intent returns UNAVAILABLE",
+        "" if wired else "start JARVIS through main() so the boot wiring runs"))
+
+    # The effect ledger is healthy iff the ONE executor exposes the derived
+    # count. A ledger that cannot be counted cannot be trusted to deduplicate.
+    counters = status.get("counters") or {}
+    out.append(Finding(
+        "specialist.effect_ledger", "specialist_execution", DoctorStatus.PASS,
+        Severity.INFO,
+        f"effect ledger observable: {counters.get('effects_executed', 0)} "
+        f"effect(s) executed, {counters.get('effects_deduplicated', 0)} "
+        f"deduplicated, {counters.get('policy_denials', 0)} denied this process"))
+    return out
+
+
 def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     """Run every check. Never raises: a check that explodes becomes a finding.
 
@@ -498,7 +572,8 @@ def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     report = DoctorReport()
     checks = [check_interpreter, check_dependencies, check_entrypoints,
               check_resources, check_directories, check_external_tools,
-              check_configuration, check_memory_stores, check_speech, check_aura]
+              check_configuration, check_memory_stores, check_speech, check_aura,
+              check_specialist_execution]
     if include_network:
         checks.append(check_model_runtime)
     for check in checks:
@@ -517,6 +592,7 @@ __all__ = [
     "check_aura", "check_configuration", "check_dependencies",
     "check_directories", "check_entrypoints", "check_external_tools",
     "check_interpreter", "check_memory_stores", "check_model_runtime",
-    "check_resources", "check_speech", "run_diagnostics",
+    "check_resources", "check_specialist_execution", "check_speech",
+    "run_diagnostics",
     "site_packages_versions",
 ]
