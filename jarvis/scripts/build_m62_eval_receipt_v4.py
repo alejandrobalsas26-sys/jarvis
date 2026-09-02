@@ -227,6 +227,16 @@ def build_receipt_v4(generation_directory: str | Path, *,
     payload["reference_arm"] = reference_arm
     payload["candidate_arm"] = candidate_arm
     payload["pairing"] = pairing
+
+    # D-S4F-3. `.3` derives authority.bound_plan_hash from the report, which under V4 is
+    # the INNER plan. The authority a human typed was `EVAL:<outer plan>` — that is the
+    # plan the token authorised, the plan the ledger recorded, and the only plan a reader
+    # could check a token against. Leaving the inner hash here would make the receipt's
+    # own account of what was authorised name a number no token ever carried. The inner
+    # plan keeps its own field under `plan.plan_hash`; the containment between the two was
+    # proved from the attempt record above.
+    payload["authority"] = {**payload.get("authority", {}),
+                            "bound_plan_hash": str(v4_plan_hash)}
     payload["schema_version"] = EVAL_RECEIPT_V4_SCHEMA_VERSION
     payload["receipt_version"] = EVAL_RECEIPT_V4_SCHEMA_VERSION
     payload["evaluation_milestone"] = milestone
@@ -293,6 +303,23 @@ def verify_receipt_v4(payload: dict) -> tuple[str, ...]:
             problems.append(
                 f"the receipt records {produced} model results against "
                 f"{expected} expected; a claimed count is not a measured one")
+
+    # D-S4F-3. The `.2`/`.3` verifiers tie authority.bound_plan_hash to the ledger's plan
+    # and never ran against a v4 receipt, so the field drifted to the inner plan unchecked.
+    # A receipt whose authority names a plan the ledger never recorded describes a token
+    # nobody could have typed.
+    authority = payload.get("authority", {}) or {}
+    ledger = payload.get("ledger", {}) or {}
+    bound = str(authority.get("bound_plan_hash", ""))
+    if bound != str(ledger.get("plan_hash", "")):
+        problems.append(
+            f"authority.bound_plan_hash is {bound[:12]} and the ledger lines name "
+            f"{str(ledger.get('plan_hash'))[:12]}; the authority and the run disagree "
+            f"about which plan was spent")
+    if bound == str((payload.get("plan") or {}).get("plan_hash", "")):
+        problems.append(
+            "authority.bound_plan_hash equals the inner plan hash; a v4 authority is "
+            "bound to the outer plan and the two are distinct by construction")
     return tuple(problems)
 
 
