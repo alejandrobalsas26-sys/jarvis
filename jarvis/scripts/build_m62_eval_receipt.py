@@ -1502,6 +1502,7 @@ def build_receipt_v3(generation_directory: str | Path, *,
                      repo_root: str | Path,
                      expected_candidate: str = "",
                      expected_evaluation_source_commit: str = "",
+                     ledger_plan_hash: str = "",
                      milestone: str = "S3Q",
                      seal_milestone: str = "S3Q.0.2") -> dict:
     """Seal an EXISTING measurement. Nothing here runs, re-scores or re-generates.
@@ -1545,13 +1546,23 @@ def build_receipt_v3(generation_directory: str | Path, *,
     commit = dict(events["commit"].get("commit", {}))
 
     # ── the ledger, the plan and the report must name ONE plan ───────────────
-    for label, value in (("the ledger lines", events["plan_hash"]),
-                         ("the approved plan file", str(plan["plan_hash"])),
-                         ("the report", str(report["plan_hash"]))):
-        if value != str(report["plan_hash"]):
+    #
+    # D-S4F-2. Under a protocol that WRAPS this one, the ledger records the outer plan
+    # while the report records the inner plan it contains, so the two legitimately differ
+    # and `.3`'s single-plan identity refused every V4 seal. `ledger_plan_hash` lets the
+    # wrapping builder name the plan the ledger is expected to carry — and names nothing
+    # else: the caller must independently prove, from the durable attempt record, that the
+    # outer plan's inner plan IS the one the report published. Left empty, the check is
+    # exactly the one it has always been.
+    expected_ledger_plan = str(ledger_plan_hash or report["plan_hash"])
+    for label, value, expected in (
+            ("the ledger lines", events["plan_hash"], expected_ledger_plan),
+            ("the approved plan file", str(plan["plan_hash"]), str(report["plan_hash"])),
+            ("the report", str(report["plan_hash"]), str(report["plan_hash"]))):
+        if value != expected:
             raise ReceiptError(
-                f"{label} names plan {value[:12]} and the report names "
-                f"{str(report['plan_hash'])[:12]}; a receipt binding two plans describes "
+                f"{label} names plan {value[:12]} and the receipt expects "
+                f"{expected[:12]}; a receipt binding two plans describes "
                 f"two measurements")
     if str(commit.get("task_pack_hash")) != str(plan["task_pack_hash"]):
         raise ReceiptError(

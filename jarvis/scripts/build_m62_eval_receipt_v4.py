@@ -135,6 +135,23 @@ def build_receipt_v4(generation_directory: str | Path, *,
                      milestone: str = "S4E",
                      seal_milestone: str = "S4E") -> dict:
     """Seal ONE paired attempt. Every `.3` verification runs first, unchanged."""
+    # D-S4F-2. The attempt record is read FIRST, because `.3` has to be told which plan
+    # the ledger carries and that claim may not be taken on trust. V4 binds an outer plan;
+    # the report publishes the inner plan the outer one contains. The durable record names
+    # BOTH, so the containment is proved here, from evidence, before `.3` is allowed to
+    # expect anything other than the plan the report names.
+    attempt = attempt_evidence(Path(attempts_ledger), plan_hash=v4_plan_hash)
+    report_plan_hash = str(json.loads(
+        (Path(generation_directory) / "evaluation-report.json").read_text(
+            encoding="utf-8"))["plan_hash"])
+    recorded_inner = str(attempt.get("inner_plan_hash", ""))
+    if recorded_inner != report_plan_hash:
+        raise ReceiptError(
+            f"the paired-attempt record says plan {str(v4_plan_hash)[:12]} contains inner "
+            f"plan {recorded_inner[:12]} and the report published "
+            f"{report_plan_hash[:12]}; the outer plan that was authorised did not contain "
+            f"the measurement this report describes")
+
     payload = build_receipt_v3(
         generation_directory,
         training_receipt=candidate_training_receipt,
@@ -143,9 +160,8 @@ def build_receipt_v4(generation_directory: str | Path, *,
         measurement_witness=measurement_witness, repo_root=repo_root,
         expected_candidate=expected_candidate,
         expected_evaluation_source_commit=expected_evaluation_source_commit,
+        ledger_plan_hash=str(v4_plan_hash),
         milestone=milestone, seal_milestone=seal_milestone)
-
-    attempt = attempt_evidence(Path(attempts_ledger), plan_hash=v4_plan_hash)
     reference_receipt = json.loads(
         Path(reference_training_receipt).read_text(encoding="utf-8"))
     candidate_receipt = json.loads(
