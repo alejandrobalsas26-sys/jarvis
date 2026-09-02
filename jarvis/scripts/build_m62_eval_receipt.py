@@ -1139,12 +1139,13 @@ def comparison_partitions(generation_directory: str | Path, *,
         raise ReceiptError(
             f"the numeric deltas account for {positive + zero + negative} pair(s) and the "
             f"canonical verdicts classify {total}")
+    # DELIBERATELY NOT RETURNED: the classified/blocking/comparable split. It flows
+    # straight into the receipt's `results` block, whose schema is closed, and a closed
+    # schema is how a receipt stays body-free. A reader recovers the split from
+    # `verdict_counts` and the production enum, so binding it would add no evidence.
     return {
         "verdict_counts": counts,
         "verdict_vocabulary": list(vocabulary),
-        "classified_pairs": total,
-        "blocking_pairs": blocking,
-        "comparable_pairs": comparable,
         "numeric_delta_counts": {"positive": positive, "zero": zero,
                                  "negative": negative},
     }
