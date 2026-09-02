@@ -1,0 +1,87 @@
+{
+  "authority_observation": {
+    "control_plane_can_grant_authority": false,
+    "eval": "NONE_OBSERVED_IN_REPOSITORY",
+    "note": "An OBSERVATION, never a grant. Tokens live outside the repository, so this is measured as 'no tracked file carries one' and is not proof none exists elsewhere. Every authority stays governed by the single-use plan-token mechanism plus an explicit human decision.",
+    "promotion": "NONE_OBSERVED_IN_REPOSITORY",
+    "train": "NONE_OBSERVED_IN_REPOSITORY"
+  },
+  "control_plane_note": "S4F: the seal. eval-v7 was already spent; generation 26 still said FROZEN_UNUSED. This reconciles the record to a measurement that already happened and measured nothing itself: 0 model loads, 0 generations, 0 new authorities. D-S4F-1..6 were RECORDING defects; no scorer, gate or threshold was touched.",
+  "generation_label": "M62_S4F_EVAL_V7_SPENT_CANDIDATE005_NOT_ELIGIBLE",
+  "next_milestone": {
+    "authority_required": [
+      "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, before anything is measured again — and there is no holdout to spend one on: eval-v7 is USED_IMMUTABLE and single-use. The S4E authority is consumed and is never replayed",
+      "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before any further training; the S4C one is consumed and is never replayed",
+      "a separate explicit human decision before any promotion, which no result implies — and candidate 005's result is a veto, so no promotion decision is available to make"
+    ],
+    "evaluation_holdout": "NONE AVAILABLE. eval-v7 is USED_IMMUTABLE, spent_by S4E gen-1, 36 tasks, manifest e80cc46f, pack e6d8d0b2. eval-v4, eval-v6 and eval-v7 are USED_IMMUTABLE; eval-v5 is FROZEN_UNUSED and RETIRED. A further measurement needs a NEW holdout, authored by a session that will not run it.",
+    "holdout_access": "No holdout may be rendered to any model or session and every spent one stays unread; under D35 a spent holdout is development evidence and may never decide eligibility again. A HOLDOUT AUTHOR IS NEVER ITS EVALUATOR: the S4D session authored eval-v7 and may not run it.",
+    "lora_scope": "ATTENTION_AND_MLP",
+    "name": "Candidate 005 is MEASURED and NOT ELIGIBLE. eval-v7 is spent and immutable. It won on quality and introduced one new secret leak; the frozen policy vetoes any new security regression whatever the delta says. Nothing is promoted, no holdout remains, and no further measurement is authorised.",
+    "primary_axis": "CLOSED AND MEASURED. Candidate 005's axis was learning_rate 5e-5 -> 2.5e-5 against candidate 004, alpha not slaved, trained on train-v2 under the DISABLED render policy. Measured once on eval-v7 under Protocol V4: mean paired delta +0.1714, 95% CI [+0.0566, +0.3122]. NOT_ELIGIBLE on the security veto.",
+    "requires_new_session": true,
+    "ruled_out": [
+      "measuring through any code path not in the plan's evaluation_source_commit: an ad-hoc driver, an untracked runner, or a session importing the modules by hand. A receipt cannot name a seal source nobody else can obtain, and a token authorises the state of the world that does the measuring",
+      "reading readiness as authority. S4E built and qualified an instrument; it created no EVAL authority, requested none, and spent nothing. A qualified execution path is a precondition for measuring, never permission to measure",
+      "weakening the v1-v3 protocol to make Protocol V4 fit: the baseline arm still may not carry an adapter, the frozen execution machinery stays byte-identical to b928f9d4, and the score-evidence arm-attribution guard is never relaxed",
+      "any second look at eval-v6: rerun, ablation, re-score, alternate seed, partial re-measurement, or reading, quoting or reconstructing one of its bodies. It is USED_IMMUTABLE and single-use, and a missing result is not permission to look again",
+      "using eval-v5 as eligibility evidence, marking it USED_IMMUTABLE or setting spent_by non-null; or reusing, reading or reconstructing eval-v4, eval-v5 or leaked material in any session",
+      "evaluating eval-v7 in the session that authored it or that designed or trained candidate 005; editing, re-authoring or re-freezing eval-v7 now that it is frozen; or designing, naming or configuring a candidate 006 without a separate explicit operator ruling",
+      "recording candidate 005 as evaluated, eligible or promoted: it has no exam, no evaluation corpus and no evaluation receipt, and no result may be inferred from a training loss",
+      "reading candidate 005's train_loss 3.762973 or eval_loss 3.483413 as eligibility evidence. Both are diagnostic, VALIDATION is steering material that appears in no gate, and a clean run creates an artefact and never a verdict",
+      "relaxing body-blindness, or any preregistered gate, grader or threshold, now that candidate 004's result is known, which is post-hoc weakening",
+      "any epoch, rank, alpha, dropout or module-surface change, a dial slaved to the learning rate, a second axis, ATTENTION_ONLY, train-v3, structured rows, a stronger response schema, or a changed refusal detector, max_new_tokens, seed or reasoning policy, or creating a D38 gate or a D43 gate",
+      "reading candidate 004's learning-rate permission as general: the S3U ruling superseded the generation-8 clause for candidate 004 only, prospectively, and only to 5e-5",
+      "reading the S4B ruling as general, or as still live: it was DESIGN_ONLY, for candidate 005 only, prospectively, and only to 2.5e-5. It is spent. It is not a sweep, a second seed, a third value of the axis, or standing permission to retrain",
+      "a second candidate 005 run under any justification: another seed, a candidate 005b, a resume, or a retry because a number looks bad. A poor validation loss is not an infrastructure failure",
+      "raising a reviewed budget, or deleting recorded defects, limitations or invariants to make room",
+      "retraining, resuming, re-seeding or patching candidate 003, 004 or 005, calling any of them production-ready, or fixing D39 as a rider",
+      "promotion, activation, registry mutation, merge, tag, release or version bump without a separate explicit human authority, which no result implies",
+      "spending eval-v7 twice, running one arm without the other, binding a bare base model as the v7 reference, or recording a Protocol V4 result in a v1-v3 receipt schema. Two arms are one evaluation with one spend",
+      "reading candidate 005's mean quality gain as a pass, or its security regression as a cost to be weighed against that gain: security is a veto and not a weight, and the policy that says so was frozen before the answer existed",
+      "re-running, re-scoring, second-looking, reseeding or partially re-measuring eval-v7, or reading, quoting or reconstructing one of its bodies. It is USED_IMMUTABLE and single-use, and an inconvenient result is not permission to look again",
+      "promoting candidate 004 because candidate 005 failed. 004 remains HELD on its own eval-v6 evidence and that evidence did not move",
+      "relaxing, recalibrating or re-deriving any gate, threshold, grader or statistic now that the answer is known; and treating measured_pairs 35 / partial_live as a reason to re-measure, since all 36 pairs were generated and scored on both arms"
+    ],
+    "training_corpus": "m62-defensive-quality-train v2, spent on candidates 003, 004 and 005 and reused UNCHANGED each time. No train-v3 exists and none is authorised."
+  },
+  "parent_snapshot_sha256": "201c87734c6c445979d267cc04dabaebe6245887b68de5f85fd61b0804a6930e",
+  "project": {
+    "branch": "jarvis-v69-eval-v7-run",
+    "master_commit": "3705114228edef2f665be349c5c4429b7b16777a",
+    "merged_into_master": false,
+    "milestone": "V69 M62 S4E - Reference-Adapter Paired Execution Qualification",
+    "released": false,
+    "tagged": false
+  },
+  "records": {
+    "archive": "420b72816185796f0f82eed31040b028f73bdb369b463a171fbc4a7ee21411ca",
+    "base_model": "5e5f7e72705f1d14aab6f49e154779c21d3aede76ca496504755e0f4e8f4dff2",
+    "candidates": "1a742b57828263abdec8c0e80d5856492c09aec43ba4320c0214bdd843fd451e",
+    "datasets": "18868a6eeaca4fe15a5fe85b0cb31e00df43a3dfa42172331f19f39ef144cbbc",
+    "defects": "11e303008378e9e4b49e3843850d4ca43afecdc30e4f977a97a3e23926b480dc",
+    "frozen_invariants": "0f0a06aea75df9a4d7a16b00c7dbb627c5a2e448e07351092260980bfaa00ac4",
+    "limitations": "02958d413f9a624c3f2a51f016b805474014b62407101367fd47988e82696d06",
+    "policy_identities": "663655cff3b1dc0f24b4a0f804d6d84d7865d62d9a6c8080178689dba9ef79a6"
+  },
+  "schema_version": "m62.control_plane.3",
+  "state_generation": 27,
+  "subject_state_commit": "86bf4c56a74abe9009fcb5e72bf9c66a2af93dfb",
+  "subject_state_milestone": "S4F",
+  "test_baseline": {
+    "failed": 0,
+    "invocation": "pytest -k m62 --ignore=tests/test_live_brain_v61.py",
+    "known_invocation_artifact": {
+      "failing_tests": 8,
+      "file": "jarvis/tests/test_training_gym_m62_s3g2_validation_wiring.py",
+      "invocation": "pytest run from the repository root instead of jarvis/",
+      "is_a_regression": false,
+      "is_defect_d39": false,
+      "note": "Cause measured in S3N.1: those tests read production source by a path relative to the working directory, so they resolve only from jarvis/. The file is unchanged since the subject commit. DISTINCT from D39, which fails four tests in the dataset-exports file. Not a rider fix."
+    },
+    "milestone": "S4D",
+    "passed": 4728,
+    "skipped": 24,
+    "working_directory": "jarvis/ (repository system interpreter)"
+  }
+}

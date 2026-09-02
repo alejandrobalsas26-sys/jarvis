@@ -1,0 +1,113 @@
+{
+  "block": "datasets",
+  "value": [
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_FIRST_LIVE_ADAPTER_EVALUATION.md",
+      "manifest_hash": "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b",
+      "pack_hash": "d714d89bb1842789ec254c4d14de1c467944d0d769b5b44367bd822e1655f1f0",
+      "parent_manifest_hash": null,
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3E.2, run-004 smoke evaluation",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v1"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3I_LIVE_QUALITY_HELDOUT_EVALUATION.md",
+      "manifest_hash": "82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60",
+      "pack_hash": "3744a22e1866a40b6e5b27ae20e798365dfbf2d3c071018afba14bf611ec2665",
+      "parent_manifest_hash": "0970600c677c89112db972c6024634aa871be92dee303db7f429c90967d3dd3b",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3I LIVE, candidate 001",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v2"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3L_SECOND_QUALITY_HELDOUT_EVALUATION.md",
+      "manifest_hash": "7c948236163198b5de451316e39346a37efcbc1254724f921e116a6c722f75a0",
+      "pack_hash": "28d2f7d0007c0dc410b7743aa93c168899c93b8b822afb3d3379675572c02442",
+      "parent_manifest_hash": "82b60bfdbea263eef3990eb6e49c2f2ca16e9b9e26ec8ac435f314b374279d60",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3L, candidate 002",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v3"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3Q_CANDIDATE003_LIVE_HELDOUT_EVALUATION.md",
+      "manifest_hash": "8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5",
+      "pack_hash": "95b4e2f6ffb495735113c236f051073449f4562b780eddfc5fe8a7f76bddf2b7",
+      "parent_manifest_hash": "7c948236163198b5de451316e39346a37efcbc1254724f921e116a6c722f75a0",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3Q LIVE, candidate 003 (evaluation m62-s3q-quality-heldout-live gen-1, plan 5ef87353, report bf7dd00d)",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v4"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3S_EVAL_V5_FREEZE.md",
+      "manifest_hash": "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c",
+      "pack_hash": "287a9fb61e3feab510763d834f77a75c3a016fe27ba4d04a4ac86c588c09fed6",
+      "parent_manifest_hash": "8c6871b0094bdfc75062a6352d383fa8e9750c1425182a2b3248db20500081c5",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": null,
+      "status": "FROZEN_UNUSED",
+      "task_count": 36,
+      "version": "v5"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S3Y_CANDIDATE004_LIVE_HELDOUT_EVALUATION.md",
+      "manifest_hash": "413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6",
+      "pack_hash": "41579381422636d073d8ce3a0df230cafb97ffdd1489ab02126f2273565ade16",
+      "parent_manifest_hash": "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S3Y LIVE, candidate 004 (evaluation m62-s3y-quality-heldout-live gen-1, plan e2b591fe, report d708d721)",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v6"
+    },
+    {
+      "dataset_id": "m62-defensive-quality-train",
+      "evidence": "jarvis/docs/V69_M62_S3G_QUALITY_TRAINING_CANDIDATE_DESIGN.md",
+      "manifest_hash": "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a",
+      "pack_hash": null,
+      "parent_manifest_hash": null,
+      "role": "TRAINING_CORPUS",
+      "spent_by": "S3H, candidate 001",
+      "status": "USED_IMMUTABLE",
+      "task_count": 128,
+      "version": "v1"
+    },
+    {
+      "dataset_id": "m62-defensive-quality-train",
+      "evidence": "jarvis/docs/V69_M62_S3J_SECOND_QUALITY_CANDIDATE_DESIGN.md",
+      "manifest_hash": "24ceb1e0677b14aaccaea2b667e6d7388530e73f2df4d7a463368500d818fc0f",
+      "pack_hash": null,
+      "parent_manifest_hash": "9bbac2f057fd0592a30a7fdeb968655f8ea585df00966e1b920415377ab7286a",
+      "role": "TRAINING_CORPUS",
+      "spent_by": "S3K, candidate 002",
+      "status": "USED_IMMUTABLE",
+      "task_count": 182,
+      "version": "v2"
+    },
+    {
+      "dataset_id": "m62-defensive-eval",
+      "evidence": "jarvis/docs/V69_M62_S4F_CANDIDATE005_LIVE_PAIRED_EVALUATION.md",
+      "manifest_hash": "e80cc46fa0b2c1ec020ed02f9565d778772d8e76dd208f2ba49349ab199b369a",
+      "pack_hash": "e6d8d0b28aa0c5e6c9d186ccc9f2c52371617ee46133199f73e25cbaf1750838",
+      "parent_manifest_hash": "413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6",
+      "role": "EVALUATION_HOLDOUT",
+      "spent_by": "S4E LIVE, candidate 005 vs reference candidate 004 (Protocol V4, evaluation m62-s4e-reference-pair-live gen-1, plan 54488fb3, report d13fc339)",
+      "status": "USED_IMMUTABLE",
+      "task_count": 36,
+      "version": "v7"
+    }
+  ]
+}

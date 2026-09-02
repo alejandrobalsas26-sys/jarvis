@@ -4337,7 +4337,7 @@ def _check_modern_evaluation_receipt(cp: ControlPlane, report: Report, *, entry:
     # declares -- and refuse a receipt that offers neither, so a future shape cannot pass
     # this check by simply having no field for it to read.
     base = cp.snapshot.get("base_model", {})
-    if version == EVAL_RECEIPT_V4_SCHEMA_VERSION:
+    if str(receipt.get("schema_version")) == EVAL_RECEIPT_V4_SCHEMA_VERSION:
         pairing = receipt.get("pairing", {}) or {}
         measured_model = pairing.get("shared_base_model_id")
         measured_revision = pairing.get("shared_base_model_revision")
