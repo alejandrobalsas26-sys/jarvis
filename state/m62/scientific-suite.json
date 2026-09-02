@@ -1,0 +1,143 @@
+{
+  "groups": [
+    {
+      "group": "candidate_lifecycle",
+      "modules": [
+        "tests/test_training_gym_m62_s3j_second_candidate.py",
+        "tests/test_training_gym_m62_s3o_third_candidate.py",
+        "tests/test_training_gym_m62_s3p_trained_state.py",
+        "tests/test_training_gym_m62_s3u_fourth_candidate.py",
+        "tests/test_training_gym_m63_s4b_fifth_candidate.py",
+        "tests/test_training_gym_m63_s4c_trained_state.py"
+      ],
+      "why": "The five candidates' identities, the single-axis claim, and TRAINED_UNEVALUATED. Two of these modules are named m63 and were never selected by `-k m62`."
+    },
+    {
+      "group": "training_receipts",
+      "modules": [
+        "tests/test_training_gym_m62_training_config.py",
+        "tests/test_training_gym_m62_training_dataset_binding.py",
+        "tests/test_training_gym_m62_training_execution.py",
+        "tests/test_training_gym_m62_training_planner.py"
+      ],
+      "why": "A TRAINED claim rests on a portable receipt, because the adapter and the run directory are gitignored."
+    },
+    {
+      "group": "evaluation_receipts",
+      "modules": [
+        "tests/test_training_gym_m62_s3q0_eval_receipt.py",
+        "tests/test_training_gym_m62_s3q01_eval_receipt_v2.py",
+        "tests/test_training_gym_m62_s3q02_eval_receipt_v3.py",
+        "tests/test_training_gym_m62_s4e_receipt_v4.py"
+      ],
+      "why": "Every receipt generation still verifies with the logic that sealed it. Candidate 005's receipt is a v4."
+    },
+    {
+      "group": "holdout_lifecycle",
+      "modules": [
+        "tests/test_training_gym_m62_s3n_fresh_eval_v4.py",
+        "tests/test_training_gym_m62_s3s_fresh_eval_v5.py",
+        "tests/test_training_gym_m62_s3x1_fresh_eval_v6.py",
+        "tests/test_training_gym_m62_s4d_fresh_eval_v7.py",
+        "tests/test_training_gym_m62_s3q0_body_blindness.py",
+        "tests/test_training_gym_m62_s3x0_repr_body_blindness.py",
+        "tests/test_training_gym_m62_s3y_fw1_body_symbol_firewall.py"
+      ],
+      "why": "Freeze, spend and body-blindness for every holdout generation, including the firewall that keeps a body source out of a control-plane surface."
+    },
+    {
+      "group": "single_spend_invariants",
+      "modules": [
+        "tests/test_training_gym_m62_s3q0_holdout_commit.py",
+        "tests/test_training_gym_m62_s3q0_ledger_durability.py",
+        "tests/test_training_gym_m62_s3q0_exact_binding.py",
+        "tests/test_training_gym_m62_s3q0_plan_truthfulness.py",
+        "tests/test_training_gym_m62_s4e_exactly_once.py",
+        "tests/test_training_gym_m62_s4e_fault_injection.py"
+      ],
+      "why": "One paired attempt spends one holdout exactly once, and a crash mid-run cannot buy a second."
+    },
+    {
+      "group": "protocol_v4_compatibility",
+      "modules": [
+        "tests/test_training_gym_m62_s4d_protocol_v4.py",
+        "tests/test_training_gym_m62_s4e_v4_execution.py",
+        "tests/test_training_gym_m62_s4e_execute_cli.py"
+      ],
+      "why": "The reference-adapter pairing candidate 005 was measured under, and the only entry point that may consume an EVAL authority."
+    },
+    {
+      "group": "control_plane",
+      "modules": [
+        "tests/test_training_gym_m62_s3n1_control_plane.py",
+        "tests/test_training_gym_m62_s3q0_control_plane.py",
+        "tests/test_training_gym_m62_s3q01_control_plane.py",
+        "tests/test_training_gym_m62_s3u_control_plane.py",
+        "tests/test_training_gym_m62_s3x1_control_plane.py",
+        "tests/test_training_gym_m63_s4b_control_plane.py",
+        "tests/test_training_gym_m62_s3y_gen14_capacity.py"
+      ],
+      "why": "The generation chain, the record store and the budgets. One module is named m63 and was never selected by `-k m62`."
+    },
+    {
+      "group": "sealed_state",
+      "modules": [
+        "tests/test_training_gym_m62_s4f_sealed_state.py",
+        "tests/test_training_gym_m62_s4h_s4f_result_invariance.py"
+      ],
+      "why": "candidate 004 HOLD, candidate 005 EVALUATED_NOT_ELIGIBLE, eval-v7 USED_IMMUTABLE, 72 historical generations, production assignment unchanged."
+    },
+    {
+      "group": "frozen_scorer_identities",
+      "modules": [
+        "tests/test_training_gym_m62_evaluation_gates.py",
+        "tests/test_training_gym_m62_evaluation_metrics.py",
+        "tests/test_training_gym_m62_evaluation_statistics.py",
+        "tests/test_training_gym_m62_s3w0_eval_qualification.py",
+        "tests/test_training_gym_m62_s4h_historical_compatibility.py"
+      ],
+      "why": "The four frozen policy digests, re-derived from the production classes rather than read from the snapshot."
+    },
+    {
+      "group": "future_instruments",
+      "modules": [
+        "tests/test_training_gym_m62_s4h_finding_schema.py",
+        "tests/test_training_gym_m62_s4h_secret_pii_v2.py",
+        "tests/test_training_gym_m62_s4h_refusal_v2.py",
+        "tests/test_training_gym_m62_s4h_tool_call_v2.py",
+        "tests/test_training_gym_m62_s4h_coverage_v2.py",
+        "tests/test_training_gym_m62_s4h_runtime_contract.py",
+        "tests/test_training_gym_m62_s4h_version_pinning.py",
+        "tests/test_training_gym_m62_s4h_mutation_campaign.py"
+      ],
+      "why": "S4H's additive instruments, and the mutation campaign that proves their tests are not vacuous."
+    },
+    {
+      "group": "scientific_manifest",
+      "modules": [
+        "tests/test_training_gym_m62_s4h_scientific_manifest.py",
+        "tests/test_training_gym_m62_s4h_control_plane.py"
+      ],
+      "why": "This manifest verifies itself, and generation 28 is re-derived rather than read."
+    }
+  ],
+  "milestone": "S4H",
+  "note": "The canonical scientific regression selection. It replaces `pytest -k m62` as the AUTHORITY on what protects the science. The keyword selector deselected all 212 tests in three m63-named modules that assert M62 candidate, control-plane and trained-state facts; a substring of a filename is not a scientific boundary. Every module here is named explicitly, and jarvis/scripts/verify_m62_scientific_suite.py refuses a manifest that has lost a required group or names a module that is not collectable.",
+  "required_groups": [
+    "candidate_lifecycle",
+    "control_plane",
+    "evaluation_receipts",
+    "frozen_scorer_identities",
+    "future_instruments",
+    "holdout_lifecycle",
+    "protocol_v4_compatibility",
+    "scientific_manifest",
+    "sealed_state",
+    "single_spend_invariants",
+    "training_receipts"
+  ],
+  "schema_version": "m62.scientific_suite.1",
+  "suite_generation": 1,
+  "suite_id": "m62-scientific-regression",
+  "working_directory": "jarvis/"
+}

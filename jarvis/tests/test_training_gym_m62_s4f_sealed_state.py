@@ -271,11 +271,20 @@ def test_no_authority_is_observed(snapshot):
 
 
 def test_the_generation_is_twenty_seven_and_chains_to_twenty_six(snapshot):
-    current = json.loads((REPO / "state/m62/current.json").read_text(encoding="utf-8"))
-    assert current["state_generation"] == 27
-    parent = (REPO / V.SNAPSHOT_DIR / "0026-m62-s4e-exec.json").read_bytes()
+    """RESCOPED AT S4H: read generation 27 itself, not the live pointer.
+
+    What S4F recorded is that IT wrote generation 27 and that 27 chains to 26, and that is
+    permanent. Reading `current.json` also asserted, silently, that no LATER generation
+    exists — which was true by coincidence until a later milestone wrote one, and is a
+    property of the experiment being open rather than of the seal. S4H wrote generation 28,
+    which changes nothing S4F claimed. Same precedent as the S4D freeze test S4F itself
+    rescoped; the live pointer's own chain is checked by the control-plane verifier and by
+    test_training_gym_m62_s4h_control_plane.py.
+    """
     stored = json.loads(
         (REPO / V.SNAPSHOT_DIR / "0027-m62-s4f-eval-v7-spent.json").read_text("utf-8"))
+    assert stored["state_generation"] == 27
+    parent = (REPO / V.SNAPSHOT_DIR / "0026-m62-s4e-exec.json").read_bytes()
     assert stored["parent_snapshot_sha256"] == V.sha256_bytes(parent)
 
 

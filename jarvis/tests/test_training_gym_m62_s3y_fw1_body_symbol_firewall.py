@@ -168,7 +168,14 @@ def test_the_registry_is_exactly_the_generations_this_repository_has_frozen():
 
 
 def test_the_live_exam_generation_is_protected_at_all():
-    """The load-bearing one: v7 is FROZEN_UNUSED and about to be measured against."""
+    """The load-bearing one: v7's body source must stay unciteable.
+
+    CURRENT-STATE CORRECTION, S4H: this docstring said v7 was FROZEN_UNUSED and about
+    to be measured against, which was true when it was written and stopped being true
+    when S4E spent it. The ASSERTION is unchanged and needs no rescoping -- a spent
+    holdout's bodies are protected for exactly the same reason an unspent one's are,
+    and under D35 a spent holdout stays unread. Only the prose was stale.
+    """
     assert "corpus_v7_material" in V.FORBIDDEN_BODY_SYMBOLS
     assert "corpus_v7(" in V.FORBIDDEN_BODY_SYMBOLS
 

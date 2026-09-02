@@ -289,12 +289,14 @@ FORBIDDEN_BODY_SOURCES = (
 FORBIDDEN_BODY_SYMBOLS = ("corpus_v4_material", "corpus_v4(",
                           "corpus_v5_material", "corpus_v5(",
                           "corpus_v6_material", "corpus_v6(",
-                          # S4E. v7 is the LIVE exam: FROZEN_UNUSED, and the corpus the
-                          # first reference-adapter comparison will be judged against.
-                          # Its builder symbols existed from the S4D freeze onward while
-                          # this registry still stopped at v6, so a control-plane surface
-                          # could cite the live exam's body source and pass. Appended,
-                          # never reordered: sealed suites index the prefix positionally.
+                          # S4E. v7 was the LIVE exam and is now USED_IMMUTABLE, spent
+                          # by the S4E paired attempt. Its builder symbols existed from
+                          # the S4D freeze onward while this registry still stopped at
+                          # v6, so a control-plane surface could cite the exam's body
+                          # source and pass. Being SPENT changes nothing here: under D35
+                          # a spent holdout stays unread, so its bodies need exactly the
+                          # protection an unspent one's do. Appended, never reordered:
+                          # sealed suites index the prefix positionally.
                           "corpus_v7_material", "corpus_v7(")
 
 
@@ -2605,6 +2607,7 @@ CATEGORIES = (
     "POLICY_IDENTITIES",
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
     "RECORD_STORE",
+    "INSTRUMENT_STACK",
     "CONTROL_PLANE_BUDGET",
 )
 
@@ -4824,6 +4827,126 @@ def check_policy_identities(cp: ControlPlane, report: Report) -> None:
                             f"gates.py references {needle!r}; a D38 gate has appeared")
 
 
+#: V69 M62 S4H. The FUTURE instrument stack, pinned HERE as an independent anchor.
+#:
+#: Same pattern and same reason as :data:`FROZEN_POLICY_DIGESTS`: the snapshot's schema is
+#: closed and cannot carry these, so a version that moved would be re-derived by NOTHING
+#: the verifier runs. They are pinned rather than added to the state because an anchor is
+#: not a second writable copy of the state.
+#:
+#: These are FUTURE instruments. No historical receipt names one, no historical scorer
+#: imports one, and nothing here re-scores anything. Their versions are pinned so that
+#: when a future evaluation config DOES name them, the config names something whose
+#: identity a reviewer can look up rather than "whatever the build had that day".
+FROZEN_INSTRUMENT_VERSIONS: dict[str, str] = {
+    "calibration": "m62.instrument_calibration.1",
+    "coverage": "m62.coverage_semantics.2",
+    "finding_schema": "m62.finding_schema.2",
+    "refusal": "m62.refusal_behavior.2",
+    "runtime_contract": "m62.runtime_contract.1",
+    "secret_pii": "m62.secret_pii_detector.2",
+    "tool_call": "m62.tool_call_validator.2",
+}
+
+#: The canonical scientific regression selection, and the modules `-k m62` cannot reach.
+SCIENTIFIC_SUITE_PATH = f"{STATE_DIR}/scientific-suite.json"
+KEYWORD_INVISIBLE_MODULES: tuple = (
+    "tests/test_training_gym_m63_s4b_control_plane.py",
+    "tests/test_training_gym_m63_s4b_fifth_candidate.py",
+    "tests/test_training_gym_m63_s4c_trained_state.py",
+)
+
+
+def check_instrument_stack(cp: ControlPlane, report: Report) -> None:
+    """V69 M62 S4H — the future instruments are present, versioned and inert.
+
+    THREE properties, and the third is the one that protects history.
+
+    1. Every pinned version RE-DERIVES from the production module, so a rule added to a
+       detector without moving its version is a failure rather than a silent change of
+       meaning under a stable identity.
+    2. The canonical scientific suite exists, is tracked, and still names the modules the
+       superseded ``-k m62`` selector cannot reach. A manifest that quietly narrowed back
+       to what the keyword already saw would leave the same 212 tests unselected.
+    3. No historical scoring module imports the instruments package. That is what keeps
+       the four frozen scorer digests and every sealed receipt meaning what they meant.
+    """
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from training_gym.evaluation.instruments import current_versions
+    except Exception as exc:  # noqa: BLE001 - absence is reported, never assumed clean
+        report.fail("INSTRUMENT_STACK",
+                    f"the future instrument package is not importable ({exc}); the "
+                    f"pinned versions are therefore UNVERIFIED, which is a failure")
+        return
+
+    derived = current_versions()
+    for slot, expected in sorted(FROZEN_INSTRUMENT_VERSIONS.items()):
+        actual = derived.get(slot)
+        if actual != expected:
+            report.fail("INSTRUMENT_STACK",
+                        f"{slot}: the production module reports {actual!r}, the frozen "
+                        f"anchor is {expected!r}. An instrument that changed under a "
+                        f"stable version is a different instrument wearing an old name")
+    extra = sorted(set(derived) - set(FROZEN_INSTRUMENT_VERSIONS))
+    if extra:
+        report.fail("INSTRUMENT_STACK",
+                    f"the package provides unanchored slot(s) {extra}; a slot nobody "
+                    f"pinned can be selected by a config nobody reviewed")
+
+    suite_path = REPO_ROOT / SCIENTIFIC_SUITE_PATH
+    if not suite_path.is_file():
+        report.fail("INSTRUMENT_STACK",
+                    f"{SCIENTIFIC_SUITE_PATH} is missing; without it the canonical "
+                    f"scientific selection is a keyword again")
+        return
+    if suite_path.is_symlink():
+        report.fail("INSTRUMENT_STACK", f"{SCIENTIFIC_SUITE_PATH} is a symlink")
+        return
+    code, tracked = _git("ls-files", "--", SCIENTIFIC_SUITE_PATH)
+    if code != 0 or not tracked.strip():
+        report.fail("INSTRUMENT_STACK",
+                    f"{SCIENTIFIC_SUITE_PATH} is not tracked by Git; an untracked "
+                    f"manifest has no history and no second witness")
+    suite, raw = _load_json(suite_path, SCIENTIFIC_SUITE_PATH)
+    if raw != canonical_bytes(suite):
+        report.fail("INSTRUMENT_STACK",
+                    f"{SCIENTIFIC_SUITE_PATH} is not in the canonical serialization; a "
+                    f"manifest whose bytes depend on formatting cannot be digested")
+    named = {module for group in suite.get("groups", [])
+             for module in group.get("modules", [])}
+    for module in KEYWORD_INVISIBLE_MODULES:
+        if module not in named:
+            report.fail("INSTRUMENT_STACK",
+                        f"{module} is invisible to `-k m62` and the scientific suite "
+                        f"does not name it either, so nothing selects it")
+    missing = sorted(m for m in named if not (_PACKAGE_ROOT / m).is_file())
+    if missing:
+        report.fail("INSTRUMENT_STACK",
+                    f"the scientific suite names {len(missing)} module(s) that do not "
+                    f"exist: {missing[:3]}")
+
+    importers = []
+    for rel in ("training_gym/evaluation/scoring.py",
+                "training_gym/evaluation/gates.py",
+                "training_gym/evaluation/policy.py",
+                "training_gym/evaluation/statistics.py",
+                "training_gym/evaluation/metrics.py",
+                "training_gym/evaluation/comparison.py",
+                "training_gym/evaluation/reports.py",
+                "training_gym/evaluation/__init__.py"):
+        source = (_PACKAGE_ROOT / rel).read_text(encoding="utf-8")
+        if "instruments" in source:
+            importers.append(rel)
+    if importers:
+        report.fail("INSTRUMENT_STACK",
+                    f"{importers} reference the future instruments; a historical scorer "
+                    f"that can reach them can drift onto a 'latest' meaning")
+    report.note(f"future instrument stack: {len(derived)} slots pinned, "
+                f"{len(named)} scientific modules named, 0 historical importers")
+
+
 def check_authority_separation(cp: ControlPlane, report: Report) -> None:
     """V25 — nothing in the control plane may read as a grant, and none of it is one."""
     observation = cp.snapshot.get("authority_observation", {})
@@ -5517,6 +5640,7 @@ def run() -> Report:
     check_holdout_firewall(cp, report)
     check_holdout_retirement(cp, report)
     check_record_store(cp, report)
+    check_instrument_stack(cp, report)
     check_budgets(cp, report)
     check_next(cp, report)
     return report

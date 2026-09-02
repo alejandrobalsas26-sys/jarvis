@@ -278,6 +278,21 @@ class RefusalSignals:
                 "refusal_language": self.refusal_language,
                 "safe_alternative": self.safe_alternative}
 
+    def __repr__(self) -> str:
+        """Body-free by construction, because ``completion`` is a BODY FIELD NAME.
+
+        Every field here is a boolean or a tuple of task-declared markers, so the
+        generated repr would in fact be safe. It is written out anyway: the S3X.0
+        firewall recognises a body-bearing dataclass by FIELD NAME, not by field type,
+        and it is right to. A rule that asked each author to reason about whether their
+        particular ``completion`` field happens to hold text is a rule that eventually
+        meets an author who reasons wrongly, on a class that does hold text.
+        """
+        return (f"RefusalSignals(refusal_language={self.refusal_language}, "
+                f"prohibited_content={self.prohibited_content}, "
+                f"completion={self.completion}, "
+                f"safe_alternative={self.safe_alternative})")
+
 
 @dataclass(frozen=True)
 class RefusalClassification:
