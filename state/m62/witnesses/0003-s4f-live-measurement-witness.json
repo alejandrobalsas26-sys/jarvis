@@ -1,0 +1,164 @@
+{
+  "candidate_id": "qwen3-06b-lora-quality-live-005",
+  "eval_corpus": {
+    "dataset_id": "m62-defensive-eval",
+    "dataset_manifest_hash": "e80cc46fa0b2c1ec020ed02f9565d778772d8e76dd208f2ba49349ab199b369a",
+    "dataset_version": "v7",
+    "hidden_target_store_hash": "9bdcad2837e6ffc9b39c1230bebec6aaefc497ff983f43bf7c701fc66984e830",
+    "pack_manifest_hash": "e6d8d0b28aa0c5e6c9d186ccc9f2c52371617ee46133199f73e25cbaf1750838",
+    "spent_once": true,
+    "status_claim": "USED_IMMUTABLE",
+    "task_pack_hash": "e6d8d0b28aa0c5e6c9d186ccc9f2c52371617ee46133199f73e25cbaf1750838"
+  },
+  "evaluation_generation": 1,
+  "evaluation_id": "m62-s4e-reference-pair-live",
+  "evaluation_source": {
+    "derived_from_repository_head": true,
+    "evaluation_source_commit": "c524931dadefae77e484bdf2d75a96aa46dbc038",
+    "evaluation_source_digest": "3c0c53c2a5e97fc00e46a282be25256de9f9f7769ba2c8407cab66da81c0e8ff",
+    "evaluation_source_digest_method": "sha256(canonical_json({tracked_path: sha256(bytes)})) over every tracked file under jarvis/training_gym/",
+    "evaluation_source_file_count": 104,
+    "evaluation_source_tree_oid": "ae5f8a33a43dc481ae979ecaf46adfcc5db3da2e",
+    "evidence_level": "the witness was written at this commit with the sealing tooling already in the worktree, so the worktree was not clean; the evaluation machinery the digest covers was verified byte-identical to this commit before the digest was taken. That is repository provenance and does not prove which bytes executed",
+    "worktree_clean_at_witness": false
+  },
+  "evidence": {
+    "bootstrap_report_hash": "649a0a4536edd2e1fa77939c1ed3ca01936c80e7c68c10244151ad6e22b0fae2",
+    "comparison_manifest_hash": "d57aba4b2bf1a69520a7ae99ebd6c7e9c3f7cad7c9c6ebafde609a44ebbb4d34",
+    "evaluation_artifact_tree_hash": "a63e8340b373b217c84b504fdad04a3c10ef9bde836284ae8169838d806fbdc4",
+    "evaluation_manifest_hash": "6662fa366d0d02dde41dfc2db05a7e91923b120e31725d13b7132f8408b16586",
+    "files": {
+      "baseline-results.jsonl": {
+        "bytes": 34430,
+        "record_count": 36,
+        "sha256": "ccab1f7f4829682aa147e3694d7f071cf1f25deda6068c8dd934f124039078eb"
+      },
+      "baseline-scores.jsonl": {
+        "bytes": 44700,
+        "record_count": 36,
+        "sha256": "da0f281add5ffc7c983f1c7d78e783dfb322f6fa629bdd324caffc947913b425"
+      },
+      "candidate-results.jsonl": {
+        "bytes": 34471,
+        "record_count": 36,
+        "sha256": "2f79778c34ebc0b0eebc6e648d6fdc9d3a049a848d6912b838814bd594c002d2"
+      },
+      "candidate-scores.jsonl": {
+        "bytes": 44620,
+        "record_count": 36,
+        "sha256": "aa11f62f2a09030a14b2e15574f8462b52d5556313c18a3c59e0d8d0e858181c"
+      },
+      "evaluation-manifest.json": {
+        "bytes": 2533,
+        "record_count": 1,
+        "sha256": "45678e01c4d5c6dd8d3738ab9dfea8b94fd26de3fdffaa0bc472818e85fdd328"
+      },
+      "evaluation-plan.json": {
+        "bytes": 3978,
+        "record_count": 1,
+        "sha256": "cd374b28136224f2e67b543acf8195ad588757ab1d96d8d811d6551b9215c886"
+      },
+      "evaluation-report.json": {
+        "bytes": 43124,
+        "record_count": 1,
+        "sha256": "28714223732cd5b0666ad47ecd58e14fddd348be9dc1cc05470ce0e93d280418"
+      },
+      "metrics.json": {
+        "bytes": 33107,
+        "record_count": 1,
+        "sha256": "a5757ef3ae64a00b6c8d32c30719d608eec749af8308d16f4176f5dee8079184"
+      },
+      "paired-comparisons.jsonl": {
+        "bytes": 35902,
+        "record_count": 36,
+        "sha256": "0262e63ae739658c827093642812be753b782e0f1c06c74d296793488696733e"
+      },
+      "task-pack-manifest.json": {
+        "bytes": 5884,
+        "record_count": 1,
+        "sha256": "2a556963d659b8c0b0f00225f24be23de704f5f476a3e612d4f9af42e7f36785"
+      },
+      "task-pack.jsonl": {
+        "bytes": 54812,
+        "record_count": 36,
+        "sha256": "69fab5d2bab519b951fe9d1bb5e04cc08ded110e23e01d387c4e486383fd236a"
+      }
+    },
+    "gate_report_hash": "65bb2d166f605068b6341cec6f668d4bcff9af488e2ae26bfd1735f0d9ed1340",
+    "metrics_summary_hash": "befd71109a954e7b7f64bebacb967b67f838b4755ff5c440077cc27ff30b8762",
+    "report_hash": "d13fc339969b135a649af128eea33e1f8e7c409aa2a17fafc87ac0ad5708d080"
+  },
+  "grants": {
+    "activation": false,
+    "candidate_state": false,
+    "is_an_evaluation_receipt": false,
+    "note": "a witness records facts; it authorises nothing",
+    "promotion": false,
+    "registry_mutation": false,
+    "retry_or_rerun": false
+  },
+  "ledger": {
+    "holdout_commit_count": 1,
+    "holdout_commit_event_hash": "03bb6a809f8d6ca0154a1d1e66070bf211c58d2ac02fadab58b0e493bba2c3d6",
+    "plan_hash": "54488fb3b58457b03c4bd64daed5aacb503c02e889e9b6ef03d19c2eac67eb43",
+    "plan_started_count": 1,
+    "plan_started_event_hash": "b752f45ff6868eba88b97477b1910c500bc2d937f2b802a1e1889c753cc96536",
+    "terminal_count": 1,
+    "terminal_event": "completed",
+    "terminal_event_hash": "456c36392497fa0d4749beb852566b0c68176ba09fe5bb0b734eafe0dfcc5ea3",
+    "unique_plan_hashes": 1,
+    "unrecognised_events": []
+  },
+  "milestone": "S4F",
+  "outcome": {
+    "activates_model": false,
+    "canonical_eligibility": "not_eligible",
+    "decision_hash": "741fb79a6d0d322fe51ffecf82650fb4cf825802a659a829b7e715e27c16d9a5",
+    "human_review_required": true,
+    "mutates_model_registry": false,
+    "promotes_model": false,
+    "rederived_by": "training_gym.evaluation.reports.decision_from_evidence"
+  },
+  "plan": {
+    "evaluation_config_hash": "6bda512cf50a43b8177fc3d4dccd5b73d791f3a626f40edf1783a5e99c844c4f",
+    "expected_task_count": 36,
+    "order_assignment_hash": "997d9f05c94b196b5b91d804b3b8e04aa9b96179b0153319ddca26ee96e46380",
+    "performs_inference": true,
+    "plan_hash": "3fc3b9616968e86c9319a2d70ce49ad60dc790165eb70153e833e3ce2b5b8ef7",
+    "plan_schema_version": "m62.evaluation_plan.2"
+  },
+  "purpose": "record, while the repository is still at the evaluation source commit, which existing runtime measurement belongs to that unchanged source state, so a later seal-recovery receipt can bind the evaluation source without deriving it from a repair-time HEAD",
+  "receipt_v2_seal_failure_classes": [
+    "three_way_verdict_partition_incompatible_with_four_verdict_production_vocabulary",
+    "ascii_only_receipt_contract_incompatible_with_canonical_unicode_decision_text",
+    "evaluation_source_conflated_with_receipt_build_source"
+  ],
+  "results": {
+    "baseline_result_count": 36,
+    "baseline_score_count": 36,
+    "candidate_result_count": 36,
+    "candidate_score_count": 36,
+    "measured_pairs": 35,
+    "missing_pairs": 1,
+    "numeric_delta_counts": {
+      "negative": 10,
+      "positive": 18,
+      "zero": 8
+    },
+    "paired_result_count": 36,
+    "task_count": 36,
+    "total_model_result_count": 72,
+    "verdict_counts": {
+      "improved": 12,
+      "not_comparable": 0,
+      "regressed": 10,
+      "security_improvement": 6,
+      "security_regression": 1,
+      "unchanged": 7
+    }
+  },
+  "schema_version": "m62.measurement_witness.1",
+  "witness_hash": "13ba9ba117d01795bb42981e49b17a7f25216d5479a3b7ab9108a6a94840abbd",
+  "witness_kind": "pre_repair_measurement_witness",
+  "witness_version": "m62.measurement_witness.1"
+}

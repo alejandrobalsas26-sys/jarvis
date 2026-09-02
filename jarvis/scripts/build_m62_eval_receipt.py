@@ -1088,7 +1088,21 @@ def comparison_partitions(generation_directory: str | Path, *,
     Only the TOTALS must agree, and only because both cover the same pairs. Requiring them
     to agree bucket-for-bucket would be asserting that the verdict is a function of the
     delta, which production does not claim.
+
+    D-S4F-1. Both partitions cover every CLASSIFIED pair; ``measured_pairs`` counts only
+    the COMPARABLE ones. Those two numbers are equal exactly when no pair carries a
+    blocking verdict — true of every run sealed before S4F, which is why `.3` compared
+    them directly. A run that produces a ``security_regression`` classifies the pair and
+    excludes it from the quality denominator, so the totals legitimately differ by the
+    number of blocking pairs, and the old equality made the one outcome the security gates
+    exist to produce the one outcome that could not be sealed. The identity below is the
+    same check where it used to apply (``blocking == 0`` reduces it to the old one) and
+    the correct one where it did not. ``is_comparable`` is READ from the production enum,
+    never re-decided here: which verdicts count toward the quality denominator is
+    `comparison.py`'s opinion, and there is exactly one such opinion in the repository.
     """
+    from training_gym.evaluation.comparison import ComparisonVerdict
+
     path = Path(generation_directory) / "paired-comparisons.jsonl"
     if path.is_symlink() or not path.is_file():
         raise ReceiptError(
@@ -1113,17 +1127,24 @@ def comparison_partitions(generation_directory: str | Path, *,
         negative += delta < 0
         zero += delta == 0
     total = sum(counts.values())
-    if total != measured_pairs:
+    blocking = sum(n for verdict, n in counts.items()
+                   if not ComparisonVerdict(verdict).is_comparable)
+    comparable = total - blocking
+    if comparable != measured_pairs:
         raise ReceiptError(
-            f"the canonical verdicts account for {total} pair(s) and the report measured "
+            f"the canonical verdicts account for {comparable} comparable pair(s) "
+            f"({total} classified, {blocking} blocking) and the report measured "
             f"{measured_pairs}; the receipt would bind a partition of a different run")
-    if positive + zero + negative != measured_pairs:
+    if positive + zero + negative != total:
         raise ReceiptError(
             f"the numeric deltas account for {positive + zero + negative} pair(s) and the "
-            f"report measured {measured_pairs}")
+            f"canonical verdicts classify {total}")
     return {
         "verdict_counts": counts,
         "verdict_vocabulary": list(vocabulary),
+        "classified_pairs": total,
+        "blocking_pairs": blocking,
+        "comparable_pairs": comparable,
         "numeric_delta_counts": {"positive": positive, "zero": zero,
                                  "negative": negative},
     }
