@@ -42,7 +42,7 @@ archive and snapshot, and asks Git — not prose — about branch, ancestry and 
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-s4h-eval-instrument-hardening` — declared by gen 28; gen 27 sealed eval-v7 on `jarvis-v69-eval-v7-run` |
-| Subject state commit | `b3fd062589758960f8fad5f76905b27981eaaec4` — the commit the current snapshot describes |
+| Subject state commit | `924e4664fc383735ec10393660775c0727aac876` — the commit the current snapshot describes |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -63,7 +63,7 @@ the verifier requires HEAD to *descend* from the subject rather than equal it.
 |---|---|
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority bound to plan `54488fb3…`: 36+36 generations, ONE spend, terminal `completed`. S4H moved no candidate, dataset or policy identity |
-| Last milestone | **S4H** — generation 28, `state/m62/snapshots/0028-m62-s4h-instrument-hardening.json` `05ab31323d776c131d741f597a523d757807424fd87f7f81394fa456e1adb208`. **FUTURE instruments only**: D45–D48 recorded, the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed the result; receipt `769d327a…`. `…S4H_EVALUATION_INSTRUMENT_HARDENING.md` |
+| Last milestone | **S4H** — generation 28, `state/m62/snapshots/0028-m62-s4h-instrument-hardening.json` `def4b272839042cfeaac19dcfb0b29bdad32fdbd884fb158e65f63a0bc956438`. **FUTURE instruments only**: D45–D48 recorded, the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed the result; receipt `769d327a…`. `…S4H_EVALUATION_INSTRUMENT_HARDENING.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |

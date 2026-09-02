@@ -68,7 +68,7 @@
   },
   "schema_version": "m62.control_plane.3",
   "state_generation": 28,
-  "subject_state_commit": "b3fd062589758960f8fad5f76905b27981eaaec4",
+  "subject_state_commit": "924e4664fc383735ec10393660775c0727aac876",
   "subject_state_milestone": "S4H",
   "test_baseline": {
     "failed": 0,
