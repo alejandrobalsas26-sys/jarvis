@@ -10,7 +10,7 @@
 | **Control plane** | V3 · schema `m62.control_plane.3` · state generation **27** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
 | **Latest snapshot** | `state/m62/snapshots/0027-m62-s4f-eval-v7-spent.json` |
-| **Snapshot SHA256** | `d0cebddd40da652234ea4c1e283b4e270c1e0e4964c061692bbe12ca9d0f9ee1` |
+| **Snapshot SHA256** | `bcf54ae6263a5c362e874a6e5f0e2a8a0c6f527e3db7809bf75409380559e736` |
 | **Subject state commit** | `86bf4c56a74abe9009fcb5e72bf9c66a2af93dfb` (eval-v7 spent once; candidate 005 measured, not eligible, not promoted) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |

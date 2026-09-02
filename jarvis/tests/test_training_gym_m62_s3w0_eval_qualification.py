@@ -350,6 +350,9 @@ def test_candidate_004_did_not_exist_at_the_tree_that_froze_v5():
     assert found.returncode == 1  # git grep: 1 means "no match", not an error
 
 
+S4E_EVALUATION_ID = "m62-s4e-reference-pair-live"
+
+
 def test_candidate_004_evaluation_evidence_exists_only_under_the_s3y_generation():
     """RESCOPED AT S3Y, exactly as this milestone's own document said it would be.
 
@@ -383,6 +386,13 @@ def test_candidate_004_evaluation_evidence_exists_only_under_the_s3y_generation(
     # unchanged, including the part that was never about candidate 004 -- no eval-v5 pack
     # or manifest may appear anywhere in this tree, spent or not.
     s4e_config = "configs/m62-s4e-reference-pair-live.json"
+    # RESCOPED AGAIN AT S4F, on the same precedent and for the same reason. S4E has now
+    # RUN, so the reference arm's identifier appears in the generation it wrote as well as
+    # in the configuration that declared it. That is still not candidate-004 evaluation
+    # evidence: no measurement OF candidate 004 was produced, its eval-v6 provenance is
+    # untouched and its HOLD is unchanged. The narrow property -- 004 may be a reference
+    # and may never be the subject -- is asserted by the test below, against the receipt.
+    s4e_generation = f"evaluations/{S4E_EVALUATION_ID}/"
     evaluation_root = JARVIS_ROOT / "evaluation"
     if evaluation_root.is_dir():
         for path in evaluation_root.rglob("*"):
@@ -390,7 +400,8 @@ def test_candidate_004_evaluation_evidence_exists_only_under_the_s3y_generation(
                 text = path.read_text("utf-8", errors="ignore")
                 posix = path.as_posix()
                 if CANDIDATE in text:
-                    assert permitted in posix or posix.endswith(s4e_config), (
+                    assert (permitted in posix or s4e_generation in posix
+                            or posix.endswith(s4e_config)), (
                         f"candidate-004 evaluation evidence outside the authorised S3Y "
                         f"generation: {path}")
                 assert V5_PACK not in text, path

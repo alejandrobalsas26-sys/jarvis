@@ -1,6 +1,6 @@
 {
   "latest_snapshot_path": "state/m62/snapshots/0027-m62-s4f-eval-v7-spent.json",
-  "latest_snapshot_sha256": "d0cebddd40da652234ea4c1e283b4e270c1e0e4964c061692bbe12ca9d0f9ee1",
+  "latest_snapshot_sha256": "bcf54ae6263a5c362e874a6e5f0e2a8a0c6f527e3db7809bf75409380559e736",
   "schema_version": "m62.control_plane.3",
   "state_generation": 27,
   "subject_state_commit": "86bf4c56a74abe9009fcb5e72bf9c66a2af93dfb",

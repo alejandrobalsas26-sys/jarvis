@@ -405,9 +405,17 @@ def test_no_v7_task_body_appears_on_any_body_free_surface(v7_rows):
 
 
 def test_the_freeze_records_v7_as_frozen_and_unspent():
+    """RESCOPED AT S4F: read from the generation that FROZE v7, not from the live pointer.
+
+    What S4D recorded is that it froze the exam unspent, and that is permanent. Read from
+    the pointer it also asserted that v7 would never be spent -- which is the experiment
+    being open, not a property of the freeze, and S4E closed it under one human authority.
+    The spent state is asserted in test_training_gym_m62_s4f_sealed_state.py.
+    """
     root = Path(__file__).resolve().parents[2]
-    pointer = json.loads((root / "state" / "m62" / "current.json").read_text())
-    latest = json.loads((root / pointer["latest_snapshot_path"]).read_text())
+    latest = json.loads(
+        (root / "state" / "m62" / "snapshots"
+         / "0022-m62-s4d-eval-v7-frozen.json").read_text())
     digest = latest["records"]["datasets"]
     record = json.loads(
         (root / "state" / "m62" / "records" / f"{digest}.json").read_text())

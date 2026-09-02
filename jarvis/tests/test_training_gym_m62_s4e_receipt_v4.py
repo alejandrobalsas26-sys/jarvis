@@ -41,9 +41,14 @@ import _s3q02_synthetic as R
 _REFERENCE_RUN = "qwen3-06b-lora-quality-live-reference"
 
 
+_V4_PLAN_HASH = "b" * 64
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
-    return R.recovery_world(tmp_path_factory)
+    # D-S4F-2: a V4 ledger names the OUTER plan. Passed here rather than rewritten later
+    # because the witness binds every ledger line by digest.
+    return R.recovery_world(tmp_path_factory, ledger_plan_hash=_V4_PLAN_HASH)
 
 
 @pytest.fixture(scope="module")
@@ -89,7 +94,7 @@ def v4_world(world, tmp_path_factory):
     report = json.loads(
         (Path(world["directory"]) / "evaluation-report.json").read_text(encoding="utf-8"))
     task_count = int(report["task_count"])
-    plan_hash = "b" * 64
+    plan_hash = _V4_PLAN_HASH
     attempt = {
         "record_version": "m62.evaluation_v4_attempt.1",
         "event": "protocol_v4_paired_attempt",
@@ -348,7 +353,10 @@ def test_a_v3_payload_parsed_as_v4_is_refused(world):
         world["directory"], training_receipt=world["training_receipt"],
         adapter_run_directory=world["adapter"]["directory"],
         evaluation_config=world["config_path"], ledger=world["ledger"],
-        measurement_witness=world["witness_path"], repo_root=world["repo_root"]))
+        measurement_witness=world["witness_path"], repo_root=world["repo_root"],
+        # This world's ledger is a V4 one (D-S4F-2), so `.3` must be told which plan it
+        # carries. What is under test is the SHAPE of the resulting payload, not the plan.
+        ledger_plan_hash=_V4_PLAN_HASH))
     assert v3["schema_version"] == EVAL_RECEIPT_V3_SCHEMA_VERSION
     assert verify_receipt_v4(v3)
     assert validate_against_schema(eval_receipt_v4_schema(), v3) != []

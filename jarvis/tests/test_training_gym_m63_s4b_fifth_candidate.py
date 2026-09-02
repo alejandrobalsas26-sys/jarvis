@@ -545,13 +545,25 @@ def test_designing_the_fifth_candidate_created_no_adapter_and_no_run():
 
 
 def test_designing_the_fifth_candidate_created_no_exam():
-    """The one absence that is NOT a moment: it must still hold, and it does."""
+    """The one absence that is NOT a moment: it must still hold, and it does.
+
+    RESCOPED AT S4F. What S4B recorded -- that DESIGNING a candidate creates no exam and
+    no measurement -- is read from S4B and is unchanged. The receipt clause asserted the
+    absence in the LIVE tree, which also asserted that nothing would ever authorise one;
+    S4E then spent one human EVAL authority and S4F sealed the result. So the clause now
+    says what it always meant: a receipt may exist only if a milestone earned it, and the
+    one that does is bound to the candidate and to the corpus that measured it.
+    """
     entry = _s4b_entry()
     assert entry["evaluation_corpus"] is None
     assert entry["evaluation_receipt"] is None
     receipts = REPO / "state" / "m62" / "receipts"
-    assert not list(receipts.glob(f"{CANDIDATE_005_ID}.eval.json")), (
-        "an evaluation receipt exists for candidate 005; nothing authorised one")
+    existing = list(receipts.glob(f"{CANDIDATE_005_ID}.eval.json"))
+    if existing:
+        receipt = json.loads(existing[0].read_text(encoding="utf-8"))
+        assert receipt["candidate"]["candidate_id"] == CANDIDATE_005_ID
+        assert receipt["holdout"]["dataset_version"] == "v7"
+        assert receipt["outcome"]["promotes_model"] is False
 
 
 def test_no_eval_v7_exists():

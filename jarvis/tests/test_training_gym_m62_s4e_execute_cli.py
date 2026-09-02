@@ -135,9 +135,23 @@ def test_an_unknown_holdout_is_refused():
     assert any("never heard of" in p for p in problems)
 
 
-def test_the_live_holdout_passes_the_guard_while_it_is_unspent():
-    """A guard that refused everything would prove nothing."""
-    assert CLI._control_plane_blockers("m62-defensive-eval", "v7") == []
+def test_the_guard_now_refuses_the_spent_live_holdout():
+    """RESCOPED AT S4F. This asserted the guard PASSES eval-v7, which was the point while
+    v7 was unspent: a guard that refused everything would prove nothing. S4E then spent it
+    exactly once, so the same guard must now REFUSE it -- and that is the stronger half of
+    the same property, since refusing a spent holdout is what the guard exists for.
+
+    Non-vacuity is kept by the unspent case below, which still passes cleanly.
+    """
+    problems = CLI._control_plane_blockers("m62-defensive-eval", "v7")
+    assert problems
+    assert any("USED_IMMUTABLE" in p for p in problems)
+
+
+def test_the_guard_still_passes_a_holdout_the_control_plane_records_as_unspent():
+    """A guard that refused everything would prove nothing. eval-v5 is FROZEN_UNUSED and
+    never model-spent, so the guard has something live to say yes to."""
+    assert CLI._control_plane_blockers("m62-defensive-eval", "v5") == []
 
 
 # ══════════════════════════════════════════════════════════════════════════════

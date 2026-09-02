@@ -61,8 +61,16 @@ def _git(root: Path, *args: str) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def recovery_world(tmp_path_factory) -> dict:
-    """One completed synthetic evaluation, sealed across a real three-commit recovery."""
+def recovery_world(tmp_path_factory, *, ledger_plan_hash: str = "") -> dict:
+    """One completed synthetic evaluation, sealed across a real three-commit recovery.
+
+    ``ledger_plan_hash`` models a WRAPPING protocol (D-S4F-2): under Protocol V4 the ledger
+    records the OUTER plan the authority was bound to, while the report publishes the inner
+    plan the outer one contains. Rewriting the ledger must happen HERE, before the witness
+    is written, because the witness binds each ledger line by the digest of its canonical
+    body -- a rewrite afterwards would leave a witness describing a different measurement.
+    Left empty, the ledger names the report's plan and every v1-v3 caller is unchanged.
+    """
     from scripts.build_m62_eval_receipt import (
         build_measurement_witness,
         witness_source_identity,
@@ -71,6 +79,20 @@ def recovery_world(tmp_path_factory) -> dict:
 
     world = dict(W.evaluated_world(tmp_path_factory))
     root = Path(world["repo_root"])
+
+    if ledger_plan_hash:
+        report = json.loads(
+            (Path(world["directory"]) / "evaluation-report.json").read_text("utf-8"))
+        ledger_path = Path(world["ledger"])
+        lines = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if str(entry.get("plan_hash")) == str(report["plan_hash"]):
+                entry["plan_hash"] = ledger_plan_hash
+            lines.append(json.dumps(entry, sort_keys=True))
+        ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # -- commit 1: the evaluation source ------------------------------------
     # `evaluated_world` already made a repository here and committed SOURCE.md. The

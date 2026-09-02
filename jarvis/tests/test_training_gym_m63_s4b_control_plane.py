@@ -275,8 +275,13 @@ def test_candidate_005_was_designed_with_no_weights_at_generation_17():
     """The sealed pair moved forward at S4C; what S4B RECORDED did not."""
     assert _s4b_entry("status") == "DESIGNED_UNTRAINED"
     assert _s4b_entry("adapter_sha256") is None
+    # RESCOPED AT S4F. The sealed pair's STATUS advances every time a milestone seals a
+    # transition -- S4C trained the candidate and S4F recorded it measured -- so pinning
+    # the tuple to the two pre-measurement states asserted that it would never be
+    # evaluated. That is the experiment being open, not a fact S4B recorded. What S4B DID
+    # record is above, read from S4B, and it is unchanged.
     assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID][0] in (
-        "DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED")
+        "DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED", "EVALUATED_NOT_ELIGIBLE")
 
 
 def test_the_design_is_re_derived_from_the_production_generator():
@@ -294,22 +299,30 @@ def test_a_designed_candidate_carrying_an_adapter_is_refused(s4b_sandbox):
     assert "designed candidate has a configuration and no weights" in _messages(report)
 
 
-def test_a_design_the_generator_cannot_produce_is_refused(sandbox):
+def test_a_design_the_generator_cannot_produce_is_refused(s4b_sandbox):
+    """RESCOPED AT S4F to the pinned generation-17 sandbox this file already provides.
+
+    `check_candidate_design` deliberately re-derives only DESIGNED_UNTRAINED and
+    TRAINED_UNEVALUATED claims, so once S4F recorded candidate 005 as measured these
+    mutations had nothing left to bite on and the tests passed by asserting nothing.
+    Pinning restores the non-vacuity; the refusal being asserted is unchanged.
+    """
     def mutate(payload: dict) -> None:
         _entry(payload, 5)["candidate_id"] = "qwen3-06b-lora-quality-live-006"
 
     report = V.Report()
-    V.check_candidate_design(_mutate(sandbox, mutate), report)
+    V.check_candidate_design(_mutate(s4b_sandbox, mutate), report)
     assert "no candidate in the production generator carries that run id" in \
         _messages(report)
 
 
-def test_a_corpus_the_generator_does_not_train_on_is_refused(sandbox):
+def test_a_corpus_the_generator_does_not_train_on_is_refused(s4b_sandbox):
+    """RESCOPED AT S4F, for the reason given above."""
     def mutate(payload: dict) -> None:
         _entry(payload, 5)["training_corpus"] = "m62-defensive-quality-train v1"
 
     report = V.Report()
-    V.check_candidate_design(_mutate(sandbox, mutate), report)
+    V.check_candidate_design(_mutate(s4b_sandbox, mutate), report)
     assert "the generator trains it on v2" in _messages(report)
 
 
@@ -348,7 +361,18 @@ def test_the_holdouts_are_untouched():
     assert v5["spent_by"] is None
     assert datasets["m62-defensive-eval v6"]["status"] == "USED_IMMUTABLE"
     assert datasets["m62-defensive-eval v4"]["status"] == "USED_IMMUTABLE"
-    assert "v7" not in " ".join(datasets)
+    # RESCOPED AT S4F. That v4 and v6 stay spent and v5 stays frozen-and-unspent are LIVE
+    # invariants and are asserted above. That no v7 EXISTS is a fact about S4B, which ran
+    # before S4D authored it -- read live it asserted the exam would never be created.
+    s4b = json.loads(
+        (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_text(encoding="utf-8"))
+    s4b_datasets, problems = V.rehydrate_v3(
+        s4b, V.load_record_store(REPO / V.RECORD_DIR))
+    assert not problems
+    assert "v7" not in " ".join(
+        f"{d['dataset_id']} {d['version']}" for d in s4b_datasets["datasets"])
+    # And now that it does exist, it is spent and terminal.
+    assert datasets["m62-defensive-eval v7"]["status"] == "USED_IMMUTABLE"
 
 
 def test_the_training_corpus_is_not_re_versioned():

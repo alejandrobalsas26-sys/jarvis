@@ -449,6 +449,12 @@ def test_the_historical_axis_assertion_still_applies_with_no_designed_candidate(
     plane = _mutate(sandbox, mutate)
     report = V.Report()
     V.check_next(plane, report)
+    # UNCHANGED BY S4F (D-S4F-6), deliberately. With nothing designed, the field records
+    # the LAST MEASURED axis, which is now re-derived from the candidate ledger and the
+    # production generator rather than matched against two literals. In THIS sandbox the
+    # last measured candidate is 003, whose axis is a render-policy transition the
+    # generator declares as an empty dial set -- not re-derivable, so the preregistered
+    # match still applies and this refusal is byte-for-byte the one it always was.
     assert "the preregistered primary axis is not recorded" in _messages(report)
 
 

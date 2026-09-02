@@ -10,9 +10,9 @@
   "generation_label": "M62_S4F_EVAL_V7_SPENT_CANDIDATE005_NOT_ELIGIBLE",
   "next_milestone": {
     "authority_required": [
-      "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, before anything is measured again — and there is no holdout to spend one on: eval-v7 is USED_IMMUTABLE and single-use. The S4E authority is consumed and is never replayed",
+      "a fresh single-use human EVAL authority, form EVAL:<plan-hash>, before anything is measured again - and there is no holdout to spend one on: eval-v7 is USED_IMMUTABLE and single-use. The S4E authority is consumed and is never replayed",
       "a fresh single-use human TRAIN authority, form TRAIN:<plan-hash>, before any further training; the S4C one is consumed and is never replayed",
-      "a separate explicit human decision before any promotion, which no result implies — and candidate 005's result is a veto, so no promotion decision is available to make"
+      "a separate explicit human decision before any promotion, which no result implies - and candidate 005's result is a veto, so no promotion decision is available to make"
     ],
     "evaluation_holdout": "NONE AVAILABLE. eval-v7 is USED_IMMUTABLE, spent_by S4E gen-1, 36 tasks, manifest e80cc46f, pack e6d8d0b2. eval-v4, eval-v6 and eval-v7 are USED_IMMUTABLE; eval-v5 is FROZEN_UNUSED and RETIRED. A further measurement needs a NEW holdout, authored by a session that will not run it.",
     "holdout_access": "No holdout may be rendered to any model or session and every spent one stays unread; under D35 a spent holdout is development evidence and may never decide eligibility again. A HOLDOUT AUTHOR IS NEVER ITS EVALUATOR: the S4D session authored eval-v7 and may not run it.",

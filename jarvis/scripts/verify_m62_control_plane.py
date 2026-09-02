@@ -5333,6 +5333,25 @@ REQUIRED_RULED_OUT_SUBJECTS = (
 )
 
 
+def _declared_dials(entry: dict) -> frozenset:
+    """The dials the production generator says this candidate's axis moves.
+
+    Empty for a candidate whose axis is not a dial at all, and empty for one the generator
+    does not know: both mean "not re-derivable here", which the caller must handle rather
+    than read as "nothing to check".
+    """
+    if str(_PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PACKAGE_ROOT))
+    try:
+        from scripts import build_quality_training_config as generator
+    except Exception:  # noqa: BLE001 — the caller reports the import failure
+        return frozenset()
+    key = next((k for k, spec in generator.CANDIDATES.items()
+                if spec.get("run_id") == entry.get("candidate_id")), "")
+    relation = generator.CANDIDATE_SINGLE_AXIS.get(key) if key else None
+    return frozenset(relation[1]) if relation else frozenset()
+
+
 def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
     """V26 — the recorded axis is the one the production generator actually configures.
 
@@ -5373,7 +5392,19 @@ def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
                         "no candidate is designed, trained or evaluated; the recorded "
                         "primary axis describes an experiment that does not exist")
             return
-        designed = [max(measured, key=lambda c: int(c.get("ordinal", 0)))]
+        last = max(measured, key=lambda c: int(c.get("ordinal", 0)))
+        # NOT EVERY AXIS IS A DIAL. Candidate 003's was a render-policy transition, which
+        # the generator declares as an EMPTY dial set -- so re-deriving it would iterate
+        # over nothing and pass whatever the snapshot said. Where the generator can name
+        # the ends, they are re-derived below; where it cannot, the preregistered
+        # transition is still matched, because a check that can verify nothing must refuse
+        # rather than agree.
+        if not _declared_dials(last):
+            if "MODEL_DEFAULT" not in recorded or "DISABLED" not in recorded:
+                report.fail("CANDIDATE_STATE",
+                            f"the preregistered primary axis is not recorded: {recorded!r}")
+            return
+        designed = [last]
 
     if str(_PACKAGE_ROOT) not in sys.path:
         sys.path.insert(0, str(_PACKAGE_ROOT))
