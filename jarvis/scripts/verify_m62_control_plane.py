@@ -513,11 +513,14 @@ FROZEN_DATASETS: dict[str, tuple[str, str]] = {
         "e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c"),
     # S4D froze v7 candidate-blind, for the FIRST reference-adapter comparison: candidate
     # 004 as the REFERENCE arm and candidate 005 as the CANDIDATE arm, one paired attempt,
-    # ONE spend. FROZEN_UNUSED is a scientific claim and not a label: no model has ever
-    # read it. The one legal transition out is guarded by EVAL_AUTHORITY_CONSUMED, and
-    # there is no edge back.
+    # ONE spend. RE-QUOTED AT S4F, from the milestone that sealed the transition: S4E
+    # spent it under ONE external human EVAL authority bound to plan 54488fb3 -- the only
+    # thing FROZEN_UNUSED -> USED_IMMUTABLE is guarded by (EVAL_AUTHORITY_CONSUMED) --
+    # producing 36 + 36 generations and one terminal `completed`. The digest is unchanged,
+    # there is no edge back, and USED_IMMUTABLE is terminal: no rerun, no second look, no
+    # re-freezing a spent corpus as fresh, and an inconvenient verdict buys none of them.
     "m62-defensive-eval v7": (
-        "FROZEN_UNUSED",
+        "USED_IMMUTABLE",
         "e80cc46fa0b2c1ec020ed02f9565d778772d8e76dd208f2ba49349ab199b369a"),
     # RE-QUOTED AT S3Y, from the milestone that sealed the transition. S3X.1 froze v6
     # candidate-blind as the replacement the v5 ELIGIBILITY retirement requires; S3Y then
@@ -636,10 +639,19 @@ FROZEN_CANDIDATES: dict[str, tuple[str, "str | None"]] = {
     # claim from the portable receipt, so this pair agreeing with the snapshot is not on
     # its own a pass.
     #
-    # TRAINED is not EVALUATED and is emphatically not ELIGIBLE. Candidate 005 has no
-    # exam: eval-v6 is spent, eval-v5 is retired unspent, and no eval-v7 exists.
+    # RE-QUOTED AT S4F. S4E measured it once against candidate 004 on eval-v7 under
+    # Protocol V4 and the frozen gates said no: one NEW secret leak where the reference arm
+    # had none, which the security policy vetoes outright. It did so while WINNING on
+    # quality -- mean paired delta +0.1714, interval excluding the regression margin, six
+    # refusal failures fixed -- and that is exactly the trade the frozen policy refuses to
+    # make, because security is a veto and not a weight. NOT ELIGIBLE IS A RESULT, NOT A
+    # FAILURE OF THE RUN: 72 results, 0 generation errors, 0 timeouts.
+    #
+    # EVALUATED is not ELIGIBLE and is emphatically not PROMOTED. The digest is unchanged
+    # by the measurement; there is no edge back to TRAINED_UNEVALUATED, and no exam remains
+    # to re-measure on.
     "qwen3-06b-lora-quality-live-005": (
-        "TRAINED_UNEVALUATED",
+        "EVALUATED_NOT_ELIGIBLE",
         "52d6da26dca20dce93de8845fa08e0b3e452d86472fd6e06d756a30e52688f2a"),
 }
 
@@ -4317,11 +4329,28 @@ def _check_modern_evaluation_receipt(cp: ControlPlane, report: Report, *, entry:
                     f"about the adapter artefact set")
 
     # -- the baseline the control plane names is the baseline that was measured -
+    #
+    # D-S4F-5. A v4 receipt carries NO `baseline` object, on purpose: under the paired
+    # protocol nothing answered as a bare base model, and a block asserting one would make
+    # that false claim expressible. The shared base both arms attach to is what this check
+    # is actually about, and v4 records it on the pairing. Read the shape the receipt
+    # declares -- and refuse a receipt that offers neither, so a future shape cannot pass
+    # this check by simply having no field for it to read.
     base = cp.snapshot.get("base_model", {})
-    baseline = receipt.get("baseline", {})
-    for label, mine, theirs in (("base model", baseline.get("model_id"),
-                                 base.get("model_id")),
-                                ("base revision", baseline.get("revision"),
+    if version == EVAL_RECEIPT_V4_SCHEMA_VERSION:
+        pairing = receipt.get("pairing", {}) or {}
+        measured_model = pairing.get("shared_base_model_id")
+        measured_revision = pairing.get("shared_base_model_revision")
+    else:
+        baseline = receipt.get("baseline", {}) or {}
+        measured_model = baseline.get("model_id")
+        measured_revision = baseline.get("revision")
+    if measured_model is None and measured_revision is None:
+        report.fail("EVALUATION_RECEIPT",
+                    f"{cid}: the receipt names no base model at all, so what it measured "
+                    f"against cannot be compared with what the control plane names")
+    for label, mine, theirs in (("base model", measured_model, base.get("model_id")),
+                                ("base revision", measured_revision,
                                  base.get("revision"))):
         if mine != theirs:
             report.fail("EVALUATION_RECEIPT",
@@ -5329,10 +5358,22 @@ def _check_primary_axis(cp: ControlPlane, nxt: dict, report: Report) -> None:
     designed = [c for c in cp.snapshot.get("candidates", [])
                 if c.get("status") in ("DESIGNED_UNTRAINED", "TRAINED_UNEVALUATED")]
     if not designed:
-        if "MODEL_DEFAULT" not in recorded or "DISABLED" not in recorded:
+        # D-S4F-6. The property is "with no open experiment, the field records the LAST
+        # MEASURED axis". Until S4F the last measured axis was candidate 003's render
+        # policy, and this branch matched its two ends as literals -- which is the exact
+        # circular pass the docstring above says this module refuses, and which went stale
+        # the moment a later candidate was measured. The last measured axis is now
+        # re-derived from the candidate ledger and the production generator, like the open
+        # case below. Nothing about a result is decided here: this checks only that the
+        # snapshot advertises the experiment that actually closed most recently.
+        measured = [c for c in cp.snapshot.get("candidates", [])
+                    if str(c.get("status", "")).startswith("EVALUATED")]
+        if not measured:
             report.fail("CANDIDATE_STATE",
-                        f"the preregistered primary axis is not recorded: {recorded!r}")
-        return
+                        "no candidate is designed, trained or evaluated; the recorded "
+                        "primary axis describes an experiment that does not exist")
+            return
+        designed = [max(measured, key=lambda c: int(c.get("ordinal", 0)))]
 
     if str(_PACKAGE_ROOT) not in sys.path:
         sys.path.insert(0, str(_PACKAGE_ROOT))

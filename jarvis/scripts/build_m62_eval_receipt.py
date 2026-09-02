@@ -1054,6 +1054,31 @@ RECEIPT_V2_SEAL_FAILURE_CLASSES: tuple[str, ...] = (
 )
 
 
+def redact_held_out_task_ids(text: object) -> str:
+    """Replace any held-out task identifier with a placeholder naming its corpus.
+
+    D-S4F-4. A receipt is TRACKED and published; the report it seals is gitignored
+    evidence. `verify_m62_control_plane` refuses a receipt that names a held-out task id,
+    and it is right to: a task id in a published file is a hint about a single-use exam,
+    delivered in instalments. But a gate blocker naming the task it fired on is the
+    report's own decision text, and dropping the blocker instead would hide WHY a
+    candidate failed.
+
+    So the identifier is replaced and the sentence is kept. The corpus is still named, the
+    reason is still legible, and the unredacted text stays recoverable from the report the
+    receipt binds by digest. The table comes from the verifier that enforces the rule, so
+    the two cannot drift into disagreeing about what a held-out id is.
+    """
+    from scripts.verify_m62_control_plane import HELD_OUT_TASK_IDS
+
+    out = str(text)
+    for version, task_ids in HELD_OUT_TASK_IDS.items():
+        for task_id in task_ids:
+            if task_id in out:
+                out = out.replace(task_id, f"<eval-{version} task id redacted>")
+    return out
+
+
 def production_verdicts() -> tuple[str, ...]:
     """The canonical paired-comparison vocabulary, from the production enum itself.
 
@@ -1899,9 +1924,10 @@ def build_receipt_v3(generation_directory: str | Path, *,
             "promotes_model": False,
             "activates_model": False,
             "mutates_model_registry": False,
-            "gate_blockers": [str(b) for b in decision.blockers],
-            "gate_warnings": [str(w) for w in decision.warnings],
-            "limitations": [str(limit) for limit in report.get("limitations", [])],
+            "gate_blockers": [redact_held_out_task_ids(b) for b in decision.blockers],
+            "gate_warnings": [redact_held_out_task_ids(w) for w in decision.warnings],
+            "limitations": [redact_held_out_task_ids(limit)
+                            for limit in report.get("limitations", [])],
             "security_blocking_count": int(
                 report["gate_report"].get("security_blocking_count", 0)),
         },
@@ -2456,9 +2482,16 @@ def verify_receipt_v3(payload: dict) -> tuple[str, ...]:
         problems.append(
             f"the receipt claims candidate state {candidate.get('status_claim')!r} and "
             f"its own evidence supports {expected_state or 'no evaluated state'}")
-    if list(outcome.get("gate_blockers", [])) != list(decision.blockers):
+    # D-S4F-4. Compared against the REDACTED decision text, because that is what a tracked
+    # receipt may carry. Redaction is a no-op on every blocker that names no held-out task,
+    # so this is the same check it has always been for every receipt sealed before S4F —
+    # and it still refuses a receipt whose blockers are not the ones its evidence produced,
+    # which dropping the comparison would not.
+    if list(outcome.get("gate_blockers", [])) != \
+            [redact_held_out_task_ids(b) for b in decision.blockers]:
         problems.append("the receipt's blockers are not the ones its evidence produces")
-    if list(outcome.get("gate_warnings", [])) != list(decision.warnings):
+    if list(outcome.get("gate_warnings", [])) != \
+            [redact_held_out_task_ids(w) for w in decision.warnings]:
         problems.append("the receipt's warnings are not the ones its evidence produces")
     gate_report = decision_evidence.get("gate_report") or {}
     if outcome.get("security_blocking_count") != \
