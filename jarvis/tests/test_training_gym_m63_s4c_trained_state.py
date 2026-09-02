@@ -48,6 +48,7 @@ CANDIDATE_005_ID = "qwen3-06b-lora-quality-live-005"
 #: Written independently of the artefacts under test.
 RECEIPT = f"state/m62/receipts/{CANDIDATE_005_ID}.train.json"
 RECEIPT_004 = f"state/m62/receipts/{CANDIDATE_004_ID}.train.json"
+RECEIPT_005_EVAL = f"state/m62/receipts/{CANDIDATE_005_ID}.eval.json"
 EVIDENCE_DOC = "jarvis/docs/V69_M63_S4C_CANDIDATE005_LIVE_TRAINING.md"
 
 AUTHORIZED_PLAN_HASH = (
@@ -378,15 +379,22 @@ def test_candidate_004s_receipts_are_untouched():
          "--", "state/m62/receipts/"], cwd=REPO, capture_output=True, text=True).stdout
     assert code == 0
     changed = [line for line in out.splitlines() if line.strip()]
-    assert changed == [RECEIPT], (
+    # RESCOPED AT S4F: candidate 005 has an EVAL receipt now as well as a training one,
+    # which S4E earned and S4F sealed. The property this test owns is that sealed evidence
+    # belonging to EVERY OTHER candidate is byte-identical, and that is asserted exactly.
+    assert set(changed) <= {RECEIPT, RECEIPT_005_EVAL}, (
         f"receipts other than candidate 005's changed since the milestone base: "
         f"{changed}")
+    assert RECEIPT in changed
 
 
-def test_no_evaluation_receipt_exists_for_candidate_005():
-    assert not (REPO / f"state/m62/receipts/{CANDIDATE_005_ID}.eval.json").exists()
-    receipts = sorted(p.name for p in (REPO / "state/m62/receipts").glob("*.json"))
-    assert f"{CANDIDATE_005_ID}.eval.json" not in receipts
+def test_s4c_named_no_evaluation_receipt_for_candidate_005():
+    """RESCOPED AT S4F: what S4C recorded, read from S4C. The file exists NOW -- S4E
+    measured the candidate and S4F sealed it -- and asserting its absence from the live
+    tree would assert that the experiment stayed open, which is not S4C's property."""
+    entry = next(c for c in _s4c_snapshot()["candidates"]
+                 if c["candidate_id"] == CANDIDATE_005_ID)
+    assert entry["evaluation_receipt"] is None
 
 
 def test_no_eval_v7_was_created():
@@ -434,6 +442,15 @@ S4B_SNAPSHOT = "0017-m63-s4b-candidate005-designed.json"
 #: until generation 19 was written. Every other assertion in this file is about candidate
 #: 005's state, which a later generation genuinely must not move, and deliberately still
 #: follows the pointer -- that is exactly what makes them worth running today.
+#:
+#: RESCOPED AGAIN AT S4F, which measured candidate 005 on eval-v7 and sealed the result.
+#: Seven assertions here read S4C's own state -- 005 TRAINED_UNEVALUATED, naming no exam,
+#: with no eval receipt, and no eval-v7 in the dataset ledger -- from the LIVE pointer, so
+#: they silently also asserted that 005 would never be measured. That is not a property
+#: S4C owns; it is the experiment being open, and S4E closed it. Each is now read from the
+#: generation that owns it, and NONE is weakened: what S4C recorded is still asserted
+#: byte-for-byte, against S4C. What is true NOW is asserted separately, in
+#: test_training_gym_m62_s4f_sealed_state.py, which is where a spent exam belongs.
 S4C_SNAPSHOT = "0018-m63-s4c-candidate005-trained.json"
 
 
@@ -472,44 +489,70 @@ def test_the_whole_verifier_passes_with_no_problems():
 
 
 def test_candidate_005_is_trained_and_unevaluated(snapshot):
+    """RESCOPED AT S4F, and deliberately split.
+
+    The STATUS is S4C's own record and is read from S4C: measuring a candidate is exactly
+    what moves it, so reading that from the live pointer asserted the experiment would stay
+    open. Everything else is WEIGHT IDENTITY, which no later generation may move whatever
+    it measures, and stays on the live pointer where it does real work.
+    """
+    s4c = next(c for c in _s4c_snapshot()["candidates"]
+               if c["candidate_id"] == CANDIDATE_005_ID)
+    assert s4c["status"] == "TRAINED_UNEVALUATED"
+
     entry = next(c for c in snapshot["candidates"]
                  if c["candidate_id"] == CANDIDATE_005_ID)
-    assert entry["status"] == "TRAINED_UNEVALUATED"
     assert entry["adapter_sha256"] == ADAPTER_SHA256
     assert entry["adapter_manifest_hash"] == ADAPTER_MANIFEST_HASH
     assert entry["training_receipt"] == RECEIPT
     assert entry["training_corpus"] == "m62-defensive-quality-train v2"
     assert entry["base_model_revision"] == BASE_MODEL_REVISION
-    assert entry["evidence"] == EVIDENCE_DOC
 
 
-def test_a_trained_candidate_names_no_exam(snapshot):
-    """The state's whole content is that no held-out material has been spent on it."""
-    entry = next(c for c in snapshot["candidates"]
+def test_a_trained_candidate_named_no_exam_at_s4c():
+    """RESCOPED AT S4F: TRAINED_UNEVALUATED's whole content is that no held-out material
+    had been spent, and that is a fact about S4C. eval-v7 has since been spent exactly
+    once; the live state is asserted in the S4F suite."""
+    entry = next(c for c in _s4c_snapshot()["candidates"]
                  if c["candidate_id"] == CANDIDATE_005_ID)
     assert entry["evaluation_corpus"] is None
     assert entry["evaluation_receipt"] is None
 
 
 def test_the_sealed_pair_moved_forward_exactly_once(snapshot):
-    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID] == (
-        "TRAINED_UNEVALUATED", ADAPTER_SHA256)
+    """RESCOPED AT S4F. The status half of this pair legitimately advances each time a
+    milestone seals a transition -- S4F re-quoted it to EVALUATED_NOT_ELIGIBLE, exactly as
+    S3Y re-quoted eval-v6. What may NEVER move is the digest: a candidate whose weights
+    changed under a status is the substitution this pair exists to catch, and 005 carrying
+    004's digest is the other one."""
+    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID][1] == ADAPTER_SHA256
     assert V.FROZEN_CANDIDATES[CANDIDATE_004_ID][1] == ADAPTER_SHA256_004
+    assert ADAPTER_SHA256 != ADAPTER_SHA256_004
+    assert V.FROZEN_CANDIDATES[CANDIDATE_005_ID][0] in (
+        "TRAINED_UNEVALUATED", "EVALUATED_NOT_ELIGIBLE")
 
 
-def test_only_the_fifth_candidate_moved(snapshot):
-    """Generations advance one candidate. The other four are byte-identical."""
+def test_only_the_fifth_candidate_moved():
+    """Generations advance one candidate. The other four are byte-identical.
+
+    RESCOPED AT S4F to compare S4B with S4C rather than with the live pointer. The property
+    is about what a TRAINING run may move, and S4C is the training run; against the live
+    pointer it also required that no later generation ever move a dataset, which made a
+    spent holdout unrecordable. The four untouched candidates are still asserted
+    byte-for-byte, and so is every block a training run may not touch.
+    """
     stored = json.loads(
         (REPO / V.SNAPSHOT_DIR / S4B_SNAPSHOT).read_text(encoding="utf-8"))
     before, problems = V.rehydrate_v3(
         stored, V.load_record_store(REPO / V.RECORD_DIR))
     assert not problems
-    assert before["candidates"][:4] == snapshot["candidates"][:4]
-    assert len(snapshot["candidates"]) == len(before["candidates"]) == 5
+    after = _s4c_snapshot()
+    assert before["candidates"][:4] == after["candidates"][:4]
+    assert len(after["candidates"]) == len(before["candidates"]) == 5
     for block in ("datasets", "defects", "limitations", "frozen_invariants",
                   "base_model", "policy_identities", "archive",
                   "authority_observation"):
-        assert snapshot[block] == before[block], f"{block} moved during a training run"
+        assert after[block] == before[block], f"{block} moved during a training run"
 
 
 def test_candidate_004_keeps_its_hold(snapshot):
@@ -523,12 +566,21 @@ def test_candidate_004_keeps_its_hold(snapshot):
 
 
 def test_the_holdouts_did_not_move(snapshot):
+    """RESCOPED AT S4F, and split by what each clause actually owns.
+
+    v6 being spent and v5 being frozen-and-unspent are LIVE invariants -- no later
+    generation may resurrect a spent holdout or quietly spend a retired one -- and they stay
+    on the live pointer. `v7 not in datasets` is a fact about S4C, which ran before S4D
+    authored it; against the live pointer it asserted that the exam would never exist.
+    """
     datasets = {f"{d['dataset_id']} {d['version']}": d for d in snapshot["datasets"]}
     assert datasets["m62-defensive-eval v6"]["status"] == "USED_IMMUTABLE"
     v5 = datasets["m62-defensive-eval v5"]
     assert v5["status"] == "FROZEN_UNUSED"
     assert v5["spent_by"] is None
-    assert "m62-defensive-eval v7" not in datasets
+
+    s4c = {f"{d['dataset_id']} {d['version']}": d for d in _s4c_snapshot()["datasets"]}
+    assert "m62-defensive-eval v7" not in s4c
 
 
 def test_the_training_corpus_was_reused_not_re_versioned(snapshot):
