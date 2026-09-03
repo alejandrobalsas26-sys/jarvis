@@ -1177,3 +1177,317 @@ def test_counters_are_numbers_and_never_content(h):
     rendered = json.dumps(h.engine._counters.to_dict())
     assert "sk-do-not-log" not in rendered
     assert h.engine._counters.executions >= 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §7 — the effect ledger, tested DIRECTLY and not through a gate that hides it
+#
+#  Every dedupe assertion elsewhere in this file runs a specialist, which means
+#  a HITL approval, a capability check and a preflight all fire first. If any of
+#  those refuses the second intent, the test passes while the ledger is never
+#  consulted — that is exactly how the first version of
+#  `test_a_duplicate_intent_produces_exactly_one_effect` passed without proving
+#  anything. These call `ToolExecutor.aexecute` with nothing in the way, so the
+#  ledger is the only thing that can produce the result being asserted.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_the_ledger_alone_deduplicates_an_identical_effect(h):
+    h.add_tool(EFFECT_TOOL, {"stdout": "once", "returncode": 0})
+    h.executor.begin_effect_epoch("turn:ledger")
+
+    async def _twice():
+        a = await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+        b = await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+        return a, b
+
+    first, second = asyncio.run(_twice())
+
+    assert h.count(EFFECT_TOOL) == 1, "the ledger let an identical effect repeat"
+    assert first == second, "the replay did not return the recorded result"
+
+
+def test_the_ledger_returns_the_recorded_result_rather_than_an_error(h):
+    """§20 — a suppressed replay must RECOVER the receipt, not fail.
+
+    A dedupe that refuses is not exactly-once, it is at-most-once with a broken
+    caller: the retry has to be able to learn what happened.
+    """
+    h.add_tool(EFFECT_TOOL, {"stdout": "recorded", "returncode": 0})
+    h.executor.begin_effect_epoch("turn:recover")
+
+    async def _twice():
+        await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+        return await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+
+    replayed = asyncio.run(_twice())
+    assert replayed.get("stdout") == "recorded"
+    assert "error" not in replayed
+
+
+def test_the_ledger_keys_arguments_canonically_not_positionally(h):
+    h.add_tool("http_request", {"status": 200})
+    h.executor.begin_effect_epoch("turn:order")
+
+    async def _twice():
+        await h.executor.aexecute(
+            "http_request", {"url": "http://127.0.0.1/a", "method": "GET"})
+        await h.executor.aexecute(
+            "http_request", {"method": "GET", "url": "http://127.0.0.1/a"})
+
+    asyncio.run(_twice())
+    assert h.count("http_request") == 1
+
+
+def test_a_new_epoch_permits_the_same_effect_again(h):
+    """Deduplication is a replay guard, never a permanent refusal."""
+    h.add_tool(EFFECT_TOOL, {"stdout": "x", "returncode": 0})
+
+    async def _two_turns():
+        h.executor.begin_effect_epoch("turn:one")
+        await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+        h.executor.begin_effect_epoch("turn:two")
+        await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+
+    asyncio.run(_two_turns())
+    assert h.count(EFFECT_TOOL) == 2
+
+
+def test_the_ledger_never_keys_a_read_only_call(h):
+    """A repeated read is not an effect and must stay cheap."""
+    h.add_tool("read_file", {"content": "x"})
+    h.executor.begin_effect_epoch("turn:reads")
+
+    async def _thrice():
+        for _ in range(3):
+            await h.executor.aexecute("read_file", {"path": "/etc/hostname"})
+
+    asyncio.run(_thrice())
+    assert h.count("read_file") == 3
+    assert h.executor.effect_count("read_file") == 0
+
+
+def test_a_failed_effect_is_never_ledgered(h):
+    """Only a SUCCESSFUL effect is recorded: a failed call left the world
+    unchanged, so retrying it is legitimate."""
+    h.add_tool(EFFECT_TOOL, fails=True)
+    h.executor.begin_effect_epoch("turn:failures")
+
+    async def _twice():
+        for _ in range(2):
+            await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
+
+    asyncio.run(_twice())
+    assert h.count(EFFECT_TOOL) == 2
+    assert h.executor.effect_count(EFFECT_TOOL) == 0
+
+
+def test_two_different_specialists_submitting_the_same_intent_cause_one_effect(
+        h, monkeypatch):
+    """§7 — 'duplicate specialist submission'. Effect identity is the EFFECT's,
+    not the requester's, so two specialists cannot each get a turn at it."""
+    from core.specialist_runtime import ToolCategory
+
+    for sid in (SpecialistId.FORGE, SpecialistId.CIRCUIT):
+        elevate(monkeypatch, sid, AutonomyLevel.HITL_EXECUTE,
+                capabilities={ToolCategory.READ, ToolCategory.CODE})
+    h.add_tool(EFFECT_TOOL, {"stdout": "shared", "returncode": 0})
+    h.answer = intent_text(EFFECT_TOOL, EFFECT_ARGS)
+
+    for sid in (SpecialistId.FORGE, SpecialistId.CIRCUIT):
+        request = h.request(specialist=sid,
+                            autonomy_level=AutonomyLevel.HITL_EXECUTE,
+                            allowed_tools=frozenset({EFFECT_TOOL}),
+                            effect_epoch="turn:shared")
+        _approve(h, request, specialist=sid, approval_id=f"ap:{sid.value}",
+                 single_use=False)
+        h.run(request)
+
+    assert h.count(EFFECT_TOOL) == 1, \
+        "a second specialist re-ran an effect that had already happened"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  §8 — ARGUS: forged, missing, scope-mismatched and authority-mismatched
+# ══════════════════════════════════════════════════════════════════════════════
+def _verify_result(result, *, graph=None, scope_decisions=(), objective="probe",
+                   required_evidence=(), ceiling=AutonomyLevel.OBSERVE):
+    """Run the REAL ARGUS over a hand-built result, so a forged shape can be
+    presented that the executor itself would never construct."""
+    from core.mesh_contracts import EvidenceGraph
+    from core.mesh_verifier import VerificationInput, verify
+
+    return verify(VerificationInput(
+        task_id="t", objective=objective,
+        graph=graph if graph is not None else EvidenceGraph(),
+        results=(result,), scope_decisions=tuple(scope_decisions),
+        required_evidence=tuple(required_evidence), autonomy_ceiling=ceiling))
+
+
+def test_argus_rejects_a_forged_success_receipt(h):
+    """A SUCCESS outcome with nothing to show is a fabrication, not a result."""
+    from core.mesh_contracts import (
+        ResultStatus,
+        SpecialistResult,
+        ToolCallStatus,
+        ToolOutcome,
+        Verdict,
+    )
+
+    forged = SpecialistResult(
+        status=ResultStatus.COMPLETE, specialist_id=SpecialistId.TRACE,
+        task_id="t", summary="The scan found three open ports.",
+        tool_outcomes=(ToolOutcome(tool="network_scan",
+                                   status=ToolCallStatus.SUCCESS,
+                                   summary=""),))
+
+    assert forged.hallucinated_tool_results == 1
+    assert _verify_result(forged).verdict is Verdict.FAILED
+
+
+def test_argus_rejects_output_attached_to_a_denied_call(h):
+    """The other forgery: a call that was REFUSED, reported as if it ran."""
+    from core.mesh_contracts import (
+        ResultStatus,
+        SpecialistResult,
+        ToolCallStatus,
+        ToolOutcome,
+        Verdict,
+    )
+
+    forged = SpecialistResult(
+        status=ResultStatus.COMPLETE, specialist_id=SpecialistId.SPECTER,
+        task_id="t", summary="The host is exposed.",
+        tool_outcomes=(ToolOutcome(tool="network_scan",
+                                   status=ToolCallStatus.DENIED,
+                                   summary="22/tcp open"),))
+
+    assert _verify_result(forged).verdict is Verdict.FAILED
+
+
+def test_argus_reports_insufficient_evidence_when_a_receipt_is_missing(h):
+    """A conclusion a specialist's contract requires evidence for, with none."""
+    from core.mesh_contracts import ResultStatus, SpecialistResult, Verdict
+
+    bare = SpecialistResult(
+        status=ResultStatus.COMPLETE, specialist_id=SpecialistId.TRACE,
+        task_id="t", summary="The host was compromised at 03:00.")
+
+    verdict = _verify_result(
+        bare, required_evidence=("a tool result naming the compromise",))
+    assert verdict.verdict in (Verdict.INSUFFICIENT_EVIDENCE, Verdict.FAILED)
+    assert not verdict.passing
+
+
+def test_argus_reports_a_scope_violation_when_a_denial_was_acted_on(h):
+    """§8 — scope mismatch is the most serious finding and outranks the rest."""
+    from core.mesh_contracts import (
+        ResultStatus,
+        SpecialistResult,
+        ToolCallStatus,
+        ToolOutcome,
+        Verdict,
+    )
+    from core.security_scope import ScopeDenial, SecurityScopeDecision
+
+    denial = SecurityScopeDecision.deny(
+        ScopeDenial.NO_SCOPE_REGISTERED, "active_service_validation",
+        "no scope is registered", target="10.0.0.5")
+    # The outcome must NAME the refused target: that is how the detector
+    # distinguishes "a scan was denied" (the control working) from "a scan of
+    # the denied target produced output anyway" (the control bypassed).
+    acted = SpecialistResult(
+        status=ResultStatus.COMPLETE, specialist_id=SpecialistId.SPECTER,
+        task_id="t", summary="Validated the service on 10.0.0.5.",
+        tool_outcomes=(ToolOutcome(tool="network_scan",
+                                   status=ToolCallStatus.SUCCESS,
+                                   summary="10.0.0.5 22/tcp open"),))
+
+    verdict = _verify_result(acted, scope_decisions=(denial,))
+    assert verdict.verdict is Verdict.SCOPE_VIOLATION
+    assert verdict.scope_violations
+    assert not verdict.passing
+
+
+def test_a_denied_call_alone_is_the_control_working_not_a_violation(h):
+    """The other side of the same detector: a refusal is not a violation."""
+    from core.mesh_contracts import (
+        ResultStatus,
+        SpecialistResult,
+        ToolCallStatus,
+        ToolOutcome,
+        Verdict,
+    )
+    from core.security_scope import ScopeDenial, SecurityScopeDecision
+
+    denial = SecurityScopeDecision.deny(
+        ScopeDenial.NO_SCOPE_REGISTERED, "active_service_validation",
+        "no scope is registered", target="10.0.0.5")
+    refused = SpecialistResult(
+        status=ResultStatus.REFUSED, specialist_id=SpecialistId.SPECTER,
+        task_id="t", summary="The scan was refused; no scope covers 10.0.0.5.",
+        tool_outcomes=(ToolOutcome(tool="network_scan",
+                                   status=ToolCallStatus.DENIED,
+                                   denial_reason="no scope"),))
+
+    assert _verify_result(refused, scope_decisions=(denial,)).verdict \
+        is not Verdict.SCOPE_VIOLATION
+
+
+def test_argus_reports_authority_missing_for_a_self_marked_approval(h):
+    """§8 — authority mismatch: an effectful request that marked ITSELF approved.
+
+    APPROVED_FOR_EXECUTOR is a state only a human decision reaches for a
+    HITL-class action, so a request carrying it with no recorded decision is a
+    claim of authority nothing granted.
+    """
+    from core.mesh_contracts import (
+        ActionDisposition,
+        ActionRequest,
+        ResultStatus,
+        SpecialistResult,
+        Verdict,
+    )
+
+    self_approved = ActionRequest(
+        action="block_address", target="10.0.0.5",
+        justification="it looked malicious",
+        requested_by=SpecialistId.GUARDIAN,
+        required_autonomy=AutonomyLevel.HITL_EXECUTE,
+        disposition=ActionDisposition.APPROVED_FOR_EXECUTOR)
+    result = SpecialistResult(
+        status=ResultStatus.COMPLETE, specialist_id=SpecialistId.GUARDIAN,
+        task_id="t", summary="Blocked the address.")
+
+    from core.mesh_contracts import EvidenceGraph
+    from core.mesh_verifier import VerificationInput, verify
+
+    verdict = verify(VerificationInput(
+        task_id="t", objective="contain", graph=EvidenceGraph(),
+        results=(result,), action_requests=(self_approved,),
+        autonomy_ceiling=AutonomyLevel.OBSERVE))
+
+    assert verdict.verdict is Verdict.AUTHORITY_MISSING
+    assert not verdict.passing
+
+
+def test_argus_never_returns_a_verdict_that_grants_anything(h):
+    """§8 — across every verdict this suite can produce."""
+    from core.mesh_contracts import ResultStatus, SpecialistResult
+
+    for summary in ("clean", "The scan found ports.", "I approve this myself."):
+        result = SpecialistResult(
+            status=ResultStatus.COMPLETE, specialist_id=SpecialistId.ARGUS,
+            task_id="t", summary=summary)
+        assert _verify_result(result).grants_authority is False
+
+
+def test_a_passing_verdict_still_leaves_the_ceiling_where_it_was(h):
+    """§8 — ARGUS does not elevate autonomy, grant scope or approve L3."""
+    h.add_tool("read_file", {"content": "bounded"})
+    h.answer = intent_text("read_file", {"path": "/etc/hostname"})
+    result = h.run(h.request(autonomy_level=AutonomyLevel.OBSERVE,
+                             allowed_tools=frozenset({"read_file"})),
+                   verify_with_argus=True)
+
+    assert result.effective_autonomy is AutonomyLevel.OBSERVE
+    assert SCOPES.scopes == []
+    assert h.approvals.approvals == []
