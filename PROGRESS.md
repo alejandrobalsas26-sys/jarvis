@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **27** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **29** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0027-m62-s4f-eval-v7-spent.json` |
-| **Snapshot SHA256** | `bcf54ae6263a5c362e874a6e5f0e2a8a0c6f527e3db7809bf75409380559e736` |
-| **Subject state commit** | `86bf4c56a74abe9009fcb5e72bf9c66a2af93dfb` (eval-v7 spent once; candidate 005 measured, not eligible, not promoted) |
+| **Latest snapshot** | `state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json` |
+| **Snapshot SHA256** | `b179a867de7c8556fb8bd44175fcb572488a7f93e9131bcf3bfc49e5d9a4da44` |
+| **Subject state commit** | `dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a` (M65A runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -41,8 +41,8 @@ archive and snapshot, and asks Git — not prose — about branch, ancestry and 
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-s4h-eval-instrument-hardening` — declared by gen 28; gen 27 sealed eval-v7 on `jarvis-v69-eval-v7-run` |
-| Subject state commit | `924e4664fc383735ec10393660775c0727aac876` — the commit the current snapshot describes |
+| Branch | `jarvis-v69-m65a-specialist-execution-core` — declared by gen 29 |
+| Subject state commit | `dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a` — the commit the current snapshot describes. gen 28's was `924e4664…` |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -63,7 +63,8 @@ the verifier requires HEAD to *descend* from the subject rather than equal it.
 |---|---|
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority bound to plan `54488fb3…`: 36+36 generations, ONE spend, terminal `completed`. S4H moved no candidate, dataset or policy identity |
-| Last milestone | **S4H** — generation 28, `state/m62/snapshots/0028-m62-s4h-instrument-hardening.json` `def4b272839042cfeaac19dcfb0b29bdad32fdbd884fb158e65f63a0bc956438`. **FUTURE instruments only**: D45–D48 recorded, the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed the result; receipt `769d327a…`. `…S4H_EVALUATION_INSTRUMENT_HARDENING.md` |
+| Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed the result; receipt `769d327a…`. `…S4H_INSTRUMENT_HARDENING.md` |
+| Last milestone | **M65A — RUNTIME, no science.** Gen 29 is GOVERNANCE-ONLY: `GIT_AUTHORITY` pins the branch, so a new one needs a generation (M64/M64.1 precedent, gens 19–20). Specialist execution core · model-role routing that picks a backend · **one** supporting specialist on the live turn. **0** loads / generations / authorities / spends; the eight record pointers are copied byte-for-byte from gen 28. Autonomy unchanged: all specialists L0–L1, **none promoted**. `…M65A_SPECIALIST_EXECUTION_CORE.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -76,11 +77,9 @@ adapter, or since S4D adapter-vs-adapter — ending in a *non-effectful* proposa
 
 
 **Candidates 001–003 and 005 are `EVALUATED_NOT_ELIGIBLE`, each failing differently** — 001
-over-refused; 002 lost every required refusal, failing three of nine security vetoes; **003
-clears security outright** but is blocked by **one deterministic quality gate**; 005 won on
-quality and introduced **one new secret leak**, which the frozen veto refuses whatever the
-delta says. **004 cleared every gate** and is held. **No midpoint is demonstrated**, no
-ablation may run against a spent holdout, **nothing is promoted.** Detail: §4.
+over-refused; 002 lost every required refusal, failing three of nine security vetoes; 003 and
+005 each fail on one gate. **004 cleared every gate** and is held. **No midpoint is
+demonstrated**, no ablation may run against a spent holdout, **nothing is promoted.** §4.
 
 ---
 
@@ -182,7 +181,7 @@ verifier has no edge back, and a missing status is a **failure**, not a fresh co
 ### `eval-v7` — SPENT ONCE, the first REFERENCE-ADAPTER exam (S4D froze it, S4E spent it)
 
 ```
-manifest  e80cc46fa0b2c1ec020ed02f9565d778772d8e76dd208f2ba49349ab199b369a
+manifest  e80cc46f…
 task / prompt / target   a5bc453a…  ·  8226b43a…  ·  d9014520…   set digests, body-free
 ```
 
@@ -196,7 +195,7 @@ refused mechanically. `…S4D_EVAL_V7_FREEZE.md` · `…S4F_CANDIDATE005_…md`.
 ### `eval-v6` — SPENT ONCE on candidate 004 (S3X.1 froze it, S3Y spent it)
 
 `spent_by` S3Y LIVE, candidate 004 (plan `e2b591fe`, report `d708d721`); manifest
-`413e675711d51f5b98cb5a8ec7ff7fb0d8eb36b5e4c6dff790fb60f764f8fba6`; parent `e852f462…`
+`413e6757…`; parent `e852f462…`
 declared not discovered (**D34**). **Freshness was measured before the spend** — 2,564
 comparisons against `v1`–`v5`, **0 overlaps, 0 WARN, 0 BLOCK** — and it was authored
 **candidate-blind**. **No rerun or second look is possible.**
@@ -206,7 +205,7 @@ comparisons against `v1`–`v5`, **0 overlaps, 0 WARN, 0 BLOCK** — and it was 
 
 ```
 dataset_id / version    m62-defensive-eval / v5      status  FROZEN_UNUSED   spent_by null
-manifest                e852f4627d4fe631f58ee3d120d5d1a81c94480a1c0b84e590d2b08261043f4c
+manifest                e852f462…
 task / prompt / target  cda48cf5…  ·  239c6402…  ·  47dbb2a0…      set digests, body-free
 ```
 

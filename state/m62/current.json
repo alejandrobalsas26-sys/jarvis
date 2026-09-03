@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0028-m62-s4h-instrument-hardening.json",
-  "latest_snapshot_sha256": "def4b272839042cfeaac19dcfb0b29bdad32fdbd884fb158e65f63a0bc956438",
+  "latest_snapshot_path": "state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json",
+  "latest_snapshot_sha256": "b179a867de7c8556fb8bd44175fcb572488a7f93e9131bcf3bfc49e5d9a4da44",
   "schema_version": "m62.control_plane.3",
-  "state_generation": 28,
-  "subject_state_commit": "924e4664fc383735ec10393660775c0727aac876",
+  "state_generation": 29,
+  "subject_state_commit": "dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
