@@ -746,6 +746,11 @@ class ToolExecutor:
         # never keyed. See `_effect_key` for the identity.
         self._effect_ledger: dict[str, tuple[float, dict]] = {}
         self._effect_epoch: str = ""
+        # V69 M65B §15 — effects that are RUNNING RIGHT NOW, keyed by the same
+        # identity. The ledger records what has committed; this records what is
+        # committing, which is the window a team's concurrent specialists made
+        # reachable. See `aexecute`.
+        self._effect_inflight: dict[str, "asyncio.Future"] = {}
 
     #: How long a recorded effect suppresses an identical repeat, in seconds.
     #:
@@ -786,6 +791,9 @@ class ToolExecutor:
         if epoch != self._effect_epoch:
             self._effect_epoch = epoch
             self._effect_ledger.clear()
+            # Reservations are NOT cleared: an effect still in flight under the
+            # old epoch owns a future its waiters are parked on, and dropping it
+            # would strand them. They drain on their own as each owner releases.
 
     def _effect_ledger_get(self, key: str) -> "dict | None":
         """The recorded result for *key*, or None once it has aged out."""
@@ -1013,7 +1021,123 @@ class ToolExecutor:
         )
         return result
 
+    #: How many times the exactly-once wrapper will wait on another caller's
+    #: in-flight effect before giving up and running the gate itself. Each
+    #: iteration requires a DIFFERENT owner to have started and finished without
+    #: recording a result, so this is unreachable in practice; it exists so a
+    #: pathological interleaving degrades to the pre-M65B behaviour rather than
+    #: spinning.
+    MAX_EFFECT_WAIT_ROUNDS: int = 8
+
+    def _effect_reserve(self, key: str):
+        """Claim *key* as this caller's in-flight effect.
+
+        Returns the future other callers will wait on. The dict insertion and
+        the preceding ``get`` happen with no ``await`` between them, which on a
+        single event loop is what makes the claim atomic.
+        """
+        reservation = asyncio.get_running_loop().create_future()
+        self._effect_inflight[key] = reservation
+        return reservation
+
+    def _effect_release(self, key: str, reservation) -> None:
+        """Publish what the ledger recorded for *key* and drop the claim.
+
+        The value handed to the waiters is read back from the LEDGER, never from
+        the owner's return value, so a refused or failed call publishes ``None``
+        and the waiters correctly run the gate themselves — a failed effect left
+        the world unchanged and repeating it is legitimate.
+        """
+        recorded = self._effect_ledger_get(key)
+        if self._effect_inflight.get(key) is reservation:
+            self._effect_inflight.pop(key, None)
+        if not reservation.done():
+            reservation.set_result(dict(recorded) if recorded is not None else None)
+
     async def aexecute(self, tool_name: str, tool_input: dict, reasoning: str = "") -> Any:
+        """The ONE effect path, with exactly-once that survives CONCURRENCY.
+
+        V69 M65B §15/§17. M64.1 gave this class the effect ledger and M65A
+        proved it holds for one specialist: a duplicate intent, a retry and a
+        crash-after-commit all yield one effect. Every one of those proofs is
+        SEQUENTIAL, and the ledger is a check-then-act — read at the top of
+        :meth:`_aexecute_gated`, written only after the handler returns, with the
+        HITL challenge, an AURA broadcast and ``run_in_executor`` awaiting in
+        between. Two specialists submitting the same effect at the same time
+        therefore both saw an empty ledger and both ran.
+
+        A team makes that reachable, so M65B closes it HERE rather than in the
+        scheduler. A scheduler-level lock would protect only effects the
+        scheduler routed; this protects every caller of ``aexecute``, which is
+        the same reason the ledger itself lives in this class.
+
+        The mechanism is a reservation: the first caller for an effect identity
+        publishes a future before it awaits anything, and later callers await
+        that future instead of the handler. When the owner finishes, the value
+        the waiters receive is read back from the ledger — so a refused, failed
+        or cancelled effect publishes nothing and a waiter legitimately runs.
+
+        Read-only calls are never reserved, for the same reason they are never
+        keyed: repeating a read is not an effect.
+        """
+        if classify_tool(tool_name) is RiskClass.READ_ONLY:
+            return await self._aexecute_gated(tool_name, tool_input, reasoning)
+
+        key = self._effect_key(self._effect_epoch, tool_name, tool_input)
+        for _ in range(self.MAX_EFFECT_WAIT_ROUNDS):
+            prior = self._effect_ledger_get(key)
+            if prior is not None:
+                # Already committed this epoch. _aexecute_gated would return the
+                # same thing; short-circuiting here keeps one audit line per
+                # suppressed duplicate rather than two.
+                logger.warning(
+                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
+                    f"returning the recorded result instead of repeating the effect"
+                )
+                self._audit.log_action(
+                    tool_name, reasoning, "deduplicated", "blocked",
+                    "duplicate effect suppressed by the effect ledger",
+                )
+                return dict(prior)
+            inflight = self._effect_inflight.get(key)
+            if inflight is None:
+                break
+            try:
+                shared = await asyncio.shield(inflight)
+            except Exception:  # noqa: BLE001 — an owner that broke recorded nothing
+                shared = None
+            if shared is not None:
+                logger.warning(
+                    f"EFFECT_LEDGER: '{tool_name}' was committed concurrently — "
+                    f"returning that result instead of repeating the effect"
+                )
+                self._audit.log_action(
+                    tool_name, reasoning, "deduplicated:concurrent", "blocked",
+                    "concurrent duplicate effect suppressed by the effect ledger",
+                )
+                return dict(shared)
+        else:  # pragma: no cover — see MAX_EFFECT_WAIT_ROUNDS
+            logger.warning(
+                f"EFFECT_LEDGER: '{tool_name}' could not be reserved after "
+                f"{self.MAX_EFFECT_WAIT_ROUNDS} rounds; running the gate unreserved"
+            )
+            stale = self._effect_ledger_get(key)
+            if stale is not None:
+                self._audit.log_action(
+                    tool_name, reasoning, "deduplicated", "blocked",
+                    "duplicate effect suppressed by the effect ledger",
+                )
+                return dict(stale)
+            return await self._aexecute_gated(tool_name, tool_input, reasoning)
+
+        reservation = self._effect_reserve(key)
+        try:
+            return await self._aexecute_gated(tool_name, tool_input, reasoning)
+        finally:
+            self._effect_release(key, reservation)
+
+    async def _aexecute_gated(self, tool_name: str, tool_input: dict,
+                              reasoning: str = "") -> Any:
         """
         Fully async execution gate:
           1. Look up handler.
@@ -1079,25 +1203,21 @@ class ToolExecutor:
         # not a parallel decorative check, it IS the check now.
         risk_class = classify_tool(tool_name)
 
-        # V69 M64.1 §17 — exactly-once effect semantics. Checked AFTER authority
-        # (an out-of-scope call must be refused as out-of-scope, never quietly
-        # deduplicated) and BEFORE the challenge, so a replayed effect never asks
-        # the operator a second time for something already done. Read-only calls
-        # are never keyed: repeating a read is not an effect.
+        # V69 M64.1 §17 — exactly-once effect semantics. This method computes
+        # the identity and RECORDS the effect once it has happened; reading the
+        # ledger to suppress a duplicate is `aexecute`'s job and happens before
+        # this coroutine is entered.
+        #
+        # V69 M65B: the read used to live here too. It could no longer fail —
+        # `aexecute` performs the identical check with no await in between, so
+        # by the time this line ran the answer was already known — and a guard
+        # that cannot fail is not defence in depth, it is a second place to have
+        # to keep correct. One reader, one writer, one identity.
+        #
+        # Read-only calls are never keyed: repeating a read is not an effect.
         _effect_key = None
         if risk_class is not RiskClass.READ_ONLY:
             _effect_key = self._effect_key(self._effect_epoch, tool_name, tool_input)
-            _prior = self._effect_ledger_get(_effect_key)
-            if _prior is not None:
-                logger.warning(
-                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
-                    f"returning the recorded result instead of repeating the effect"
-                )
-                self._audit.log_action(
-                    tool_name, reasoning, "deduplicated", "blocked",
-                    "duplicate effect suppressed by the effect ledger",
-                )
-                return dict(_prior)
         if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
             self._audit.log_action(
                 tool_name, reasoning, "blocked:lab_only", "blocked",
