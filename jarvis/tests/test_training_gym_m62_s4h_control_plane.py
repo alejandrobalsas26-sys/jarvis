@@ -41,10 +41,25 @@ def pointer() -> dict:
     return json.loads((STATE / "current.json").read_text(encoding="utf-8"))
 
 
+#: The generation this file owns, addressed by PATH rather than through the live
+#: pointer.
+#:
+#: V69 M65A rescoping. Reading `current.json` made every assertion here silently
+#: also assert "and no later generation exists" — true by coincidence until the
+#: next milestone wrote one, which M65A did (generation 29, governance-only). The
+#: properties this file was written to protect belong to generation 28, so it now
+#: reads generation 28; that is the precedent S3N, S3S, S3X.1, S4D and S4F each
+#: set, and it is argued in V69_M65A_SPECIALIST_EXECUTION_CORE.md.
+#:
+#: No assertion is weakened by this. Every check below still re-derives S4H's
+#: claims from the record store, the production modules and the suite manifest —
+#: against the snapshot that made them.
+GENERATION_28 = "state/m62/snapshots/0028-m62-s4h-instrument-hardening.json"
+
+
 @pytest.fixture
-def stored(pointer) -> dict:
-    return json.loads((REPO_ROOT / pointer["latest_snapshot_path"]).read_text(
-        encoding="utf-8"))
+def stored() -> dict:
+    return json.loads((REPO_ROOT / GENERATION_28).read_text(encoding="utf-8"))
 
 
 def record(stored: dict, block: str):
@@ -56,16 +71,36 @@ def record(stored: dict, block: str):
 # ══════════════════════════════════════════════════════════════════════════════
 #  §69 THE SUCCESSOR IS APPEND-ONLY AND TRUTHFUL
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_pointer_names_generation_28(pointer):
-    assert pointer["state_generation"] == 28
+def test_generation_28_is_still_present_and_the_pointer_never_regresses(pointer):
+    """What S4H can honestly assert about the LIVE pointer.
+
+    Not "the pointer still names 28" — a successor generation is a normal event
+    and would make that a false alarm rather than a finding. What must stay true
+    is that generation 28 still exists where it was written, that the schema did
+    not change under it, and that the chain only ever moves forward.
+    """
+    assert (REPO_ROOT / GENERATION_28).is_file()
     assert pointer["schema_version"] == "m62.control_plane.3"
-    assert pointer["latest_snapshot_path"] == (
-        "state/m62/snapshots/0028-m62-s4h-instrument-hardening.json")
+    assert pointer["state_generation"] >= 28
 
 
 def test_the_pointer_digest_is_the_snapshot_s_own_bytes(pointer, V):
     path = REPO_ROOT / pointer["latest_snapshot_path"]
     assert V.sha256_bytes(path.read_bytes()) == pointer["latest_snapshot_sha256"]
+
+
+def test_generation_28_hashes_to_what_its_successor_recorded(V):
+    """Append-only, checked from the OTHER side: whatever generation follows 28
+    must name 28's real bytes as its parent. This is what stops a rescoped file
+    from quietly losing the immutability it was protecting."""
+    import glob
+
+    successors = sorted(glob.glob(str(STATE / "snapshots" / "00*.json")))
+    gen28_digest = V.sha256_bytes((REPO_ROOT / GENERATION_28).read_bytes())
+    for path in successors:
+        snap = json.loads(Path(path).read_text(encoding="utf-8"))
+        if snap["state_generation"] == 29:
+            assert snap["parent_snapshot_sha256"] == gen28_digest
 
 
 def test_generation_28_descends_from_generation_27(stored, V):
