@@ -899,11 +899,18 @@ class SpecialistExecutor:
             return AutonomyLevel.ADVISE, decision, (
                 f"no authorized scope: {decision.denial.value if decision.denial else 'refused'}"
                 " — analysis only",)
-        lifted = min(record.ceiling_with_scope(True), ceiling, key=int) \
-            if int(ceiling) >= int(record.default_autonomy) \
-            else min(record.ceiling_with_scope(True), ceiling, key=int)
+        # The lift is clamped by what the CALLER asked for, not by the pre-lift
+        # ceiling. Clamping by the pre-lift value would be self-defeating: for
+        # every specialist that actually declares a ``scoped_autonomy`` the
+        # pre-lift ceiling IS ``default_autonomy``, so the min would always
+        # return it and a registered scope would lift nothing. Measured, not
+        # theorised — it is what the first run of the scope tests showed.
+        # This mirrors ``CognitiveOrchestrator.effective_ceiling`` exactly.
+        lifted = min(record.ceiling_with_scope(True), request.autonomy_level,
+                     key=int)
         return lifted, decision, (
-            f"scope '{decision.scope_id}' grants {request.activity.value}",)
+            f"scope '{decision.scope_id}' grants {request.activity.value}; "
+            f"ceiling L{int(lifted)}",)
 
     # ── the one tool path (§19) ─────────────────────────────────────────────
     async def _run_intent(self, intent: ToolIntent, request: SpecialistExecutionRequest,
