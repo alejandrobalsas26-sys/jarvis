@@ -362,6 +362,69 @@ Two bugs in M65A's own code were found by writing the tests, not by review:
 
 ---
 
+## 12b. Control plane, and one rescoped suite
+
+Generation **29** (`0029-m65a-specialist-execution-core-branch.json`, milestone
+label **S5C**) is **governance-only**. It exists for one mechanical reason:
+`GIT_AUTHORITY` pins `project.branch`, so working on a new branch fails the
+verifier until a generation declares it. M64 wrote gen 19 (S5A) and M64.1 wrote
+gen 20 (S5B) for exactly the same reason; M65A takes the next label.
+
+Nothing scientific moves. A diff of generations 28 and 29 shows only
+`control_plane_note`, `generation_label`, `parent_snapshot_sha256`, `project`,
+`state_generation`, `subject_state_commit` and `subject_state_milestone`. The
+eight content-addressed record pointers are **byte-for-byte** those of generation
+28, so candidates, datasets, receipts, policy identities, defects, limitations,
+frozen invariants and the archive digest are the *same blocks*. Candidate 005
+stays `EVALUATED_NOT_ELIGIBLE`, 004 keeps its HOLD, `eval-v7` stays
+`USED_IMMUTABLE`, and both evaluation receipts hash to the values they had at the
+source commit. Verifier: **PASS, PROBLEMS 0**.
+
+The schema refused three drafts, each usefully: `subject_state_milestone` must
+match `^S[0-9A-Z.]{1,10}$` (hence S5C, not "M65A"); `test_baseline` has a closed
+key set, so a note about M65A's tests belongs here rather than smuggled in as an
+extra field; and `HOLDOUT_FIREWALL` caps `control_plane_note` at 320 characters
+precisely so a body cannot arrive in instalments — the first draft was 1,210.
+
+### The rescoping, argued here because precedent requires it
+
+Writing generation 29 broke four assertions in
+`test_training_gym_m62_s4h_control_plane.py`. PROGRESS §10 already names the
+shape: *an assertion comparing a sealed milestone's property against LIVE state
+also asserts, silently, that no later generation exists.* The suite's `stored`
+fixture read `current.json` and followed it, so four tests about **generation
+28** were really being asked of whatever generation was newest.
+
+They now read generation 28 **by path**. No assertion is weakened — each still
+re-derives S4H's claims from the record store, the production modules and the
+suite manifest, against the snapshot that actually made them. This is the
+precedent S3N, S3S, S3X.1, S4D and S4F each set.
+
+One test could not simply be repointed, because its subject *is* the live
+pointer. `test_the_pointer_names_generation_28` is replaced by what S4H can
+honestly assert about live state: generation 28 still exists where it was
+written, the schema did not change under it, and the chain only moves forward
+(`>= 28`). A successor generation is a normal event, not a finding.
+
+That trade would have quietly lost something: the immutability of 28's bytes was
+being protected by the digest check the old test performed *through* the pointer.
+So it is restored from the other side —
+`test_generation_28_hashes_to_what_its_successor_recorded` asserts that whatever
+names itself generation 29 carries 28's real digest as its parent. The property
+survives the rescoping rather than leaking out of it.
+
+**PROGRESS.md** was recompacted, not grown: it sat at 40,903 of its 40,960-byte
+cap. The budget was **not** raised. Savings came from §15's own rule — superseded
+detail folds into the document that owns it — plus the file's existing `…`
+abbreviation for pointer digests whose full values live in the records the
+verifier re-hashes. The three frozen `*_policy_hash` identities in §6 were left in
+full on purpose: §6 exists so a human can compare them by eye. A drift was fixed
+in passing: the header table still declared generation **27** while §1 and §2
+carried the gen-28 identities, and the verifier's four required needles were all
+satisfied elsewhere in the file, so the stale header had gone unnoticed.
+
+---
+
 ## 13. Limitations
 
 * **No L2-risk tool is reachable through the capability map.** `ToolBroker`'s
