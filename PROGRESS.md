@@ -10,7 +10,7 @@
 | **Control plane** | V3 · schema `m62.control_plane.3` · state generation **29** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
 | **Latest snapshot** | `state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json` |
-| **Snapshot SHA256** | `b179a867de7c8556fb8bd44175fcb572488a7f93e9131bcf3bfc49e5d9a4da44` |
+| **Snapshot SHA256** | `ec71585e4ecc0bc03d05daccf2c1ecf753b687f3400da4bd3853348925ce4d15` |
 | **Subject state commit** | `dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a` (M65A runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |

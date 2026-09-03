@@ -81,8 +81,8 @@
       "is_defect_d39": false,
       "note": "Cause measured in S3N.1: those tests read production source by a path relative to the working directory, so they resolve only from jarvis/. The file is unchanged since the subject commit. DISTINCT from D39, which fails four tests in the dataset-exports file. Not a rider fix."
     },
-    "milestone": "S4H",
-    "passed": 3178,
+    "milestone": "S5C",
+    "passed": 3179,
     "skipped": 2,
     "working_directory": "jarvis/ (repository system interpreter)"
   }

@@ -1,6 +1,6 @@
 {
   "latest_snapshot_path": "state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json",
-  "latest_snapshot_sha256": "b179a867de7c8556fb8bd44175fcb572488a7f93e9131bcf3bfc49e5d9a4da44",
+  "latest_snapshot_sha256": "ec71585e4ecc0bc03d05daccf2c1ecf753b687f3400da4bd3853348925ce4d15",
   "schema_version": "m62.control_plane.3",
   "state_generation": 29,
   "subject_state_commit": "dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a",

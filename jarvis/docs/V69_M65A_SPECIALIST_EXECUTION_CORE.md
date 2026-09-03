@@ -380,6 +380,14 @@ stays `EVALUATED_NOT_ELIGIBLE`, 004 keeps its HOLD, `eval-v7` stays
 `USED_IMMUTABLE`, and both evaluation receipts hash to the values they had at the
 source commit. Verifier: **PASS, PROBLEMS 0**.
 
+One number in `test_baseline` did move, and it is recorded rather than carried
+forward: the canonical 54-module scientific suite goes **3178 → 3179** passed,
+2 skipped, 0 failed. That is not M65A's 156 runtime tests leaking in — those are
+not members of the suite. It is the rescoped
+`test_training_gym_m62_s4h_control_plane.py`, which *is* one of the 54, where one
+assertion was replaced by two. The suite moved, so the baseline records the number
+that was actually measured under milestone label S5C.
+
 The schema refused three drafts, each usefully: `subject_state_milestone` must
 match `^S[0-9A-Z.]{1,10}$` (hence S5C, not "M65A"); `test_baseline` has a closed
 key set, so a note about M65A's tests belongs here rather than smuggled in as an
