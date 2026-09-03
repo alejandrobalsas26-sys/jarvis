@@ -561,6 +561,69 @@ def check_specialist_execution() -> list[Finding]:
     return out
 
 
+def check_team_fabric() -> list[Finding]:
+    """Whether the M65B team execution fabric can actually run a plan (§47).
+
+    Answerable WITHOUT an LLM and without a network call, for the same reason
+    ``check_specialist_execution`` is: an operator needs to know whether a team
+    COULD execute and how far it is bounded, not what the configuration would
+    have been had anything been wired.
+    """
+    out: list[Finding] = []
+    try:
+        from core.specialist_team import team_fabric_status
+        status = team_fabric_status()
+    except Exception as exc:  # noqa: BLE001 — an unimportable fabric is a finding
+        return [Finding("team.fabric", "team_execution",
+                        DoctorStatus.DEGRADED, Severity.MEDIUM,
+                        f"the team execution fabric did not load: "
+                        f"{type(exc).__name__}",
+                        "check core/specialist_team.py imports")]
+
+    available = bool(status.get("executor_available"))
+    out.append(Finding(
+        "team.fabric", "team_execution",
+        DoctorStatus.PASS if available else DoctorStatus.DEGRADED,
+        Severity.INFO if available else Severity.MEDIUM,
+        "the team execution fabric is enabled and a specialist can execute"
+        if available else
+        "the team fabric is enabled but no inference backend is wired; plans "
+        "validate and schedule, and no specialist can reason",
+        "" if available else "start JARVIS through main() so the boot wiring runs"))
+
+    out.append(Finding(
+        "team.bounds", "team_execution", DoctorStatus.PASS, Severity.INFO,
+        f"bounds: {status.get('max_plan_tasks')} tasks/plan, "
+        f"{status.get('max_parallel_specialists')} parallel specialists "
+        f"({status.get('max_parallel_effectful')} effectful), delegation depth "
+        f"{status.get('max_delegation_depth')}, "
+        f"{status.get('max_team_retries')} retries, "
+        f"{status.get('max_team_timeout_s')}s per team"))
+
+    admission = status.get("admission") or {}
+    active = int(admission.get("active", 0))
+    at_capacity = active >= int(admission.get("max_active", 1))
+    out.append(Finding(
+        "team.queue", "team_execution",
+        DoctorStatus.DEGRADED if at_capacity else DoctorStatus.PASS,
+        Severity.LOW if at_capacity else Severity.INFO,
+        f"{active} team(s) active of {admission.get('max_active')}, "
+        f"{admission.get('queued')} queued of {admission.get('max_queued')}, "
+        f"{admission.get('rejected')} refused admission this process; "
+        f"backend concurrency limit {status.get('backend_concurrency_limit')}",
+        "wait for a running team to finish" if at_capacity else ""))
+
+    counters = status.get("counters") or {}
+    out.append(Finding(
+        "team.scheduler", "team_execution", DoctorStatus.PASS, Severity.INFO,
+        f"conflict scheduler: {counters.get('conflict_serializations', 0)} "
+        f"serialisation(s), {counters.get('dependency_waits', 0)} dependency "
+        f"wait(s), {counters.get('tasks_parallelised', 0)} overlapping pair(s), "
+        f"{counters.get('delegations_denied', 0)} delegation(s) denied, "
+        f"{counters.get('plans_rejected', 0)} plan(s) rejected this process"))
+    return out
+
+
 def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     """Run every check. Never raises: a check that explodes becomes a finding.
 
@@ -573,7 +636,7 @@ def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     checks = [check_interpreter, check_dependencies, check_entrypoints,
               check_resources, check_directories, check_external_tools,
               check_configuration, check_memory_stores, check_speech, check_aura,
-              check_specialist_execution]
+              check_specialist_execution, check_team_fabric]
     if include_network:
         checks.append(check_model_runtime)
     for check in checks:
@@ -593,6 +656,7 @@ __all__ = [
     "check_directories", "check_entrypoints", "check_external_tools",
     "check_interpreter", "check_memory_stores", "check_model_runtime",
     "check_resources", "check_specialist_execution", "check_speech",
+    "check_team_fabric",
     "run_diagnostics",
     "site_packages_versions",
 ]

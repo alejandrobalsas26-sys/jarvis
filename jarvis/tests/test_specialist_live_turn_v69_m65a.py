@@ -351,7 +351,19 @@ def test_a_team_route_actually_executes_a_supporting_specialist(live):
         pytest.skip(f"router chose {r.route.mode if r.route else None}; "
                     "this scenario needs a TEAM route")
 
-    assert len(r.support_executions) == 1, "no supporting specialist executed"
+    # V69 M65B rescoping. The claim this test exists for is that a supporting
+    # specialist ACTUALLY EXECUTES on a team route — `support_results` was
+    # declared in M64.1 and populated by nothing until M65A. That claim is
+    # unchanged and is still asserted here.
+    #
+    # What moved is the COUNT. M65A ran exactly one and said so in its own
+    # limitations ("One supporting specialist per turn. By design.") and its
+    # deferral list ("broad parallel specialist teams" -> M65B). This route now
+    # runs a validated team, so `== 1` would assert the absence of the very
+    # thing the next milestone was chartered to build. The bound itself is not
+    # dropped: it is asserted against the constant that now governs it, in
+    # `test_the_supporting_executions_stay_bounded` below.
+    assert r.support_executions, "no supporting specialist executed"
     assert r.support_results, "the typed result never reached the mesh turn"
 
 
@@ -397,11 +409,21 @@ def test_the_consultation_is_labelled_as_evidence_not_as_an_instruction(live):
     assert r.route.autonomy_ceiling <= AutonomyLevel.OBSERVE
 
 
-def test_only_one_supporting_specialist_runs_per_turn(live):
-    """§27 — M65A is a spine. One, bounded by a named constant."""
+def test_the_supporting_executions_stay_bounded(live):
+    """§27 — the turn is bounded by a NAMED CONSTANT, not by a loop's shape.
+
+    M65A's version of this test asserted the constant was 1, which was true and
+    was also the milestone's own stated limitation. M65B lifts the count and
+    keeps the property: whichever route runs, the number of supporting
+    executions is capped by a constant this test reads rather than repeats.
+    """
     r = _team_turn(live, "Please analyse this Sysmon alert and correlate it "
                         "with our previous incidents and threat intel")
-    assert len(r.support_executions) <= mesh_live.MAX_LIVE_SUPPORT_EXECUTIONS == 1
+    ceiling = max(mesh_live.MAX_LIVE_SUPPORT_EXECUTIONS,
+                  mesh_live.MAX_LIVE_TEAM_TASKS)
+    assert 0 < len(r.support_executions) <= ceiling
+    # The one-specialist route's own bound is untouched.
+    assert mesh_live.MAX_LIVE_SUPPORT_EXECUTIONS == 1
 
 
 def test_the_supporting_execution_runs_at_least_authority(live):
@@ -621,10 +643,17 @@ def test_the_live_wiring_is_actually_present_in_chat_stream():
         if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and \
                 node.name == "chat_stream":
             for inner in ast.walk(node):
+                # V69 M65B — the call site is now `run_specialists`, which
+                # chooses DIRECT / ONE_SPECIALIST / TEAM and calls
+                # `run_support_specialist` for the middle one. The property this
+                # test protects is that chat_stream itself still reaches the
+                # specialist path; naming the dispatcher is what keeps that true
+                # after the route became plural.
                 if isinstance(inner, ast.Attribute) and \
-                        inner.attr == "run_support_specialist":
+                        inner.attr in ("run_specialists",
+                                       "run_support_specialist"):
                     found = True
-    assert found, "chat_stream no longer calls run_support_specialist"
+    assert found, "chat_stream no longer reaches the specialist path"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

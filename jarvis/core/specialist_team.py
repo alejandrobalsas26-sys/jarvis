@@ -76,7 +76,6 @@ from core.specialist_execution import (
     SpecialistExecutionResult,
     _receipt_id,
 )
-from core.specialist_execution import executor as _default_executor
 
 logger = logging.getLogger("jarvis.specialist_team")
 
@@ -1557,11 +1556,28 @@ class TeamOrchestrator:
                  counters: "TeamCounters | None" = None,
                  admission: "TeamAdmissionController | None" = None,
                  backend_limiter: "BackendLimiter | None" = None) -> None:
-        self._executor = executor if executor is not None else _default_executor
+        self._injected_executor = executor
         self._router = role_router if role_router is not None else _default_role_router
         self._counters = counters if counters is not None else COUNTERS
         self._admission = admission if admission is not None else ADMISSION
         self._backends = backend_limiter
+
+    @property
+    def _executor(self):
+        """The M65A executor this orchestrator runs tasks through.
+
+        Resolved LAZILY rather than snapshotted in ``__init__``. Binding it at
+        construction made the module singleton's executor depend on WHEN this
+        module was first imported: import before boot and it captured an
+        unwired executor, import after and it captured whatever was current.
+        Production survived that by accident — ``attach_live_runtime`` mutates
+        the singleton in place, so the identity never changed — and it was a
+        genuine fault waiting for the first caller that rebound the name.
+        """
+        if self._injected_executor is not None:
+            return self._injected_executor
+        from core.specialist_execution import executor as live_executor
+        return live_executor
 
     @property
     def available(self) -> bool:

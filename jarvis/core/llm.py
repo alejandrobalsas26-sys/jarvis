@@ -2633,19 +2633,38 @@ class LLM:
         # preflight and the SAME ToolExecutor (one effect path, one ledger), and
         # it returns a typed result that reaches ARGUS and synthesis.
         #
-        # `run_support_specialist` decides for itself whether this turn deserves
-        # one — TEAM routes only, never the fast path — so a greeting still costs
-        # one generation and this call costs nothing on the turns that dominate
-        # (§26). It never raises and never blocks the answer: a failed or denied
-        # consultation degrades the turn's judgement, never its ability to
-        # answer at all.
+        # V69 M65B — and it may now be a TEAM. `run_specialists` decides which
+        # of DIRECT / ONE_SPECIALIST / TEAM this turn deserves: it reads the
+        # route the deterministic router already produced and the registry's own
+        # handoff policy, so JARVIS chooses and the operator never selects a
+        # specialist by hand. A greeting still costs exactly one generation.
+        #
+        # It never raises and never blocks the answer: a failed, denied or
+        # timed-out consultation degrades the turn's judgement, never its ability
+        # to answer at all.
         _mesh_support = None
+        _mesh_team = None
+        _mesh_route = None
         if _mesh is not None:
             _support_t0 = _time.monotonic()
             try:
-                _mesh_support = await _mesh_live.run_support_specialist(_mesh)
+                _mesh_route, _outcome = await _mesh_live.run_specialists(_mesh)
+                if _mesh_route is _mesh_live.TeamRoute.TEAM:
+                    _mesh_team = _outcome
+                else:
+                    _mesh_support = _outcome
             except Exception as _sup_e:  # noqa: BLE001
-                logger.warning(f"MESH: support execution skipped ({_sup_e})")
+                logger.warning(f"MESH: specialist execution skipped ({_sup_e})")
+            if _mesh_team is not None:
+                logger.info(
+                    "MESH: team status={} ran={} overlaps={} skipped={} ms={}".format(
+                        _mesh_team.status.value,
+                        ",".join(_mesh_team.specialists_executed),
+                        _mesh_team.parallel_overlaps,
+                        len(_mesh_team.skipped),
+                        round((_time.monotonic() - _support_t0) * 1000.0, 1),
+                    )
+                )
             if _mesh_support is not None:
                 logger.info(
                     "MESH: support={} status={} role={} effects={} ms={}".format(
