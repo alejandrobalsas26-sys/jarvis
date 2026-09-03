@@ -1310,7 +1310,15 @@ class TeamVerification:
 
     @property
     def passing(self) -> bool:
-        return self.verdict is Verdict.VERIFIED
+        """The repository's own reading, imported rather than re-decided.
+
+        ``PASSING_VERDICTS`` already answers "may the answer state a conclusion
+        as established", and a team verdict that used a stricter rule would make
+        the same run pass at task level and fail at team level for no reason an
+        operator could act on.
+        """
+        from core.mesh_contracts import PASSING_VERDICTS
+        return self.verdict in PASSING_VERDICTS
 
     @property
     def grants_authority(self) -> bool:
@@ -1737,7 +1745,8 @@ class TeamOrchestrator:
                 start_seq = _next_seq()
                 start_at = time.monotonic()
                 execution = await self._executor.run(
-                    request, graph=graph, verify_with_argus=verify_with_argus,
+                    request, graph=graph,
+                    verify_with_argus=_task_needs_argus(current_plan, task),
                     cancelled=token)
                 return task.task_id, execution, start_seq, start_at, backend
             finally:
@@ -2055,6 +2064,30 @@ class TeamOrchestrator:
         }
 
 
+#: Verification policies a plan may declare. TEAM verifies the plan's own
+#: structure; PER_TASK_AND_TEAM also asks M65A's ARGUS about every node.
+VERIFICATION_TEAM = "team_argus"
+VERIFICATION_PER_TASK_AND_TEAM = "per_task_and_team"
+
+
+def _task_needs_argus(plan: SpecialistTeamPlan,
+                      task: SpecialistTeamTask) -> bool:
+    """Whether M65A's per-task ARGUS runs for this node.
+
+    Team verification does NOT imply it. The two answer different questions —
+    per-task ARGUS asks whether one specialist's claims are bound to evidence,
+    team ARGUS asks whether the PLAN holds together — and running the expensive
+    one on every node by default would make VERIFIED so rare that an operator
+    would learn to ignore it.
+
+    It runs where the plan actually asked for evidence, and wherever the plan
+    declares the stricter policy.
+    """
+    if plan.verification_policy == VERIFICATION_PER_TASK_AND_TEAM:
+        return True
+    return bool(task.evidence_requirements)
+
+
 def derive_team_status(results: "tuple[TeamTaskResult, ...]", *,
                        cancelled: bool = False) -> TeamStatus:
     """The plan's status, computed from its nodes (§10).
@@ -2290,6 +2323,7 @@ __all__ = [
     "PlanValidation", "ResourceArbiter", "ResourceClaim",
     "SpecialistTeamPlan", "SpecialistTeamResult", "SpecialistTeamTask",
     "TaskState", "TeamAdmissionController", "TeamCounters", "TeamOrchestrator",
+    "VERIFICATION_PER_TASK_AND_TEAM", "VERIFICATION_TEAM",
     "TeamStatus", "TeamTaskResult", "TeamVerification",
     "authorize_delegation", "canonical_resource", "conflict_policy",
     "derive_team_status", "detect_cycle", "orchestrator",
