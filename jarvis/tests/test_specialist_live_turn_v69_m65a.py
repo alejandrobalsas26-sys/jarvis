@@ -625,3 +625,163 @@ def test_the_live_wiring_is_actually_present_in_chat_stream():
                         inner.attr == "run_support_specialist":
                     found = True
     assert found, "chat_stream no longer calls run_support_specialist"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Routing controls the mutation campaign proved were UNVERIFIED
+#
+#  Four mutations weakened `support_candidate` / `build_support_request` and the
+#  whole suite still passed. Each was hidden the same way: with the routes the
+#  real router produces, the weakened branch and the correct branch return the
+#  SAME answer, so the control was never exercised.
+#
+#    * the fast-path guard      — fast routes carry no `supporting`, so the
+#                                 later emptiness check caught it regardless
+#    * the handoff-permission   — the router only ever lists permitted support
+#      guard
+#    * the one-execution bound  — nothing called the function twice
+#    * least-authority clamping — every shipped route ceiling is already <= L1
+#
+#  So these build the route directly. A hand-built route is not a fiction here:
+#  it is the only way to present the executor with the inputs that tell the two
+#  branches apart, and each field set below is one the real router can legally
+#  produce on some turn.
+# ══════════════════════════════════════════════════════════════════════════════
+def _route(primary, supporting, *, mode=RouteMode.TEAM,
+           ceiling=AutonomyLevel.OBSERVE):
+    """A MeshRoute built by REPLACING fields on one the real router produced.
+
+    Derived from a genuine route rather than constructed from nothing, so every
+    field this test does not care about still holds a value the router itself
+    chose — and a field added to MeshRoute later does not silently default.
+    """
+    import dataclasses
+
+    from core.mesh_router import route_task
+
+    real = route_task("Please analyse this Sysmon alert and correlate it with "
+                      "our previous incidents and threat intel")
+    return dataclasses.replace(
+        real, mode=mode, primary=primary, supporting=tuple(supporting),
+        autonomy_ceiling=ceiling, scoped_autonomy_ceiling=ceiling)
+
+
+def _turn(route):
+    return mesh_live.MeshTurn(route=route, task_id="t:probe")
+
+
+def test_the_fast_path_recruits_no_support_even_when_support_is_listed(live):
+    """S1 — the fast-path guard, exercised where it is the only thing deciding.
+
+    A FAST_PATH route that names supporting specialists is the case the guard
+    exists for. Without it, a greeting would summon a team the router
+    explicitly decided the turn did not need.
+    """
+    fast = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,),
+                  mode=RouteMode.FAST_PATH)
+    assert mesh_live.support_candidate(_turn(fast)) is None
+
+    # The same route in TEAM mode DOES recruit, so this is discriminating rather
+    # than returning None for some unrelated reason.
+    team = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,),
+                  mode=RouteMode.TEAM)
+    assert mesh_live.support_candidate(_turn(team)) is SpecialistId.TRACE
+
+
+def test_a_single_route_mode_recruits_no_support_either(live):
+    """SINGLE means one specialist with tools — still not a team."""
+    single = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,),
+                    mode=RouteMode.SINGLE)
+    assert mesh_live.support_candidate(_turn(single)) is None
+
+
+def test_a_handoff_the_registry_forbids_is_never_recruited(live):
+    """S3 — the registry decides who may be consulted, not the route.
+
+    A route can name a supporting specialist; only `REGISTRY.handoff_allowed`
+    decides whether the primary may actually consult it. The forbidden pair is
+    found from the registry itself, so this stays honest if the handoff graph
+    changes.
+    """
+    forbidden = None
+    for primary in REGISTRY.ids():
+        for target in REGISTRY.ids():
+            if target is primary:
+                continue
+            if not REGISTRY.handoff_allowed(primary, target):
+                forbidden = (primary, target)
+                break
+        if forbidden:
+            break
+    assert forbidden, "the registry permits every handoff; this test is moot"
+
+    primary, target = forbidden
+    route = _route(primary, (target,))
+    assert mesh_live.support_candidate(_turn(route)) is None, (
+        f"{primary.value} recruited {target.value}, which the registry forbids")
+
+
+def test_only_one_supporting_execution_is_ever_recruited_per_turn(live):
+    """S4 — the bound, exercised by asking twice.
+
+    The first call yields a candidate; once an execution is recorded the second
+    must yield None. Nothing in the live path calls it twice today, which is
+    exactly why the bound needs a test rather than a comment.
+    """
+    from core.specialist_execution import SpecialistExecutionResult
+
+    route = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,
+                                           SpecialistId.ORACLE))
+    turn = _turn(route)
+
+    assert mesh_live.support_candidate(turn) is SpecialistId.TRACE
+    turn.support_executions.append(SpecialistExecutionResult(
+        execution_id="e1", specialist_id=SpecialistId.TRACE,
+        status=ExecutionStatus.SUCCESS))
+    assert mesh_live.support_candidate(turn) is None, \
+        "a second supporting specialist was recruited on one turn"
+    assert mesh_live.MAX_LIVE_SUPPORT_EXECUTIONS == 1
+
+
+def test_support_is_requested_at_least_authority_not_the_route_ceiling(live):
+    """S5 — §18, exercised on a route whose ceiling is above OBSERVE.
+
+    Every shipped route ceiling is already <= L1, so on real traffic 'clamp to
+    OBSERVE' and 'use the route ceiling' agree. They stop agreeing the moment a
+    route legitimately carries more, which is precisely when the clamp matters.
+    """
+    for ceiling in (AutonomyLevel.SAFE_EXECUTE, AutonomyLevel.HITL_EXECUTE):
+        route = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,),
+                       ceiling=ceiling)
+        request = mesh_live.build_support_request(
+            _turn(route), SpecialistId.TRACE, execution_id="e:probe")
+        assert request.autonomy_level is AutonomyLevel.OBSERVE, (
+            f"a route at L{int(ceiling)} handed its ceiling to a consultation")
+
+
+def test_a_lower_route_ceiling_is_still_honoured(live):
+    """The clamp narrows; it must not raise a route that asked for less."""
+    route = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,),
+                   ceiling=AutonomyLevel.ADVISE)
+    request = mesh_live.build_support_request(
+        _turn(route), SpecialistId.TRACE, execution_id="e:probe")
+    assert request.autonomy_level is AutonomyLevel.ADVISE
+
+
+def test_the_supporting_request_carries_the_turns_effect_epoch(live):
+    """A consultation shares the turn's effect identity space, so an effect it
+    proposes cannot escape the turn's ledger by having its own epoch."""
+    route = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,))
+    turn = _turn(route)
+    request = mesh_live.build_support_request(
+        turn, SpecialistId.TRACE, execution_id="e:probe")
+    assert request.effect_epoch == mesh_live.effect_epoch(turn, route.task_id)
+
+
+def test_the_supporting_request_grants_no_tools_by_default(live):
+    """Least authority applies to the tool allowlist too: a consultation gets
+    nothing unless a caller deliberately hands it something."""
+    route = _route(SpecialistId.GUARDIAN, (SpecialistId.TRACE,))
+    request = mesh_live.build_support_request(
+        _turn(route), SpecialistId.TRACE, execution_id="e:probe")
+    assert request.allowed_tools == frozenset()

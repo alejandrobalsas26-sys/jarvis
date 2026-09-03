@@ -295,8 +295,14 @@ def support_candidate(turn: "MeshTurn | None") -> "SpecialistId | None":
     supporting execution is a second generation on the turn; it is warranted
     only where the router already concluded the request needs a team.
     """
-    if turn is None or turn.is_fast:
+    if turn is None:
         return None
+    # ONE guard decides this, and it decides both facts at once: the fast path
+    # stays fast, and no non-team route recruits. An earlier `turn.is_fast`
+    # check sat above this one and was pure redundancy — FAST_PATH is not in the
+    # set either — so it could be deleted without changing a single outcome.
+    # A guard that cannot fail is not defence in depth, it is a second place to
+    # have to keep correct.
     if turn.route.mode not in (RouteMode.TEAM, RouteMode.TEAM_VERIFIED):
         return None
     if not turn.route.supporting:
