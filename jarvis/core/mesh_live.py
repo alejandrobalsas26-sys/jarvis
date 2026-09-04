@@ -57,6 +57,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from core.cognitive_mesh import REGISTRY, AutonomyLevel, SpecialistId
 from core.mesh_contracts import (
@@ -75,6 +76,9 @@ from core.specialist_execution import (
     SpecialistExecutionResult,
 )
 from core.specialist_execution import executor as _specialist_executor
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from core.specialist_team import SpecialistTeamPlan
 
 logger = logging.getLogger("jarvis.mesh_live")
 

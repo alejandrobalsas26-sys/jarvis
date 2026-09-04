@@ -64,13 +64,11 @@ from core.cognitive_mesh import (
     AutonomyLevel,
     MeshBudget,
     SpecialistId,
-    permits,
 )
 from core.mesh_contracts import EvidenceGraph, ToolCallStatus, Verdict
 from core.model_role_router import router as _default_role_router
 from core.security_scope import ActivityClass
 from core.specialist_execution import (
-    APPROVALS,
     ExecutionStatus,
     SpecialistExecutionRequest,
     SpecialistExecutionResult,

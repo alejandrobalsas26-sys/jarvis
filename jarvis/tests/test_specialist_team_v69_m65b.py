@@ -62,14 +62,12 @@ from core.security_scope import (
     EnvironmentType,
 )
 from core.specialist_execution import (
-    ExecutionStatus,
     HitlApproval,
     HitlApprovalRegistry,
     SpecialistExecutor,
     ToolIntent,
 )
 from core.specialist_team import (
-    ADMISSION,
     MAX_DELEGATION_DEPTH,
     MAX_PARALLEL_EFFECTFUL,
     MAX_PARALLEL_SPECIALISTS,
