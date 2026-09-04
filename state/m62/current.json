@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json",
-  "latest_snapshot_sha256": "ec71585e4ecc0bc03d05daccf2c1ecf753b687f3400da4bd3853348925ce4d15",
+  "latest_snapshot_path": "state/m62/snapshots/0030-m65b-team-execution-fabric-branch.json",
+  "latest_snapshot_sha256": "cbfb7ae4aaf7859676e5fea03802f4d734af282b365aabae0577039c764fb83f",
   "schema_version": "m62.control_plane.3",
-  "state_generation": 29,
-  "subject_state_commit": "dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a",
+  "state_generation": 30,
+  "subject_state_commit": "35a2e1f84299f48ee83c497a5ccc3131a4cb6744",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

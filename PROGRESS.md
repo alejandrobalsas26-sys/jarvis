@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **29** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **30** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0029-m65a-specialist-execution-core-branch.json` |
-| **Snapshot SHA256** | `ec71585e4ecc0bc03d05daccf2c1ecf753b687f3400da4bd3853348925ce4d15` |
-| **Subject state commit** | `dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a` (M65A runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0030-m65b-team-execution-fabric-branch.json` |
+| **Snapshot SHA256** | `cbfb7ae4aaf7859676e5fea03802f4d734af282b365aabae0577039c764fb83f` |
+| **Subject state commit** | `35a2e1f84299f48ee83c497a5ccc3131a4cb6744` (M65B runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -41,8 +41,8 @@ archive and snapshot, and asks Git — not prose — about branch, ancestry and 
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-m65a-specialist-execution-core` — declared by gen 29 |
-| Subject state commit | `dc64297e6a9048cd3a781ea30bf1d9c3f6afdc8a` — the commit the current snapshot describes. gen 28's was `924e4664…` |
+| Branch | `jarvis-v69-m65b-team-execution-fabric` — declared by gen 30 |
+| Subject state commit | `35a2e1f84299f48ee83c497a5ccc3131a4cb6744` — the commit the current snapshot describes |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -63,8 +63,9 @@ the verifier requires HEAD to *descend* from the subject rather than equal it.
 |---|---|
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority bound to plan `54488fb3…`: 36+36 generations, ONE spend, terminal `completed`. S4H moved no candidate, dataset or policy identity |
-| Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed the result; receipt `769d327a…`. `…S4H_INSTRUMENT_HARDENING.md` |
-| Last milestone | **M65A — RUNTIME, no science.** Gen 29 is GOVERNANCE-ONLY: `GIT_AUTHORITY` pins the branch, so a new one needs a generation (M64/M64.1 precedent, gens 19–20). Specialist execution core · model-role routing that picks a backend · **one** supporting specialist on the live turn. **0** loads / generations / authorities / spends; the eight record pointers are copied byte-for-byte from gen 28. Autonomy unchanged: all specialists L0–L1, **none promoted**. `…M65A_SPECIALIST_EXECUTION_CORE.md` |
+| Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed it; receipt `769d327a…`. `…S4H_INSTRUMENT_HARDENING.md` |
+| Previous milestone | **M65A — RUNTIME, no science** (gen 29). Specialist execution core · model-role routing · **one** supporting specialist live. `…M65A_SPECIALIST_EXECUTION_CORE.md` |
+| Last milestone | **M65B — RUNTIME, no science.** Gen 30 is GOVERNANCE-ONLY: `GIT_AUTHORITY` pins the branch (M64/M64.1/M65A precedent, gens 19–20, 29). Governed specialist **team**: validated DAG, bounded parallelism, conflict scheduling, delegation depth 1, cancellation, backpressure, team ARGUS, live TEAM route. Hardened the canonical `ToolExecutor`: exactly-once was **sequential only**, so two concurrent callers of one effect identity both ran. **0** loads / generations / authorities / spends; the eight record pointers are byte-for-byte gen 28's. Autonomy unchanged, **none promoted**; the L2 gap is audited, not fixed. `…M65B_TEAM_EXECUTION_FABRIC.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -300,10 +301,10 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
 | **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. Exercised by one live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**; closing it is *not* predicted to restore 9/9. |
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic beside the unchanged input-truncation metric. **No gate reads it and none may be added without a separate operator decision.** Reaching the ceiling is not failure. |
 | **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** |
-| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced. **D40** the paired outcome is **not** an exhaustive `wins/ties/losses` partition — production classifies **four** comparable verdicts and `security_improvement` is **not** a win; **D41** close an encoding question by **defining** the encoding (`U+2212` is legitimate decision text), never by discarding evidence; **D42** the code that **measured** is not the code that **built the receipt**. |
+| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence; the code that **measured** is not the code that **built the receipt**. Full text in the snapshot's `defects` record. |
 | **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0 with a body-free class, location and repetition scalar. **No gate reads them**; nothing historical is backfilled. |
-| **D44** | **FIXED · GATE** | A held-out body reached an orchestration session **before any authorisation existed**, through representation machinery alone — including `repr` of a **bound method**. The persistence firewall held; the missing one was in-memory display. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
-| **D45–D47** | FIXED (obs. only) | S4H's instrument findings, each fixed **PROSPECTIVELY** and read by **no gate**: **D45** `secret_pii:secret` carried no rule provenance — enough to veto, not to review; **D46** the loader passes no `device_map` and no dtype, so the declared `cpu`/`fp32` never reached the load; **D47** `classify_empirical_status` reads the **quality** denominator, so 36/36 generated and scored reported `partial_live`. **005 not rescored; nothing backfilled.** |
+| **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. Persistence held; in-memory display did not. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
+| **D45–D47** | FIXED (obs. only) | S4H's instrument findings, each fixed **PROSPECTIVELY** and read by **no gate**: no rule provenance on `secret_pii:secret`; the loader passed no `device_map`/dtype; `classify_empirical_status` read the **quality** denominator. **005 not rescored; nothing backfilled.** Full text in the `defects` record. |
 | **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. A filename substring is not a scientific boundary. `state/m62/scientific-suite.json` + its verifier. |
 
 ### Limitations that travel into any successor run
@@ -429,18 +430,20 @@ human decision, which no milestone since has moved, replaced or weakened.
 ## 10 — Authoritative test baseline
 
 ```
-canonical   verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>  [S4H]
-broad       pytest -k m62 --ignore=tests/test_live_brain_v61.py
+canonical   verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from    jarvis/ (repository system interpreter)
-result      4728 passed · 24 skipped · 0 failed                              [S4D, broad]
+result      3179 passed · 2 skipped · 0 failed                            [M65B, measured]
+broad       pytest tests/
+result      10222 passed · 46 skipped · 4 failed                          [M65B, measured]
+            all 4 fail identically at M65A: bandit-Low drift (489 > 488,
+            unmoved by M65B) ×3, and a missing `fastapi` ×1
 ```
 
 **`-k m62` is no longer the authority (D48):** it matches node ids and deselected all **212**
 tests in three `m63`-named modules asserting M62 state. Keep the broad sweep too — it is
-wider in other directions. S4D adds the Protocol V4 and `eval-v7` suites. Edits to sealed suites moved **witnesses, not properties**; S4D and S4F rescoped
-assertions pinning a *version roster* rather than the property they own, on the precedent
-S3N, S3S and S3X.1 each set. **0** threshold, gate, grader, policy, receipt or transition
-weakenings. Counts are **one** interpreter's; **never reconcile across interpreters.**
+wider in other directions. Edits to sealed suites moved **witnesses, not properties**. **0** threshold, gate, grader,
+policy, receipt or transition weakenings. Counts are **one** interpreter's; **never
+reconcile across interpreters.**
 
 **Rescoped assertions are not regressions.** An assertion comparing a *sealed* milestone's
 property against *live* state also asserts, silently, that no later generation exists — true

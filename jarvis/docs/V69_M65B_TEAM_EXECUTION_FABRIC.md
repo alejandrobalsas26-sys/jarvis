@@ -235,11 +235,15 @@ has already let go.
 
 ---
 
-## 6. Exactly-once, and the defect M65B had to fix first
+## 6. Exactly-once, and the two defects M65B had to fix first
 
 `ToolExecutor.aexecute` remains the one effect path, and its ledger remains the
 one ledger. But M65A's exactly-once proofs were all **sequential**, and that is
 all M65A could reach — it had one specialist.
+
+**Sequential exactly-once existed before M65B. Concurrent exactly-once did
+not, and required hardening the canonical executor.** Both defects below were
+found by the mutation campaign, not by review.
 
 The ledger was a **check-then-act**: read near the top of the gate, written only
 after the handler returns, with the HITL challenge, an AURA broadcast and
@@ -272,6 +276,63 @@ specialists in one team proposing one effect → one effect, one deduplication �
 a refused gate releases its reservation so the real call still runs · a failed
 effect is never ledgered · a new epoch is never blocked · argument order cannot
 manufacture a second identity.
+
+### 6.1 The second defect: a concurrent effect count that lied
+
+Forcing the window exposed a bug behind it. M65A decided whether a call had been
+deduplicated by sampling the ledger count **before and after** the call — correct
+sequentially, and wrong the moment two specialists overlap, because the second
+one's "before" is taken while the first is still inside the gate. Both then read
+a count that moved for a reason neither could attribute, and **both reported
+having caused the effect**.
+
+Measured on a real two-specialist team: **one effect ran and the team reported
+two.** A milestone about concurrent effects cannot ship a concurrent effect count
+that lies.
+
+`aexecute` now fills an optional `effect_note` with what **this** call did —
+`deduplicated`, `effect_key`, `committed` — because the executor is the only
+component that knows which branch it took and therefore the only one that can
+say. `ToolBroker` forwards it, deciding by **signature** rather than by catching
+`TypeError`, so a `TypeError` raised from inside a tool is not mistaken for an
+executor that lacks the parameter. `SpecialistExecutor` reads it, and the
+count-sampling helper is **deleted** rather than kept as a second, weaker way to
+work the same thing out.
+
+`committed` is read back from the **ledger**, not from the return value: a gate
+that refused and a handler that failed both return a dict, and only the ledger
+distinguishes them.
+
+### 6.2 Duplicate-owner and waiter semantics
+
+| situation | outcome |
+|---|---|
+| owner commits | waiters receive the owner's recorded result; effect count 1 |
+| owner refused at the gate | nothing committed, reservation released, a waiter legitimately runs |
+| owner's handler fails | nothing ledgered, waiters run; a failed effect left the world unchanged |
+| owner raises | `finally` releases the reservation; the identity is not poisoned |
+| owner cancelled before commit | no effect, no poison, the identity is still runnable |
+| **waiter** cancelled | the owner's effect is untouched — the wait is `asyncio.shield`ed |
+| different identities | run concurrently; the reservation is per-effect, never a global mutex |
+
+Every one of those is a test with a **bounded deadline**, so a broken build fails
+instead of hanging. The first campaign hung for 900 seconds on exactly this
+shape, which is why the campaign harness now carries a per-mutation watchdog.
+
+### 6.3 Two layers, tested apart
+
+M65B has two independent controls that both stop a duplicate effect, and
+conflating them is how a milestone claims a property it does not have:
+
+* **RESOURCE_CONFLICT_CONTROL** — the scheduler refuses to run two tasks
+  claiming one resource at once. It protects effects the *scheduler* routed.
+* **EFFECT_IDENTITY_DEDUPE** — the ledger refuses to run one effect identity
+  twice, whoever asks and however they arrived.
+
+The cross-specialist and cross-team-task proofs deliberately **lift**
+`MAX_PARALLEL_EFFECTFUL` and declare no overlapping claim, so the scheduler
+positively permits both submissions and the ledger alone holds the line. Without
+that lift those tests would pass on a build whose ledger did nothing.
 
 **Retries are two-layered and both are bounded**: `SpecialistExecutor` retries
 the *inference* up to `MAX_ATTEMPTS`, and the team retries the *task* up to
@@ -613,6 +674,43 @@ and that its evidence carries no payload.
 
 ---
 
+## 15b. The mutation campaign
+
+**81 mutations, 81 detected, 0 survivors**, one of them detected by the
+watchdog. Categories, each above its floor: `dag_validation` 11 ·
+`delegation` 11 · `parallel_conflict` 11 · `exactly_once` 15 · `team_argus` 8 ·
+`authority_security` 7 · `dependencies` 6 · `cancellation_backpressure` 6 ·
+`routing_injection` 6.
+
+Every mutation names the test that must catch it, so a mutation "detected" by an
+unrelated assertion is not counted as coverage of the thing it was aimed at.
+
+**Ten survived the first run.** None was softened, deleted or skipped.
+
+| survivor | classification | why it survived | closure |
+|---|---|---|---|
+| duplicate effect executes twice | REAL_TEST_GAP | the duplicate always arrived *after* the owner committed, so the plain ledger read caught it | park the owner inside the gate, then admit the duplicate |
+| reservation never taken | REAL_TEST_GAP | same window never forced | same fixture |
+| reservation never released | *hang* | waiters parked forever; the harness had no deadline | bounded waits ⇒ fails; harness watchdog added |
+| task autonomy taken from the plan | REAL_TEST_GAP | task autonomy always *equalled* the plan ceiling | a plan authorising L3 with a task asked to observe |
+| empty parent scope means everything | REAL_TEST_GAP | every scope test used a non-empty scope | an empty scope authorises no target |
+| team scope dropped from the request | REAL_TEST_GAP | every scope test asserted a *denial*, so losing the scope denied for another reason | a positive control: an in-scope active task that succeeds |
+| delegation scanner non-greedy | REAL_TEST_GAP | a flat payload cannot distinguish balanced from first-brace | payload with an unknown **nested object**; string-awareness gets its own test |
+| retry budget ignored | REAL_TEST_GAP | the task succeeded on attempt 2, so unbounded retry would also pass | a task that never succeeds — removing the bound is now non-termination |
+| delegation to unknown specialist | DEAD_REDUNDANT_CODE | the registry check could not fail; every `SpecialistId` has a record | merged into `registered_specialist()`; the assumption is pinned by a test |
+| cancellation still starts tasks | DEAD_REDUNDANT_CODE | step 2 had already terminalised every PENDING task | guard removed; cancellation enforced in **one** place |
+
+Two further mutations were **equivalent until observed**, and closing them
+clarified what the code is actually for. Read-only calls funnelled through the
+reservation still all execute, so no count assertion can see it — the property is
+that reads stay *cheap*, now proven with a barrier on a single identity. And the
+value an owner publishes on its reservation was always backstopped by the ledger
+read, so it changes no effect count; its real job is telling an operator a
+*concurrent duplicate* from a *sequential replay*, and the audit trail now
+asserts that distinction.
+
+---
+
 ## 16. Limitations
 
 * **Crash recovery is in-process only.** The effect ledger is an in-memory dict
@@ -620,6 +718,10 @@ and that its evidence carries no payload.
   task retry within one process; it does not survive a process restart, because
   the repository has no durable effect journal and M65B did not build one.
 * **The L2 rung is engine-supported and unoccupiable in production.** §14.
+* **The dedupe signal is an opt-in parameter.** A caller that does not pass an
+  `effect_note` learns nothing about deduplication. Every M65B path passes one;
+  a future caller that forgets will under-report rather than over-report, which
+  is the safe direction but is still a thing to remember.
 * **`aexecute_mcp` keeps the pre-M65B race.** The MCP bridge has the same
   check-then-act ledger shape that `aexecute` had. It is not reachable from the
   team fabric — `ToolBroker` delegates only to `aexecute` — so M65B fixed the
