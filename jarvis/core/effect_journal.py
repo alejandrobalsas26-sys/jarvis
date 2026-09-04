@@ -55,6 +55,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -583,12 +584,14 @@ class DurableEffectJournal:
                 logger.warning("EFFECT_JOURNAL: could not restrict permissions on "
                                f"{self._path}")
         cur = db.cursor()
+        # Bounded contention (§24), set FIRST because everything below it can
+        # collide with another process opening the same file at the same
+        # instant. Never unbounded: one stuck process would otherwise hang every
+        # other one indefinitely.
+        cur.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
         # WAL: a reader (recovery inspection, the doctor) must not block the
         # writer reserving an effect. A persistent property of the file.
-        cur.execute("PRAGMA journal_mode=WAL").fetchall()
-        # Bounded contention (§24). Never unbounded: one stuck process would
-        # otherwise hang every other one indefinitely.
-        cur.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+        self._ensure_wal(cur)
         # THE load-bearing pragma. Under WAL the default NORMAL does not fsync
         # on commit, so a power loss can lose a COMMITTED row for an effect that
         # really happened — manufacturing the exact P3 ambiguity this module
@@ -599,6 +602,43 @@ class DurableEffectJournal:
         # is a corrupt audit trail.
         cur.execute("PRAGMA foreign_keys=ON")
         return db
+
+    def _ensure_wal(self, cur) -> None:
+        """Put the file in WAL, tolerating another process doing it at once.
+
+        ``PRAGMA journal_mode=WAL`` needs a brief exclusive lock, and unlike an
+        ordinary write SQLite does not reliably route it through the busy
+        handler — so two processes opening a brand-new journal at the same
+        instant can make one of them fail outright with "database is locked".
+
+        Measured: the §22 initialisation-race test reproduced exactly that, and
+        it is not a test artefact — two JARVIS processes starting together would
+        hit it. WAL is a persistent property of the FILE rather than of a
+        connection, so the loser only has to wait for the winner and read the
+        mode back. Bounded by the same busy timeout as every other wait here.
+        """
+        deadline = time.monotonic() + (self._busy_timeout_ms / 1000.0)
+        detail = ""
+        while True:
+            try:
+                row = cur.execute("PRAGMA journal_mode=WAL").fetchone()
+                if row and str(row[0]).lower() == "wal":
+                    return
+                detail = f"mode is {row[0] if row else 'unknown'}"
+            except sqlite3.OperationalError as exc:
+                detail = str(exc)
+            try:
+                row = cur.execute("PRAGMA journal_mode").fetchone()
+                if row and str(row[0]).lower() == "wal":
+                    return          # another process established it first
+            except sqlite3.OperationalError:
+                pass
+            if time.monotonic() >= deadline:
+                raise JournalUnhealthy(
+                    f"the effect journal at {self._path} could not be put into "
+                    f"WAL mode within {self._busy_timeout_ms}ms ({detail}); "
+                    f"refusing to run without it")
+            time.sleep(0.01)
 
     def _init_schema(self) -> None:
         """Create or validate the schema. Two processes may race here (§22).

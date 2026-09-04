@@ -234,6 +234,16 @@ class ToolReceipt:
     effect_identity: str
     executed: bool
     deduplicated: bool = False
+    #: V69 M65C §18/§46 — WHICH branch of the effect protocol produced this
+    #: receipt, stated by the executor rather than inferred here. ARGUS needs
+    #: it because "executed now", "recovered from a durable receipt" and
+    #: "blocked because the outcome is unknown" are three different facts that a
+    #: SUCCESS/FAILURE pair cannot express.
+    disposition: str = ""
+    #: True when the durable journal refused this effect because a previous
+    #: attempt may or may not have taken effect. ARGUS may never read this as
+    #: a verified success.
+    recovery_required: bool = False
     risk: str = RiskClass.READ_ONLY.value
     required_autonomy: AutonomyLevel = AutonomyLevel.HITL_EXECUTE
     denial_reason: str = ""
@@ -260,6 +270,8 @@ class ToolReceipt:
             "specialist_id": self.specialist_id.value, "status": self.status.value,
             "effect_identity_digest": self.identity_digest,
             "executed": self.executed, "deduplicated": self.deduplicated,
+            "disposition": self.disposition,
+            "recovery_required": self.recovery_required,
             "risk": self.risk, "required_autonomy": int(self.required_autonomy),
             "denial_reason": _clip(self.denial_reason, 300),
             "summary": _clip(self.summary, 400),
@@ -544,6 +556,31 @@ class SpecialistExecutionResult:
         return sum(1 for r in self.tool_receipts if r.deduplicated)
 
     @property
+    def recovered_effects(self) -> int:
+        """Effects a durable receipt answered instead of re-running (§18).
+
+        Counted separately from ``deduplicated_effects`` because the guarantees
+        differ: an in-process duplicate was suppressed by a ledger that dies with
+        the interpreter, and a recovered one was suppressed by a journal that
+        outlived the process that made it.
+        """
+        from core.effect_journal import ExecutionDisposition
+
+        recovered = {ExecutionDisposition.RECOVERED_COMMITTED.value,
+                     ExecutionDisposition.DEDUPLICATED_DURABLE.value,
+                     ExecutionDisposition.RECONCILED_COMMITTED.value}
+        return sum(1 for r in self.tool_receipts if r.disposition in recovered)
+
+    @property
+    def indeterminate_effects(self) -> int:
+        """Effects whose outcome is unknown and which were NOT retried.
+
+        A non-zero count is not a failure to hide: it is the one thing an
+        operator has to be told, because only a human can reconcile it.
+        """
+        return sum(1 for r in self.tool_receipts if r.recovery_required)
+
+    @property
     def denied_tools(self) -> int:
         return sum(1 for r in self.tool_receipts
                    if r.status is ToolCallStatus.DENIED)
@@ -587,6 +624,8 @@ class SpecialistExecutionResult:
             "attempts": self.attempts, "duration_ms": round(self.duration_ms, 1),
             "executed_effects": self.executed_effects,
             "deduplicated_effects": self.deduplicated_effects,
+            "recovered_effects": self.recovered_effects,
+            "indeterminate_effects": self.indeterminate_effects,
             "denied_tools": self.denied_tools,
             "body_safe_trace": list(self.body_safe_trace),
             "timestamp": self.timestamp,
@@ -1056,6 +1095,10 @@ class SpecialistExecutor:
             effect_identity=identity,
             executed=status in (ToolCallStatus.SUCCESS, ToolCallStatus.PARTIAL),
             deduplicated=deduped and status is ToolCallStatus.SUCCESS,
+            # V69 M65C — copied, never derived. The executor is the only
+            # component that knows which branch of the durable protocol it took.
+            disposition=str(effect_note.get("disposition") or ""),
+            recovery_required=bool(effect_note.get("recovery_required")),
             risk=risk.value, required_autonomy=decision.required_autonomy,
             denial_reason=denial, summary=summary, elapsed_s=elapsed,
             scope_decision=decision.scope_decision, hitl_approval_id=approval_id)
@@ -1390,7 +1433,14 @@ class SpecialistExecutor:
                     + [r.scope_decision for r in receipts if r.scope_decision]),
                 budget=request.budget,
                 required_evidence=request.evidence_requirements,
-                autonomy_ceiling=request.autonomy_level))
+                autonomy_ceiling=request.autonomy_level,
+                # V69 M65C §46 — hand ARGUS the effects whose outcome is
+                # unknown. Without this it would see a tool that returned an
+                # error envelope and could still pass the execution on the
+                # strength of the other receipts.
+                indeterminate_effects=tuple(
+                    f"{r.tool}: a previous attempt may have taken effect"
+                    for r in receipts if r.recovery_required)))
         except Exception as exc:  # noqa: BLE001 — a verifier that cannot run has
             # not verified anything, and must not be read as if it had.
             from core.mesh_contracts import Verdict

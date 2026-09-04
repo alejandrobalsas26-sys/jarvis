@@ -624,6 +624,111 @@ def check_team_fabric() -> list[Finding]:
     return out
 
 
+def check_effect_journal() -> list[Finding]:
+    """Whether the M65C durable effect journal can protect an effect (§48).
+
+    Answerable WITHOUT an LLM and without a network call. An operator needs to
+    know three things before trusting the runtime with an irreversible action:
+    whether the journal is on, whether it is healthy, and whether anything is
+    sitting in a state that needs a human — because an INDETERMINATE effect is
+    not a bug report, it is a task.
+
+    Nothing here repairs, reconciles or executes. Reporting a stale reservation
+    is not the same as reclaiming it, and this module does neither.
+    """
+    out: list[Finding] = []
+    try:
+        from core.effect_journal import (
+            SCHEMA_VERSION, DurableEffectJournal, JournalUnhealthy,
+            configured_journal_path, journal_enabled,
+        )
+    except Exception as exc:  # noqa: BLE001 — an unimportable journal is a finding
+        return [Finding("effects.journal", "effect_durability",
+                        DoctorStatus.BLOCKED, Severity.HIGH,
+                        f"the durable effect journal did not load: "
+                        f"{type(exc).__name__}",
+                        "check core/effect_journal.py imports")]
+
+    if not journal_enabled():
+        return [Finding(
+            "effects.journal", "effect_durability", DoctorStatus.DEGRADED,
+            Severity.HIGH,
+            "the durable effect journal is DISABLED (JARVIS_EFFECT_JOURNAL). "
+            "Effects are deduplicated within this process only; a crash or a "
+            "restart can repeat one",
+            "unset JARVIS_EFFECT_JOURNAL to restore durable effect protection")]
+
+    path = configured_journal_path()
+    try:
+        journal = DurableEffectJournal(path)
+        journal.assert_healthy()
+        status = journal.status()
+    except JournalUnhealthy as exc:
+        # Fail closed and SAY SO. The remedy is an operator decision — restore
+        # from a managed backup — never an automatic delete (§25).
+        return [Finding(
+            "effects.journal", "effect_durability", DoctorStatus.BLOCKED,
+            Severity.CRITICAL,
+            f"the effect journal at {path} is UNHEALTHY: {str(exc)[:160]}. "
+            f"Effectful tools are refused while this holds",
+            "restore data/effect_journal.db from a managed backup; do NOT "
+            "delete it — the committed identities are what prevent replays")]
+    except Exception as exc:  # noqa: BLE001
+        return [Finding(
+            "effects.journal", "effect_durability", DoctorStatus.BLOCKED,
+            Severity.HIGH,
+            f"the effect journal could not be read: {type(exc).__name__}",
+            f"check permissions on {path}")]
+
+    out.append(Finding(
+        "effects.journal", "effect_durability", DoctorStatus.PASS, Severity.INFO,
+        f"durable effect journal enabled at {path}, schema v{SCHEMA_VERSION}, "
+        f"integrity {status['integrity']}, {status['db_bytes']} bytes"))
+
+    out.append(Finding(
+        "effects.ledger", "effect_durability", DoctorStatus.PASS, Severity.INFO,
+        f"{status['total']} effect identit(ies) recorded: "
+        f"{status['committed']} committed, {status['reserved']} reserved, "
+        f"{status['executing']} executing, "
+        f"{status['indeterminate']} indeterminate"))
+
+    stale = int(status.get("stale_reservations", 0))
+    out.append(Finding(
+        "effects.stale", "effect_durability",
+        DoctorStatus.DEGRADED if stale else DoctorStatus.PASS,
+        Severity.LOW if stale else Severity.INFO,
+        f"{stale} reservation(s) whose owner's lease has expired"
+        if stale else "no stale reservations",
+        "a stale PRE-EFFECT reservation is reclaimed automatically by the next "
+        "caller; a stale EXECUTING one becomes INDETERMINATE and needs a human"
+        if stale else ""))
+
+    indeterminate = int(status.get("indeterminate", 0))
+    out.append(Finding(
+        "effects.recovery", "effect_durability",
+        DoctorStatus.BLOCKED if indeterminate else DoctorStatus.PASS,
+        Severity.HIGH if indeterminate else Severity.INFO,
+        f"{indeterminate} effect(s) INDETERMINATE: a previous attempt may or "
+        f"may not have taken effect. Automatic retry is blocked for these to "
+        f"prevent duplication" if indeterminate else
+        "no effect requires reconciliation",
+        "reconcile each one against the external system, then decide; JARVIS "
+        "will not guess" if indeterminate else ""))
+
+    counters = status.get("counters") or {}
+    out.append(Finding(
+        "effects.contention", "effect_durability", DoctorStatus.PASS,
+        Severity.INFO,
+        f"this process: {counters.get('ownership_wins', 0)} ownership win(s), "
+        f"{counters.get('reservation_conflicts', 0)} conflict(s), "
+        f"{counters.get('durable_dedupe_hits', 0)} durable dedupe hit(s), "
+        f"{counters.get('stale_reservations_reclaimed', 0)} reclaim(ed), "
+        f"{counters.get('reconciliations', 0)} reconciliation(s), "
+        f"{counters.get('db_busy', 0)} lock timeout(s); busy timeout "
+        f"{status['busy_timeout_ms']}ms, lease {status['lease_s']}s"))
+    return out
+
+
 def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     """Run every check. Never raises: a check that explodes becomes a finding.
 
@@ -636,7 +741,8 @@ def run_diagnostics(*, include_network: bool = True) -> DoctorReport:
     checks = [check_interpreter, check_dependencies, check_entrypoints,
               check_resources, check_directories, check_external_tools,
               check_configuration, check_memory_stores, check_speech, check_aura,
-              check_specialist_execution, check_team_fabric]
+              check_specialist_execution, check_team_fabric,
+              check_effect_journal]
     if include_network:
         checks.append(check_model_runtime)
     for check in checks:
@@ -656,7 +762,7 @@ __all__ = [
     "check_directories", "check_entrypoints", "check_external_tools",
     "check_interpreter", "check_memory_stores", "check_model_runtime",
     "check_resources", "check_specialist_execution", "check_speech",
-    "check_team_fabric",
+    "check_effect_journal", "check_team_fabric",
     "run_diagnostics",
     "site_packages_versions",
 ]

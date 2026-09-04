@@ -59,6 +59,11 @@ class VerificationInput:
     required_evidence: tuple[str, ...] = ()
     autonomy_ceiling: AutonomyLevel = AutonomyLevel.ADVISE
     retries_used: int = 0
+    #: V69 M65C §46 — effects the durable journal left INDETERMINATE: a previous
+    #: attempt may or may not have taken effect and nothing local can say which.
+    #: Assembled by the caller from tool receipts, so ARGUS reads a fact rather
+    #: than re-deriving one. Each entry is a body-safe "tool: reason" string.
+    indeterminate_effects: tuple[str, ...] = ()
 
 
 def verify(inp: VerificationInput) -> VerifierVerdict:
@@ -100,6 +105,25 @@ def verify(inp: VerificationInput) -> VerifierVerdict:
         return VerifierVerdict(
             Verdict.AUTHORITY_MISSING, reasons=tuple(invented),
             scope_violations=tuple(scope_violations), retries_used=inp.retries_used)
+
+    # ── 2b. effects whose outcome is unknown. ────────────────────────────────
+    # V69 M65C §46. ARGUS may not turn INDETERMINATE into VERIFIED. An effect
+    # the journal could not resolve is not a failure — the action may well have
+    # succeeded — but it is not a demonstrated success either, and only evidence
+    # from the external system can settle it. Ranked above fabricated results
+    # because an unresolved irreversible action is the more urgent thing to say.
+    if inp.indeterminate_effects:
+        return VerifierVerdict(
+            Verdict.INSUFFICIENT_EVIDENCE,
+            reasons=tuple(
+                f"the outcome of {entry} could not be determined; it may or may "
+                f"not have taken effect and was NOT retried"
+                for entry in inp.indeterminate_effects[:4]
+            ) + ("an effect with an unknown outcome cannot support a claim that "
+                 "the task completed; it needs reconciliation against the "
+                 "external system",),
+            scope_violations=tuple(scope_violations),
+            limitations=tuple(limitations), retries_used=inp.retries_used)
 
     # ── 3. fabricated tool results. ──────────────────────────────────────────
     fabricated = _fabricated_tool_results(inp)
