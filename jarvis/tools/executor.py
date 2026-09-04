@@ -1054,8 +1054,24 @@ class ToolExecutor:
         if not reservation.done():
             reservation.set_result(dict(recorded) if recorded is not None else None)
 
-    async def aexecute(self, tool_name: str, tool_input: dict, reasoning: str = "") -> Any:
+    async def aexecute(self, tool_name: str, tool_input: dict, reasoning: str = "",
+                       *, effect_note: "dict | None" = None) -> Any:
         """The ONE effect path, with exactly-once that survives CONCURRENCY.
+
+        ``effect_note``, when supplied, is filled in with what THIS call did:
+        ``deduplicated`` (whether the handler was skipped because the identity
+        was already committed or in flight), ``effect_key`` and ``committed``.
+
+        It exists because a caller cannot work that out for itself under
+        concurrency. M65A inferred it by sampling the ledger count before and
+        after — which is correct sequentially and wrong the moment two callers
+        overlap, because the second one's "before" was taken while the first was
+        still in the gate. Both then read a count that had moved for a reason
+        neither could attribute, and both reported having caused the effect.
+        Measured: one effect ran and two specialists claimed it.
+
+        The executor is the only component that knows which branch it took, so
+        it is the only component that can say.
 
         V69 M65B §15/§17. M64.1 gave this class the effect ledger and M65A
         proved it holds for one specialist: a duplicate intent, a retry and a
@@ -1080,10 +1096,17 @@ class ToolExecutor:
         Read-only calls are never reserved, for the same reason they are never
         keyed: repeating a read is not an effect.
         """
+        note = effect_note if effect_note is not None else {}
+        note.update({"deduplicated": False, "effect_key": None,
+                     "committed": False})
+
         if classify_tool(tool_name) is RiskClass.READ_ONLY:
+            # Repeating a read is not an effect, so it is neither keyed, nor
+            # reserved, nor ever reported as a duplicate.
             return await self._aexecute_gated(tool_name, tool_input, reasoning)
 
         key = self._effect_key(self._effect_epoch, tool_name, tool_input)
+        note["effect_key"] = key
         for _ in range(self.MAX_EFFECT_WAIT_ROUNDS):
             prior = self._effect_ledger_get(key)
             if prior is not None:
@@ -1098,6 +1121,7 @@ class ToolExecutor:
                     tool_name, reasoning, "deduplicated", "blocked",
                     "duplicate effect suppressed by the effect ledger",
                 )
+                note.update({"deduplicated": True, "committed": True})
                 return dict(prior)
             inflight = self._effect_inflight.get(key)
             if inflight is None:
@@ -1115,6 +1139,7 @@ class ToolExecutor:
                     tool_name, reasoning, "deduplicated:concurrent", "blocked",
                     "concurrent duplicate effect suppressed by the effect ledger",
                 )
+                note.update({"deduplicated": True, "committed": True})
                 return dict(shared)
         else:  # pragma: no cover — see MAX_EFFECT_WAIT_ROUNDS
             logger.warning(
@@ -1127,14 +1152,20 @@ class ToolExecutor:
                     tool_name, reasoning, "deduplicated", "blocked",
                     "duplicate effect suppressed by the effect ledger",
                 )
+                note.update({"deduplicated": True, "committed": True})
                 return dict(stale)
             return await self._aexecute_gated(tool_name, tool_input, reasoning)
 
         reservation = self._effect_reserve(key)
         try:
-            return await self._aexecute_gated(tool_name, tool_input, reasoning)
+            result = await self._aexecute_gated(tool_name, tool_input, reasoning)
         finally:
             self._effect_release(key, reservation)
+        # Whether the effect COMMITTED is read back from the ledger rather than
+        # from the return value: a gate that refused and a handler that failed
+        # both return a dict, and only the ledger distinguishes them.
+        note["committed"] = self._effect_ledger_get(key) is not None
+        return result
 
     async def _aexecute_gated(self, tool_name: str, tool_input: dict,
                               reasoning: str = "") -> Any:

@@ -998,12 +998,20 @@ class SpecialistExecutor:
 
         broker = ToolBroker(self._tool_executor,
                             spec_for(REGISTRY.runtime_role(request.specialist_id)))
-        before = self._effect_count(intent.tool)
+        # V69 M65B §17 — the executor reports what THIS call did. M65A inferred
+        # it by sampling the ledger count before and after, which is correct
+        # sequentially and wrong the moment two specialists overlap: the second
+        # one's "before" is taken while the first is still inside the gate, so
+        # both read a count that moved for a reason neither can attribute and
+        # both report having caused the effect. Measured on a live team: one
+        # effect ran and two specialists claimed it.
+        effect_note: dict = {}
         started = time.monotonic()
         try:
             output = await asyncio.wait_for(
                 broker.call(intent.tool, dict(intent.tool_input),
-                            f"specialist execution {request.execution_id}"),
+                            f"specialist execution {request.execution_id}",
+                            effect_note=effect_note),
                 timeout=request.deadline_s)
         except asyncio.TimeoutError:
             return ToolReceipt(
@@ -1035,9 +1043,11 @@ class SpecialistExecutor:
         #    ledger rather than from the tool's return value. An effect the
         #    ledger suppressed is reported as deduplicated and — crucially —
         #    still returns the recorded result, which is what makes a retry
-        #    safe rather than merely refused.
-        after = self._effect_count(intent.tool)
-        deduped = (risk is not RiskClass.READ_ONLY and after == before)
+        #    safe rather than merely refused. The count-sampling helper this
+        #    used to need is gone with it: an executor that answers the question
+        #    directly cannot be raced, and keeping a second, weaker way to work
+        #    it out would only be a second thing to keep correct.
+        deduped = bool(effect_note.get("deduplicated"))
         status, denial = self._classify_output(output)
         summary = self._body_safe_summary(output)
         return ToolReceipt(
@@ -1049,23 +1059,6 @@ class SpecialistExecutor:
             risk=risk.value, required_autonomy=decision.required_autonomy,
             denial_reason=denial, summary=summary, elapsed_s=elapsed,
             scope_decision=decision.scope_decision, hitl_approval_id=approval_id)
-
-    def _effect_count(self, tool: str) -> int:
-        """The executor's own effect count for *tool*, or -1 when unknowable.
-
-        Derived from ``ToolExecutor.effect_count``, which reads the ledger. A
-        caller cannot under-report by forgetting to increment, and a wired
-        executor that does not expose the method simply yields -1 — which never
-        compares equal to a later count, so an unknown count is never mistaken
-        for "deduplicated".
-        """
-        counter = getattr(self._tool_executor, "effect_count", None)
-        if not callable(counter):
-            return -1
-        try:
-            return int(counter(tool))
-        except Exception:  # noqa: BLE001
-            return -1
 
     @staticmethod
     def _classify_output(output) -> "tuple[ToolCallStatus, str]":

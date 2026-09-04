@@ -732,9 +732,36 @@ class ToolBroker:
         cat = self.category_of(tool_name)
         return cat is not None and cat in self._allowed
 
-    async def call(self, tool_name: str, tool_input: dict, reasoning: str = "") -> dict:
+    def _accepts_effect_note(self) -> bool:
+        """Whether the wired executor can report what one call actually did.
+
+        Checked by signature rather than by catching ``TypeError``: a TypeError
+        raised from inside a tool would otherwise be mistaken for an executor
+        that does not support the parameter, and the call would be silently
+        retried without it.
+        """
+        cached = getattr(self, "_note_ok", None)
+        if cached is None:
+            import inspect
+            try:
+                params = inspect.signature(self._executor.aexecute).parameters
+                cached = ("effect_note" in params
+                          or any(p.kind is inspect.Parameter.VAR_KEYWORD
+                                 for p in params.values()))
+            except (TypeError, ValueError):  # pragma: no cover - exotic callable
+                cached = False
+            self._note_ok = cached
+        return cached
+
+    async def call(self, tool_name: str, tool_input: dict, reasoning: str = "",
+                   *, effect_note: "dict | None" = None) -> dict:
         """Delegate a tool call through the protected executor. Fail-closed on a
-        disallowed category or a missing executor — never a bypass."""
+        disallowed category or a missing executor — never a bypass.
+
+        ``effect_note`` is passed straight through to ``ToolExecutor.aexecute``
+        so the caller learns whether THIS call caused the effect or was
+        deduplicated. The broker adds nothing to it and reads nothing from it.
+        """
         if self._executor is None:
             return {"error": "tool gateway unavailable"}
         if not self.is_allowed(tool_name):
@@ -743,9 +770,11 @@ class ToolBroker:
                 f"(category not in {sorted(c.value for c in self._allowed)})"
             )
             return {"error": f"tool '{tool_name}' not permitted for role {self._role.value}"}
-        return await self._executor.aexecute(
-            tool_name, tool_input, f"[{self._role.value}] {reasoning}"[:200]
-        )
+        reason = f"[{self._role.value}] {reasoning}"[:200]
+        if effect_note is not None and self._accepts_effect_note():
+            return await self._executor.aexecute(
+                tool_name, tool_input, reason, effect_note=effect_note)
+        return await self._executor.aexecute(tool_name, tool_input, reason)
 
 
 # ════════════════════════════════════════════════════════════════════════════
