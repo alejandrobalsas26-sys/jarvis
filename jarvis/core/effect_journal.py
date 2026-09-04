@@ -77,10 +77,13 @@ SCHEMA_VERSION = 1
 _JARVIS_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_JOURNAL_PATH = _JARVIS_DIR / "data" / "effect_journal.db"
 
-#: Env override, read through here rather than at each call site so the path is
-#: configurable and stable and no developer machine path is ever hardcoded (§28).
+#: Env overrides, read through here rather than at each call site so the paths
+#: and timings are configurable and stable and no developer machine path is ever
+#: hardcoded (§28).
 _PATH_ENV = "JARVIS_EFFECT_JOURNAL_PATH"
 _ENABLED_ENV = "JARVIS_EFFECT_JOURNAL"
+_LEASE_ENV = "JARVIS_EFFECT_LEASE_S"
+_LEASE_GRACE_ENV = "JARVIS_EFFECT_LEASE_GRACE_S"
 
 #: How long a reservation stays this owner's before another process may consider
 #: the owner gone. Generous relative to a tool call, because an owner declared
@@ -534,6 +537,38 @@ def configured_journal_path() -> Path:
     return Path(raw) if raw else DEFAULT_JOURNAL_PATH
 
 
+def _configured_seconds(name: str, default: float) -> float:
+    """A non-negative float from the environment, or *default*.
+
+    A malformed or negative value falls back rather than failing boot: the
+    consequence of a bad lease setting is a timing change, and refusing to start
+    over one would be worse than ignoring it. It IS logged, so a setting that
+    silently did nothing is visible.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(f"EFFECT_JOURNAL: {name}={raw!r} is not a number; "
+                       f"using {default}")
+        return default
+    if value < 0:
+        logger.warning(f"EFFECT_JOURNAL: {name}={raw!r} is negative; "
+                       f"using {default}")
+        return default
+    return value
+
+
+def configured_lease_s() -> float:
+    return _configured_seconds(_LEASE_ENV, DEFAULT_LEASE_S)
+
+
+def configured_lease_grace_s() -> float:
+    return _configured_seconds(_LEASE_GRACE_ENV, DEFAULT_LEASE_GRACE_S)
+
+
 class DurableEffectJournal:
     """Durable ownership and lifecycle for effect identities, across processes.
 
@@ -544,14 +579,16 @@ class DurableEffectJournal:
     """
 
     def __init__(self, path: "str | Path | None" = None, *, clock=None,
-                 lease_s: float = DEFAULT_LEASE_S,
-                 lease_grace_s: float = DEFAULT_LEASE_GRACE_S,
+                 lease_s: "float | None" = None,
+                 lease_grace_s: "float | None" = None,
                  busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
                  instance_id: "str | None" = None) -> None:
         self._path = Path(path) if path is not None else configured_journal_path()
         self._clock = clock if clock is not None else _utcnow
-        self._lease_s = float(lease_s)
-        self._lease_grace_s = float(lease_grace_s)
+        self._lease_s = float(lease_s if lease_s is not None
+                              else configured_lease_s())
+        self._lease_grace_s = float(lease_grace_s if lease_grace_s is not None
+                                    else configured_lease_grace_s())
         self._busy_timeout_ms = int(busy_timeout_ms)
         self._instance_id = instance_id or runtime_instance_id()
         #: sqlite3 connections are not safe to share across threads without
@@ -1469,7 +1506,8 @@ __all__ = [
     "Reservation",
     "ReservationOutcome",
     "action_digest", "args_digest", "canonical_json", "compute_effect_id",
-    "configured_journal_path", "derive_idempotency_key", "durability_class",
+    "configured_journal_path", "configured_lease_grace_s",
+    "configured_lease_s", "derive_idempotency_key", "durability_class",
     "journal_enabled", "may_auto_retry", "opaque_digest", "receipt_digest",
     "reconcile", "register_durability", "register_reconciler",
     "runtime_instance_id", "unregister_durability",

@@ -1657,6 +1657,50 @@ async def _main_async() -> None:
         stt_queue=stt_queue, stt_listener=audio_listener, consent=session_consent,
         authority=authority_state,
     )
+
+    # V69 M65C §49 — inspect what a previous process left in the durable effect
+    # journal. This CLASSIFIES and never executes: a startup path that re-ran
+    # stale effects would turn every crash into a duplicate. A pre-effect
+    # reservation is left exactly where it is for the next caller to reclaim; an
+    # abandoned EXECUTING row becomes INDETERMINATE so an operator can see that
+    # something needs reconciling. Bounded (§50) — a large or locked journal
+    # degrades to a warning rather than blocking boot behind a full scan.
+    def _inspect_effect_journal() -> None:
+        from core.effect_journal import (
+            DurableEffectJournal, JournalUnhealthy, journal_enabled,
+        )
+
+        if not journal_enabled():
+            logger.warning(
+                "EFFECT_JOURNAL: disabled — effects are deduplicated within "
+                "this process only; a crash or restart can repeat one")
+            return
+        try:
+            journal = DurableEffectJournal()
+            journal.assert_healthy()
+            report = journal.startup_recovery()
+        except JournalUnhealthy as exc:
+            # Fail closed and SAY SO. Effectful tools refuse while this holds,
+            # and the remedy is an operator decision — restore from a managed
+            # backup — never an automatic delete (§25).
+            logger.error(f"EFFECT_JOURNAL: UNHEALTHY — {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001 — boot never dies on a diagnosis
+            logger.warning(f"EFFECT_JOURNAL: startup inspection skipped ({exc})")
+            return
+        if report["classified_indeterminate"] or report["already_indeterminate"]:
+            logger.warning(
+                f"EFFECT_JOURNAL: {report['already_indeterminate']} effect(s) "
+                f"have an UNKNOWN outcome and will not be retried "
+                f"automatically; reconcile them against the external system")
+        if report["reclaimable_pre_effect"]:
+            logger.info(
+                f"EFFECT_JOURNAL: {report['reclaimable_pre_effect']} "
+                f"reservation(s) from a previous process never reached the "
+                f"tool and are reclaimable")
+
+    _inspect_effect_journal()
+
     llm = LLM(tool_executor=executor)
     tts = TTS()
 
