@@ -709,6 +709,37 @@ async def _aura_broadcast(event: dict) -> None:
         pass
 
 
+class _EffectHooks:
+    """The one line of communication between the effect protocol and a gate.
+
+    A gate knows whether it refused; the protocol knows what a refusal means for
+    the journal. Rather than teach either one the other's job — or copy the
+    journal logic into both gates, which §19 exists to prevent — the gate calls
+    :meth:`before_invoke` at exactly one place, immediately before the tool
+    runs, and the protocol reads :attr:`invoked` afterwards.
+
+    ``invoked`` is therefore the durable meaning of "the external effect may
+    have started". It is set AFTER the journal write succeeds, so a journal that
+    could not record EXECUTING aborts the call instead of running unrecorded.
+    """
+
+    __slots__ = ("_on_invoke", "invoked")
+
+    def __init__(self, on_invoke) -> None:
+        self._on_invoke = on_invoke
+        self.invoked = False
+
+    def before_invoke(self) -> None:
+        """Durably record that the tool is about to run. Raises to abort."""
+        from core.effect_journal import EffectJournalRefused
+
+        if self._on_invoke is not None and not self._on_invoke():
+            raise EffectJournalRefused(
+                "the durable effect journal refused to mark this effect "
+                "EXECUTING; refusing to invoke the tool unrecorded")
+        self.invoked = True
+
+
 class ToolExecutor:
     def __init__(
         self,
@@ -716,6 +747,7 @@ class ToolExecutor:
         stt_listener=None,
         consent: "SessionConsent | None" = None,
         authority: "AuthorityState | None" = None,
+        journal: "DurableEffectJournal | None" = None,
     ) -> None:
         self._active_web_server: socketserver.TCPServer | None = None
         self._active_web_thread: threading.Thread | None = None
@@ -751,6 +783,16 @@ class ToolExecutor:
         # committing, which is the window a team's concurrent specialists made
         # reachable. See `aexecute`.
         self._effect_inflight: dict[str, "asyncio.Future"] = {}
+        # V69 M65C §6 — the DURABLE half. The two structures above are RAM and
+        # die with the interpreter; this one is a local SQLite journal that
+        # survives a crash, a SIGKILL and a machine restart, and is the only
+        # thing that can answer "did this already happen?" for a process that is
+        # gone. Constructed lazily on the first effectful call, so a read-only
+        # session never touches the disk and a test never inherits another
+        # test's durable state.
+        self._journal: "DurableEffectJournal | None" = journal
+        self._journal_ready: bool = journal is not None
+        self._journal_error: str = ""
 
     #: How long a recorded effect suppresses an identical repeat, in seconds.
     #:
@@ -814,6 +856,120 @@ class ToolExecutor:
             return len(self._effect_ledger)
         return sum(1 for k in self._effect_ledger
                    if k.split("|", 2)[1:2] == [tool_name])
+
+    # ── V69 M65C: the durable effect protocol ────────────────────────────────
+    #: How long a caller waits for a live owner in ANOTHER process to finish
+    #: before giving up. Bounded (§24/§35): a cross-process waiter has no future
+    #: to park on, so it polls, and an unbounded poll is a deadlock with extra
+    #: steps. Giving up is reported, never converted into a second execution.
+    DURABLE_WAIT_S: float = 30.0
+    DURABLE_POLL_S: float = 0.05
+
+    def _effect_journal(self) -> "DurableEffectJournal | None":
+        """The process's durable journal, or None when it is switched off.
+
+        Opened once, lazily. A journal that cannot be opened or is structurally
+        unhealthy does NOT degrade to "no journal" — that would silently drop
+        the guarantee while the system believed it had it — it raises, and
+        `_execute_effect_protocol` turns that into a refusal (§25).
+        """
+        if self._journal_ready:
+            return self._journal
+        from core.effect_journal import DurableEffectJournal, journal_enabled
+
+        self._journal_ready = True
+        if not journal_enabled():
+            self._journal = None
+            return None
+        self._journal = DurableEffectJournal()
+        return self._journal
+
+    @staticmethod
+    def _authority_digests(authority) -> "tuple[str, str]":
+        """Body-safe (authority, scope) identities for the journal.
+
+        Digests, not contents: the journal records WHICH authority a reservation
+        was made under so a later attempt can be compared against it, and it
+        must never become a place an authority can be read back out of.
+        """
+        from core.effect_journal import opaque_digest
+
+        try:
+            mode = getattr(getattr(authority, "mode", None), "value", "")
+            scopes = [
+                {"id": getattr(sc, "scope_id", ""),
+                 "targets": sorted(getattr(sc, "targets", []) or []),
+                 "expires": str(getattr(sc, "expires_at", ""))}
+                for sc in (getattr(authority, "scopes", None) or [])
+            ]
+            return opaque_digest({"mode": mode}), opaque_digest(scopes)
+        except Exception:  # noqa: BLE001 — an unreadable posture is still a digest
+            return opaque_digest("unreadable"), opaque_digest("unreadable")
+
+    def _durable_recovery_envelope(self, record, disposition) -> dict:
+        """What a caller gets when the effect is proven already done.
+
+        Deliberately NOT the original response body. The journal stores a
+        receipt DIGEST, because retaining bodies would make it a copy of every
+        tool result the runtime has ever produced (§52) — so recovery returns a
+        truthful envelope that says what happened and how to identify it, and
+        says plainly that the body is not retained.
+        """
+        return {
+            "status": "recovered",
+            "disposition": disposition.value,
+            "effect_id": record.effect_id,
+            "tool": record.tool_id,
+            "committed_at": record.committed_at,
+            "receipt_digest": record.receipt_digest,
+            "detail": (
+                "This effect is recorded as already committed in the durable "
+                "effect journal, so it was NOT executed again. The original "
+                "result body is not retained by the journal."
+            ),
+        }
+
+    async def _durable_wait_for_owner(self, journal, reservation, reserve_kw):
+        """Poll a bounded number of times for a live owner in another process.
+
+        Returns the final reservation. Every exit is bounded, so contention
+        degrades to a reported refusal rather than a hang (§24/§35).
+        """
+        from core.effect_journal import ReservationOutcome
+
+        deadline = time.monotonic() + self.DURABLE_WAIT_S
+        while (reservation.outcome is ReservationOutcome.OWNED_ELSEWHERE
+               and time.monotonic() < deadline):
+            await asyncio.sleep(self.DURABLE_POLL_S)
+            reservation = journal.reserve(**reserve_kw)
+        return reservation
+
+    async def _resolve_indeterminate(self, journal, reservation, reserve_kw,
+                                     tool_id: str):
+        """Try to turn an INDETERMINATE effect into a proven one (§15/§16).
+
+        The ONLY route out is a reconciliation answer from the tool itself.
+        UNKNOWN stays UNKNOWN — this method never converts uncertainty into
+        either certainty, which is the single rule the whole milestone rests on.
+        """
+        from core.effect_journal import (
+            ReconciliationVerdict, ReservationOutcome, reconcile,
+        )
+
+        if reservation.outcome is not ReservationOutcome.RECONCILE_REQUIRED:
+            return reservation
+        record = reservation.record
+        verdict = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: reconcile(tool_id, record.effect_id,
+                                    record.idempotency_key))
+        if verdict is ReconciliationVerdict.UNKNOWN:
+            return reservation
+        journal.apply_reconciliation(record.effect_id, verdict)
+        if verdict is ReconciliationVerdict.CONFIRMED_COMMITTED:
+            # Proven present. Recovered, never replayed.
+            return journal.reserve(**reserve_kw)
+        # Proven absent: a fresh attempt is legitimate and takes ownership.
+        return journal.reserve(**reserve_kw)
 
     def _consent_error(self, surface: str, grant_phrase: str) -> dict:
         return {
@@ -1056,72 +1212,120 @@ class ToolExecutor:
 
     async def aexecute(self, tool_name: str, tool_input: dict, reasoning: str = "",
                        *, effect_note: "dict | None" = None) -> Any:
-        """The ONE effect path, with exactly-once that survives CONCURRENCY.
+        """The ONE native effect path. Exactly-once as far as it can be proven.
 
         ``effect_note``, when supplied, is filled in with what THIS call did:
-        ``deduplicated`` (whether the handler was skipped because the identity
-        was already committed or in flight), ``effect_key`` and ``committed``.
+        ``deduplicated``, ``effect_key``, ``committed``, and — since M65C — an
+        explicit ``disposition`` naming the branch taken.
 
         It exists because a caller cannot work that out for itself under
         concurrency. M65A inferred it by sampling the ledger count before and
-        after — which is correct sequentially and wrong the moment two callers
-        overlap, because the second one's "before" was taken while the first was
-        still in the gate. Both then read a count that had moved for a reason
-        neither could attribute, and both reported having caused the effect.
-        Measured: one effect ran and two specialists claimed it.
+        after, which is correct sequentially and wrong the moment two callers
+        overlap: both read a count that had moved for a reason neither could
+        attribute, and both reported having caused the effect. Measured: one
+        effect ran and two specialists claimed it.
 
-        The executor is the only component that knows which branch it took, so
-        it is the only component that can say.
+        Three layers now stand behind this method, each closing what the one
+        before it could not:
 
-        V69 M65B §15/§17. M64.1 gave this class the effect ledger and M65A
-        proved it holds for one specialist: a duplicate intent, a retry and a
-        crash-after-commit all yield one effect. Every one of those proofs is
-        SEQUENTIAL, and the ledger is a check-then-act — read at the top of
-        :meth:`_aexecute_gated`, written only after the handler returns, with the
-        HITL challenge, an AURA broadcast and ``run_in_executor`` awaiting in
-        between. Two specialists submitting the same effect at the same time
-        therefore both saw an empty ledger and both ran.
+        * the M64.1 **ledger** — one reasoning pass cannot repeat an effect;
+        * the M65B **in-flight reservation** — two concurrent callers in this
+          process cannot both run one effect;
+        * the M65C **durable journal** — a process that DIED cannot have its
+          effect silently repeated by the process that replaces it.
 
-        A team makes that reachable, so M65B closes it HERE rather than in the
-        scheduler. A scheduler-level lock would protect only effects the
-        scheduler routed; this protects every caller of ``aexecute``, which is
-        the same reason the ledger itself lives in this class.
+        All three live behind :meth:`_execute_effect_protocol`, which
+        :meth:`aexecute_mcp` also calls. There is exactly one implementation of
+        the protocol, because two would be two things to keep correct (§19).
 
-        The mechanism is a reservation: the first caller for an effect identity
-        publishes a future before it awaits anything, and later callers await
-        that future instead of the handler. When the owner finishes, the value
-        the waiters receive is read back from the ledger — so a refused, failed
-        or cancelled effect publishes nothing and a waiter legitimately runs.
-
-        Read-only calls are never reserved, for the same reason they are never
-        keyed: repeating a read is not an effect.
+        Read-only calls are never keyed, never reserved and never journalled,
+        for the same reason: repeating a read is not an effect.
         """
         note = effect_note if effect_note is not None else {}
         note.update({"deduplicated": False, "effect_key": None,
-                     "committed": False})
+                     "committed": False, "disposition": None,
+                     "effect_id": None, "durable": False})
 
         if classify_tool(tool_name) is RiskClass.READ_ONLY:
-            # Repeating a read is not an effect, so it is neither keyed, nor
-            # reserved, nor ever reported as a duplicate.
             return await self._aexecute_gated(tool_name, tool_input, reasoning)
 
-        key = self._effect_key(self._effect_epoch, tool_name, tool_input)
+        def _gated(hooks):
+            return self._aexecute_gated(tool_name, tool_input, reasoning,
+                                        effect_hooks=hooks)
+
+        return await self._execute_effect_protocol(
+            surface="native", tool_id=tool_name, ledger_tool=tool_name,
+            tool_input=tool_input, reasoning=reasoning, note=note, gated=_gated)
+
+    #: How many times the exactly-once wrapper will wait on another caller's
+    #: in-flight effect before giving up and running the gate itself. Each
+    #: iteration requires a DIFFERENT owner to have started and finished without
+    #: recording a result, so this is unreachable in practice; it exists so a
+    #: pathological interleaving degrades to the pre-M65B behaviour rather than
+    #: spinning.
+    MAX_EFFECT_WAIT_ROUNDS: int = 8
+
+    def _effect_reserve(self, key: str):
+        """Claim *key* as this caller's in-flight effect.
+
+        Returns the future other callers will wait on. The dict insertion and
+        the preceding ``get`` happen with no ``await`` between them, which on a
+        single event loop is what makes the claim atomic.
+        """
+        reservation = asyncio.get_running_loop().create_future()
+        self._effect_inflight[key] = reservation
+        return reservation
+
+    def _effect_release(self, key: str, reservation) -> None:
+        """Publish what the ledger recorded for *key* and drop the claim.
+
+        The value handed to the waiters is read back from the LEDGER, never from
+        the owner's return value, so a refused or failed call publishes ``None``
+        and the waiters correctly run the gate themselves — a failed effect left
+        the world unchanged and repeating it is legitimate.
+        """
+        recorded = self._effect_ledger_get(key)
+        if self._effect_inflight.get(key) is reservation:
+            self._effect_inflight.pop(key, None)
+        if not reservation.done():
+            reservation.set_result(dict(recorded) if recorded is not None else None)
+
+    async def _execute_effect_protocol(self, *, surface: str, tool_id: str,
+                                       ledger_tool: str, tool_input: dict,
+                                       reasoning: str, note: dict, gated) -> Any:
+        """THE effect protocol, shared by the native and MCP paths (§19).
+
+        Order is load-bearing and is the opposite of a retry handler's instinct
+        (§42): identify the effect, consult durable state, choose the protocol,
+        and only THEN decide whether the tool may run. Nothing here invokes a
+        handler before the journal has been asked.
+
+        *gated* receives a hook object and returns the coroutine that performs
+        the surface's own gating and invocation. It calls ``before_invoke``
+        immediately before the tool runs and nowhere else, which is what lets
+        this method distinguish "refused before the effect" from "the effect
+        started" without duplicating either surface's gate.
+        """
+        from core.effect_journal import ExecutionDisposition
+
+        key = self._effect_key(self._effect_epoch, ledger_tool, tool_input)
         note["effect_key"] = key
+
+        # ── layers 1+2: this process's ledger and in-flight reservation ─────
         for _ in range(self.MAX_EFFECT_WAIT_ROUNDS):
             prior = self._effect_ledger_get(key)
             if prior is not None:
-                # Already committed this epoch. _aexecute_gated would return the
-                # same thing; short-circuiting here keeps one audit line per
-                # suppressed duplicate rather than two.
                 logger.warning(
-                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
+                    f"EFFECT_LEDGER: '{tool_id}' already executed this epoch — "
                     f"returning the recorded result instead of repeating the effect"
                 )
                 self._audit.log_action(
-                    tool_name, reasoning, "deduplicated", "blocked",
+                    tool_id, reasoning, "deduplicated", "blocked",
                     "duplicate effect suppressed by the effect ledger",
                 )
-                note.update({"deduplicated": True, "committed": True})
+                note.update({"deduplicated": True, "committed": True,
+                             "disposition": ExecutionDisposition
+                             .DEDUPLICATED_IN_PROCESS.value})
                 return dict(prior)
             inflight = self._effect_inflight.get(key)
             if inflight is None:
@@ -1132,43 +1336,238 @@ class ToolExecutor:
                 shared = None
             if shared is not None:
                 logger.warning(
-                    f"EFFECT_LEDGER: '{tool_name}' was committed concurrently — "
+                    f"EFFECT_LEDGER: '{tool_id}' was committed concurrently — "
                     f"returning that result instead of repeating the effect"
                 )
                 self._audit.log_action(
-                    tool_name, reasoning, "deduplicated:concurrent", "blocked",
+                    tool_id, reasoning, "deduplicated:concurrent", "blocked",
                     "concurrent duplicate effect suppressed by the effect ledger",
                 )
-                note.update({"deduplicated": True, "committed": True})
+                note.update({"deduplicated": True, "committed": True,
+                             "disposition": ExecutionDisposition
+                             .DEDUPLICATED_IN_PROCESS.value})
                 return dict(shared)
         else:  # pragma: no cover — see MAX_EFFECT_WAIT_ROUNDS
             logger.warning(
-                f"EFFECT_LEDGER: '{tool_name}' could not be reserved after "
+                f"EFFECT_LEDGER: '{tool_id}' could not be reserved after "
                 f"{self.MAX_EFFECT_WAIT_ROUNDS} rounds; running the gate unreserved"
             )
             stale = self._effect_ledger_get(key)
             if stale is not None:
                 self._audit.log_action(
-                    tool_name, reasoning, "deduplicated", "blocked",
+                    tool_id, reasoning, "deduplicated", "blocked",
                     "duplicate effect suppressed by the effect ledger",
                 )
-                note.update({"deduplicated": True, "committed": True})
+                note.update({"deduplicated": True, "committed": True,
+                             "disposition": ExecutionDisposition
+                             .DEDUPLICATED_IN_PROCESS.value})
                 return dict(stale)
-            return await self._aexecute_gated(tool_name, tool_input, reasoning)
+            return await gated(_EffectHooks(None))
 
         reservation = self._effect_reserve(key)
         try:
-            result = await self._aexecute_gated(tool_name, tool_input, reasoning)
+            return await self._durable_effect(
+                surface=surface, tool_id=tool_id, tool_input=tool_input,
+                reasoning=reasoning, note=note, gated=gated, key=key)
         finally:
             self._effect_release(key, reservation)
-        # Whether the effect COMMITTED is read back from the ledger rather than
-        # from the return value: a gate that refused and a handler that failed
-        # both return a dict, and only the ledger distinguishes them.
-        note["committed"] = self._effect_ledger_get(key) is not None
+
+    async def _durable_effect(self, *, surface: str, tool_id: str,
+                              tool_input: dict, reasoning: str, note: dict,
+                              gated, key: str) -> Any:
+        """Layer 3: durable ownership, recovery, and the P0-P5 crash windows."""
+        from core.effect_journal import (
+            EffectJournalRefused, ExecutionDisposition, JournalUnhealthy,
+            ReservationOutcome, compute_effect_id, durability_class,
+        )
+
+        try:
+            journal = self._effect_journal()
+        except JournalUnhealthy as exc:
+            # Fail closed (§25). An effectful call cannot proceed without the
+            # component that would stop it duplicating, and continuing anyway
+            # would drop the guarantee at the exact moment it is needed.
+            self._journal_error = str(exc)
+            self._audit.log_action(tool_id, reasoning, "blocked:journal_unhealthy",
+                                   "blocked", self._journal_error[:200])
+            note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+            note["journal_unhealthy"] = True
+            return {"error": (
+                "Efecto rechazado: el diario durable de efectos no está sano, "
+                "así que no se puede garantizar que esta acción no se duplique. "
+                f"({self._journal_error[:160]})"),
+                "error_class": "journal_unhealthy"}
+
+        if journal is None:
+            # Explicitly switched off by the operator. In-process guarantees
+            # only; the disposition says so rather than implying durability.
+            result = await gated(_EffectHooks(None))
+            note["committed"] = self._effect_ledger_get(key) is not None
+            note["disposition"] = (
+                ExecutionDisposition.EXECUTED_NOW.value if note["committed"]
+                else ExecutionDisposition.FAILED_BEFORE_EFFECT.value)
+            return result
+
+        cls = durability_class(tool_id, classify_tool(tool_id))
+        effect_id = compute_effect_id(surface=surface, tool_id=tool_id,
+                                      identity_scope=self._effect_epoch,
+                                      tool_input=tool_input)
+        note.update({"effect_id": effect_id, "durable": True,
+                     "durability_class": cls.value})
+        auth_digest, scope_digest = self._authority_digests(self.authority)
+        reserve_kw = {
+            "effect_id": effect_id, "tool_id": tool_id, "surface": surface,
+            "durability_class": cls, "tool_input": tool_input,
+            "authority_digest": auth_digest, "scope_digest": scope_digest,
+        }
+        try:
+            reservation = journal.reserve(**reserve_kw)
+            if reservation.outcome is ReservationOutcome.OWNED_ELSEWHERE:
+                reservation = await self._durable_wait_for_owner(
+                    journal, reservation, reserve_kw)
+            reservation = await self._resolve_indeterminate(
+                journal, reservation, reserve_kw, tool_id)
+        except JournalUnhealthy as exc:
+            self._audit.log_action(tool_id, reasoning, "blocked:journal_unhealthy",
+                                   "blocked", str(exc)[:200])
+            note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+            note["journal_unhealthy"] = True
+            return {"error": f"Efecto rechazado: diario durable no disponible "
+                             f"({str(exc)[:160]})",
+                    "error_class": "journal_unhealthy"}
+
+        outcome = reservation.outcome
+        if outcome is ReservationOutcome.ALREADY_COMMITTED:
+            # P4/P5. Proven done, possibly by a process that no longer exists.
+            disposition = (
+                ExecutionDisposition.RECONCILED_COMMITTED
+                if reservation.record.state.value == "RECONCILED_COMMITTED"
+                else ExecutionDisposition.RECOVERED_COMMITTED)
+            logger.warning(
+                f"EFFECT_JOURNAL: '{tool_id}' is recorded as already committed — "
+                f"returning the durable receipt instead of repeating the effect")
+            self._audit.log_action(
+                tool_id, reasoning, "deduplicated:durable", "blocked",
+                "duplicate effect suppressed by the durable effect journal")
+            note.update({"deduplicated": True, "committed": True,
+                         "disposition": disposition.value})
+            return self._durable_recovery_envelope(reservation.record, disposition)
+
+        if outcome in (ReservationOutcome.INDETERMINATE,
+                       ReservationOutcome.RECONCILE_REQUIRED):
+            # The P2/P3 window. An automatic retry here is exactly the duplicate
+            # this milestone exists to prevent, so it is refused and named (§12).
+            logger.error(
+                f"EFFECT_JOURNAL: '{tool_id}' is INDETERMINATE — a previous "
+                f"attempt may or may not have taken effect; automatic retry is "
+                f"blocked")
+            self._audit.log_action(
+                tool_id, reasoning, "blocked:indeterminate", "blocked",
+                "effect outcome unknown; retry blocked to prevent duplication")
+            note.update({
+                "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
+                "recovery_required": True})
+            return {
+                "error": (
+                    "Efecto bloqueado: un intento anterior pudo haberse "
+                    "ejecutado y no se puede confirmar. No se reintenta "
+                    "automáticamente para no duplicarlo; requiere "
+                    "reconciliación manual."),
+                "error_class": "indeterminate_effect",
+                "effect_id": effect_id,
+                "durability_class": cls.value,
+            }
+
+        if not reservation.owned:
+            # A live owner elsewhere outlasted our bounded wait. Nothing ran.
+            self._audit.log_action(
+                tool_id, reasoning, "blocked:owned_elsewhere", "blocked",
+                "another process owns this effect identity")
+            note["disposition"] = ExecutionDisposition.BLOCKED_OWNED_ELSEWHERE.value
+            return {
+                "error": ("Efecto en curso en otro proceso; no se ejecuta una "
+                          "segunda vez."),
+                "error_class": "effect_owned_elsewhere",
+                "effect_id": effect_id,
+            }
+
+        # ── we own it: run the tool ─────────────────────────────────────────
+        hooks = _EffectHooks(lambda: journal.mark_executing(effect_id))
+        try:
+            result = await gated(hooks)
+        except asyncio.CancelledError:
+            self._settle_cancelled(journal, effect_id, hooks, note)
+            raise
+        except EffectJournalRefused as exc:
+            # The journal would not record the effect, so nothing ran. Proven
+            # pre-effect, and reported as a journal problem rather than a tool
+            # fault — the two need different operator responses.
+            journal.fail_before_effect(effect_id, "journal_refused_executing")
+            self._audit.log_action(tool_id, reasoning, "blocked:journal_refused",
+                                   "blocked", str(exc)[:200])
+            note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+            note["journal_unhealthy"] = True
+            return {"error": f"Efecto no ejecutado: {str(exc)[:160]}",
+                    "error_class": "journal_unhealthy"}
+        except Exception:
+            # The gate itself broke. If the tool had already started we cannot
+            # claim it did not (§5), so that is INDETERMINATE, not a failure.
+            if hooks.invoked:
+                journal.mark_indeterminate(
+                    effect_id, "the gate raised after the tool was invoked")
+                note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+            else:
+                journal.fail_before_effect(effect_id, "gate_raised")
+                note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+            raise
+
+        committed = self._effect_ledger_get(key) is not None
+        note["committed"] = committed
+        if not hooks.invoked:
+            # Refused by a gate: preflight, guardrail, authority/scope, HITL or
+            # an unknown tool. Provably pre-effect, so a later attempt is
+            # legitimate and the identity is NOT poisoned.
+            journal.fail_before_effect(effect_id, "refused_before_effect")
+            note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+            return result
+        if committed:
+            journal.commit(effect_id, receipt=result)
+            note["disposition"] = ExecutionDisposition.EXECUTED_NOW.value
+            return result
+        # Invoked, and the ledger recorded no success: the call returned an error
+        # and THIS process observed it. Distinct from INDETERMINATE, where nobody
+        # came back at all. The retry policy attached to this state is M64.1's,
+        # inherited unchanged and named as a limitation in the milestone doc.
+        journal.fail_observed(effect_id, "tool_returned_error")
+        note.update({
+            "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
+            "observed_failure": True})
         return result
 
+    def _settle_cancelled(self, journal, effect_id: str, hooks, note) -> None:
+        """Record a cancellation truthfully (§41).
+
+        Before the tool ran, cancelling proves nothing happened. AFTER it ran,
+        the handler is on a thread pool that keeps going, so the outcome is
+        unknown — and a caller changing its mind is not evidence about the
+        world. The record is never erased to make a cancellation look clean.
+        """
+        from core.effect_journal import ExecutionDisposition
+
+        try:
+            if hooks.invoked:
+                journal.mark_indeterminate(
+                    effect_id, "caller cancelled after the tool was invoked")
+                note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+            else:
+                journal.fail_before_effect(effect_id, "cancelled_before_effect")
+                note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+        except Exception:  # noqa: BLE001 — never mask the cancellation
+            logger.warning("EFFECT_JOURNAL: could not settle a cancelled effect")
+
     async def _aexecute_gated(self, tool_name: str, tool_input: dict,
-                              reasoning: str = "") -> Any:
+                              reasoning: str = "", *,
+                              effect_hooks: "_EffectHooks | None" = None) -> Any:
         """
         Fully async execution gate:
           1. Look up handler.
@@ -1290,6 +1689,19 @@ class ToolExecutor:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
+        # V69 M65C — the durable EXECUTING commit, at the ONE point where the
+        # external effect is about to become real. Committed BEFORE the call,
+        # never after: a row written afterwards would make every crash look like
+        # "the tool never ran" and would authorise a blind retry of a completed
+        # effect. Everything above this line is provably pre-effect, which is
+        # what makes FAILED_BEFORE_EFFECT truthful.
+        #
+        # Deliberately OUTSIDE the try below: a journal refusal is not a tool
+        # fault and must not be sanitised into one, or the operator would read
+        # "the tool failed" for a call that never ran.
+        if effect_hooks is not None:
+            effect_hooks.before_invoke()
+
         try:
             # Layer 4: run synchronous tool handler in thread pool
             result = await loop.run_in_executor(None, lambda: handler(**tool_input))
@@ -1380,7 +1792,8 @@ class ToolExecutor:
         return result.to_dict()
 
     async def aexecute_mcp(
-        self, tool_name: str, tool_input: dict, call_fn, reasoning: str = ""
+        self, tool_name: str, tool_input: dict, call_fn, reasoning: str = "",
+        *, effect_note: "dict | None" = None
     ) -> Any:
         """
         Security gate for MCP-bridge tools — the counterpart to aexecute() for
@@ -1397,9 +1810,50 @@ class ToolExecutor:
         requires HITL unconditionally (no exempt tier for MCP), so this is not
         a behavior change; an unclassified future MCP tool defaults to
         HIGH_IMPACT (fail-closed) rather than silently skipping the challenge.
+
+        V69 M65C §19/§62 — THE UNIFICATION. Until now this method carried the
+        pre-M65B race that ``aexecute`` had already lost: it read the ledger,
+        then awaited a HITL challenge and an RPC, then wrote the ledger. Two
+        concurrent MCP callers therefore both saw an empty ledger and both ran,
+        and M65B closed that hole for the native path only — leaving a KNOWN
+        weaker effect path in the codebase.
+
+        It is now a thin surface over :meth:`_execute_effect_protocol`, the same
+        one ``aexecute`` uses. MCP effects get the in-flight reservation they
+        never had and the durable journal at the same time, and there is exactly
+        one implementation of the protocol rather than two to keep in step.
+
+        The identity keeps ``surface="mcp"``, because a local handler and a
+        remote server are different code and fusing them would claim an
+        equivalence nothing has established. See the milestone document for the
+        exact boundary that draws.
         """
+        note = effect_note if effect_note is not None else {}
+        note.update({"deduplicated": False, "effect_key": None,
+                     "committed": False, "disposition": None,
+                     "effect_id": None, "durable": False})
         tool_input = _strip_override(tool_name, tool_input)
 
+        if classify_tool(tool_name) is RiskClass.READ_ONLY:
+            return await self._aexecute_mcp_gated(tool_name, tool_input, call_fn,
+                                                  reasoning)
+
+        def _gated(hooks):
+            return self._aexecute_mcp_gated(tool_name, tool_input, call_fn,
+                                            reasoning, effect_hooks=hooks)
+
+        return await self._execute_effect_protocol(
+            surface="mcp", tool_id=tool_name, ledger_tool=f"mcp:{tool_name}",
+            tool_input=tool_input, reasoning=reasoning, note=note, gated=_gated)
+
+    async def _aexecute_mcp_gated(self, tool_name: str, tool_input: dict, call_fn,
+                                  reasoning: str = "", *,
+                                  effect_hooks: "_EffectHooks | None" = None) -> Any:
+        """The MCP surface's own gate: allowlist, path traversal, lab, HITL, RPC.
+
+        The counterpart of :meth:`_aexecute_gated`. It contains no effect-identity
+        logic at all — that lives once, in the shared protocol.
+        """
         if tool_name not in MCP_TOOL_ALLOWLIST:
             self._audit.log_action(
                 tool_name, reasoning, "blocked:mcp_not_allowlisted", "blocked",
@@ -1422,25 +1876,17 @@ class ToolExecutor:
 
         risk_class = classify_tool(tool_name)
 
-        # V69 M64.1 §17 — exactly-once effect semantics. Checked AFTER authority
-        # (an out-of-scope call must be refused as out-of-scope, never quietly
-        # deduplicated) and BEFORE the challenge, so a replayed effect never asks
-        # the operator a second time for something already done. Read-only calls
-        # are never keyed: repeating a read is not an effect.
-        _effect_key = None
-        if risk_class is not RiskClass.READ_ONLY:
-            _effect_key = self._effect_key(self._effect_epoch, f"mcp:{tool_name}", tool_input)
-            _prior = self._effect_ledger_get(_effect_key)
-            if _prior is not None:
-                logger.warning(
-                    f"EFFECT_LEDGER: '{tool_name}' already executed this epoch — "
-                    f"returning the recorded result instead of repeating the effect"
-                )
-                self._audit.log_action(
-                    tool_name, reasoning, "deduplicated", "blocked",
-                    "duplicate effect suppressed by the effect ledger",
-                )
-                return dict(_prior)
+        # V63 — operator authority / authorized-scope preflight, matching the
+        # native gate. Server-side only; never read from tool_input.
+        auth_decision = authorize_action(self.authority, tool_name, tool_input)
+        if not auth_decision.allowed:
+            logger.warning(f"AUTHORITY: MCP '{tool_name}' refused — {auth_decision.reason}")
+            self._audit.log_action(
+                tool_name, reasoning, "blocked:scope", "blocked",
+                auth_decision.reason[:200],
+            )
+            return {"error": f"Fuera de alcance autorizado: {auth_decision.reason}"}
+
         if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
             self._audit.log_action(
                 tool_name, reasoning, "blocked:lab_only", "blocked",
@@ -1479,6 +1925,16 @@ class ToolExecutor:
             "auth_audit": auth_audit,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+
+        _effect_key = None
+        if risk_class is not RiskClass.READ_ONLY:
+            _effect_key = self._effect_key(self._effect_epoch, f"mcp:{tool_name}",
+                                           tool_input)
+        # V69 M65C — the durable EXECUTING commit, at the same point in the MCP
+        # surface as in the native one: immediately before the external call and
+        # nowhere else. Outside the try for the same reason as the native gate.
+        if effect_hooks is not None:
+            effect_hooks.before_invoke()
 
         try:
             result = await call_fn(tool_name, tool_input)

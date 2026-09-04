@@ -114,6 +114,15 @@ class InvalidTransition(RuntimeError):
     """A state change that the state machine does not allow (§7)."""
 
 
+class EffectJournalRefused(RuntimeError):
+    """The journal would not record an effect that was about to run.
+
+    Raised at the one point where the external effect is about to become real.
+    A tool invoked without a durable EXECUTING row is a tool whose crash cannot
+    be recovered from, so the call is aborted instead.
+    """
+
+
 class EffectState(str, Enum):
     """Durable lifecycle of one effect identity.
 
@@ -1416,7 +1425,8 @@ __all__ = [
     "DEFAULT_LEASE_S", "SCHEMA_VERSION",
     "DurableEffectJournal", "EffectDurabilityClass", "EffectRecord",
     "EffectState", "ExecutionDisposition", "InvalidTransition",
-    "JournalUnhealthy", "ReconciliationVerdict", "Reservation",
+    "EffectJournalRefused", "JournalUnhealthy", "ReconciliationVerdict",
+    "Reservation",
     "ReservationOutcome",
     "action_digest", "args_digest", "canonical_json", "compute_effect_id",
     "configured_journal_path", "derive_idempotency_key", "durability_class",

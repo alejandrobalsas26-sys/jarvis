@@ -43,6 +43,12 @@ MANIFEST_NAME = "manifest.json"
 _ELIGIBLE: tuple[tuple[str, str], ...] = (
     ("session_journal", "data/sessions/session_continuity.db"),
     ("operational_store", "data/operational_state.db"),
+    # V69 M65C — the durable effect journal. Eligible precisely because §25
+    # forbids repairing a corrupt one by deleting it: restoring from a managed
+    # backup is the recovery route, and it can only be that if the journal is
+    # backed up. It holds ids, states and digests — no secret — so it does not
+    # trip the exclusion markers below.
+    ("effect_journal", "data/effect_journal.db"),
     ("alias_registry", "data/alias_registry.json"),
 )
 # Paths that must NEVER enter a backup, even if they appear under data/.
