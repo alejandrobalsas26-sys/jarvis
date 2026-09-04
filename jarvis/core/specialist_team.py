@@ -923,6 +923,29 @@ def _balanced_blocks(text: str, marker: re.Pattern, limit: int) -> "tuple[str, .
     return tuple(out)
 
 
+def registered_specialist(name: str, *, registry=REGISTRY
+                          ) -> "SpecialistId | None":
+    """Resolve a proposed specialist name, or ``None``.
+
+    ONE decision, deliberately. This used to be two consecutive branches — a
+    ``SpecialistId(...)`` conversion and a separate ``not in registry`` check —
+    and the second could not fail, because every member of the enum has a record
+    in the shipped registry. A mutation deleting it therefore changed no
+    behaviour and survived the campaign, which is the campaign correctly
+    reporting that the branch was not load-bearing.
+
+    Merging them keeps both properties and leaves one place to keep correct.
+    ``test_every_specialist_id_has_a_record`` pins the assumption that makes the
+    merge safe, so a registry that ever drops a record fails a test instead of
+    quietly reaching an unresolvable id.
+    """
+    try:
+        specialist = SpecialistId(str(name).strip().lower())
+    except ValueError:
+        return None
+    return specialist if specialist in registry else None
+
+
 def authorize_delegation(proposal: DelegationProposal, *,
                          parent: SpecialistTeamTask,
                          plan: SpecialistTeamPlan,
@@ -954,13 +977,8 @@ def authorize_delegation(proposal: DelegationProposal, *,
                     f"{min(plan.delegation_depth, MAX_DELEGATION_DEPTH)}; a "
                     f"specialist may not build an agent tree"))
 
-    try:
-        child_id = SpecialistId(proposal.specialist)
-    except ValueError:
-        return DelegationDecision(
-            False, denial=DelegationDenial.UNKNOWN_SPECIALIST,
-            reason=f"'{proposal.specialist}' is not a registered specialist")
-    if child_id not in registry:
+    child_id = registered_specialist(proposal.specialist, registry=registry)
+    if child_id is None:
         return DelegationDecision(
             False, denial=DelegationDenial.UNKNOWN_SPECIALIST,
             reason=f"'{proposal.specialist}' is not a registered specialist")
@@ -1798,34 +1816,41 @@ class TeamOrchestrator:
 
             # 3. Start whatever may start, in plan order so the schedule is
             #    deterministic rather than dependent on dict iteration luck.
-            if not token.cancelled:
-                for task in current_plan.tasks:
-                    task_id = task.task_id
-                    if states[task_id] is not TaskState.PENDING:
-                        continue
-                    if _dependencies_satisfied(task) is not True:
-                        self._counters.dependency_waits += 1
-                        continue
-                    if len(running) >= current_plan.max_parallelism:
-                        break
-                    if task.effectful and active_effectful >= MAX_PARALLEL_EFFECTFUL:
-                        continue
-                    # §15 — the reservation happens BEFORE the execution starts
-                    # and is held until it is terminal, so there is no window in
-                    # which a check has passed and the resource has moved.
-                    if not arbiter.reserve(task):
-                        self._counters.conflict_serializations += 1
-                        trace.append(
-                            f"{task_id}: serialised behind "
-                            f"{','.join(arbiter.blocking(task)[:2])}")
-                        continue
-                    states[task_id] = TaskState.RUNNING
-                    attempts[task_id] += 1
-                    if task.effectful:
-                        active_effectful += 1
-                    handle = asyncio.ensure_future(
-                        _worker(task, attempts[task_id]))
-                    running[handle] = task_id
+            #
+            #    There is deliberately no `if not token.cancelled` guard
+            #    here. Step 2 has already moved every PENDING and READY
+            #    task to CANCELLED, so the PENDING filter below starts
+            #    nothing — and a guard that cannot change an outcome is not
+            #    defence in depth, it is a second place to have to keep
+            #    correct. Cancellation is enforced in ONE place, which is
+            #    the place a mutation has to break to be noticed.
+            for task in current_plan.tasks:
+                task_id = task.task_id
+                if states[task_id] is not TaskState.PENDING:
+                    continue
+                if _dependencies_satisfied(task) is not True:
+                    self._counters.dependency_waits += 1
+                    continue
+                if len(running) >= current_plan.max_parallelism:
+                    break
+                if task.effectful and active_effectful >= MAX_PARALLEL_EFFECTFUL:
+                    continue
+                # §15 — the reservation happens BEFORE the execution starts
+                # and is held until it is terminal, so there is no window in
+                # which a check has passed and the resource has moved.
+                if not arbiter.reserve(task):
+                    self._counters.conflict_serializations += 1
+                    trace.append(
+                        f"{task_id}: serialised behind "
+                        f"{','.join(arbiter.blocking(task)[:2])}")
+                    continue
+                states[task_id] = TaskState.RUNNING
+                attempts[task_id] += 1
+                if task.effectful:
+                    active_effectful += 1
+                handle = asyncio.ensure_future(
+                    _worker(task, attempts[task_id]))
+                running[handle] = task_id
 
             if not running:
                 if token.cancelled:
@@ -2343,6 +2368,7 @@ __all__ = [
     "TeamStatus", "TeamTaskResult", "TeamVerification",
     "authorize_delegation", "canonical_resource", "conflict_policy",
     "derive_team_status", "detect_cycle", "orchestrator",
+    "registered_specialist",
     "parse_delegation_proposals", "scope_subset", "team_fabric_status",
     "validate_plan", "verify_team",
 ]

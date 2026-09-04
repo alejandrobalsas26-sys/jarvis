@@ -111,9 +111,15 @@ from core.specialist_team import (
 # ══════════════════════════════════════════════════════════════════════════════
 def intent_text(tool: str, tool_input: dict | None = None, *,
                 why: str = "the objective needs this observation",
+                target: "str | None" = None,
                 prose: str = "Analysis: one observation settles this.") -> str:
     payload = {"tool": tool, "tool_input": tool_input or {}, "why": why,
                "hypothesis": "the value is what the operator expects"}
+    if target is not None:
+        # A target-bound activity that names no target is refused by the real
+        # preflight — scope membership would be undecidable — so an intent that
+        # is MEANT to be in scope has to say what it is acting on.
+        payload["target"] = target
     return prose + "\nTOOL_INTENT: " + json.dumps(payload)
 
 
@@ -1083,14 +1089,39 @@ def test_fields_a_specialist_may_not_set_are_dropped_and_reported(h):
 
 
 def test_the_delegation_scanner_balances_braces(h):
-    """The measured M65A bug, in its M65B shape: a non-greedy regex closes on the
-    inner brace and every real proposal is silently dropped."""
+    """The measured M65A bug, in its M65B shape: a scanner that closes on the
+    first brace it meets cuts a proposal in half and drops it silently.
+
+    The payload carries an unknown key whose value is a nested OBJECT, which is
+    what makes brace depth load-bearing. A flat payload cannot distinguish a
+    balanced scanner from one that stops at the first closing brace, so the
+    first version of this test passed against both — measured, not assumed.
+    The nested key is then dropped by the parser, which is the separate control.
+    """
+    text = ('DELEGATE: {"specialist": "trace", "objective": "correlate",'
+            ' "tools": ["read_file"], "context": {"host": "127.0.0.1"},'
+            ' "why": "a second domain owns the rest"}')
+    proposals, warnings = parse_delegation_proposals(
+        text, proposed_by=SpecialistId.ATLAS, parent_task_id="a")
+    assert len(proposals) == 1, "the nested object truncated the block"
+    assert proposals[0].objective == "correlate"
+    assert proposals[0].tools == ("read_file",)
+    assert any("context" in w for w in warnings)
+
+
+def test_the_delegation_scanner_is_string_aware(h):
+    """A brace inside a quoted value must not close the object.
+
+    The other half of the same scanner, and separately load-bearing: an
+    unmatched closing brace in prose would end the block early and the whole
+    proposal would parse as malformed and vanish.
+    """
     text = ('DELEGATE: {"specialist": "trace", "objective": "look",'
-            ' "tools": ["read_file"], "why": "a nested {brace} in prose"}')
+            ' "why": "the log line ended with } which is not a delimiter"}')
     proposals, _ = parse_delegation_proposals(
         text, proposed_by=SpecialistId.ATLAS, parent_task_id="a")
     assert len(proposals) == 1
-    assert proposals[0].tools == ("read_file",)
+    assert proposals[0].specialist == "trace"
 
 
 def test_a_valid_delegation_produces_a_child_task_that_actually_runs(h):
@@ -1720,3 +1751,175 @@ def test_team_argus_reports_limitations_rather_than_failing_a_partial_team(h):
     assert result.status is TeamStatus.PARTIAL_SUCCESS
     assert result.verification.verdict is Verdict.VERIFIED_WITH_LIMITATIONS
     assert result.verified
+
+
+def test_every_specialist_id_has_a_record(h):
+    """The assumption behind merging the two delegation identity checks.
+
+    ``registered_specialist`` answers "is this a real specialist" in ONE branch
+    because every ``SpecialistId`` currently has a registry record. If that ever
+    stops being true the merge would silently stop covering the second case, so
+    the assumption is pinned here rather than left implicit.
+    """
+    for specialist in SpecialistId:
+        assert specialist in REGISTRY, f"{specialist.value} has no record"
+
+
+def test_an_unknown_specialist_name_resolves_to_nothing(h):
+    from core.specialist_team import registered_specialist
+
+    assert registered_specialist("shadow") is None
+    assert registered_specialist("") is None
+    assert registered_specialist("TRACE") is SpecialistId.TRACE
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Narrowing, where a team ceiling is NOT the same as a task's own
+# ══════════════════════════════════════════════════════════════════════════════
+def test_a_task_runs_at_its_own_autonomy_not_the_teams(h, monkeypatch):
+    """A plan may authorise L3 and still ask one task to merely observe.
+
+    Every earlier test set the task's autonomy equal to the plan's ceiling, so
+    `min(task, plan)` and `plan` were the same number and a mutation taking the
+    plan's value changed nothing. Measured — that mutation survived the first
+    campaign. Here the two differ, and the task's own, lower value must win.
+    """
+    elevate(monkeypatch, SpecialistId.FORGE, AutonomyLevel.HITL_EXECUTE)
+    seen: "list[AutonomyLevel]" = []
+    real = h.engine.run
+
+    async def _spy(request, **kw):
+        seen.append(request.autonomy_level)
+        return await real(request, **kw)
+
+    h.engine.run = _spy
+    h.add_tool("code_execute", {"stdout": "1"})
+    h.script["task=a"] = intent_text("code_execute", {"code": "print(1)"})
+
+    result = h.run(h.plan(
+        h.task("a", SpecialistId.FORGE, autonomy=AutonomyLevel.OBSERVE,
+               allowed_tools=frozenset({"code_execute"})),
+        authority_ceiling=AutonomyLevel.HITL_EXECUTE))
+
+    assert seen == [AutonomyLevel.OBSERVE], (
+        f"the task was requested at {seen}, not at its own L1")
+    assert result.result_for("a").execution.effective_autonomy \
+        is AutonomyLevel.OBSERVE
+    assert h.count("code_execute") == 0, (
+        "an L1 task reached an L3 tool because it took the team's ceiling")
+
+
+def test_an_empty_team_scope_is_not_a_licence_for_every_target(h):
+    """`scope_subset` must not read an empty parent as "everything".
+
+    Every earlier scope test used a non-empty team scope, where the difference
+    between "subset of parent" and "anything when parent is empty" never shows.
+    A team that was granted no scope has authorised no target.
+    """
+    assert scope_subset((), ())
+    assert not scope_subset(("10.0.0.9",), ())
+
+    from core.specialist_team import PlanDefect
+    plan = h.plan(h.task("a", SpecialistId.SPECTER, scope=("10.0.0.9",)),
+                  scope=())
+    assert PlanDefect.SCOPE_EXPANSION in validate_plan(plan).codes
+
+
+def test_a_delegated_child_of_an_unscoped_parent_stays_unscoped(h):
+    parent = h.task("a", SpecialistId.GUARDIAN, scope=())
+    decision = authorize_delegation(
+        DelegationProposal(SpecialistId.GUARDIAN, "a", "trace", "look"),
+        parent=parent, plan=h.plan(parent, scope=("127.0.0.1",)),
+        effective_parent_autonomy=AutonomyLevel.OBSERVE, remaining_budget=2)
+    assert decision.allowed
+    assert decision.task.scope == ()
+
+
+def test_an_in_scope_active_task_actually_runs(h, monkeypatch):
+    """The POSITIVE control the scope tests were missing.
+
+    Everything else asserts a denial, so dropping the authorized scope from the
+    request denied the action for a different reason and looked identical. Here
+    a correctly scoped active validation SUCCEEDS, which is the only shape in
+    which losing the scope can be detected.
+    """
+    SCOPES.scopes = [lab_scope(targets=("127.0.0.1",))]
+    elevate(monkeypatch, SpecialistId.SPECTER, AutonomyLevel.HITL_EXECUTE)
+    h.add_tool("network_scan", {"ports": [22]})
+    approve(h, SpecialistId.SPECTER, "network_scan", {"target": "127.0.0.1"})
+    h.script["task=a"] = intent_text("network_scan", {"target": "127.0.0.1"},
+                                     target="127.0.0.1")
+
+    result = h.run(h.plan(
+        h.task("a", SpecialistId.SPECTER, autonomy=AutonomyLevel.HITL_EXECUTE,
+               allowed_tools=frozenset({"network_scan"}),
+               activity=ActivityClass.ACTIVE_SERVICE_VALIDATION,
+               scope=("127.0.0.1",), effect_class=EffectClass.EFFECTFUL),
+        scope=("127.0.0.1",), authority_ceiling=AutonomyLevel.HITL_EXECUTE))
+
+    node = result.result_for("a")
+    assert node.state is TaskState.SUCCESS, (
+        f"an in-scope active task was refused: {node.reason[:200]}")
+    assert h.count("network_scan") == 1
+    assert node.receipts[0].scope_decision is not None
+    assert node.receipts[0].scope_decision.allowed
+
+
+def test_a_task_that_always_fails_is_retried_a_bounded_number_of_times(h):
+    """The retry BUDGET, not merely the retry.
+
+    The existing retry test uses a task that succeeds on its second attempt, so
+    a scheduler that retried forever would pass it. This one never succeeds, so
+    the only thing that can end the run is the bound.
+    """
+    attempts = {"n": 0}
+
+    async def _always_fail():
+        attempts["n"] += 1
+        raise RuntimeError("the backend is down")
+
+    h.script["task=a"] = _always_fail
+    result = h.run(h.plan(h.task("a", SpecialistId.ATLAS, retry_limit=1)))
+
+    from core.specialist_execution import MAX_ATTEMPTS
+    node = result.result_for("a")
+    assert node.state is TaskState.FAILED
+    assert node.attempts == 2, f"the task ran {node.attempts} times, not 2"
+    assert attempts["n"] == 2 * MAX_ATTEMPTS, (
+        "the inference retry budget was not bounded either")
+    assert result.budget_usage["retries_used"] == 1
+    assert result.budget_usage["retries_left"] == h.plan(
+        h.task("a", SpecialistId.ATLAS)).retry_budget - 1
+
+
+def test_the_team_retry_budget_is_spent_across_tasks_not_per_task(h):
+    """A plan cannot buy more retries by having more failing tasks."""
+    async def _fail():
+        raise RuntimeError("down")
+
+    for tid in ("a", "b", "c", "d"):
+        h.script[f"task={tid}"] = _fail
+    plan = h.plan(*(h.task(tid, s, retry_limit=1) for tid, s in
+                    (("a", SpecialistId.ATLAS), ("b", SpecialistId.MESH),
+                     ("c", SpecialistId.TRACE), ("d", SpecialistId.FORGE))),
+                  retry_budget=2)
+    result = h.run(plan)
+
+    assert result.budget_usage["retries_used"] == 2
+    assert result.budget_usage["retries_left"] == 0
+    assert sum(r.attempts for r in result.task_results) == 4 + 2
+
+
+def test_team_argus_catches_a_task_that_named_a_target_outside_the_scope(h):
+    """§44 — the plan validator refuses this shape, so ARGUS only ever sees it
+    on a tampered result. That is exactly when a verifier has to work."""
+    plan = h.plan(h.task("a", SpecialistId.ATLAS), scope=("127.0.0.1",))
+    result = h.run(plan)
+    assert result.verification.passing
+
+    widened = dataclasses.replace(
+        plan, tasks=(dataclasses.replace(plan.tasks[0], scope=("10.0.0.9",)),))
+    verification = verify_team(widened, result)
+    assert not verification.passing
+    assert verification.verdict is Verdict.SCOPE_VIOLATION
+    assert any("outside the team's scope" in r for r in verification.reasons)

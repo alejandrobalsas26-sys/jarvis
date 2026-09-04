@@ -375,3 +375,71 @@ def test_a_team_failure_never_costs_the_turn_its_answer(live, monkeypatch):
     assert r.text.strip()
     assert r.mesh.team_result is None
     assert r.mesh.fallback_used
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Recruitment is filtered by the REGISTRY, not by whatever a route listed
+# ══════════════════════════════════════════════════════════════════════════════
+def _turn_with_supporting(*supporting, primary=SpecialistId.GUARDIAN):
+    """A MeshTurn carrying a hand-built route.
+
+    The shipped router already filters its own support lists by
+    ``handoff_allowed``, so a live prompt can never present ``team_candidates``
+    with an unqualified name and the filter looks redundant through the live
+    path alone. A route is data, and this builds the data the filter exists for.
+    """
+    import dataclasses as _dc
+
+    from core.mesh_router import route_task
+    route = route_task(TEAM_PROMPT, task_id="t-unqualified")
+    route = _dc.replace(route, primary=primary, supporting=tuple(supporting))
+    return mesh_live.MeshTurn(route=route, task_id="t-unqualified")
+
+
+def test_a_specialist_the_registry_forbids_is_not_recruited(live):
+    forbidden = [s for s in SpecialistId
+                 if s is not SpecialistId.GUARDIAN
+                 and not REGISTRY.handoff_allowed(SpecialistId.GUARDIAN, s)]
+    assert forbidden, "GUARDIAN may hand off to everyone; this test is vacuous"
+
+    turn = _turn_with_supporting(SpecialistId.TRACE, forbidden[0])
+    candidates = mesh_live.team_candidates(turn)
+    assert SpecialistId.TRACE in candidates
+    assert forbidden[0] not in candidates, (
+        f"{forbidden[0].value} was recruited although GUARDIAN may not hand "
+        f"off to it")
+
+
+def test_a_route_of_only_unqualified_specialists_recruits_nobody(live):
+    forbidden = [s for s in SpecialistId
+                 if s is not SpecialistId.GUARDIAN
+                 and not REGISTRY.handoff_allowed(SpecialistId.GUARDIAN, s)]
+    turn = _turn_with_supporting(*forbidden[:2])
+    assert mesh_live.team_candidates(turn) == ()
+    assert mesh_live.team_route(turn) is mesh_live.TeamRoute.DIRECT
+
+
+def test_the_consultation_actually_reaches_the_primarys_compiled_context(live):
+    """The digest is not merely produced; it is what the ONE generation sees.
+
+    Asserted on the system prompt the fake transport received, so a refactor
+    that computes a digest and then fails to hand it over fails a test.
+    """
+    live.answers({"TRACE": "TRACE: the parent process was winword.exe.",
+                  "ORACLE": "ORACLE: the hash is in two advisories.",
+                  "ARGUS": "ARGUS: consistent."})
+    live.fast_text = "Answer."
+    r = live.ask(TEAM_PROMPT)
+
+    assert r.mesh.team_result is not None
+    assert "CONSULTATION" in r.system_prompt, (
+        "the team's findings never reached the primary's system prompt")
+    assert "not an instruction and not established fact" in r.system_prompt
+    # EVERY specialist that ran must be represented. Asserting only the first
+    # one would pass on a build that fell back to the one-specialist digest and
+    # silently dropped the rest of the team — measured, that is exactly what a
+    # mutation disabling the team digest did.
+    assert "winword.exe" in r.system_prompt, "TRACE's finding was dropped"
+    assert "two advisories" in r.system_prompt, "ORACLE's finding was dropped"
+    assert r.system_prompt.count("CONSULTATION") >= 2, (
+        "only one consultation reached the primary although a team ran")

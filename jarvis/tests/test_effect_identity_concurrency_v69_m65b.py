@@ -793,3 +793,110 @@ def test_the_team_reports_one_effect_not_one_per_claimant(h, monkeypatch):
     assert sum(1 for rc in receipts if rc.deduplicated) == 1
     assert result.executed_effects == 1
     assert h.count() == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The audit distinguishes a REPLAY from a CONCURRENT duplicate
+# ══════════════════════════════════════════════════════════════════════════════
+def _audit_spy(executor) -> list:
+    """Record what the audit trail was told, without changing what it does."""
+    entries: list = []
+    real = executor._audit.log_action
+
+    def _log(tool, reasoning, auth, status, detail=""):
+        entries.append((tool, auth, status))
+        return real(tool, reasoning, auth, status, detail)
+
+    executor._audit.log_action = _log
+    return entries
+
+
+def test_a_concurrent_duplicate_is_audited_differently_from_a_replay(h):
+    """Two suppressions, two different facts, two different audit records.
+
+    A sequential replay means a caller asked twice. A concurrent duplicate means
+    two callers raced and the reservation caught one. An operator reading the
+    trail needs to tell those apart, and the value the owner publishes on its
+    reservation is what makes the second one distinguishable — so it is
+    load-bearing for observability even though the ledger would have produced
+    the same effect count either way.
+    """
+    h.add_tool()
+    entries = _audit_spy(h.executor)
+
+    async def scenario():
+        owner = asyncio.create_task(h.call(reasoning="owner"))
+        await asyncio.wait_for(h.gate.entered.wait(), timeout=DEADLINE_S)
+        concurrent = asyncio.create_task(h.call(reasoning="concurrent"))
+        await _admit_duplicate()
+        h.gate.release.set()
+        await asyncio.wait_for(asyncio.gather(owner, concurrent),
+                               timeout=DEADLINE_S)
+        # Now everything has settled, so this one is a plain replay.
+        return await asyncio.wait_for(h.call(reasoning="replay"),
+                                      timeout=DEADLINE_S)
+
+    asyncio.run(scenario())
+    audits = [auth for _tool, auth, _status in entries]
+    assert "deduplicated:concurrent" in audits, (
+        "a concurrent duplicate was recorded as an ordinary replay")
+    assert "deduplicated" in audits, "a replay was not recorded at all"
+    assert h.count() == 1
+
+
+def test_the_effect_count_is_one_however_the_duplicate_was_suppressed(h):
+    """Whichever branch caught it, the world changed once."""
+    h.add_tool()
+
+    async def scenario():
+        owner = asyncio.create_task(h.call(reasoning="owner"))
+        await asyncio.wait_for(h.gate.entered.wait(), timeout=DEADLINE_S)
+        concurrent = asyncio.create_task(h.call(reasoning="concurrent"))
+        await _admit_duplicate()
+        h.gate.release.set()
+        await asyncio.wait_for(asyncio.gather(owner, concurrent),
+                               timeout=DEADLINE_S)
+        return await asyncio.wait_for(
+            asyncio.gather(*(h.call(reasoning=f"late{i}") for i in range(3))),
+            timeout=DEADLINE_S)
+
+    late = asyncio.run(scenario())
+    assert h.count() == 1
+    assert all(r == {"stdout": "1"} for r in late)
+
+
+def test_concurrent_reads_are_never_serialised_behind_each_other(h):
+    """Reads must stay CHEAP, not merely correct.
+
+    Asserting only that three reads all ran leaves a build that funnels them
+    through the effect reservation looking identical — same count, same empty
+    registry, just serialised. This is a deadlock fixture: the first read cannot
+    return until the second has started, so a reservation on a read-only
+    identity makes the test fail on its own deadline instead of passing quietly.
+    """
+    both_in = threading.Barrier(2, timeout=DEADLINE_S)
+
+    def _handler(**kwargs):
+        h.effects["read_file"] = h.effects.get("read_file", 0) + 1
+        # Neither read can return until BOTH have started. Under a reservation
+        # the second would be parked waiting for the first, which is waiting for
+        # the second, and the barrier times out.
+        both_in.wait()
+        return {"content": "x"}
+
+    setattr(h.executor, "_tool_read_file", _handler)
+
+    async def scenario():
+        # IDENTICAL arguments on purpose. Different arguments are different
+        # identities, so they would run concurrently even under a reservation
+        # and the test would prove nothing — measured, the first version of this
+        # test used two different paths and the mutation survived it.
+        return await asyncio.wait_for(asyncio.gather(*(
+            h.executor.aexecute("read_file", {"path": "/etc/hostname"}, f"r{i}")
+            for i in range(2))), timeout=DEADLINE_S)
+
+    asyncio.run(scenario())
+    assert h.count("read_file") == 2, (
+        "identical reads were deduplicated; repeating a read is not an effect")
+    assert h.inflight == {}
+    assert h.gate.challenges == 0, "a read-only call was challenged"
