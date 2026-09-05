@@ -475,7 +475,7 @@ exit code 0, with the **command and threshold unchanged**. 489 Low findings rema
 are outside this release gate, recorded honestly rather than suppressed. (The count was
 488 at this milestone and the ceiling was set there; V69 S5E re-approved it at 489 after
 triaging two accepted false positives, and refreshed every document that quotes it —
-see `docs/V69_S5E_REALITY_RECONCILIATION.md`.)
+see `jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md`.)
 
 Nothing was excluded, no module was skipped, no threshold lowered, no `|| true` added,
 no `continue-on-error` placed on Bandit, and no test deleted. The tree contains

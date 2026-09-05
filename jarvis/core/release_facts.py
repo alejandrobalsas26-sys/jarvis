@@ -108,7 +108,7 @@ several thousand tests, so a reader comparing 4128 against a current run of the 
 is comparing two different trees. V69 S5E measured the authoritative invocation
 (``python -m pytest -q --tb=short jarvis/tests tests`` from the repository root, on
 CI's Python 3.11 with dev+soc installed) and recorded the result in PROGRESS.md §10
-and docs/V69_S5E_REALITY_RECONCILIATION.md, which is where a current number belongs.
+and jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md, which is where a current number belongs.
 Only :data:`DETERMINISTIC_TESTS_FAILED` ``== 0`` is asserted of both trees.
 
 The pass/skip split is **environment-dependent and legitimately so**: a suite whose

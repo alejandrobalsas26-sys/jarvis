@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **31** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **32** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0031-m65c-durable-effect-journal-branch.json` |
-| **Snapshot SHA256** | `a220534e8aaaabe7d7de1dd498f6a20df7194b07efee1f8ac1d89aa368ee86f4` |
-| **Subject state commit** | `dd2e937e9dbea9d376639e9b36ac9172bb295611` (M65C runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0032-s5e-reality-gate-branch.json` |
+| **Snapshot SHA256** | `25eb25b143b6c6160310c182e270c296f56498efad484715cbd08ae119452c27` |
+| **Subject state commit** | `04f433c8079e7b6491e57a12f2e0a959c094c5d5` (S5E repository reality; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -64,8 +64,9 @@ the verifier requires HEAD to *descend* from the subject rather than equal it.
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority bound to plan `54488fb3…`: 36+36 generations, ONE spend, terminal `completed`. S4H moved no candidate, dataset or policy identity |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed it; receipt `769d327a…`. `…S4H_INSTRUMENT_HARDENING.md` |
-| Previous milestones | **M65A · M65B — RUNTIME, no science** (gens 29–30, GOVERNANCE-ONLY; `GIT_AUTHORITY` pins the branch). Specialist execution core, model-role routing, one live supporting specialist, then a governed **team** (validated DAG, bounded parallelism, conflict scheduling, delegation, cancellation, backpressure, team ARGUS, live TEAM) and a hardened `ToolExecutor` — exactly-once had been **sequential only**. `…M65A_SPECIALIST_EXECUTION_CORE.md` · `…M65B_TEAM_EXECUTION_FABRIC.md` |
-| Last milestone | **M65C — RUNTIME, no science.** Gen 31 GOVERNANCE-ONLY. **Durable effect journal** (SQLite, fail-closed): effect identity, ownership and lifecycle survive a crash, a SIGKILL, a restart. Atomic cross-process reservation; a committed effect is recovered, never re-run; the window where an effect happened and its commit did not is **INDETERMINATE**, never guessed; `aexecute_mcp`'s race closed onto ONE protocol. **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE`. **0** loads / generations / authorities / spends; the eight record pointers are gen 28's. `…M65C_DURABLE_EFFECT_JOURNAL.md` |
+| Previous milestones | **M65A · M65B — RUNTIME, no science** (gens 29–30, GOVERNANCE-ONLY; `GIT_AUTHORITY` pins the branch). Specialist execution core and model-role routing, then a governed **team** (validated DAG, bounded parallelism, delegation, cancellation, team ARGUS) and a hardened `ToolExecutor` — exactly-once had been **sequential only**. `…M65A_SPECIALIST_EXECUTION_CORE.md` · `…M65B_TEAM_EXECUTION_FABRIC.md` |
+| Previous milestone | **M65C — RUNTIME, no science.** Gen 31 GOVERNANCE-ONLY. **Durable effect journal** (SQLite, fail-closed): effect identity, ownership and lifecycle survive a crash, a SIGKILL, a restart; a committed effect is recovered, never re-run; the window where an effect happened and its commit did not is **INDETERMINATE**, never guessed. **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE`. `…M65C_DURABLE_EFFECT_JOURNAL.md` |
+| Last milestone | **S5E — REPOSITORY REALITY, no science.** Gen 32 GOVERNANCE + REPAIR. CI's authoritative job (`pytest jarvis/tests tests` from the repository **ROOT**, 3.11) **exited 2 and ran zero tests** at the M65C seal: a regular `tests` package shadowed the namespace one whatever `sys.path` said. Same root cause 13× more (sources read CWD-relative), a red `ruff` gate (27), a Bandit Low ceiling breached 5 weeks, a consistency checker comparing copies not reality. Fixed, and now **executed** by tests. **0** loads / generations / authorities / spends. `…V69_S5E_REALITY_RECONCILIATION.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -288,23 +289,23 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
 
 | Defect | State | What it still binds |
 |---|---|---|
-| **D25** | FIXED | A persisted report in `run_state: comparing` is the documented serialisation state, **not** an unfinished run. |
-| **D28** | **OPEN** | No tool-call transport exists, so `tool_call_validity_rate` is **VACUOUS** on both arms and the six `tool_call_schema` tasks decide nothing. Unchanged; FUTURE successor `tool_call_validator/v2`, named by no evaluation. |
-| **D29** | ACCEPTED LIMITATION | `looks_like_refusal` reads sixteen literal phrasings the JSON refusal targets do not contain. It bounds QG-1 and SV-5 **in both directions** and travels into `v4` by design. Unchanged; FUTURE successor `refusal_behavior/v2`. |
+| **D25** | FIXED | `run_state: comparing` is the documented serialisation state, **not** an unfinished run. |
+| **D28** | **OPEN** | No tool-call transport exists, so `tool_call_validity_rate` is **VACUOUS** on both arms and the six `tool_call_schema` tasks decide nothing. FUTURE successor `tool_call_validator/v2`, named by no evaluation. |
+| **D29** | ACCEPTED LIMITATION | `looks_like_refusal` reads sixteen literal phrasings the JSON refusal targets do not contain. Bounds QG-1 and SV-5 **in both directions**. FUTURE successor `refusal_behavior/v2`. |
 | **D30** | FIXED | A plan may not report `is_executable` with an unverified model cache. |
-| **D31** | FIXED | VALIDATION is wired and **diagnostic only**. Do not remove `eval_dataset` or the closing `trainer.evaluate()`. |
+| **D31** | FIXED | VALIDATION is wired, **diagnostic only**. Do not remove `eval_dataset` or the closing `trainer.evaluate()`. |
 | **D32** | SUPERSEDED | By D34. |
-| **D33** | **OPEN** | The declared generation timeout is **not enforced**, so `timeout_rate` is **VACUOUS**. A config must state `timeout_s`; the default is 120 s. |
-| **D34** | FIXED | A dataset parent is **DECLARED**, never discovered from disk. Fails closed rather than degrading to genesis. |
+| **D33** | **OPEN** | The declared generation timeout is **not enforced**, so `timeout_rate` is **VACUOUS**. A config must state `timeout_s`; default 120 s. |
+| **D34** | FIXED | A dataset parent is **DECLARED**, never discovered from disk. Fails closed, never degrades to genesis. |
 | **D35** | OPERATOR RULING | A spent holdout becomes development evidence. **Each candidate needs a fresh holdout.** Not a contamination claim. |
 | **D36** | FIXED | The identity redactor matches unless flanked by ASCII letters on both sides. Do not simplify to a substring match; do not widen to `\b`. |
-| **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. Exercised by one live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**; closing it is *not* predicted to restore 9/9. |
-| **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic beside the unchanged input-truncation metric. **No gate reads it and none may be added without a separate operator decision.** Reaching the ceiling is not failure. |
+| **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. One live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**. |
+| **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic. **No gate reads it and none may be added without a separate operator decision.** |
 | **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** |
-| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence; the code that **measured** is not the code that **built the receipt**. Full text in the `defects` record. |
-| **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0 with a body-free class, location and repetition scalar. **No gate reads them**; nothing historical is backfilled. |
-| **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. Persistence held; in-memory display did not. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
-| **D45–D47** | FIXED (obs. only) | S4H's instrument findings, each fixed **PROSPECTIVELY** and read by **no gate**: no rule provenance on `secret_pii:secret`; the loader passed no `device_map`/dtype; `classify_empirical_status` read the **quality** denominator. **005 not rescored; nothing backfilled.** Full text in the `defects` record. |
+| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence. Full text in the `defects` record. |
+| **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0. **No gate reads it**; nothing is backfilled. |
+| **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
+| **D45–D47** | FIXED (obs. only) | S4H's instrument findings, each fixed **PROSPECTIVELY** and read by **no gate**. **005 not rescored; nothing backfilled.** Full text in the `defects` record. |
 | **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. A filename substring is not a scientific boundary. `state/m62/scientific-suite.json` + its verifier. |
 
 ### Limitations that travel into any successor run
@@ -430,30 +431,33 @@ human decision, which no milestone since has moved, replaced or weakened.
 ## 10 — Authoritative test baseline
 
 ```
-canonical   verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
-run from    jarvis/ (repository system interpreter)
-result      3179 passed · 2 skipped · 0 failed                            [M65C, measured]
-broad       pytest tests/
-result      10395 passed · 46 skipped · 4 failed                          [M65C, measured]
-            every failure PRE-EXISTING, reproduced at 3473dc44a041;
-            M65C adds NEW_FAILURES = 0
+CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
+run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
+result            10614 passed · 46 skipped · 0 failed      [S5E, measured]
+scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
+run from          jarvis/ (repository system interpreter)
+result            3179 passed · 2 skipped · 0 failed        [S5E, measured]
 ```
 
+**The first row is new in S5E, and its absence WAS the milestone.** This section used to
+record only suites run from `jarvis/`. The command `ci.yml` calls authoritative runs from
+the repository ROOT, and at the M65C seal it exited **2** and ran **zero** tests. Counts
+are **one** interpreter's; **never reconcile across interpreters.**
+
 **`-k m62` is no longer the authority (D48):** it matches node ids and deselected all **212**
-tests in three `m63`-named modules asserting M62 state. Keep the broad sweep too — it is wider
-in other directions. Edits to sealed suites moved **witnesses, not properties**: **0**
-threshold, gate, grader, policy, receipt or transition weakenings. Counts are **one**
-interpreter's; **never reconcile across interpreters.**
+tests in three `m63`-named modules asserting M62 state.
 
 **Rescoped assertions are not regressions.** An assertion comparing a *sealed* milestone's
-property against *live* state also asserts, silently, that no later generation exists — true
-by coincidence until the next milestone writes one. Such tests are pinned to the generation
-that recorded the property; each rescoping is argued in its own milestone document.
+property against *live* state also, silently, asserts that no later generation exists. Such
+tests are pinned to the generation that recorded the property; each rescoping is argued in
+its own milestone document.
 
-**Known invocation-context artefact — never rediscovered as a regression.** `pytest` from the
-**repository root** instead of `jarvis/` fails **8** tests in `…s3g2_validation_wiring.py`,
-which read production source relative to the working directory; S3N reproduced the same 8
-pre-S3N; it is **distinct from D39** (4 tests, *dataset-exports*). Never a rider fix.
+**Known invocation-context artefact — RESOLVED by S5E, 8 → 0.** `pytest` from the
+**repository root** instead of `jarvis/` used to fail **8** tests in
+`…s3g2_validation_wiring.py`, which read production source relative to the CWD; it is
+**distinct from D39** (4 tests, *dataset-exports*). Gen 31 called it an artefact of an
+*alternative* invocation; the repository root **is** the authoritative one. Now anchored to
+`_APP_ROOT`; the caveat stays recorded so the history stays legible.
 
 ---
 

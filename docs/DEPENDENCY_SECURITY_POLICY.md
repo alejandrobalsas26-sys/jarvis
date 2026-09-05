@@ -186,7 +186,7 @@ that case:
 > member read as a hardcoded password (B105), and a `writer.wait_closed()` swallowed in
 > a `finally` during socket teardown (B110). The breach survived five weeks because the
 > only thing enforcing this ceiling is a test in CI's authoritative job, and that job
-> could not collect; see `docs/V69_S5E_REALITY_RECONCILIATION.md`. The blocking
+> could not collect; see `jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md`. The blocking
 > Medium/High gate was not touched and remains at zero.
 | Enforcement | `jarvis/scripts/check_bandit_low_baseline.py` and `tests/test_bandit_low_baseline_v69_m618.py` |
 | Rule | `observed <= baseline` |

@@ -222,7 +222,7 @@ That re-approval has since happened once, exactly as this paragraph describes: t
 grew to 489 in `436119b` and V69 S5E triaged the two new findings and raised the ceiling
 deliberately. Worth recording that the increase went unnoticed for five weeks — the
 ceiling is enforced only by a test in CI's authoritative job, and that job could not
-collect. See `docs/V69_S5E_REALITY_RECONCILIATION.md`.
+collect. See `jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md`.
 
 During M61.8 this gate did its job on M61.8's own code: three new Low findings appeared
 (two `B105` on enum members named `PASS` and `PASS_WITH_WARNINGS`, one `B110` bare

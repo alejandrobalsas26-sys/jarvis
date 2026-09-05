@@ -1469,12 +1469,41 @@ def test_the_authoritative_focused_baseline_is_preserved(snapshot):
 
 
 def test_the_root_invocation_caveat_is_preserved_and_not_mislabelled(snapshot):
+    """V69 S5E: this used to assert ``failing_tests == 8``.
+
+    That pinned a DEFECT as though it were a permanent property. The caveat described
+    eight tests that failed when pytest ran "from the repository root instead of
+    jarvis/" — and the repository root is where ``.github/workflows/ci.yml`` runs the
+    authoritative job, so those eight were not an artifact of an alternative invocation.
+    They were part of why that job could not pass. S5E anchored them to an application
+    root and the count is now zero.
+
+    The caveat is still recorded rather than deleted, because the history is the point:
+    the snapshot must show that the condition was real and is resolved. What is asserted
+    is therefore the RESOLUTION, and it is checked against the file rather than taken
+    from the declaration — a snapshot claiming zero over a file that still reads sources
+    relative to the working directory would be a fresh instance of the same defect.
+    """
     artifact = snapshot["test_baseline"]["known_invocation_artifact"]
-    assert artifact["failing_tests"] == 8
+    assert artifact["failing_tests"] == 0, (
+        f"the root-invocation caveat still records "
+        f"{artifact['failing_tests']} failing tests")
     assert "s3g2_validation_wiring" in artifact["file"]
     assert artifact["is_a_regression"] is False
     assert artifact["is_defect_d39"] is False
     assert "DISTINCT from D39" in artifact["note"]
+
+    named = REPO / artifact["file"]
+    assert named.is_file(), f"the caveat names {artifact['file']}, which does not exist"
+    source = named.read_text(encoding="utf-8")
+    assert "_APP_ROOT" in source, (
+        "the caveat is recorded as resolved, but the file it names has no application "
+        "root anchor; a zero declared over an unfixed file is worse than the caveat")
+    for stem in ("Path(\"training_gym/", "Path('training_gym/",
+                 "Path(\"core/", "Path('core/"):
+        assert stem not in source, (
+            f"{artifact['file']} still reads a source by a CWD-relative path ({stem}), "
+            f"so the caveat is not resolved")
 
 
 def test_progress_records_the_caveat_and_separates_it_from_d39():
