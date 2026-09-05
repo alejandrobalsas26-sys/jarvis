@@ -873,7 +873,13 @@ class DurableEffectJournal:
     def _record_transition(self, effect_id: str, frm: EffectState,
                            to: EffectState, owner: str, attempt: int,
                            at: str, note: str = "") -> None:
-        """Append the edge. Callers already hold the write transaction."""
+        """Append the edge, and REFUSE one the state machine does not allow.
+
+        This is the only place an edge is validated. Every path that changes a
+        row calls it — `reserve`, `_take_over` and `_transition_locked` — so one
+        check covers all of them, and the transaction it runs inside means a
+        refusal rolls the row change back with it.
+        """
         if (frm, to) not in _ALLOWED_EDGES:
             raise InvalidTransition(
                 f"effect journal refuses {frm.value} -> {to.value}")
@@ -1104,9 +1110,14 @@ class DurableEffectJournal:
         abandoned row as INDETERMINATE is done BY a non-owner, which is the
         whole point of that transition.
         """
-        if (existing.state, to) not in _ALLOWED_EDGES:
-            raise InvalidTransition(
-                f"effect journal refuses {existing.state.value} -> {to.value}")
+        # The edge is NOT validated here. It is validated in
+        # `_record_transition`, which is the single append point every path
+        # funnels through — including `reserve` and `_take_over`, which call it
+        # directly. A mutation deleting this copy survived the whole campaign
+        # precisely because the other one caught everything, and a guard that
+        # cannot fail is not defence in depth: it is a second place to keep
+        # correct. The UPDATE below runs first and is rolled back with the
+        # transaction when the append refuses.
         clauses = ["effect_id=?", "state=?", "owner_attempt=?"]
         if expect_owner is not None:
             clauses.append("owner_instance_id=?")
@@ -1149,6 +1160,18 @@ class DurableEffectJournal:
                     self._db.execute("ROLLBACK")
                     return False
                 existing = self._row_to_record(row)
+                if (expect_owner is not None
+                        and existing.owner_instance_id != expect_owner):
+                    # This caller has LOST the reservation — another process
+                    # reclaimed it while this one was inside the tool. Its write
+                    # is a no-op rather than an error: the late-waking owner is a
+                    # race, not a programming mistake, and raising here would
+                    # surface as a failure of a call whose effect already
+                    # happened. The InvalidTransition below stays for the real
+                    # owner attempting an edge that does not exist.
+                    self._db.execute("ROLLBACK")
+                    self._bump("lost_ownership_writes")
+                    return False
                 ok = self._transition_locked(
                     existing, to, now_iso, failure_class=failure_class,
                     recovery_note=recovery_note,

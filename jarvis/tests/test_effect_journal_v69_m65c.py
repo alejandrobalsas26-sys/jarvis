@@ -814,3 +814,271 @@ def test_counters_are_body_safe_and_countable(tmp_path):
     assert c["reservation_conflicts"] == 1
     assert c["durable_dedupe_hits"] == 1
     assert c["commits"] == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MUTATION-CAMPAIGN CLOSURES
+#
+#  Each test below exists because a mutation SURVIVED the first campaign. None
+#  softens an assertion; each closes the gap that let a real defect hide.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_the_write_transaction_is_immediate_not_deferred(tmp_path):
+    """Closes `res-deferred-transaction`, and explains `res-reclaim-cas-dropped`.
+
+    Two independent mechanisms stop two processes owning one effect:
+
+      * every write path opens ``BEGIN IMMEDIATE``, which takes the write lock
+        up front so no other writer can interleave between the read and the
+        write;
+      * the reclaim and transition UPDATEs carry compare-and-swap guards on
+        ``state`` and ``owner_attempt``.
+
+    They are MUTUALLY REDUNDANT, which is why removing either one alone survived
+    the campaign — and why neither may be deleted as "obviously dead". This test
+    pins the first; ``test_the_compare_and_swap_guards_are_present`` pins the
+    second; and the campaign carries a combined mutation removing BOTH, which is
+    detected.
+    """
+    import inspect
+
+    source = inspect.getsource(DurableEffectJournal)
+    assert "BEGIN DEFERRED" not in source
+    assert source.count('BEGIN IMMEDIATE') >= 4, (
+        "a write path stopped taking the write lock up front")
+
+
+def test_the_compare_and_swap_guards_are_present(tmp_path):
+    """The second half of the pair above."""
+    import inspect
+
+    take_over = inspect.getsource(DurableEffectJournal._take_over)
+    assert "AND state=? AND owner_attempt=?" in take_over, (
+        "the reclaim UPDATE lost its compare-and-swap guard")
+    transition = inspect.getsource(DurableEffectJournal._transition_locked)
+    assert '"state=?"' in transition and '"owner_attempt=?"' in transition
+
+
+def test_the_schema_is_created_inside_one_transaction(tmp_path):
+    """Closes `schema-created-outside-transaction`.
+
+    Every statement is ``IF NOT EXISTS``, so two racers reach a valid schema
+    either way and no behavioural test can tell the difference — the mutation is
+    EQUIVALENT for today's schema. It stops being equivalent the moment a future
+    statement is not idempotent, so the discipline is pinned here rather than
+    left to be rediscovered.
+    """
+    import inspect
+
+    source = inspect.getsource(DurableEffectJournal._init_schema)
+    # Count both quote styles: an inserted COMMIT with the other quote character
+    # would slip past a single literal search and leave the loop outside the
+    # transaction while the ordering assertion still held.
+    assert source.count("BEGIN IMMEDIATE") == 1, (
+        "schema creation opens more than one transaction")
+    assert source.count("COMMIT") == 1, (
+        "schema creation commits more than once")
+    begin = source.index("BEGIN IMMEDIATE")
+    loop = source.index("for statement in _SCHEMA")
+    commit = source.index("COMMIT")
+    assert begin < loop < commit, "schema creation left its transaction"
+    assert "executescript" not in source, (
+        "executescript commits any open transaction before it runs")
+
+
+class _ModeCursor:
+    """A cursor stand-in that answers ``PRAGMA journal_mode`` from a script.
+
+    SQLite can refuse a journal-mode change by returning the UNCHANGED mode
+    rather than by raising — the busy handler is not involved — and that is the
+    case the retry loop exists for. Scripting it here makes the contract
+    deterministic instead of depending on which way a real lock race lands.
+    """
+
+    def __init__(self, modes) -> None:
+        self.modes = list(modes)
+        self.calls = 0
+
+    def execute(self, sql):
+        self.calls += 1
+        if "journal_mode" in sql:
+            mode = self.modes.pop(0) if self.modes else "delete"
+            return _OneRow((mode,))
+        return _OneRow(None)
+
+
+class _OneRow:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+    def fetchall(self):
+        return [self._row] if self._row else []
+
+
+def test_wal_is_retried_when_sqlite_returns_the_unchanged_mode(tmp_path):
+    """Closes `schema-wal-not-retried`.
+
+    The cross-process §22 test DOES catch this — measured: with a single attempt
+    it failed 4 runs out of 5 — but the run that passes is the run that hides
+    it, and a flaky detector is not a detector. So the contract is asserted
+    directly: refused twice, established on the third attempt, no exception.
+    """
+    journal = make_journal(tmp_path, busy_timeout_ms=5000)
+    cursor = _ModeCursor(["delete", "delete", "wal"])
+    journal._ensure_wal(cursor)          # must not raise
+    assert cursor.calls >= 3, "the WAL pragma was not retried"
+
+
+def test_wal_that_is_never_established_fails_closed_within_the_bound(tmp_path):
+    """And the retry is bounded: a mode that never changes raises rather than
+    spinning forever."""
+    journal = make_journal(tmp_path, busy_timeout_ms=200)
+    cursor = _ModeCursor(["delete"] * 10_000)
+    started = __import__("time").monotonic()
+    with pytest.raises(JournalUnhealthy) as exc:
+        journal._ensure_wal(cursor)
+    assert "WAL" in str(exc.value)
+    assert __import__("time").monotonic() - started < 5.0, (
+        "the WAL retry is not bounded by the busy timeout")
+
+
+def test_a_wal_lock_held_by_another_connection_is_retried(tmp_path):
+    """Closes `schema-wal-not-retried` deterministically.
+
+    The §22 cross-process test reproduced the original defect only when the
+    timing happened to line up, which is exactly how a race hides. Here the
+    contention is arranged rather than hoped for: another connection holds an
+    EXCLUSIVE lock, a timer releases it, and the journal must WAIT rather than
+    fail on the first refusal.
+    """
+    import sqlite3 as _sq
+    import threading
+
+    path = tmp_path / "contended.db"
+    # check_same_thread=False: the releaser below runs on a timer thread.
+    blocker = _sq.connect(str(path), isolation_level=None, check_same_thread=False)
+    blocker.execute("PRAGMA journal_mode=delete").fetchall()
+    blocker.execute("CREATE TABLE probe(x)")
+    blocker.execute("BEGIN EXCLUSIVE")
+
+    released = threading.Event()
+
+    def _release():
+        released.wait(5.0)
+        blocker.execute("COMMIT")
+
+    releaser = threading.Thread(target=_release, daemon=True)
+    releaser.start()
+    threading.Timer(0.25, released.set).start()
+
+    journal = DurableEffectJournal(path, busy_timeout_ms=5000)
+    releaser.join(5.0)
+    assert journal._db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    blocker.close()
+
+
+def test_a_wal_lock_that_never_clears_fails_closed(tmp_path):
+    """And the bound holds: a lock that never clears raises rather than hanging."""
+    import sqlite3 as _sq
+
+    path = tmp_path / "stuck.db"
+    blocker = _sq.connect(str(path), isolation_level=None)
+    blocker.execute("PRAGMA journal_mode=delete").fetchall()
+    blocker.execute("CREATE TABLE probe(x)")
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(JournalUnhealthy) as exc:
+            DurableEffectJournal(path, busy_timeout_ms=200)
+        assert "WAL" in str(exc.value)
+    finally:
+        blocker.close()
+
+
+def test_deep_corruption_is_caught_even_when_a_shallow_read_succeeds(tmp_path):
+    """Closes `corrupt-integrity-ignored`.
+
+    The first corruption test shredded pages a ``SELECT 1 ... LIMIT 1`` also
+    touched, so removing the integrity check entirely still failed — for the
+    wrong reason. Here the table spans many pages, a shallow read succeeds, and
+    only ``PRAGMA integrity_check`` notices.
+    """
+    j = make_journal(tmp_path)
+    for n in range(400):
+        args = {"code": f"payload-{n}-" + ("x" * 200)}
+        reserve(j, eid=effect_id(args=args), args=args)
+    j.close()
+
+    path = tmp_path / "effects.db"
+    for side in ("-wal", "-shm"):
+        p = tmp_path / f"effects.db{side}"
+        if p.exists():
+            p.unlink()
+    raw = bytearray(path.read_bytes())
+    page = int.from_bytes(raw[16:18], "big") or 4096
+    assert len(raw) > page * 12, "the fixture did not grow past a dozen pages"
+    # Shred pages near the END, which a LIMIT 1 read never reaches.
+    start = len(raw) - page * 3
+    raw[start:start + page * 2] = b"\xa5" * (page * 2)
+    path.write_bytes(bytes(raw))
+
+    reopened = DurableEffectJournal(path)
+    assert reopened._db.execute(
+        "SELECT 1 FROM effects LIMIT 1").fetchone() is not None, (
+        "the fixture is not discriminating: a shallow read already fails")
+    with pytest.raises(JournalUnhealthy) as exc:
+        reopened.assert_healthy()
+    assert "integrity" in str(exc.value)
+
+
+def test_an_unopenable_journal_names_the_open_failure(tmp_path):
+    """Closes `schema-open-failure-falls-back-to-memory`.
+
+    Replacing the raise with an in-memory fallback still failed — because
+    ``:memory:`` cannot be put into WAL, so the WAL requirement raised instead.
+    The test now asserts WHICH failure it got, so a silent in-memory degradation
+    is distinguishable from a refusal to run without WAL.
+    """
+    blocker = tmp_path / "blocked"
+    blocker.mkdir()
+    with pytest.raises(JournalUnhealthy) as exc:
+        DurableEffectJournal(blocker)
+    assert "cannot open" in str(exc.value), (
+        f"expected an open failure, got: {exc.value}")
+
+
+def test_the_status_surface_has_a_fixed_body_safe_shape(tmp_path):
+    """Closes `priv-status-dumps-rows`.
+
+    The journal holds only digests, so dumping every row leaks no secret and no
+    content assertion can see the change. The property that actually matters is
+    that ``status`` reports COUNTERS, not per-effect rows — so the shape is
+    pinned instead.
+    """
+    j = make_journal(tmp_path)
+    reserve(j, eid=effect_id())
+    keys = set(j.status())
+    assert keys == {
+        "path", "schema_version", "instance_id", "lease_s", "busy_timeout_ms",
+        "by_state", "total", "committed", "reserved", "executing",
+        "indeterminate", "stale_reservations", "integrity", "healthy",
+        "recovery_required", "db_bytes", "counters"}, (
+        f"the status surface changed shape: {sorted(keys)}")
+    assert all(not isinstance(v, (list, tuple)) or k == "counters"
+               for k, v in j.status().items()), (
+        "status grew a per-effect collection")
+
+
+def test_the_idempotency_key_cannot_be_taken_from_the_arguments(tmp_path):
+    """Closes `idem-key-is-user-controllable`.
+
+    The stored key must be the DERIVED one even when an argument by that name is
+    present, so a caller cannot steer two different actions onto one key.
+    """
+    forged = {"code": "print(1)", "idempotency_key": "attacker-chosen-key"}
+    eid = effect_id(args=forged)
+    j = make_journal(tmp_path)
+    record = reserve(j, eid=eid, args=forged).record
+    assert record.idempotency_key == derive_idempotency_key(eid)
+    assert record.idempotency_key != "attacker-chosen-key"
