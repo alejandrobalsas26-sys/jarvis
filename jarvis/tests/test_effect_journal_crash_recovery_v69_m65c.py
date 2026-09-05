@@ -44,15 +44,10 @@ from core.effect_journal import (
     compute_effect_id,
     derive_idempotency_key,
     may_auto_retry,
-    reconcile,
-    register_durability,
-    register_reconciler,
-    unregister_durability,
 )
 from tests.support import m65c_effect_world
 from tests.support.m65c_effect_world import (
     CRASH_EXIT,
-    FileBarrier,
     SyntheticWorld,
     make_reconciler,
 )

@@ -44,8 +44,6 @@ from core.effect_journal import (  # noqa: E402
     EffectState,
     ExecutionDisposition,
     compute_effect_id,
-    register_durability,
-    unregister_durability,
 )
 from core.security_effects import CONTAINMENT, SCOPES  # noqa: E402
 from tests.support import m65c_effect_world  # noqa: E402

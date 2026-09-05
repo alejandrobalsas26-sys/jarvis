@@ -30,7 +30,7 @@ owner that reached :attr:`EffectState.EXECUTING` and never came back becomes
 tool's :class:`EffectDurabilityClass` — never by the fact that a lease expired.
 
 STORAGE
-=======
+========
 stdlib ``sqlite3``, one file on the local NVMe, WAL. The engine and the
 conventions (``jarvis/data/``, a ``meta`` table carrying ``schema_version``,
 forward-only migration) come from :mod:`core.operational_store`; the discipline

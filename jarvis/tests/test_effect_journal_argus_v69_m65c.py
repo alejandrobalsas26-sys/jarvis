@@ -19,7 +19,6 @@ import asyncio
 import inspect
 import json
 
-import pytest
 
 from core.cognitive_mesh import SpecialistId
 from core.effect_journal import (

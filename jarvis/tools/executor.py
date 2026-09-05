@@ -34,7 +34,7 @@ import tempfile
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import psutil
 import requests
 from loguru import logger
@@ -707,6 +707,13 @@ async def _aura_broadcast(event: dict) -> None:
         await broadcast(event)
     except Exception:
         pass
+
+
+if TYPE_CHECKING:  # pragma: no cover — annotations only
+    # The durable journal is imported LAZILY inside the methods that use it, so
+    # a read-only session never pays for it and a broken journal cannot break
+    # this module's import. The annotations still need the name.
+    from core.effect_journal import DurableEffectJournal
 
 
 class _EffectHooks:
