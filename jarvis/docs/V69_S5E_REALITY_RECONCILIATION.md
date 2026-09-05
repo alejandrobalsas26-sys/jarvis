@@ -10,8 +10,9 @@ S5E is not a feature milestone. It asks one question of the repository:
 > Do the claims this repository makes about itself resolve to commands, imports,
 > release facts and Git topology that actually exist?
 
-For six things, the answer was no. This document records what was measured, how, and
-what changed.
+For eight things, the answer was no. This document records what was measured, how, and
+what changed. Six of the seven were invisible to every run done from a developer's
+working directory; the seventh was invisible until the tree was cloned afresh.
 
 ---
 
@@ -110,6 +111,11 @@ FileNotFoundError: 'training_gym/training/backends/transformers_peft.py'
 Those paths exist only when the working directory is `jarvis/`. Anchored to an explicit
 `_APP_ROOT` derived from `__file__`, so the CWD cannot decide the answer.
 
+The full 25, so none is left unaccounted for: **13** CWD-relative source reads (this
+section), **2** interpreter/profile failures (§4), **3** stale Bandit facts (§6) and
+**7** control-plane `GIT_AUTHORITY` failures — the last self-inflicted, because creating
+the S5E branch is exactly what generation 32 exists to declare.
+
 **The Control Plane had already recorded this and closed it.** Generation 31 carries:
 
 ```json
@@ -154,12 +160,13 @@ constraint file's own comment warns that "a ruff minor bump adds new rules that 
 green tree red" and then pins only `>=0.4.0,<1.0.0`; that looseness is not what caused
 this, but it remains an open exposure.
 
-All 27 were dead code — 20 `F401`, 5 `F402`, 3 `F541`, 1 `F841` — and all were fixed
+All 27 were dead code — 20 `F401`, 3 `F402`, 3 `F541`, 1 `F841` — and all were fixed
 rather than ignored. No new per-file ignore, no widened `select`, no `noqa` blanket. Two
 judgement calls: the `F841` kept its call and dropped only the dead binding (the effect
 committing is the point of the test), and the `F402` loop variables in
 `verify_m62_control_plane.py` were renamed rather than suppressed, found via AST because
-ruff reports one shadow per scope and fixing the first surfaces the next.
+ruff reports one shadow per scope: fixing the reported 3 surfaced 2 more, so 5 loops were
+renamed in total against 3 reported findings.
 
 ---
 
@@ -241,6 +248,114 @@ re-derive that.
 
 ---
 
+## 7b — Defect 7: the local tree is not the checkout CI gets
+
+The local authoritative run was green. `git clone` + the same command + the same
+interpreter was **EXIT 1**: 5 failures and 5 errors. Everything that differed was
+gitignored runtime evidence a developer host happens to have and `actions/checkout`
+never produces. This was found by running the clean clone BEFORE pushing, and it is the
+reason that step is not optional.
+
+* **Nine tests** in `test_training_gym_m62_s4f_sealed_state.py` read
+  `evaluation/protocol-v4-attempts.jsonl` and the per-generation results
+  unconditionally. That evidence quotes held-out material, so the root `.gitignore`
+  refuses to commit it and `MANIFEST.in` refuses to package it — correctly, and that is
+  not going to change. So the tests must report "not present" rather than fail.
+
+  These are **skips, not relaxations**: where the evidence exists all nine run unchanged
+  and can still fail (verified — 125 passed, **zero skipped**, in the developer tree).
+  The sixteen tests in that file which read TRACKED evidence are deliberately left
+  unguarded, so a bare checkout still proves the sealed verdict, the spent holdout, that
+  005 is not eligible, that 004 is still held and that nothing was promoted.
+
+* **`test_the_runtime_adapter_is_not_tracked`** asserted
+  `git check-ignore -q jarvis/training_runs`. The rule is `training_runs/` —
+  directory-only — so git can only match the bare path when it can see the path IS a
+  directory, which means when it exists on disk. A fresh checkout has never created the
+  runtime tree, so the probe returned 1 and the assertion failed. It now probes a path
+  *inside* the tree: checkout-independent, and the stronger claim anyway.
+
+This is the same failure mode as the import shadow one layer out. That gate passed
+because of the **working directory**; this one passed because of the **checkout**.
+Neither was visible to any local run, and both were red in CI.
+
+## 7c — Defect 8: CI checks out one commit, and the suite needs history
+
+Found by a red team AFTER the milestone believed itself finished, and it is the sharpest
+instance of S5E's own thesis turned back on S5E.
+
+`.github/workflows/ci.yml` uses `actions/checkout@v4` eight times and set `fetch-depth`
+nowhere. The default is **1**. Measured:
+
+```
+$ git clone --depth 1 <repo> -b jarvis-v69-s5e-reality-gate shallow
+$ cd shallow
+  commits available : 1
+  master ref        : ABSENT
+  origin/master     : ABSENT
+  git cat-file -e 0bb1a6b^{commit} : fatal: Not a valid object name
+$ python -m pytest -q jarvis/tests tests   ->  26 failed          EXIT 1
+```
+
+This suite verifies the M62 control plane, which resolves `subject_state_commit`,
+requires HEAD to descend from it, and compares `master` against a declared invariant.
+`check_git_authority` **fails closed** when master does not resolve — correctly, since
+"the ref was not available" is not evidence that master is untouched. On a depth-1
+checkout that is unconditional.
+
+**One of the 26 was a test S5E itself added.**
+`test_the_declared_merge_commit_exists_in_this_repository` runs `git cat-file` on
+`RELEASE_MERGE_COMMIT`, and a shallow clone does not have that object. In making a
+circular claim executable, S5E introduced a new CI-only failure of precisely the class it
+exists to remove. That is worth stating plainly rather than quietly fixing.
+
+Both halves are addressed:
+
+* the authoritative job now checks out with `fetch-depth: 0`, and **only** that job —
+  the other seven touch no git, and the compat job's four suites were verified to pass
+  unchanged on a depth-1 clone;
+* the two git-dependent tests skip on a shallow checkout, because asserting against
+  history that was never fetched is a finding about the checkout, not the repository;
+* `test_the_authoritative_job_checks_out_full_history` pins the workflow setting, so the
+  cheap checkout cannot come back silently.
+
+Three layers of the same defect, in one milestone: the import shadow depended on the
+**working directory**, the sealed-state tests on the **checkout's contents**, and this on
+the **checkout's depth**. Each was invisible locally, and each made the blocking job red.
+
+---
+
+## 7d — What the red team could still falsify
+
+A fresh read-only red team was given the finished branch and asked to break it. It found
+defect 8 above, and four things this document had overstated. All are fixed; they are
+recorded because a milestone about honest claims should not hide the claims it got wrong.
+
+| finding | disposition |
+|---|---|
+| The "generator can NEVER touch the ceiling" guard was a substring check on one dict literal — bypassed by registering the key after it | Now asserted on the runtime object AND behaviourally, against a text whose ceiling is absurd (on the real tree approved == measured, so a rewrite would be invisible) |
+| Gutting `rewrite()` to `return text, []` left every generator guard green | New test feeds a known-stale text and requires the drift to be reported |
+| `test_the_low_ceiling_cannot_be_removed_without_the_scan_noticing` claimed a control it does not implement | Renamed to `..._is_still_wired_to_a_real_scan`, with the limit stated in the docstring |
+| `pytest.importorskip("fastapi")` turned a red HUD **security allowlist** test into one that never ran in CI at all | Reverted properly: the allowlist is now read by parsing `aura/server.py`, so the assertion runs on every profile and additionally pins that the constants stay auditable literals |
+| Doc §10 claimed no ref held unique commits, measured before S5E created its own backup branch | Branch deleted, sweep re-run, caveat recorded in §10 |
+| Ruff breakdown summed to 29, not 27 | Corrected in §5 |
+
+Two further criticisms are accepted and NOT closed, because closing them would be worse:
+
+* **Nine sealed-state tests skip in CI** (§7b). A red team is right that a single-spend
+  control on `eval-v7` is among them. It is not unguarded: `test_eval_v7_is_spent_and_names_its_spender`
+  reads the **tracked** control plane and runs everywhere, so the spend is still asserted
+  in CI — what skips is the cross-check against the gitignored ledger.
+* **D39 remains open, and the green run is order-dependent.** Measured:
+  `pytest …dataset_exports.py …s3g2_validation_wiring.py` → 117 passed;
+  reversed → **4 failed**. Alphabetical collection puts the exports file first, so the
+  authoritative invocation does not trigger it. That is luck, not a fix. S5E replaced
+  PROGRESS §10's old "4 failed" row with a measured "0 failed"; the row was about a
+  different invocation, but the ordering caveat belongs in the record and is now in §7
+  and §10 of PROGRESS.
+
+---
+
 ## 8 — What is measured now
 
 | gate | command | result |
@@ -248,6 +363,7 @@ re-derive that.
 | consistency | `python scripts/check_release_consistency.py` | PASS |
 | lint | `ruff check .` · `compileall` | PASS |
 | **authoritative suite** | `python -m pytest -q --tb=short jarvis/tests tests` **from the repository root** | **exit 0** |
+| **the same, in a fresh `git clone`** | identical command and interpreter | **exit 0** — 10,576 passed, 84 skipped |
 | stabilization | `python scripts/soak_stabilization_m61.py --json` | PASS |
 | doctor | `python scripts/doctor.py` | PASS |
 | compat (3.12) | consistency + compileall + 4 suites | PASS |
@@ -304,6 +420,14 @@ The ten milestone branches (M62 → M65C) are bookmarks at increasing offsets on
 not parallel lines of development. Every merge commit in the repository's history predates
 master; the post-master convention is a linear chain. Two `refs/claude/checkpoint-*` refs
 carry one WIP commit each, both superseded, both with parents already in the chain.
+
+**A caveat on when that was measured.** The sweep above ran before S5E made its own
+commits, and S5E then created a `s5e-backup-before-amend` branch while reorganising them
+— which stranded four commits behind a claim of "none", for exactly as long as nobody
+re-measured. A red team caught it. The branch has been deleted and the sweep re-run:
+across every `refs/heads`, `refs/remotes` and `refs/tags`, zero refs hold a commit that
+HEAD does not. The lesson is the milestone's own: a measurement is about the moment it
+was taken, and the audit has to be repeated after the auditor edits the thing.
 
 Nothing is stranded and nothing needs recovering before integration.
 

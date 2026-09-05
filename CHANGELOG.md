@@ -80,7 +80,11 @@ Closure stage of the same release (`69.61.0`; M61.8 is **not** a version).
   blocking gate `bandit -r core tools -ll -q` reports **0 Medium and 0 High**; the 489
   Low findings it also reports are recorded as an explicit, enforced baseline — a
   decrease passes, an increase fails until reviewed. They are bounded, not called
-  harmless.
+  harmless. (That count was 488 at this release's closure commit; the ceiling tracks the
+  checked-out tree rather than the tag, and V69 S5E re-approved it at 489 after triaging
+  two accepted false positives — `jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md`. M62
+  through M65C and S5E are unreleased milestone work and, by this repository's
+  convention, carry milestone documents rather than changelog sections.)
 - **Release engineering.** `docs/releases/v69.61.0.md` (also the GitHub Release body),
   `docs/RELEASE_RUNBOOK.md`, `docs/BRANCH_PROTECTION.md`, and
   `scripts/check_release_tag_guard.py`, which refuses to tag a dirty tree, a feature

@@ -62,13 +62,31 @@ def _in_a_checkout() -> bool:
     return shutil.which("git") is not None and (_REPO_ROOT / ".git").exists()
 
 
+def _is_shallow() -> bool:
+    """A depth-limited clone holds no history to ask questions of.
+
+    `actions/checkout@v4` defaults to `fetch-depth: 1`, and a depth-1 clone of this
+    branch has ONE commit, no `master` ref and no `0bb1a6b`. Asserting against history
+    that was never fetched is not a finding about the repository, it is a finding about
+    the checkout — so these skip. CI's authoritative job sets `fetch-depth: 0` precisely
+    so they do NOT skip there; `test_ci_entrypoint_reality_v69_s5e.py` pins that.
+    """
+    if (_REPO_ROOT / ".git" / "shallow").exists():
+        return True
+    proc = _git("rev-parse", "--is-shallow-repository")
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
 requires_git = pytest.mark.skipif(not _in_a_checkout(),
                                   reason="not a git checkout (sdist or exported tree)")
+requires_history = pytest.mark.skipif(
+    not _in_a_checkout() or _is_shallow(),
+    reason="shallow checkout: the history this asserts against was never fetched")
 
 
 # ── the merge-state claim, actually asked of git ────────────────────────────
 
-@requires_git
+@requires_history
 def test_the_declared_merge_commit_exists_in_this_repository():
     """"Cross-checked against git" used to mean "quoted in a document"."""
     commit = rf.RELEASE_MERGE_COMMIT
@@ -78,7 +96,7 @@ def test_the_declared_merge_commit_exists_in_this_repository():
         f"a commit in this repository")
 
 
-@requires_git
+@requires_history
 def test_the_declared_merge_commit_is_an_ancestor_of_master():
     """A merge commit for a `merged` release that master does not contain is not one."""
     if rf.RELEASE_STATE == "in_flight":
@@ -99,19 +117,57 @@ def test_the_measured_facts_have_a_canonical_generator():
         "them; a derived fact with no generator is a fact that rots")
 
 
-def test_the_generator_refuses_to_touch_the_approved_ceiling():
+def test_the_generator_cannot_rewrite_the_approved_ceiling():
     """A generator that could raise its own ceiling could hide a security regression.
 
-    ``BANDIT_LOW_BASELINE`` is a human decision. Asserted over the source rather than by
-    running it, because the interesting case is the one where a future edit ADDS it to
-    the derived set — that would pass a behavioural test on a tree where the measured
-    and approved values happen to be equal, which is exactly today's tree.
+    This asserted a SUBSTRING of the source — the text between ``_DERIVED`` and the
+    first ``}``. A red team broke it in one line by registering the key AFTER the dict
+    literal (``_DERIVED["BANDIT_LOW_BASELINE"] = "low"``), which left the guard silent
+    while the generator happily rewrote the ceiling. So it is now asked of the runtime
+    object and of the behaviour, neither of which cares where the key was added.
+
+    The behavioural half deliberately uses a text whose ceiling is absurd (``1``): on
+    the real tree the approved and measured values are equal, so a generator that DID
+    rewrite the ceiling would produce no visible diff and pass.
     """
-    source = _GENERATOR.read_text(encoding="utf-8")
-    derived = source.split("_DERIVED", 1)[1].split("}", 1)[0]
-    assert "BANDIT_LOW_BASELINE" not in derived, (
-        "regenerate_release_facts.py lists the approved ceiling among the facts it "
-        "rewrites; raising a security baseline must stay a reviewed decision")
+    from scripts import regenerate_release_facts as gen
+
+    assert "BANDIT_LOW_BASELINE" not in gen._DERIVED, (
+        "regenerate_release_facts.py derives the approved ceiling; raising a security "
+        "baseline must stay a reviewed decision, not a generator's side effect")
+
+    text = ("BANDIT_LOW_BASELINE = 1\n"
+            "BANDIT_LOW_OBSERVED = 1\n"
+            "BANDIT_MEDIUM = 1\n"
+            "BANDIT_HIGH = 1\n"
+            "BANDIT_SCANNED_LINES = 1\n")
+    updated, changes = gen.rewrite(
+        text, {"low": 489, "medium": 0, "high": 0, "scanned_lines": 88_908})
+    assert "BANDIT_LOW_BASELINE = 1" in updated, \
+        "the generator rewrote the approved ceiling"
+    assert not any("BANDIT_LOW_BASELINE" in c for c in changes), changes
+
+
+def test_the_generator_actually_detects_a_stale_fact():
+    """Non-vacuity for every guard above it.
+
+    A red team replaced ``rewrite()``'s body with ``return text, []``. The generator
+    then reported "release facts are current" on any tree whatsoever, ``--check`` exited
+    0, and every other test in this file still passed — the S5E generator guards added
+    zero detection over what already existed. A generator that can never report a change
+    is not a generator, so it is now made to report one.
+    """
+    from scripts import regenerate_release_facts as gen
+
+    text = ("BANDIT_MEDIUM = 0\n"
+            "BANDIT_HIGH = 0\n"
+            "BANDIT_LOW_OBSERVED = 1\n"
+            "BANDIT_SCANNED_LINES = 1_000\n")
+    _updated, changes = gen.rewrite(
+        text, {"low": 489, "medium": 0, "high": 0, "scanned_lines": 88_908})
+    joined = " ".join(changes)
+    assert "BANDIT_LOW_OBSERVED" in joined, f"an exact count drift was not reported: {changes}"
+    assert "BANDIT_SCANNED_LINES" in joined, f"a magnitude drift was not reported: {changes}"
 
 
 @pytest.mark.slow
@@ -183,8 +239,15 @@ def test_a_declared_release_document_that_is_missing_is_a_problem():
         release_check._RELEASE_DOCS = real
 
 
-def test_the_low_ceiling_cannot_be_removed_without_the_scan_noticing():
-    """The ceiling is only a control while something compares it to a real scan.
+def test_the_low_ceiling_is_still_wired_to_a_real_scan():
+    """NOTE THE NAME. This does NOT claim the ceiling cannot be silently raised.
+
+    It cannot detect that, and S5E measured as much: setting BANDIT_LOW_BASELINE to
+    100000 and editing one line of the security policy passes every gate. Raising a
+    ceiling is a reviewed decision that shows up in a diff — the generator is forbidden
+    from doing it (above), and `test_the_policy_document_records_the_baseline_and_the_rule`
+    forces the change to appear in the policy document too. What THIS test defends is
+    narrower and still worth having: that the ceiling is compared against a real scan.
 
     ``check_release_consistency.py`` never did: raising BANDIT_LOW_BASELINE to 100000
     passed it. What makes the ceiling real is the live scan in
@@ -212,10 +275,12 @@ def test_the_release_facts_docstring_does_not_claim_evidence_it_lacks():
     closure = (_APP_ROOT / "tests" / "test_release_closure_v69_m618.py").read_text(
         encoding="utf-8")
     facts = _FACTS.read_text(encoding="utf-8")
-    if "--collect-only" not in closure:
-        assert "re-measures them with ``--collect-only`` arithmetic" not in facts, (
-            "core/release_facts.py still credits test_release_closure_v69_m618 with a "
-            "--collect-only re-measurement that module does not contain")
+    assert "--collect-only" not in closure, (
+        "test_release_closure_v69_m618 gained a --collect-only re-measurement; the "
+        "release_facts docstring may now credit it, and this guard should be revisited")
+    assert "re-measures them with ``--collect-only`` arithmetic" not in facts, (
+        "core/release_facts.py still credits test_release_closure_v69_m618 with a "
+        "--collect-only re-measurement that module does not contain")
 
 
 def test_the_historical_counts_are_scoped_to_the_release_they_describe():

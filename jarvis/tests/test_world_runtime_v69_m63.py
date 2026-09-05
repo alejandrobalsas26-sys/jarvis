@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +50,9 @@ from core.world_status import (
     unhealthy_report,
     what_changed,
 )
+
+#: Anchored so a source read cannot depend on the working directory (V69 S5E).
+_APP_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _obs(identity="web-1", etype=AssetType.CONTAINER, payload=None, **kw):
@@ -282,16 +286,44 @@ def test_narrate_is_deterministic():
 # ══════════════════════════════════════════════════════════════════════════════
 #  §23 AURA bridge
 # ══════════════════════════════════════════════════════════════════════════════
+def _hud_frozenset(name: str) -> frozenset:
+    """Read a module-level ``frozenset`` constant from ``aura/server.py``, by PARSING it.
+
+    V69 S5E, in two steps. ``aura.server`` imports FastAPI, which lives in
+    ``requirements/all.txt`` and NOT in the ``dev``+``soc`` profile CI installs, so the
+    hard import made this an unconditional CI failure. The first fix was
+    ``pytest.importorskip("fastapi")`` — which turned a red test into one that never ran
+    in CI at all. That is worse, and a red team was right to call it: this is a SECURITY
+    ALLOWLIST, and the whole point of asserting it is that it is asserted where the
+    release gate runs.
+
+    Reading the assignment keeps the assertion running on every profile. It also asserts
+    something the import could not: that these stay literal, module-level constants a
+    reader can audit, rather than becoming computed at import time.
+    """
+    source = (_APP_ROOT / "aura" / "server.py").read_text(encoding="utf-8")
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target, value = node.target.id, node.value
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            target, value = node.targets[0].id, node.value
+        else:
+            continue
+        if target != name:
+            continue
+        assert (isinstance(value, ast.Call)
+                and getattr(value.func, "id", "") == "frozenset"), (
+            f"{name} is no longer a plain frozenset literal in aura/server.py; the HUD "
+            f"allowlist must stay auditable without executing the server")
+        return frozenset(ast.literal_eval(value.args[0]))
+    raise AssertionError(f"{name} is not a module-level constant in aura/server.py")
+
+
 def test_world_hud_commands_are_allowlisted_and_none_are_risky():
-    # aura.server imports FastAPI, which lives in requirements/all.txt — NOT in the
-    # dev+soc profile CI installs. Hard-importing it made this an unconditional CI
-    # failure rather than an optional-dependency skip. V69 S5E.
-    pytest.importorskip("fastapi", reason="aura.server requires FastAPI (all profile)")
-    from aura.server import (
-        _HIGH_RISK_HUD,
-        _HUD_ALLOWED_COMMANDS,
-        _MEDIUM_RISK_HUD,
-    )
+    _HUD_ALLOWED_COMMANDS = _hud_frozenset("_HUD_ALLOWED_COMMANDS")
+    _HIGH_RISK_HUD = _hud_frozenset("_HIGH_RISK_HUD")
+    _MEDIUM_RISK_HUD = _hud_frozenset("_MEDIUM_RISK_HUD")
     world_cmds = {"world_status", "world_changed", "world_impact",
                   "world_unhealthy", "world_security", "world_connectors",
                   "world_doctor"}

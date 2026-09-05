@@ -301,7 +301,7 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
 | **D36** | FIXED | The identity redactor matches unless flanked by ASCII letters on both sides. Do not simplify to a substring match; do not widen to `\b`. |
 | **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. One live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**. |
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic. **No gate reads it and none may be added without a separate operator decision.** |
-| **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** |
+| **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** S5E: alphabetical collection puts exports first, so the authoritative run misses it — **117 passed, 4 failed reversed**. Ordering, not a fix. |
 | **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence. Full text in the `defects` record. |
 | **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0. **No gate reads it**; nothing is backfilled. |
 | **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
@@ -439,18 +439,17 @@ run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [S5E, measured]
 ```
 
-**The first row is new in S5E, and its absence WAS the milestone.** This section used to
-record only suites run from `jarvis/`. The command `ci.yml` calls authoritative runs from
-the repository ROOT, and at the M65C seal it exited **2** and ran **zero** tests. Counts
-are **one** interpreter's; **never reconcile across interpreters.**
+**The first row is new in S5E, and its absence WAS the milestone.** This section recorded
+only suites run from `jarvis/`; the command `ci.yml` calls authoritative runs from the
+repository ROOT, and at the M65C seal it exited **2** and ran **zero** tests. Counts are
+**one** interpreter's; **never reconcile across interpreters.**
 
 **`-k m62` is no longer the authority (D48):** it matches node ids and deselected all **212**
 tests in three `m63`-named modules asserting M62 state.
 
 **Rescoped assertions are not regressions.** An assertion comparing a *sealed* milestone's
-property against *live* state also, silently, asserts that no later generation exists. Such
-tests are pinned to the generation that recorded the property; each rescoping is argued in
-its own milestone document.
+property against *live* state also, silently, asserts that no later generation exists. Each
+rescoping is argued in its own milestone document.
 
 **Known invocation-context artefact — RESOLVED by S5E, 8 → 0.** `pytest` from the
 **repository root** instead of `jarvis/` used to fail **8** tests in

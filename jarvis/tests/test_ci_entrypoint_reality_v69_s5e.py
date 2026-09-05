@@ -52,8 +52,10 @@ _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 #: The canonical, unambiguous home of the shared test-support package.
 _SUPPORT_DIR = _JARVIS_ROOT / "tests" / "_test_support"
 
-#: Bounded so a hung child fails loudly instead of stalling the suite.
-_SUBPROCESS_S = 300.0
+#: Bounded so a hung child fails loudly instead of stalling the suite. Generous:
+#: a nested 10,600-test collection takes ~25s here and a cold GitHub runner is
+#: much slower, so a tight bound would fail for the one reason that proves nothing.
+_SUBPROCESS_S = 900.0
 
 
 @pytest.fixture(scope="module")
@@ -212,6 +214,84 @@ def test_the_authoritative_command_names_both_trees(workflow):
     assert "jarvis/tests" in command, f"the authoritative job drops jarvis/tests: {command}"
     tail = command.split("jarvis/tests", 1)[1]
     assert "tests" in tail, f"the authoritative job drops the repo-level tests: {command}"
+
+
+def test_the_authoritative_job_checks_out_full_history(workflow):
+    """`actions/checkout@v4` defaults to `fetch-depth: 1`, and this suite needs history.
+
+    A depth-1 checkout has one commit, no `master` ref and no ancestry. The control
+    plane's `check_git_authority` FAILS CLOSED when master does not resolve — correctly,
+    since "the ref was not available" is not evidence that master is untouched — so on
+    the checkout CI actually produced, this job was red for a reason no developer clone
+    could ever reproduce. Measured in S5E: 26 tests fail on a depth-1 clone of this
+    branch and none of them fail with full history.
+    """
+    job = workflow["jobs"]["tests"]
+    checkouts = [s for s in job.get("steps", [])
+                 if isinstance(s, dict) and str(s.get("uses", "")).startswith(
+                     "actions/checkout@")]
+    assert checkouts, "the authoritative job does not check the repository out"
+    for step in checkouts:
+        depth = (step.get("with") or {}).get("fetch-depth")
+        assert str(depth) == "0", (
+            "the authoritative job checks out at fetch-depth "
+            f"{depth!r}; this suite verifies git ancestry and needs full history")
+
+
+def test_no_test_reads_a_tracked_source_by_a_cwd_relative_path():
+    """The second half of the same defect, and the guard is repo-wide, not one file.
+
+    Thirteen tests parsed tracked sources through bare relative paths such as
+    `Path("core/specialist_team.py")`. Those resolve only when the working directory is
+    `jarvis/`; from the repository root — where the authoritative job runs — they raise
+    FileNotFoundError. The fix anchors them to an application root, and this scans BOTH
+    test trees so a regression anywhere is caught, not just in the one file the control
+    plane's caveat happens to name.
+
+    Matched over the AST, not the text. A substring scan flagged this very docstring and
+    `Path("core/injection_firewall.py").as_posix()` — which builds a string for a
+    comparison and never touches a filesystem, so the working directory cannot change
+    its answer. What makes a construction dangerous is READING through it, so that is
+    what is matched: a filesystem access whose receiver is a `Path(...)` built from a
+    literal that starts inside the application tree.
+    """
+    import ast
+
+    prefixes = ("core/", "tools/", "aura/", "training_gym/", "scripts/",
+                "training_gym_datasets/", "evaluation/", "state/")
+    reads = {"read_text", "read_bytes", "open", "is_file", "exists", "is_dir",
+             "iterdir", "glob", "rglob", "stat", "resolve", "unlink", "write_text"}
+
+    def _is_bare_path_call(node) -> str | None:
+        """The literal of a `Path("...")` / `pathlib.Path("...")` call, if it is one."""
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != "Path" or not node.args:
+            return None
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+        return None
+
+    offenders = []
+    for tree in (_JARVIS_ROOT / "tests", _REPO_ROOT / "tests"):
+        for path in sorted(tree.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, ast.Attribute) or node.attr not in reads:
+                    continue
+                literal = _is_bare_path_call(node.value)
+                if literal and literal.startswith(prefixes):
+                    offenders.append(
+                        f"{path.relative_to(_REPO_ROOT)}:{node.lineno}: "
+                        f"Path({literal!r}).{node.attr}(...)")
+    assert not offenders, (
+        "these read a tracked source relative to the working directory, so they resolve "
+        "from jarvis/ and fail from the repository root:\n" + "\n".join(offenders))
 
 
 def test_the_authoritative_job_does_not_set_a_working_directory(workflow):

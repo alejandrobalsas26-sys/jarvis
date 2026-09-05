@@ -87,7 +87,24 @@ jobs:
     env:
       RBAC_DEFAULT_ACTOR: "test-actor:Admin"
     steps:
+      # V69 S5E — FULL HISTORY, and this is the only job that needs it.
+      #
+      # `actions/checkout@v4` defaults to `fetch-depth: 1`: one commit, no `master`
+      # ref, no ancestry. This suite verifies the M62 control plane, which resolves
+      # `subject_state_commit`, requires HEAD to descend from it, and compares `master`
+      # against the declared invariant. `check_git_authority` FAILS CLOSED when master
+      # does not resolve — correctly, because "the ref was not available" is not
+      # evidence that master is untouched. On a depth-1 checkout that is unconditional,
+      # so this job was red on every run for a reason no local suite could reproduce:
+      # a developer clone always has history.
+      #
+      # Measured in S5E: `git clone --depth 1` of this branch yields 1 commit, no
+      # `master`, no `origin/master`, and `git cat-file -e 0bb1a6b^{commit}` fails.
+      # The other seven jobs touch no git and keep the cheap checkout — verified: the
+      # compat job's four suites pass unchanged on a depth-1 clone.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
