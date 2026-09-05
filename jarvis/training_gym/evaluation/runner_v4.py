@@ -62,7 +62,7 @@ taken anywhere higher counts intentions.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field, replace
@@ -85,7 +85,6 @@ from .backend import (
 from .generation import GenerationPolicy, assert_identical_policies
 from .policy import ResourceCeilings
 from .protocol_v4 import (
-    AdapterArmReference,
     EvaluationArmRole,
     ProtocolV4Error,
     ReferenceAdapterPairing,

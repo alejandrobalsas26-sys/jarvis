@@ -67,7 +67,6 @@ from core.risk_classes import RiskClass
 from core.security_scope import (
     FORBIDDEN_ACTIVITIES,
     ActivityClass,
-    RedTeamLevel,
     ScopeDenial,
     SecurityScopeRegistry,
     authorize_security_activity,

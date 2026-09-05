@@ -41,7 +41,6 @@ from training_gym.evaluation.backend import (
     FinishReason,
 )
 from training_gym.evaluation.generation import GenerationPolicy
-from training_gym.evaluation.policy import ResourceCeilings
 from training_gym.evaluation.protocol_v4 import (
     AdapterArmReference,
     EvaluationArmRole,

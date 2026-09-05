@@ -278,7 +278,7 @@ def compile_context(
         f"EVIDENCE POLICY: {record.evidence_policy.value}. "
         f"AUTONOMY: L{int(record.default_autonomy)}.\n"
         f"COMPLETION CONTRACT: " + " | ".join(record.completion_contract) + "\n"
-        f"STOP WHEN: " + " | ".join(record.stop_conditions)
+        "STOP WHEN: " + " | ".join(record.stop_conditions)
     )
     text = (header + "\n\n" + "\n\n".join(b for b in blocks if b.strip())).strip()
     if len(text) > budget.max_context_chars:

@@ -21,7 +21,6 @@ from core.cognitive_mesh import (
 )
 from core.mesh_contracts import (
     ActionDisposition,
-    ActionRequest,
     Claim,
     ClaimStatus,
     EvidenceGraph,
@@ -57,7 +56,6 @@ from core.mesh_workflows import (
 )
 from core.security_scope import (
     ActivityClass,
-    EnvironmentType,
     RedTeamLevel,
     ScopeDenial,
     SecurityScopeRegistry,

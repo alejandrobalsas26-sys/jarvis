@@ -227,7 +227,7 @@ def test_the_production_planner_declares_inference():
     assert "performs_inference=True" in source
     # And the superseded proxy formulas are gone from the planner entirely.
     assert 'hashlib.sha256(\n            manifest.manifest_hash()' not in source
-    assert f'"{{ORDER_POLICY_BALANCED}}:{{config.seed}}"' not in source
+    assert '"{ORDER_POLICY_BALANCED}:{config.seed}"' not in source
 
 
 # ══════════════════════════════════════════════════════════════════════════════

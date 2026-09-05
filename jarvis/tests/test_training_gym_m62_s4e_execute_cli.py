@@ -18,7 +18,6 @@ NOTHING HERE LOADS A WEIGHT. Every assertion is about a refusal or about a shape
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
 

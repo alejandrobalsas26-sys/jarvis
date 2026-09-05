@@ -442,7 +442,7 @@ def _with_unicode_gate(receipt: dict, message: str) -> dict:
 
 def test_finding_b_v2_refuses_a_receipt_carrying_a_real_gate_minus_sign(world):
     """REPRODUCED. `.2` refuses the representation of a valid report."""
-    from scripts.build_m62_eval_receipt import receipt_hash, verify_receipt_v2
+    from scripts.build_m62_eval_receipt import receipt_hash
 
     payload = seal(build_receipt_v2(
         world["directory"], training_receipt=world["training_receipt"],

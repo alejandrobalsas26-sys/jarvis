@@ -3774,11 +3774,11 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
                         f"{cid}: {declared!r} has no sealed export identity, so the "
                         f"material this run trained on is unverifiable")
         else:
-            for field, sealed in zip(("export_manifest_hash", "train_shard_hash",
+            for field_name, sealed in zip(("export_manifest_hash", "train_shard_hash",
                                       "validation_shard_hash"), exports):
-                if dataset.get(field) != sealed:
+                if dataset.get(field_name) != sealed:
                     report.fail("TRAINING_RECEIPT",
-                                f"{cid}: the receipt's {field} {dataset.get(field)} is "
+                                f"{cid}: the receipt's {field_name} {dataset.get(field_name)} is "
                                 f"not the sealed {sealed}")
 
         # ── THE AXIS, re-derived and required to still be the only one ─────────
@@ -4161,12 +4161,12 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
 
         # ── the three durable events, each counted ───────────────────────────
         ledger = receipt.get("ledger", {})
-        for field, label in (("plan_started_count", "plan-start"),
+        for field_name, label in (("plan_started_count", "plan-start"),
                              ("holdout_commit_count", "model-facing commit"),
                              ("terminal_count", "terminal")):
-            if ledger.get(field) != 1:
+            if ledger.get(field_name) != 1:
                 report.fail("EVALUATION_RECEIPT",
-                            f"{cid}: the receipt binds {ledger.get(field)!r} {label} "
+                            f"{cid}: the receipt binds {ledger.get(field_name)!r} {label} "
                             f"event(s); exactly one is what a single-use ceremony means")
 
         # ── the plan bound what was measured, and said it would run a model ──
@@ -4536,13 +4536,13 @@ def _check_seal_recovery_receipt(report: Report, *, receipt: dict, cid: str) -> 
                     f"{cid}: the bound witness describes {witness.get('candidate_id')!r}")
 
     witness_source = witness.get("evaluation_source", {})
-    for field in ("evaluation_source_commit", "evaluation_source_tree_oid",
+    for field_name in ("evaluation_source_commit", "evaluation_source_tree_oid",
                   "evaluation_source_digest"):
-        if source.get(field) != witness_source.get(field):
+        if source.get(field_name) != witness_source.get(field_name):
             report.fail("EVALUATION_RECEIPT",
-                        f"{cid}: the receipt's {field} is "
-                        f"{str(source.get(field))[:12]} and the pre-repair witness "
-                        f"recorded {str(witness_source.get(field))[:12]}; the evaluation "
+                        f"{cid}: the receipt's {field_name} is "
+                        f"{str(source.get(field_name))[:12]} and the pre-repair witness "
+                        f"recorded {str(witness_source.get(field_name))[:12]}; the evaluation "
                         f"source must come from the witness, never from a repair-time "
                         f"HEAD")
 
@@ -4556,22 +4556,22 @@ def _check_seal_recovery_receipt(report: Report, *, receipt: dict, cid: str) -> 
              ("report_hash", "evaluation_manifest_hash",
               "evaluation_artifact_tree_hash", "comparison_manifest_hash",
               "metrics_summary_hash", "gate_report_hash", "bootstrap_report_hash"))):
-        for field in fields:
-            if mine.get(field) != theirs.get(field):
+        for field_name in fields:
+            if mine.get(field_name) != theirs.get(field_name):
                 report.fail("EVALUATION_RECEIPT",
-                            f"{cid}: {section}.{field} is {str(mine.get(field))[:12]} in "
-                            f"the receipt and {str(theirs.get(field))[:12]} in the "
+                            f"{cid}: {section}.{field_name} is {str(mine.get(field_name))[:12]} in "
+                            f"the receipt and {str(theirs.get(field_name))[:12]} in the "
                             f"witness")
     if receipt.get("plan", {}).get("plan_hash") != witness.get("plan", {}).get("plan_hash"):
         report.fail("EVALUATION_RECEIPT",
                     f"{cid}: the receipt and the witness bind different plans")
     holdout, w_corpus = receipt.get("holdout", {}), witness.get("eval_corpus", {})
-    for field in ("dataset_id", "dataset_version", "dataset_manifest_hash",
+    for field_name in ("dataset_id", "dataset_version", "dataset_manifest_hash",
                   "task_pack_hash", "hidden_target_store_hash"):
-        if holdout.get(field) != w_corpus.get(field):
+        if holdout.get(field_name) != w_corpus.get(field_name):
             report.fail("EVALUATION_RECEIPT",
-                        f"{cid}: holdout.{field} is {str(holdout.get(field))[:12]} in "
-                        f"the receipt and {str(w_corpus.get(field))[:12]} in the "
+                        f"{cid}: holdout.{field_name} is {str(holdout.get(field_name))[:12]} in "
+                        f"the receipt and {str(w_corpus.get(field_name))[:12]} in the "
                         f"witness; the corpus that was spent is not open to revision")
     if receipt.get("evidence", {}).get("pack_manifest_hash") != \
             w_corpus.get("pack_manifest_hash"):
@@ -4582,13 +4582,13 @@ def _check_seal_recovery_receipt(report: Report, *, receipt: dict, cid: str) -> 
                     f"{cid}: the witness does not record the corpus as spent exactly "
                     f"once and immutable")
     w_results = witness.get("results", {})
-    for field in ("task_count", "measured_pairs", "missing_pairs",
+    for field_name in ("task_count", "measured_pairs", "missing_pairs",
                   "total_model_result_count", "baseline_result_count",
                   "candidate_result_count", "paired_result_count"):
-        if results.get(field) != w_results.get(field):
+        if results.get(field_name) != w_results.get(field_name):
             report.fail("EVALUATION_RECEIPT",
-                        f"{cid}: results.{field} is {results.get(field)!r} in the receipt "
-                        f"and {w_results.get(field)!r} in the witness")
+                        f"{cid}: results.{field_name} is {results.get(field_name)!r} in the receipt "
+                        f"and {w_results.get(field_name)!r} in the witness")
     # The witness predates the exhaustive-key rule and carries only what it observed.
     if {k: v for k, v in counts.items() if v} != w_results.get("verdict_counts"):
         report.fail("EVALUATION_RECEIPT",
@@ -5089,10 +5089,10 @@ def check_operator_ruling(cp: ControlPlane, report: Report) -> None:
             "ruled_value": generator.format_learning_rate(
                 generator.OPTIONS[generator.CANDIDATE_OPTION[key]]["learning_rate"]),
         }
-        for field, value in expected.items():
-            if payload.get(field) != value:
+        for field_name, value in expected.items():
+            if payload.get(field_name) != value:
                 report.fail("AUTHORITY_SEPARATION",
-                            f"{rel} records {field}={payload.get(field)!r}; the "
+                            f"{rel} records {field_name}={payload.get(field_name)!r}; the "
                             f"repository builds {value!r}")
         superseded = payload.get("supersedes", {})
         if superseded.get("historical_entry_erased") is not False:
@@ -5112,8 +5112,8 @@ def check_operator_ruling(cp: ControlPlane, report: Report) -> None:
         if not path.is_file():
             continue
         payload, _raw = _load_json(path, rel)
-        for field in ("ruling_id", "ruling_phrase_sha256", "subject_candidate"):
-            seen.setdefault(f"{field}={payload.get(field)}", []).append(rel)
+        for field_name in ("ruling_id", "ruling_phrase_sha256", "subject_candidate"):
+            seen.setdefault(f"{field_name}={payload.get(field_name)}", []).append(rel)
     for marker, owners in sorted(seen.items()):
         if len(owners) > 1:
             report.fail("AUTHORITY_SEPARATION",

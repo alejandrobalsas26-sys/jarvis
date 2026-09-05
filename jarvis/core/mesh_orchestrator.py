@@ -45,7 +45,6 @@ from core.cognitive_mesh import (
 )
 from core.mesh_context import compile_context, redundant_observation
 from core.mesh_contracts import (
-    ActionDisposition,
     ActionRequest,
     EvidenceGraph,
     EvidenceRef,
@@ -60,7 +59,7 @@ from core.mesh_contracts import (
     VerifierVerdict,
     dispose_action,
 )
-from core.mesh_router import MeshRoute, RouteMode, route_task
+from core.mesh_router import MeshRoute, route_task
 from core.mesh_verifier import VerificationInput, adjudicate, verify
 from core.risk_classes import RiskClass, classify_tool
 from core.security_scope import (

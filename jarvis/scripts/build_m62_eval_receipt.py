@@ -1320,7 +1320,7 @@ def seal_implementation_identity(repo_root: str | Path, *,
             f"the seal implementation commit could not be derived from {root} ({commit})")
     code, tree = _git(root, "rev-parse", "HEAD^{tree}")
     if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", tree):
-        raise ReceiptError(f"the seal implementation tree oid could not be derived")
+        raise ReceiptError("the seal implementation tree oid could not be derived")
     code, status = _git(root, "status", "--porcelain")
     if code != 0 or status.strip():
         raise ReceiptError(

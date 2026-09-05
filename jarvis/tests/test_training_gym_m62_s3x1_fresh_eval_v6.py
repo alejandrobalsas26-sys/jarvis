@@ -65,7 +65,6 @@ from training_gym.schemas import sha256_text
 pytest.importorskip("scripts.build_training_corpus")
 from scripts import build_evaluation_corpus as BC  # noqa: E402
 from scripts import build_training_corpus as QC  # noqa: E402
-from scripts import project_m62_gen13_capacity as CAP  # noqa: E402
 
 # ── The identities S3X.1 may not move ─────────────────────────────────────────
 EVAL_V5_MANIFEST = (

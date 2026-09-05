@@ -708,7 +708,7 @@ def test_a_retry_after_a_crash_recovers_the_receipt_without_a_second_effect(
         return out
 
     h.executor.aexecute = _crash_once
-    first = h.run(request)                    # effect commits, delivery fails
+    h.run(request)                            # effect commits, delivery fails
     assert crashed["done"], "the crash never happened; the test proved nothing"
     assert h.count(EFFECT_TOOL) == 1
 

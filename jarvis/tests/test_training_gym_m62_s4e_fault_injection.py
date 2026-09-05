@@ -19,7 +19,6 @@ root is a temporary directory.
 """
 from __future__ import annotations
 
-import copy
 import json
 import sys
 from pathlib import Path
@@ -27,11 +26,9 @@ from pathlib import Path
 import pytest
 
 from training_gym.evaluation import store_v4 as SV4
-from training_gym.evaluation.backend import CleanupStatus
 from training_gym.evaluation.config import EvaluationRunState
 from training_gym.evaluation.execution_v4 import (
     V4_ARM_LIMITATION,
-    ExecutionV4Error,
     V4ExecutionRequest,
     execute_v4_evaluation,
 )
@@ -42,7 +39,6 @@ from training_gym.evaluation.protocol_v4 import (
     ProtocolV4Error,
     ReferenceAdapterPairing,
 )
-from training_gym.evaluation.store import HoldoutAlreadyCommitted
 
 _BANNED = ("torch", "transformers", "peft", "trl", "accelerate", "bitsandbytes",
            "safetensors")

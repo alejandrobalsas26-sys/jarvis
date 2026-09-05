@@ -324,7 +324,6 @@ def test_the_frozen_training_surface_is_the_only_reason_for_the_exclusion():
     If ``jarvis/training_gym/training/`` ever becomes editable, this test fails and the
     exclusion has to be justified again on its merits rather than inherited.
     """
-    import subprocess
 
     excluded = {name for name in _body_bearing_dataclasses()
                 if name.startswith(FROZEN_SURFACE_PREFIX)}
