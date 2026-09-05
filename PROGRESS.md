@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **30** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **31** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0030-m65b-team-execution-fabric-branch.json` |
-| **Snapshot SHA256** | `cbfb7ae4aaf7859676e5fea03802f4d734af282b365aabae0577039c764fb83f` |
-| **Subject state commit** | `35a2e1f84299f48ee83c497a5ccc3131a4cb6744` (M65B runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0031-m65c-durable-effect-journal-branch.json` |
+| **Snapshot SHA256** | `67b30b60a1ada9fd5090fa9ab93630bf5c20e13ee3fae8bc153691e20bb563a6` |
+| **Subject state commit** | `90ef1d6eb9fb011d37a249e2fc64889bc37c3e6e` (M65C runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -27,10 +27,10 @@ git fetch origin --prune && git status -sb
 python jarvis/scripts/verify_m62_control_plane.py     # expect: PASS / PROBLEMS: 0
 ```
 
-The verifier is offline, read-only, deterministic and fail-closed. It loads no model,
-tokenizer or weights, writes nothing, opens no socket. It does not trust this file: it
-re-derives policy and instrument identities from the production classes, re-hashes the
-archive and snapshot, and asks Git — not prose — about branch, ancestry and `master`.
+The verifier is offline, read-only, deterministic and fail-closed: no model, tokenizer or
+weights, no write, no socket. It does not trust this file — it re-derives policy and
+instrument identities from the production classes, re-hashes the archive and snapshot, and
+asks Git, not prose, about branch, ancestry and `master`.
 
 **If it fails, stop** (§14).
 
@@ -64,17 +64,17 @@ the verifier requires HEAD to *descend* from the subject rather than equal it.
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority bound to plan `54488fb3…`: 36+36 generations, ONE spend, terminal `completed`. S4H moved no candidate, dataset or policy identity |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): the four frozen scorer digests re-derive unchanged, 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. S4F (gen 27) sealed it; receipt `769d327a…`. `…S4H_INSTRUMENT_HARDENING.md` |
-| Previous milestone | **M65A — RUNTIME, no science** (gen 29). Specialist execution core · model-role routing · **one** supporting specialist live. `…M65A_SPECIALIST_EXECUTION_CORE.md` |
-| Last milestone | **M65B — RUNTIME, no science.** Gen 30 is GOVERNANCE-ONLY: `GIT_AUTHORITY` pins the branch (M64/M64.1/M65A precedent, gens 19–20, 29). Governed specialist **team**: validated DAG, bounded parallelism, conflict scheduling, delegation depth 1, cancellation, backpressure, team ARGUS, live TEAM route. Hardened the canonical `ToolExecutor`: exactly-once was **sequential only**, so two concurrent callers of one effect identity both ran. **0** loads / generations / authorities / spends; the eight record pointers are byte-for-byte gen 28's. Autonomy unchanged, **none promoted**; the L2 gap is audited, not fixed. `…M65B_TEAM_EXECUTION_FABRIC.md` |
+| Previous milestones | **M65A · M65B — RUNTIME, no science** (gens 29–30, GOVERNANCE-ONLY; `GIT_AUTHORITY` pins the branch). Specialist execution core, model-role routing, one live supporting specialist, then a governed **team** (validated DAG, bounded parallelism, conflict scheduling, delegation, cancellation, backpressure, team ARGUS, live TEAM) and a hardened `ToolExecutor` — exactly-once had been **sequential only**. `…M65A_SPECIALIST_EXECUTION_CORE.md` · `…M65B_TEAM_EXECUTION_FABRIC.md` |
+| Last milestone | **M65C — RUNTIME, no science.** Gen 31 GOVERNANCE-ONLY. **Durable effect journal** (SQLite, fail-closed): effect identity, ownership and lifecycle survive a crash, a SIGKILL, a restart. Atomic cross-process reservation; a committed effect is recovered, never re-run; the window where an effect happened and its commit did not is **INDETERMINATE**, never guessed; `aexecute_mcp`'s race closed onto ONE protocol. **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE`. **0** loads / generations / authorities / spends; the eight record pointers are gen 28's. `…M65C_DURABLE_EFFECT_JOURNAL.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
 | Next | **A separate human governance decision.** The axis is closed and no holdout remains: a further measurement needs a NEW corpus authored by a session that will not run it. The instruments are readier; **readiness is never authority**. **No `TRAIN`, `EVAL` or promotion authority exists in this repository** |
 
-**What M62 is.** The Training Gym: an offline-first, human-gated pipeline that grades
-defensive episodes, builds immutable leakage-checked datasets, runs a bounded LoRA fine-tune
-under a single-use token, and runs a paired evaluation over a held-out corpus — base-vs-
-adapter, or since S4D adapter-vs-adapter — ending in a *non-effectful* proposal.
+**What M62 is.** The Training Gym: an offline-first, human-gated pipeline grading defensive
+episodes, building immutable leakage-checked datasets, running a bounded LoRA fine-tune under
+a single-use token and a paired evaluation over a held-out corpus — base-vs-adapter, or since
+S4D adapter-vs-adapter — ending in a *non-effectful* proposal.
 
 
 **Candidates 001–003 and 005 are `EVALUATED_NOT_ELIGIBLE`, each failing differently** — 001
@@ -244,9 +244,9 @@ state out of a gitignored runtime tree; eligibility is **re-derived** by product
 `decide_eligibility`, never copied (`.2`'s refusals were **D40–D42**, §7).
 `m62.eval_receipt.4` is S4D's **additive** reference-adapter shape: **no `baseline` field at
 all**, so it cannot record an adapter as a bare base model; no prior receipt is migrated.
-**THE MEASUREMENT WITNESS** (`state/m62/witnesses/`) is **not a receipt:** it grants no
-state, authorises no retry, promotes nothing, and establishes **repository provenance, NOT
-execution attestation** — nothing signed, no PKI implied.
+**THE MEASUREMENT WITNESS** (`state/m62/witnesses/`) is **not a receipt:** it grants no state,
+authorises no retry, promotes nothing, and establishes **repository provenance, NOT execution
+attestation** — nothing signed, no PKI implied.
 
 **Body boundaries.** `ORCHESTRATOR_SEMANTIC_ACCESS` forbidden — **enforced in memory, not
 only on disk (D44)** · `BODY_OPAQUE_PROGRAMMATIC_ACCESS` permitted for reviewed
@@ -301,7 +301,7 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
 | **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. Exercised by one live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**; closing it is *not* predicted to restore 9/9. |
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic beside the unchanged input-truncation metric. **No gate reads it and none may be added without a separate operator decision.** Reaching the ceiling is not failure. |
 | **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** |
-| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence; the code that **measured** is not the code that **built the receipt**. Full text in the snapshot's `defects` record. |
+| **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence; the code that **measured** is not the code that **built the receipt**. Full text in the `defects` record. |
 | **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0 with a body-free class, location and repetition scalar. **No gate reads them**; nothing historical is backfilled. |
 | **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. Persistence held; in-memory display did not. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |
 | **D45–D47** | FIXED (obs. only) | S4H's instrument findings, each fixed **PROSPECTIVELY** and read by **no gate**: no rule provenance on `secret_pii:secret`; the loader passed no `device_map`/dtype; `classify_empirical_status` read the **quality** denominator. **005 not rescored; nothing backfilled.** Full text in the `defects` record. |
@@ -440,21 +440,20 @@ result      10222 passed · 46 skipped · 4 failed                          [M65
 ```
 
 **`-k m62` is no longer the authority (D48):** it matches node ids and deselected all **212**
-tests in three `m63`-named modules asserting M62 state. Keep the broad sweep too — it is
-wider in other directions. Edits to sealed suites moved **witnesses, not properties**. **0** threshold, gate, grader,
-policy, receipt or transition weakenings. Counts are **one** interpreter's; **never
-reconcile across interpreters.**
+tests in three `m63`-named modules asserting M62 state. Keep the broad sweep too — it is wider
+in other directions. Edits to sealed suites moved **witnesses, not properties**: **0**
+threshold, gate, grader, policy, receipt or transition weakenings. Counts are **one**
+interpreter's; **never reconcile across interpreters.**
 
 **Rescoped assertions are not regressions.** An assertion comparing a *sealed* milestone's
 property against *live* state also asserts, silently, that no later generation exists — true
 by coincidence until the next milestone writes one. Such tests are pinned to the generation
-that recorded the property, and each rescoping is argued in its own milestone document.
+that recorded the property; each rescoping is argued in its own milestone document.
 
-**Known invocation-context artefact — do not rediscover it as a regression.** Running `pytest`
-from the **repository root** instead of `jarvis/` fails **8** tests in
-`…s3g2_validation_wiring.py`, which read production source relative to the working directory;
-S3N reproduced the same 8 pre-S3N. **It is distinct from D39**, which fails **4** tests in
-the *dataset-exports* file. Do not conflate them or fix as a rider.
+**Known invocation-context artefact — never rediscovered as a regression.** `pytest` from the
+**repository root** instead of `jarvis/` fails **8** tests in `…s3g2_validation_wiring.py`,
+which read production source relative to the working directory; S3N reproduced the same 8
+pre-S3N; it is **distinct from D39** (4 tests, *dataset-exports*). Never a rider fix.
 
 ---
 
@@ -510,9 +509,8 @@ under a `HUMAN_PROMOTION_AUTHORITY` that does not exist. **No second look:** `v4
 task inspection, qualitative review or threshold experimentation — and `v5` is RETIRED
 unspent, `spent_by` null. Every spent holdout stays **unread**.
 
-**Explicitly NOT authorised** — the **current** snapshot's `next_milestone.ruled_out` is the
-authority and is longer than this: promotion, activation, registry mutation, merge, tag,
-release or version bump · **candidate 006** · recording 005 as eligible · spending `eval-v7`
+**Explicitly NOT authorised** — the snapshot's `next_milestone.ruled_out` is the authority
+and is longer: promotion, activation, registry mutation, merge, tag, release or version bump · **candidate 006** · recording 005 as eligible · spending `eval-v7`
 twice, running one arm alone, editing or re-freezing it · a second run, seed or value of the
 axis · retraining or patching candidate 003, 004 **or 005** · any epoch, rank, alpha, dropout
 or module change · a second axis · `train-v3` · changing gates, graders, thresholds or the
@@ -534,10 +532,9 @@ lines · **Router** `jarvis/docs/m62/HISTORY_INDEX.md` · **Migration record**
 `jarvis/docs/V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md`.
 
 The archive is the **byte-for-byte** pre-migration `PROGRESS.md`, **append-never-edit**, its
-digest pinned in the snapshot *and* the migration manifest and compared against the bytes by
-the verifier. **If it fails, the remediation is operator review — never "update the expected
-hash".** Use the index to find a milestone, defect or era **without reading the archive in
-full**; milestone documents remain the deep authority.
+digest pinned in the snapshot *and* the migration manifest and compared against the bytes.
+**If it fails: operator review, never "update the expected hash".** Use the index to find a milestone,
+defect or era **without reading the archive in full**.
 
 ---
 
@@ -547,8 +544,8 @@ If `verify_m62_control_plane.py` fails:
 
 **Allowed immediately, all read-only:** read the verifier's problem list · compare archive
 and snapshot against Git history (`git log --oneline -- state/m62 PROGRESS.md`,
-`git show <commit>:<path>`) · inspect the snapshot chain by hand · read
-`V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md`.
+`git show <commit>:<path>`) · inspect the snapshot chain · read
+`…S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md`.
 
 **Forbidden without an explicit operator-authorised CONTROL-PLANE RECOVERY milestone:**
 rewriting state, regenerating the archive or updating an expected hash · deleting or editing
@@ -563,11 +560,10 @@ until it passes has verified nothing.
 ## 15 — Update protocol for this file
 
 Control Plane V2 separates five roles that must not collapse into one: **CURRENT control
-state** (this file + `state/m62/current.json` + the latest snapshot) · **DEEP authority**
-(milestone documents in `jarvis/docs/`) · **HISTORICAL event log** (the archive) ·
-**NAVIGATION** (`jarvis/docs/m62/HISTORY_INDEX.md`) · **TRUST BOUNDARY**
-(`jarvis/scripts/verify_m62_control_plane.py`). **A normal milestone close may update** the
-current status, NEXT, the active defect and limitation lists, the test baseline and the
+state** (this file + `current.json` + the latest snapshot) · **DEEP authority** (milestone
+documents) · **HISTORICAL event log** (the archive) · **NAVIGATION** (`HISTORY_INDEX.md`) ·
+**TRUST BOUNDARY** (`verify_m62_control_plane.py`). **A normal milestone close may update**
+the current status, NEXT, the defect and limitation lists, the test baseline and the
 READ-FIRST pointers — and **must not append the milestone report**. Deep detail goes to a
 milestone document; the index gains a row.
 
@@ -584,11 +580,11 @@ writes a **new snapshot generation**:
 5. run the verifier again and require `PASS`.
 
 **Size budgets, enforced by the verifier.** This file: **760 lines / 40,960 bytes**, plus a
-test requiring **150 lines of headroom**, so a close that grows it must **recompact** back
-under **610 lines**, folding superseded detail into the milestone document that owns it.
-Snapshot **34,816 bytes** (migrated from 32,768 at S3X.0 by operator ruling, **≥1,024 bytes**
-headroom) · `current.json` **2,048** · history index **32,768**. Raising a budget is an
-explicit control-plane migration decision, never a side effect of a milestone.
+test requiring **150 lines of headroom**, so a close that grows it must **recompact** under
+**610 lines**, folding superseded detail into the milestone document that owns it. Snapshot
+**34,816 bytes** (migrated from 32,768 at S3X.0 by operator ruling, **≥1,024** headroom) ·
+`current.json` **2,048** · history index **32,768**. Raising a budget is an explicit
+control-plane migration decision, never a side effect of a milestone.
 
 **Never delete a historical negative result, and never rewrite a failed experiment as though
 it did not happen.** Mark superseded statements as superseded and name what superseded them;

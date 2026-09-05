@@ -501,6 +501,97 @@ the whole design is arranged so the system says it rather than guesses.
 
 ---
 
+## 17b. THE MUTATION CAMPAIGN
+
+**77 mutations, 77 detected, 0 survivors, 0 hangs.** Every family above its
+floor: `crash_restart` 10 · `atomic_reservation` 10 · `state_machine` 9 ·
+`idempotency` 9 · `indeterminate` 8 · `corruption_schema` 8 · `authority_scope` 6
+· `privacy` 6 · `disposition` 6 · `mcp_unification` 5.
+
+Every mutation names the tests that must catch it and only those run, so a
+mutation "detected" by an unrelated assertion is not counted as coverage of the
+thing it was aimed at. Each run carries a watchdog; a hang is reported
+separately and never counts as a pass.
+
+**Fourteen survived the first run.** None was softened, skipped or deleted.
+
+| survivor | classification | why it survived | closure |
+|---|---|---|---|
+| edge validation removed from `_transition_locked` | DEAD_REDUNDANT_CODE | `_record_transition` validated the same edge, so either copy could go unnoticed | one validator, at the single append point every path funnels through |
+| `state=?` guard dropped from the UPDATE | EQUIVALENT (see below) | `BEGIN IMMEDIATE` already prevents the interleave | source-level pin + a combined mutation |
+| reclaim compare-and-swap dropped | EQUIVALENT (see below) | same | same |
+| `BEGIN IMMEDIATE` → `DEFERRED` | EQUIVALENT (see below) | the CAS guards already prevent two owners | a test asserting the transaction mode |
+| idempotency key from an argument | *unreachable mutant* | the mutation added a parameter no caller passes | rewritten to read the key inside `reserve`, which is the actual threat |
+| recovery branch widened past `ALREADY_COMMITTED` | REAL_TEST_GAP | every executor test reached `OWNED` or `ALREADY_COMMITTED`; `RECLAIMED` was never driven through the executor | a stale pre-effect reservation reclaimed through `aexecute`, which must EXECUTE |
+| integrity check ignored | REAL_TEST_GAP | the fixture shredded pages a `LIMIT 1` read also touched, so it still failed — for the wrong reason | a 400-row table, deep pages shredded, shallow read asserted to still succeed |
+| open failure → in-memory fallback | REAL_TEST_GAP | `:memory:` cannot be put into WAL, so it raised anyway | assert WHICH failure was raised |
+| schema created outside its transaction | EQUIVALENT | every statement is `IF NOT EXISTS`, so racers converge either way | shape pinned, so it stops being equivalent the day a statement is not idempotent |
+| WAL retry removed | REAL_TEST_GAP (**flaky detector**) | see below | a scripted cursor, deterministic |
+| `status()` dumps every row | REAL_TEST_GAP | the journal stores digests, so dumping rows leaks nothing a content assertion can see | the status surface's exact key set is pinned |
+| doctor finding embeds the status dict | REAL_TEST_GAP | same | findings asserted to be bounded sentences carrying no record structure |
+| disposition derived from the status | REAL_TEST_GAP | every disposition test built a receipt by hand | the real `SpecialistExecutor`, driven twice: the second call is a SUCCESS that is also a DUPLICATE |
+| `recovery_required` dropped | REAL_TEST_GAP | same | the real executor against an identity already marked INDETERMINATE |
+
+### The SQL is fully literal, and that was a bandit finding
+
+`bandit` reported **10 MEDIUM `B608`** findings against the journal — SQL built
+by string interpolation — and the release gate requires MEDIUM to be **zero**.
+That was a real regression this milestone introduced, not a false positive to
+suppress: a query assembled next to its parameters is a query somebody can later
+append to, and a static analyser cannot tell a constant column list from an
+attacker's.
+
+Every statement is now a **finished literal named at module scope**; nothing in
+the module builds SQL from a variable, including the table-existence probes and
+the two transition UPDATEs (which are two named statements chosen between,
+rather than one assembled from a list of clauses). Bandit now reports **0
+MEDIUM, 0 HIGH and 0 LOW** for the module, and
+`test_no_sql_is_built_from_a_variable` pins the property here rather than leaving
+it to the release gate alone.
+
+### Three mutually redundant mechanisms, and why none was deleted
+
+This pattern appeared twice. `BEGIN IMMEDIATE` and the compare-and-swap guards
+on `state`/`owner_attempt` each **independently** stop two owners; so do the
+`_apply` ownership pre-check and the `owner_instance_id=?` clause in the UPDATE, so removing either alone was invisible.
+That is not a reason to delete one: the campaign now carries a combined mutation
+removing **both** in each case — the campaign harness applies multi-edit
+mutations for exactly this — and source-level tests pin each pair so a later
+reader does not mistake either half for dead code.
+
+### One survivor closed by measurement, not argument
+
+The WAL retry loop looked redundant once `busy_timeout` was set first. Rather
+than reason about it, it was **removed and the cross-process test run five
+times: it failed four.** The loop is load-bearing — SQLite can refuse a
+journal-mode change by returning the *unchanged* mode without raising, and the
+busy handler is not involved. A detector that passes one run in five is not a
+detector, so the flaky cross-process check was replaced with a scripted cursor
+that makes the contract deterministic.
+
+### A real defect the campaign found
+
+A process that lost its reservation while inside the tool could commit over the
+new owner. `_apply` now checks ownership before validating the edge and returns
+`False`: a late-waking owner is a race, not a programming mistake, and raising
+would surface as the failure of a call whose effect had already happened.
+
+---
+
+## 17c. FOCUSED TEST GROUPS
+
+All load-bearing, **0 skips**.
+
+| group | file |
+|---|---|
+| `JOURNAL_SCHEMA` · `JOURNAL_STATE_MACHINE` · `ATOMIC_RESERVATION` · `IDEMPOTENCY_KEY` · `JOURNAL_CORRUPTION` · `JOURNAL_PRIVACY` | `test_effect_journal_v69_m65c.py` |
+| `SAME_PROCESS_COMPATIBILITY` · `MCP_EXECUTION` · `INDETERMINATE` · `RECONCILIATION` · `CANCELLATION` | `test_durable_effect_protocol_v69_m65c.py` |
+| `CROSS_PROCESS_DEDUPE` · `PROCESS_RESTART` · `STALE_OWNER` · `P3_CRASH` | `test_effect_journal_crash_recovery_v69_m65c.py` |
+| `LIVE_JARVIS_RECOVERY` · `HITL_RECOVERY` · `SCOPE_RECOVERY` · `RUNTIME_DOCTOR` · `TEAM_RECOVERY` | `test_durable_effect_live_v69_m65c.py` |
+| `ARGUS_DURABLE_DISPOSITIONS` | `test_effect_journal_argus_v69_m65c.py` |
+
+---
+
 ## 18. LIMITATIONS
 
 * **`FAILED_OBSERVED` inherits M64.1's retry policy unchanged, and that policy is

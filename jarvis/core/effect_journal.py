@@ -518,6 +518,61 @@ _COLUMNS = (
     "recovery_note"
 )
 
+#: Every statement this module runs, named and finished at import time.
+#:
+#: NOTHING here is built from a variable at a call site. That is not decoration:
+#: a query assembled next to its parameters is a query somebody can later append
+#: to, and a static analyser cannot tell a constant column list from an
+#: attacker's. Values always arrive as bound parameters; only the fixed text
+#: lives here.
+_SELECT_EFFECT = (
+    "SELECT effect_id, tool_id, surface, durability_class, state, "
+    "owner_instance_id, owner_attempt, canonical_action_digest, "
+    "canonical_args_digest, authority_digest, scope_digest, "
+    "approval_digest, plan_id, task_id, idempotency_key, "
+    "reservation_created_at, lease_expires_at, state_changed_at, "
+    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "effects WHERE effect_id=?"
+)
+_SELECT_OPEN_EFFECTS = (
+    "SELECT effect_id, tool_id, surface, durability_class, state, "
+    "owner_instance_id, owner_attempt, canonical_action_digest, "
+    "canonical_args_digest, authority_digest, scope_digest, "
+    "approval_digest, plan_id, task_id, idempotency_key, "
+    "reservation_created_at, lease_expires_at, state_changed_at, "
+    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "effects WHERE state IN (?,?) ORDER BY state_changed_at LIMIT ?"
+)
+_SELECT_BY_STATE = (
+    "SELECT effect_id, tool_id, surface, durability_class, state, "
+    "owner_instance_id, owner_attempt, canonical_action_digest, "
+    "canonical_args_digest, authority_digest, scope_digest, "
+    "approval_digest, plan_id, task_id, idempotency_key, "
+    "reservation_created_at, lease_expires_at, state_changed_at, "
+    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "effects WHERE state=? ORDER BY state_changed_at LIMIT ?"
+)
+_TRANSITION_SET = (
+    "UPDATE effects SET state=?, state_changed_at=?, failure_class=?, "
+    "recovery_note=?, committed_at=CASE WHEN ?='' THEN committed_at ELSE ? END, "
+    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END "
+    "WHERE effect_id=? AND state=? AND owner_attempt=?"
+)
+#: The same UPDATE, additionally guarded on the owner. Two finished statements
+#: rather than one assembled from a list of clauses.
+_TRANSITION_SET_OWNED = (
+    "UPDATE effects SET state=?, state_changed_at=?, failure_class=?, "
+    "recovery_note=?, committed_at=CASE WHEN ?='' THEN committed_at ELSE ? END, "
+    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END "
+    "WHERE effect_id=? AND state=? AND owner_attempt=? AND owner_instance_id=?"
+)
+#: Structural probes, one per table, so no table name is ever interpolated.
+_TABLE_PROBES = (
+    ("meta", "SELECT 1 FROM meta LIMIT 1"),
+    ("effects", "SELECT 1 FROM effects LIMIT 1"),
+    ("transitions", "SELECT 1 FROM transitions LIMIT 1"),
+)
+
 
 def journal_enabled() -> bool:
     """Whether the durable journal is active for this process.
@@ -800,9 +855,9 @@ class DurableEffectJournal:
                 f"the effect journal at {self._path} failed its integrity "
                 f"check: {verdict}. It has NOT been modified — recover it from "
                 f"a managed backup or move it aside deliberately.")
-        for table in ("meta", "effects", "transitions"):
+        for table, probe in _TABLE_PROBES:
             try:
-                self._db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                self._db.execute(probe).fetchone()
             except sqlite3.Error as exc:
                 raise JournalUnhealthy(
                     f"the effect journal is missing table '{table}': "
@@ -843,7 +898,7 @@ class DurableEffectJournal:
 
     def get(self, effect_id: str) -> "EffectRecord | None":
         row = self._db.execute(
-            f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?",
+            _SELECT_EFFECT,
             (effect_id,)).fetchone()
         return self._row_to_record(row) if row is not None else None
 
@@ -946,7 +1001,7 @@ class DurableEffectJournal:
                     return Reservation(ReservationOutcome.OWNED, record, True)
 
                 row = self._db.execute(
-                    f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?",
+                    _SELECT_EFFECT,
                     (effect_id,)).fetchone()
                 if row is None:  # pragma: no cover — the row we just conflicted on
                     self._db.execute("ROLLBACK")
@@ -1041,7 +1096,7 @@ class DurableEffectJournal:
                            "or may not have happened"))
         self._bump("indeterminate_effects")
         updated = self._row_to_record(self._db.execute(
-            f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?", (eid,)).fetchone())
+            _SELECT_EFFECT, (eid,)).fetchone())
         outcome = (ReservationOutcome.RECONCILE_REQUIRED
                    if existing.durability_class is EffectDurabilityClass.RECONCILABLE
                    else ReservationOutcome.INDETERMINATE)
@@ -1083,7 +1138,7 @@ class DurableEffectJournal:
             # Someone else won the reclaim between our read and this UPDATE.
             self._bump("reservation_conflicts")
             row = self._db.execute(
-                f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?",
+                _SELECT_EFFECT,
                 (existing.effect_id,)).fetchone()
             current = self._row_to_record(row)
             return Reservation(ReservationOutcome.OWNED_ELSEWHERE, current, False)
@@ -1093,7 +1148,7 @@ class DurableEffectJournal:
         self._bump("reservations")
         self._bump("ownership_wins")
         row = self._db.execute(
-            f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?",
+            _SELECT_EFFECT,
             (existing.effect_id,)).fetchone()
         return Reservation(outcome, self._row_to_record(row), True)
 
@@ -1118,18 +1173,20 @@ class DurableEffectJournal:
         # cannot fail is not defence in depth: it is a second place to keep
         # correct. The UPDATE below runs first and is rolled back with the
         # transaction when the append refuses.
-        clauses = ["effect_id=?", "state=?", "owner_attempt=?"]
+        # Two finished statements, chosen — never one assembled from a list of
+        # clauses. The compare-and-swap on state and owner_attempt is what makes
+        # this safe if the write transaction is ever downgraded, so it is part of
+        # the statement text rather than something a future edit can drop.
+        params: list = [
+            to.value, now_iso, failure_class[:80], recovery_note[:200],
+            committed_at, committed_at, receipt, receipt,
+            existing.effect_id, existing.state.value, existing.owner_attempt,
+        ]
+        statement = _TRANSITION_SET
         if expect_owner is not None:
-            clauses.append("owner_instance_id=?")
-        cur = self._db.execute(
-            "UPDATE effects SET state=?, state_changed_at=?, failure_class=?, "
-            "recovery_note=?, committed_at=CASE WHEN ?='' THEN committed_at ELSE ? END, "
-            "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END "
-            f"WHERE {' AND '.join(clauses)}",
-            (to.value, now_iso, failure_class[:80], recovery_note[:200],
-             committed_at, committed_at, receipt, receipt,
-             existing.effect_id, existing.state.value, existing.owner_attempt,
-             *([expect_owner] if expect_owner is not None else [])))
+            statement = _TRANSITION_SET_OWNED
+            params.append(expect_owner)
+        cur = self._db.execute(statement, params)
         if cur.rowcount != 1:
             return False
         self._record_transition(existing.effect_id, existing.state, to,
@@ -1154,7 +1211,7 @@ class DurableEffectJournal:
                     f"{self._busy_timeout_ms}ms: {exc}") from exc
             try:
                 row = self._db.execute(
-                    f"SELECT {_COLUMNS} FROM effects WHERE effect_id=?",
+                    _SELECT_EFFECT,
                     (effect_id,)).fetchone()
                 if row is None:
                     self._db.execute("ROLLBACK")
@@ -1313,8 +1370,7 @@ class DurableEffectJournal:
     def stale_reservations(self, *, limit: int = MAX_STARTUP_SCAN) -> list[EffectRecord]:
         """Open rows whose owner's lease has expired. Bounded, read-only."""
         rows = self._db.execute(
-            f"SELECT {_COLUMNS} FROM effects WHERE state IN (?,?) "
-            "ORDER BY state_changed_at LIMIT ?",
+            _SELECT_OPEN_EFFECTS,
             (EffectState.RESERVED.value, EffectState.EXECUTING.value, limit))
         now = self._clock()
         return [r for r in (self._row_to_record(x) for x in rows)
@@ -1322,8 +1378,7 @@ class DurableEffectJournal:
 
     def indeterminate_effects(self, *, limit: int = MAX_STARTUP_SCAN) -> list[EffectRecord]:
         rows = self._db.execute(
-            f"SELECT {_COLUMNS} FROM effects WHERE state=? "
-            "ORDER BY state_changed_at LIMIT ?",
+            _SELECT_BY_STATE,
             (EffectState.INDETERMINATE.value, limit))
         return [self._row_to_record(r) for r in rows]
 

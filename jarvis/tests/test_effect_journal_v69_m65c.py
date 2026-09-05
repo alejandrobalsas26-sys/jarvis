@@ -850,11 +850,38 @@ def test_the_compare_and_swap_guards_are_present(tmp_path):
     """The second half of the pair above."""
     import inspect
 
+    from core import effect_journal as ej
+
     take_over = inspect.getsource(DurableEffectJournal._take_over)
     assert "AND state=? AND owner_attempt=?" in take_over, (
         "the reclaim UPDATE lost its compare-and-swap guard")
-    transition = inspect.getsource(DurableEffectJournal._transition_locked)
-    assert '"state=?"' in transition and '"owner_attempt=?"' in transition
+    # The transition statements are module constants — no SQL in this module is
+    # assembled at a call site — so the guard is asserted where it now lives.
+    for name in ("_TRANSITION_SET", "_TRANSITION_SET_OWNED"):
+        statement = getattr(ej, name)
+        assert "WHERE effect_id=? AND state=? AND owner_attempt=?" in statement, (
+            f"{name} lost its compare-and-swap guard")
+    assert ej._TRANSITION_SET_OWNED.endswith("AND owner_instance_id=?"), (
+        "the owned transition lost its ownership guard")
+
+
+def test_no_sql_is_built_from_a_variable(tmp_path):
+    """Every statement is a finished literal, named at module scope.
+
+    A query assembled next to its parameters is a query somebody can later
+    append to, and a static analyser cannot tell a constant column list from an
+    attacker's — bandit reported ten MEDIUM B608 findings for exactly that shape
+    and MEDIUM must be zero. Asserted here so the property is owned by this
+    milestone's tests rather than only by the release gate.
+    """
+    import inspect
+
+    from core import effect_journal as ej
+
+    source = inspect.getsource(ej)
+    for marker in ('f"SELECT', "f'SELECT", 'f"UPDATE', 'f"INSERT', 'f"DELETE',
+                   '" + _COLUMNS', "'.join(clauses)"):
+        assert marker not in source, f"SQL is being constructed: {marker}"
 
 
 def test_the_schema_is_created_inside_one_transaction(tmp_path):
