@@ -1,8 +1,8 @@
 {
   "latest_snapshot_path": "state/m62/snapshots/0031-m65c-durable-effect-journal-branch.json",
-  "latest_snapshot_sha256": "67b30b60a1ada9fd5090fa9ab93630bf5c20e13ee3fae8bc153691e20bb563a6",
+  "latest_snapshot_sha256": "a220534e8aaaabe7d7de1dd498f6a20df7194b07efee1f8ac1d89aa368ee86f4",
   "schema_version": "m62.control_plane.3",
   "state_generation": 31,
-  "subject_state_commit": "90ef1d6eb9fb011d37a249e2fc64889bc37c3e6e",
+  "subject_state_commit": "dd2e937e9dbea9d376639e9b36ac9172bb295611",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

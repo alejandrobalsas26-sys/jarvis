@@ -10,8 +10,8 @@
 | **Control plane** | V3 · schema `m62.control_plane.3` · state generation **31** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
 | **Latest snapshot** | `state/m62/snapshots/0031-m65c-durable-effect-journal-branch.json` |
-| **Snapshot SHA256** | `67b30b60a1ada9fd5090fa9ab93630bf5c20e13ee3fae8bc153691e20bb563a6` |
-| **Subject state commit** | `90ef1d6eb9fb011d37a249e2fc64889bc37c3e6e` (M65C runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Snapshot SHA256** | `a220534e8aaaabe7d7de1dd498f6a20df7194b07efee1f8ac1d89aa368ee86f4` |
+| **Subject state commit** | `dd2e937e9dbea9d376639e9b36ac9172bb295611` (M65C runtime; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -432,11 +432,11 @@ human decision, which no milestone since has moved, replaced or weakened.
 ```
 canonical   verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from    jarvis/ (repository system interpreter)
-result      3179 passed · 2 skipped · 0 failed                            [M65B, measured]
+result      3179 passed · 2 skipped · 0 failed                            [M65C, measured]
 broad       pytest tests/
-result      10222 passed · 46 skipped · 4 failed                          [M65B, measured]
-            all 4 fail identically at M65A: bandit-Low drift (489 > 488,
-            unmoved by M65B) ×3, and a missing `fastapi` ×1
+result      10395 passed · 46 skipped · 4 failed                          [M65C, measured]
+            every failure PRE-EXISTING, reproduced at 3473dc44a041;
+            M65C adds NEW_FAILURES = 0
 ```
 
 **`-k m62` is no longer the authority (D48):** it matches node ids and deselected all **212**
