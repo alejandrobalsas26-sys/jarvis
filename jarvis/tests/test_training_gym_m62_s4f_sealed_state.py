@@ -49,6 +49,30 @@ GENERATION_DIR = OUTPUT_ROOT / "evaluations" / EVALUATION_ID / "gen-1"
 TASK_COUNT = 36
 TOTAL_GENERATIONS = 72
 
+# ── evidence that deliberately does not travel in the repository ─────────────
+#
+# `protocol-v4-attempts.jsonl` and the per-generation results under `evaluation/` are
+# GITIGNORED runtime evidence: they quote held-out material, so the root .gitignore
+# refuses to commit them and MANIFEST.in refuses to package them. That is correct and
+# is not going to change.
+#
+# What was wrong is that nine tests here read them unconditionally. On a checkout that
+# does not carry them -- which is EXACTLY what `actions/checkout` produces -- this file
+# produced 4 failures and 5 errors, on every run, forever. V69 S5E measured that in a
+# clean clone; the developer tree hid it, because the developer tree has the artefacts.
+#
+# These are SKIPS, not relaxations. Where the evidence exists every assertion runs
+# unchanged and can still fail. The sixteen tests that read TRACKED evidence -- the
+# receipt, the witness, the control plane -- are deliberately NOT guarded, so a clean
+# checkout still proves the sealed verdict, the spent holdout and the absent promotion.
+_LEDGER_ABSENT = ("the paired-attempt ledger is gitignored runtime evidence and is not "
+                  "present in this checkout")
+_GENERATIONS_ABSENT = ("the per-generation evaluation results are gitignored runtime "
+                       "evidence and are not present in this checkout")
+
+requires_generation_evidence = pytest.mark.skipif(
+    not GENERATION_DIR.is_dir(), reason=_GENERATIONS_ABSENT)
+
 
 @pytest.fixture(scope="module")
 def snapshot() -> dict:
@@ -64,6 +88,8 @@ def receipt() -> dict:
 
 @pytest.fixture(scope="module")
 def attempt() -> dict:
+    if not ATTEMPTS.is_file():
+        pytest.skip(_LEDGER_ABSENT)
     lines = [line for line in ATTEMPTS.read_text(encoding="utf-8").splitlines()
              if line.strip()]
     assert len(lines) == 1, "one paired attempt, one spend"
@@ -89,6 +115,7 @@ def test_the_outer_plan_contains_the_inner_plan_the_report_published(attempt):
     assert attempt["plan_hash"] != attempt["inner_plan_hash"]
 
 
+@requires_generation_evidence
 def test_both_arms_produced_thirty_six_generations_each():
     for arm in ("baseline", "candidate"):
         rows = [json.loads(line) for line
@@ -101,6 +128,7 @@ def test_both_arms_produced_thirty_six_generations_each():
         assert not any(r["interrupted"] for r in rows)
 
 
+@requires_generation_evidence
 def test_the_report_is_the_one_the_receipt_binds(receipt):
     from training_gym.evaluation.reports import verify_report_payload
 
@@ -112,6 +140,7 @@ def test_the_report_is_the_one_the_receipt_binds(receipt):
 
 
 # ── the 35/36 artefact, and that it decided nothing ──────────────────────────
+@requires_generation_evidence
 def test_every_pair_was_measured_on_both_arms():
     """`measured_pairs` 35 is a quality-denominator fact, never a missing measurement."""
     from training_gym.evaluation.comparison import ComparisonVerdict
@@ -132,6 +161,7 @@ def test_every_pair_was_measured_on_both_arms():
     assert report["missing_pairs"] == 1
 
 
+@requires_generation_evidence
 def test_the_security_veto_and_not_the_coverage_label_decided_it():
     """The empirical gate never ran: security blockers return first, and did."""
     import inspect

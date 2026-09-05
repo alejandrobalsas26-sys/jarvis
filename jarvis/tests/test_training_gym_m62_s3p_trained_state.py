@@ -1127,12 +1127,26 @@ def test_the_receipt_is_tracked_and_lives_in_the_state_tree():
 
 
 def test_the_runtime_adapter_is_not_tracked():
-    """Weights stay out of Git. The receipt is what travels."""
+    """Weights stay out of Git. The receipt is what travels.
+
+    The ignore rule is ``training_runs/`` — directory-only — so `git check-ignore` can
+    only match the bare path when it can see that the path IS a directory, which means
+    when it exists on disk. Probing the bare path therefore passed in a developer tree
+    and FAILED in a fresh checkout, where the runtime tree has never been created. That
+    is the checkout `actions/checkout` produces, so this assertion was red in CI on
+    every run; V69 S5E measured it in a clean clone.
+
+    Probing a path INSIDE the tree is checkout-independent — and it is the stronger
+    claim anyway: what matters is that anything written under the runtime tree is
+    ignored, not that one directory name is.
+    """
     assert _git("ls-files", "--", "jarvis/training_runs") == ""
     result = subprocess.run(
-        ["git", "-C", str(REPO), "check-ignore", "-q", "jarvis/training_runs"],
+        ["git", "-C", str(REPO), "check-ignore", "-q",
+         "jarvis/training_runs/any-adapter/adapter_model.safetensors"],
         capture_output=True, text=True, check=False)
-    assert result.returncode == 0
+    assert result.returncode == 0, (
+        "jarvis/training_runs/ is not gitignored; model weights could be committed")
 
 
 def test_training_history_does_not_depend_on_the_runtime_tree(sandbox):
