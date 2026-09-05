@@ -808,7 +808,7 @@ def _reviewed_template() -> str | None:
                       / "chat_template.jinja")
     for path in candidates:
         try:
-            text = path.read_text(encoding="utf-8", newline=None)
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
         if chat_template_hash(text) == PINNED_CHAT_TEMPLATE_DIGEST:

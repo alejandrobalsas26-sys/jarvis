@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import pathlib
 
 import pytest
 
@@ -102,6 +103,18 @@ from core.specialist_team import (
     validate_plan,
     verify_team,
 )
+
+#: Source files are read RELATIVE TO THE APPLICATION ROOT, never the working directory.
+#: The authoritative CI job runs from the REPOSITORY ROOT (`python -m pytest -q
+#: --tb=short jarvis/tests tests`), where a bare `Path("core/specialist_team.py")` does
+#: not exist — it resolved only because these tests had been run from `jarvis/`. V69 S5E.
+_APP_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _app_source(relative: str) -> str:
+    """Read one application source file, anchored so the CWD cannot decide the answer."""
+    return (_APP_ROOT / relative).read_text(encoding="utf-8")
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1055,10 +1068,9 @@ def test_a_specialist_cannot_instantiate_another_specialist(h):
     """§19 — there is no ``specialist.spawn``. Asserted over the parsed AST so
     this module's own prose cannot satisfy the test that proves it."""
     import ast
-    import pathlib
 
     for name in ("core/specialist_execution.py", "core/specialist_team.py"):
-        tree = ast.parse(pathlib.Path(name).read_text(encoding="utf-8"))
+        tree = ast.parse(_app_source(name))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 assert node.name != "spawn", f"{name} defines spawn()"
@@ -1535,11 +1547,10 @@ def test_the_team_path_never_grants_an_approval_to_itself(h):
     """Nothing in the specialist or team path calls ``grant``. That absence is
     the control, so it is asserted over the parsed AST."""
     import ast
-    import pathlib
 
     for name in ("core/specialist_team.py", "core/specialist_execution.py",
                  "core/mesh_live.py"):
-        tree = ast.parse(pathlib.Path(name).read_text(encoding="utf-8"))
+        tree = ast.parse(_app_source(name))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 assert node.func.attr != "grant", f"{name} grants an approval"

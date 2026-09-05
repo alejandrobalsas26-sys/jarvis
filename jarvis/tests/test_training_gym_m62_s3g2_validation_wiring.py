@@ -82,6 +82,12 @@ from training_gym.training.config import (  # noqa: E402
 )
 from training_gym.training.dataset_conversion import convert_sft_export  # noqa: E402
 
+#: Application sources are read RELATIVE TO THE APPLICATION ROOT, never the working
+#: directory: the authoritative CI job runs from the REPOSITORY ROOT, where a bare
+#: `(_APP_ROOT / "training_gym/training/execution.py")` does not exist. V69 S5E.
+_APP_ROOT = Path(__file__).resolve().parent.parent
+
+
 NOW = "2026-08-13T00:00:00Z"
 
 
@@ -95,7 +101,7 @@ def _executable_source(module: str) -> str:
     """
     import ast
 
-    tree = ast.parse(Path(module).read_text(encoding="utf-8"))
+    tree = ast.parse((_APP_ROOT / module).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         body = getattr(node, "body", None)
         if not isinstance(body, list) or not body:
@@ -596,7 +602,7 @@ def test_no_validation_row_truncates_at_512_in_the_promoted_quality_corpus():
     what it can without a tokenizer — the token measurement is in the S3G.2 document,
     taken through the production encoder against the pinned tokenizer.
     """
-    export = (Path("training_gym_datasets/exports") / "m62-defensive-quality-train"
+    export = (_APP_ROOT / "training_gym_datasets/exports" / "m62-defensive-quality-train"
               / "v1" / SFT_VALIDATION_FILENAME)
     if not export.is_file():  # the promoted corpus is a gitignored runtime artefact
         pytest.skip("the promoted quality corpus is not present in this checkout")
@@ -848,7 +854,7 @@ def test_a_corpus_supplied_against_a_config_that_did_not_ask_is_refused(corpus,
 
 def test_the_execution_stage_no_longer_hard_codes_the_field_to_none():
     """The exact line D31 was. A regression here is silent, so it is pinned literally."""
-    code = Path("training_gym/training/execution.py").read_text(encoding="utf-8")
+    code = (_APP_ROOT / "training_gym/training/execution.py").read_text(encoding="utf-8")
     assert "validation_file=validation_file" in code
     assert "validation_file=None," not in code
 

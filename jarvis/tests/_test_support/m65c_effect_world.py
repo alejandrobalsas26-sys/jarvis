@@ -1,5 +1,5 @@
 """
-tests/support/m65c_effect_world.py — V69 M65C: a TEST-OWNED external world and
+tests/_test_support/m65c_effect_world.py — V69 M65C: a TEST-OWNED external world and
 the worker that acts on it.
 
 WHY THIS EXISTS AS A SEPARATE MODULE, RUN AS A SUBPROCESS

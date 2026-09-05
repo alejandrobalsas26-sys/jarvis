@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import pathlib
 
 import pytest
 
@@ -48,6 +49,18 @@ from core.specialist_team import (                                    # noqa: E4
     TaskState,
     TeamStatus,
 )
+
+#: Source files are read RELATIVE TO THE APPLICATION ROOT, never the working directory.
+#: The authoritative CI job runs from the REPOSITORY ROOT (`python -m pytest -q
+#: --tb=short jarvis/tests tests`), where a bare `Path("core/specialist_team.py")` does
+#: not exist — it resolved only because these tests had been run from `jarvis/`. V69 S5E.
+_APP_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _app_source(relative: str) -> str:
+    """Read one application source file, anchored so the CWD cannot decide the answer."""
+    return (_APP_ROOT / relative).read_text(encoding="utf-8")
+
 
 
 #: The payload §41 names. It is a plausible authority claim, which is the point:
@@ -186,10 +199,8 @@ def test_team_verification_runs_after_every_effect_decision(h, monkeypatch):
     """§44 — no verdict can retroactively permit an effect, because every
     effect decision was already made when the verifier is called."""
     import ast
-    import pathlib
 
-    tree = ast.parse(pathlib.Path("core/specialist_team.py").read_text(
-        encoding="utf-8"))
+    tree = ast.parse(_app_source("core/specialist_team.py"))
     verify_team = next(n for n in ast.walk(tree)
                        if isinstance(n, ast.FunctionDef) and n.name == "verify_team")
     for node in ast.walk(verify_team):
@@ -394,10 +405,8 @@ def test_parallel_specialists_do_not_create_a_duplicate_canonical_entity():
 def test_the_team_creates_no_shadow_world_state():
     """§42 — no specialist-owned authoritative state. Asserted structurally."""
     import ast
-    import pathlib
 
-    tree = ast.parse(pathlib.Path("core/specialist_team.py").read_text(
-        encoding="utf-8"))
+    tree = ast.parse(_app_source("core/specialist_team.py"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             assert "WorldState" not in node.name
@@ -474,10 +483,8 @@ def test_a_team_reaches_no_execution_surface_of_its_own(h):
     """§40 — no subprocess, no socket, no raw handler. Parsed, not grepped, so
     this module's own prose cannot satisfy the test that proves it."""
     import ast
-    import pathlib
 
-    tree = ast.parse(pathlib.Path("core/specialist_team.py").read_text(
-        encoding="utf-8"))
+    tree = ast.parse(_app_source("core/specialist_team.py"))
     banned = {"subprocess", "socket", "os", "shutil", "requests", "httpx"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

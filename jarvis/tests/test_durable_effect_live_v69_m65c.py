@@ -46,8 +46,8 @@ from core.effect_journal import (  # noqa: E402
     compute_effect_id,
 )
 from core.security_effects import CONTAINMENT, SCOPES  # noqa: E402
-from tests.support import m65c_effect_world  # noqa: E402
-from tests.support.m65c_effect_world import CRASH_EXIT, SyntheticWorld  # noqa: E402
+from _test_support import m65c_effect_world  # noqa: E402
+from _test_support.m65c_effect_world import CRASH_EXIT, SyntheticWorld  # noqa: E402
 
 WORKER = Path(m65c_effect_world.__file__).resolve()
 JARVIS_ROOT = WORKER.parent.parent.parent

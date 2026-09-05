@@ -21,7 +21,7 @@ that must happen does happen rather than being hoped for. Every wait is bounded,
 so a broken implementation FAILS instead of hanging.
 
 The parent terminates ONLY processes it created, and every effect is synthetic
-and confined to a temporary directory (see ``tests/support/m65c_effect_world``).
+and confined to a temporary directory (see ``tests/_test_support/m65c_effect_world``).
 """
 from __future__ import annotations
 
@@ -45,8 +45,8 @@ from core.effect_journal import (
     derive_idempotency_key,
     may_auto_retry,
 )
-from tests.support import m65c_effect_world
-from tests.support.m65c_effect_world import (
+from _test_support import m65c_effect_world
+from _test_support.m65c_effect_world import (
     CRASH_EXIT,
     SyntheticWorld,
     make_reconciler,

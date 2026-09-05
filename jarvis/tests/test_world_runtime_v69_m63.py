@@ -14,7 +14,7 @@ import inspect
 import pytest
 
 from core.asset_graph import AssetGraph, AssetType, ObservationSource, RelationshipType
-from core.presence import AssistantMode, PresenceLevel, PresenceSignal, Urgency
+from core.presence import AssistantMode, PresenceLevel, PresenceSignal
 from core.runtime_doctor import (
     DoctorStatus,
     check_dependencies,
@@ -34,7 +34,6 @@ from core.world_presence import (
 from core.world_runtime import WorldRuntime
 from core.world_state import (
     ChangeKind,
-    EntityStatus,
     ObservationTrust,
     StateChange,
     WorldObservation,
@@ -284,6 +283,10 @@ def test_narrate_is_deterministic():
 #  §23 AURA bridge
 # ══════════════════════════════════════════════════════════════════════════════
 def test_world_hud_commands_are_allowlisted_and_none_are_risky():
+    # aura.server imports FastAPI, which lives in requirements/all.txt — NOT in the
+    # dev+soc profile CI installs. Hard-importing it made this an unconditional CI
+    # failure rather than an optional-dependency skip. V69 S5E.
+    pytest.importorskip("fastapi", reason="aura.server requires FastAPI (all profile)")
     from aura.server import (
         _HIGH_RISK_HUD,
         _HUD_ALLOWED_COMMANDS,
