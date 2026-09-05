@@ -139,9 +139,20 @@ def main(argv: list[str] | None = None) -> int:
     updated, changes = rewrite(original, measured)
 
     if not changes:
+        # Print the DECLARED value, and the measured one beside it when they differ.
+        # Printing only the measurement under the heading "facts are current" read as a
+        # contradiction for BANDIT_SCANNED_LINES, whose declaration is deliberately a
+        # magnitude with a tolerance rather than an exact count.
         print("release facts are current:")
         for name, key in _DERIVED.items():
-            print(f"  {name} = {_format(name, int(measured[key]))}")
+            measured_text = _format(name, int(measured[key]))
+            found = re.search(rf"^{name} = (.+)$", original, re.MULTILINE)
+            declared_text = found.group(1) if found else "?"
+            if declared_text == measured_text:
+                print(f"  {name} = {declared_text}")
+            else:
+                print(f"  {name} = {declared_text}  (measured {measured_text}, "
+                      f"within tolerance)")
         return 0
 
     if args.check:

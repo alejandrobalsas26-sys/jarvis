@@ -433,7 +433,7 @@ human decision, which no milestone since has moved, replaced or weakened.
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            10614 passed · 46 skipped · 0 failed      [S5E, measured]
+result            10618 passed · 45 skipped · 0 failed      [S5E, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [S5E, measured]
