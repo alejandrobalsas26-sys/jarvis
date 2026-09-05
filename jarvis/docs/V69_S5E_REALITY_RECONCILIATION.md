@@ -362,8 +362,9 @@ Two further criticisms are accepted and NOT closed, because closing them would b
 |---|---|---|
 | consistency | `python scripts/check_release_consistency.py` | PASS |
 | lint | `ruff check .` · `compileall` | PASS |
-| **authoritative suite** | `python -m pytest -q --tb=short jarvis/tests tests` **from the repository root** | **exit 0** |
-| **the same, in a fresh `git clone`** | identical command and interpreter | **exit 0** — 10,576 passed, 84 skipped |
+| **authoritative suite** | `python -m pytest -q --tb=short jarvis/tests tests` **from the repository root** | **exit 0** — 10,618 passed, 45 skipped |
+| **the same, in a fresh `git clone`** | identical command and interpreter | **exit 0** — 10,580 passed, 83 skipped |
+| **the same, `--depth 1`** | what `actions/checkout` produced before this milestone | 26 failed → fixed by `fetch-depth: 0` (§7c) |
 | stabilization | `python scripts/soak_stabilization_m61.py --json` | PASS |
 | doctor | `python scripts/doctor.py` | PASS |
 | compat (3.12) | consistency + compileall + 4 suites | PASS |
