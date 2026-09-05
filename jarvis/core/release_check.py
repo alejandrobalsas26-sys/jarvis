@@ -482,6 +482,22 @@ def changelog_current_section() -> str:
     return "\n".join(lines[start:end])
 
 
+def check_release_documents_exist() -> list[str]:
+    """A declared release document that is not on disk makes every scan over it vacuous.
+
+    ``_release_texts`` skips a file that does not exist, and ``check_release_state``
+    used to ``continue`` past one. Deleting ``docs/releases/<version>.md`` therefore did
+    not fail this checker — it emptied the ``counts`` and ``security`` families, which
+    then reported zero problems over zero documents and the run passed. V69 S5E
+    reproduced that: the mutation "delete the release notes" was accepted as PASS.
+
+    Existence is checked here, once, so the scans downstream can keep their skips.
+    """
+    return [f"{_relative(path)} is declared in _RELEASE_DOCS but does not exist; "
+            f"every check that scans it would silently pass over nothing"
+            for path in _RELEASE_DOCS if not path.is_file()]
+
+
 def _release_texts() -> dict[str, str]:
     """Current release documents plus the changelog's current section."""
     texts = {_relative(p): _read(p) for p in _RELEASE_DOCS if p.is_file()}
@@ -666,7 +682,8 @@ def audit() -> dict:
         "version": check_version(),
         "models": check_models() + check_role_models_match_the_router(),
         "claims": check_claims(),
-        "status": check_release_status() + check_release_state()
+        "status": (check_release_status() + check_release_state()
+                   + check_release_documents_exist())
         + check_release_tag_not_claimed(),
         "install": check_install_commands(),
         "counts": check_validated_counts(),

@@ -1,9 +1,16 @@
 """scripts/check_bandit_low_baseline.py — V69 M61.8: the Low findings cannot grow.
 
 The blocking release gate is ``bandit -r core tools -ll -q`` — Medium and High. Below
-that threshold sit 488 Low-severity findings. M61.7 recorded them honestly instead of
-suppressing them, which was the right call and also an incomplete one: a number nobody
-enforces is a number that grows.
+that threshold sit several hundred Low-severity findings; the exact ceiling is
+``core.release_facts.BANDIT_LOW_BASELINE`` and is deliberately not repeated here, because
+a second copy of a number is a second thing to forget to update. M61.7 recorded the
+findings honestly instead of suppressing them, which was the right call and also an
+incomplete one: a number nobody enforces is a number that grows.
+
+V69 S5E: it grew. The ceiling was breached for five weeks and nothing failed, because
+the only thing that runs this comparison is ``tests/test_bandit_low_baseline_v69_m618.py``
+in CI's authoritative job — and that job could not collect. This script is invoked by no
+workflow step; it is a developer tool, and the test is the gate.
 
 This is the enforcement, and it is deliberately a CEILING rather than a fixed point:
 

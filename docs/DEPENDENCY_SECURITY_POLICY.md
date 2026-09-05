@@ -170,14 +170,24 @@ that case:
 
 ---
 
-## 5. The 488 Low Bandit findings
+## 5. The 489 Low Bandit findings
 
 **These are not claimed to be harmless.** They are recorded, bounded and enforced.
 
 | | |
 |---|---|
-| Approved baseline | **488** (`core.release_facts.BANDIT_LOW_BASELINE`) |
-| Currently observed | **488**, same command, no exclusions |
+| Approved baseline | **489** (`core.release_facts.BANDIT_LOW_BASELINE`) |
+| Currently observed | **489**, same command, no exclusions |
+
+> **Baseline history.** Set at **488** at the M61.8 closure commit, where it was
+> measured and correct. Breached by `436119b` ("feat(runtime): add situational
+> world-state fabric", 2026-08-29) and re-approved at **489** by V69 S5E after triaging
+> both new findings as accepted false positives — a `DoctorStatus.PASS = "pass"` enum
+> member read as a hardcoded password (B105), and a `writer.wait_closed()` swallowed in
+> a `finally` during socket teardown (B110). The breach survived five weeks because the
+> only thing enforcing this ceiling is a test in CI's authoritative job, and that job
+> could not collect; see `docs/V69_S5E_REALITY_RECONCILIATION.md`. The blocking
+> Medium/High gate was not touched and remains at zero.
 | Enforcement | `jarvis/scripts/check_bandit_low_baseline.py` and `tests/test_bandit_low_baseline_v69_m618.py` |
 | Rule | `observed <= baseline` |
 
@@ -194,7 +204,7 @@ were **removed rather than baselined** — the status vocabulary is now derived 
 single tuple, and the bare handler gained a real fallback.
 
 **Reduction is scheduled, bounded maintenance work — not part of this release.** M61.8
-deliberately does not attempt to eliminate 488 findings: that is a wide, low-value-per-
+deliberately does not attempt to eliminate 489 findings: that is a wide, low-value-per-
 change sweep across ~280 files, and bundling it with release closure would make both
 unreviewable. The intended shape of that later work:
 
@@ -293,7 +303,7 @@ A release is **not** blocked by:
 
 Carried into `69.61.0`, deliberately and with the reasoning stated:
 
-1. **488 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
+1. **489 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
 2. **The advisory `pip-audit` result is not triaged.** M61 made the result visible;
    acting on it is separate work. This is the highest-value item for the next
    maintenance pass.

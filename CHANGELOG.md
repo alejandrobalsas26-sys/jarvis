@@ -77,7 +77,7 @@ Closure stage of the same release (`69.61.0`; M61.8 is **not** a version).
   deterministic CycloneDX 1.5 SBOMs per dependency profile
   (`scripts/build_sbom.py`), declared-authority scoped and honest about it.
 - **Dependency and vulnerability policy.** `docs/DEPENDENCY_SECURITY_POLICY.md`. The
-  blocking gate `bandit -r core tools -ll -q` reports **0 Medium and 0 High**; the 488
+  blocking gate `bandit -r core tools -ll -q` reports **0 Medium and 0 High**; the 489
   Low findings it also reports are recorded as an explicit, enforced baseline — a
   decrease passes, an increase fails until reviewed. They are bounded, not called
   harmless.

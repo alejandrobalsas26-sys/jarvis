@@ -220,8 +220,17 @@ def test_the_declared_observation_matches_reality_or_is_conservative(scan):
     than the one that was scanned.
     """
     current = _low_count(scan)
+    # V69 S5E: this assertion used to read
+    #     assert rf.BANDIT_LOW_OBSERVED >= current or current <= rf.BANDIT_LOW_BASELINE
+    # whose right-hand disjunct is exactly the ceiling assertion below, which has
+    # already passed by the time it runs. The `or` could therefore never be false, so
+    # the test named "matches reality" only ever failed through its duplicate of the
+    # ceiling test — it did not check the declaration at all. It does now.
+    assert rf.BANDIT_LOW_OBSERVED >= current, (
+        f"release_facts declares {rf.BANDIT_LOW_OBSERVED} observed Low findings but the "
+        f"tree has {current}: the declaration understates the truth, so the release "
+        f"notes would claim a cleaner tree than the one that was scanned")
     assert current <= rf.BANDIT_LOW_BASELINE
-    assert rf.BANDIT_LOW_OBSERVED >= current or current <= rf.BANDIT_LOW_BASELINE
 
 
 def test_the_declared_scanned_line_count_is_within_range_of_the_real_scan(scan):
