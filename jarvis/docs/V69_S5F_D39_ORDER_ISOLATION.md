@@ -29,7 +29,9 @@ $ python -m pytest -q jarvis/tests/test_training_gym_m62_s3g2_validation_wiring.
 4 failed, 112 passed, 1 skipped
 ```
 
-The reverse order is green, and each file alone is green (47 and 70). The four failures are
+117 nodes either way. The skip is environment-dependent and has nothing to do with D39
+(see §6); on a developer tree carrying the gitignored quality corpus the same run reads
+`4 failed, 113 passed`. The reverse order is green, and each file alone is green (47 and 70). The four failures are
 exactly the historical four:
 
 ```
@@ -186,8 +188,15 @@ developer tree reports 117 passed.
    each order is its own reported node. It asserts on the **return code**, never on stdout:
    a sentinel that greps for "passed" is satisfied by a run that collected nothing.
 2. **Structural** — the root cause as an invariant: no test may `importlib.reload` a module
-   whose classes another test module (or itself) binds at import time. This is the precise
-   hazard condition, so the defect cannot return through a different module.
+   whose classes another test module (or itself) binds at import time. That is the precise
+   hazard *condition*; what the guard can **see** is a matter of coverage, and §8 states it
+   exactly rather than claiming the defect can never return.
+
+   It scans **both** trees CI collects (`jarvis/tests` and the repo-root `tests`),
+   recursively, including `conftest.py` and helper packages. It recognises
+   `importlib.reload` and a bare `reload` from `from importlib import reload`, and as the
+   target: a literal `import_module("x.y")` (attribute or bare), a bound alias, a dotted
+   `a.b.c`, and `sys.modules["x.y"]`.
 
 The structural guard deliberately permits safe reloads. `test_training_gym_m62_evaluation_runner.py`
 reloads `training_gym.evaluation.backends` while `EvaluationBackendError` is defined in
@@ -214,10 +223,14 @@ something else.
 
 ## 8 — Known limitations
 
-* The structural guard resolves `importlib.reload` targets only for the two call shapes the
-  test tree actually uses (a literal `import_module("x.y")`, and a plain alias bound by
-  `import x.y as alias`). A reload reached through a computed name would not be seen. This
-  is a deliberate bound: the alternative is a general dataflow analysis of the test tree.
+* The structural guard is a static reader, not a dataflow analysis. A reload whose target
+  is assembled at run time from a computed string is out of reach. The six literal forms it
+  does cover are enumerated in §7 and each is regression-tested in §11; the first version of
+  this guard saw only two of them, which the red team demonstrated by reintroducing live D39
+  four different ways.
+* A module-scope alias (`ExportError = export.ExportError`) is not a `from`-import and is
+  not counted as a holder, and relative `from .export import ...` holders are skipped.
+  Neither form occurs in either test tree today.
 * It inspects **test** modules as holders. `training_gym/datasets/__init__.py:168`
   re-exports `ExportError` by value, so any future reload would also desynchronize the
   package facade from the module. Nothing reloads it today; this is a hazard, not a bug,
@@ -292,3 +305,78 @@ assertion, and then all four weakenings let the defect escape:
 
 D2 is the one worth keeping in mind: `"passed" in stdout` is satisfied by
 `4 failed, 112 passed`, so a sentinel written that way would have reported D39 as closed.
+
+## 11 — Red team
+
+An independent read-only agent was given the closure and told to falsify it. It ran roughly
+284 ordered pytest invocations, re-derived the 24/120 and 120/120 permutation results
+independently, and confirmed that pytest honours command-line node order — so the matrix in
+§9 measures what it claims.
+
+**Blockers: none.** All six masking forms were answered negative with evidence: no state
+reset, no reloading, no order forcing, no hidden skip or xfail (skip/xfail marker count
+across `jarvis/tests` is **118 before and 118 after**), no suppressed failure, no autouse
+fixture, and no change under `jarvis/core`, `jarvis/training_gym`, `jarvis/tools` or
+`jarvis/aura`. The victim file is untouched and all four `pytest.raises(ExportError,
+match=...)` sites survive with their patterns intact.
+
+It confirmed independently that the repaired test cannot silently no-op — an unimportable
+target, a bad `sys.path` or a crashed subprocess all land on the returncode assert — that
+the remaining reloads are safe (`training_gym/evaluation/backends/__init__.py` defines
+**zero** classes; the CLI and `plugin_loader` holders use module-attribute access, which a
+reload keeps correct), and that the control-plane edits are corrections rather than
+relaxations: the verifier's check is a symmetric inequality, so writing `OPEN` over a frozen
+`FIXED` is exactly as strong as the reverse.
+
+### The one MAJOR, and what was done about it
+
+The structural guard's **stated scope was false.** This document and the sentinel docstring
+claimed the defect "cannot return through a different module"; the guard actually recognised
+two call shapes. The red team reintroduced **live D39** — the same four failures — through
+four literal, idiomatic, non-computed forms it could not see.
+
+The wording was not softened to match the guard. The guard was rewritten to match the claim,
+and every form is now a regression test. Each was reintroduced in a clean clone and the
+guard confirmed to fire, with the unmodified clone green as the control:
+
+| | Evasion | Before | After |
+|---|---|---|---|
+| E1 | `from importlib import reload` + bare `import_module(...)` | missed | **caught** |
+| E2 | `importlib.reload(training_gym.datasets.export)` (dotted attribute) | missed | **caught** |
+| E3 | `importlib.reload(sys.modules["..."])` (subscript) | missed | **caught** |
+| E4 | reload in `jarvis/tests/_test_support/reloader.py` (glob was non-recursive) | missed | **caught** |
+| E5 | reload in the repo-root `tests/` tree (the second tree CI collects) | missed | **caught** |
+| E6 | `from pkg import mod as alias`, then `reload(alias)` | missed | **caught** |
+| — | unmodified clone (control) | 3 passed | 3 passed |
+
+Also fixed from the MINOR list: module-level classes declared under `if`/`try` are now
+counted; the alias map no longer mis-keys a plain `import a.b.c`; and the nested runs pass
+`-p no:randomly`, so the two "known orders" stay the orders the guard names even if an
+ordering plugin is ever installed. The remaining MINORs are recorded in §8.
+
+Two further checks after the rewrite: a reload hidden inside a helper function and reached
+through a **fixture** is caught; and all six modules that bind names from
+`training_gym.datasets.export` at import time were run in **10 orders** (both pair
+directions, full reverse, and eight seeded shuffles) — 468 passed every time.
+
+## 12 — Why the workflow is unchanged
+
+A dedicated `D39 order-independence sentinel` step was added to the authoritative `tests`
+job, so the gate would appear as its own named remote result. It was **reverted**, because
+the full suite then failed three of S5E's and M61.2's own reality gates:
+
+```
+test_ci_entrypoint_reality_v69_s5e.py::test_the_authoritative_command_names_both_trees
+  AssertionError: expected exactly one pytest invocation in the authoritative job, got 2
+test_ci_workflow_v69_m612.py::test_an_authoritative_job_runs_the_complete_suite
+  Failed: the authoritative job runs a subset: python -m pytest -q ... test_order_isolation_...
+```
+
+Those gates are deliberate: the authoritative job runs **one** pytest invocation over the
+complete suite, and nothing that looks like a subset. Buying a prettier job list by relaxing
+them would trade a real invariant for a cosmetic one.
+
+Nothing is lost. `jarvis/tests/test_order_isolation_d39_v69_s5f.py` lives in `jarvis/tests`,
+which the authoritative command names, so all three sentinel nodes are collected and run on
+every CI run — verified: `pytest --collect-only jarvis/tests tests` reports 3 matching nodes.
+The D39 gate executes remotely; it simply is not a separately named step.

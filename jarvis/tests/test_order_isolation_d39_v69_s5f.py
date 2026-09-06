@@ -74,7 +74,7 @@ def _run_pytest(*rel_paths: str) -> subprocess.CompletedProcess:
     """
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "--tb=short",
-         "-p", "no:cacheprovider", *rel_paths],
+         "-p", "no:cacheprovider", "-p", "no:randomly", *rel_paths],
         cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=900)
 
 
@@ -97,32 +97,88 @@ def test_both_known_orders_pass_in_a_fresh_process(first, second):
 
 
 # ── the root cause, stated as an invariant ───────────────────────────────────
-def _reloaded_modules(tree: ast.AST) -> set[str]:
-    """Module names passed to ``importlib.reload`` in *tree*, best-effort.
+#: Both test trees CI collects: `python -m pytest -q --tb=short jarvis/tests tests`.
+#: Scanned recursively and including conftest.py, because a reload in a helper package
+#: or a conftest contaminates exactly as well as one in a test file. The S5F red team
+#: reintroduced live D39 through both gaps.
+def _test_sources() -> list[Path]:
+    roots = [_TESTS_DIR, _REPO_ROOT / "tests"]
+    return sorted({p for root in roots if root.is_dir()
+                   for p in root.rglob("*.py") if not p.name.startswith(".")})
 
-    Resolves the two forms the test tree actually uses: a literal
-    ``importlib.reload(importlib.import_module("x.y"))`` and ``importlib.reload(alias)``
-    where *alias* came from an ``import x.y as alias``.
-    """
+
+def _dotted(node: ast.AST) -> str | None:
+    """``a.b.c`` written as nested Attributes -> "a.b.c". Anything else -> None."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _module_aliases(tree: ast.AST) -> dict[str, str]:
+    """Names bound to a MODULE by an import, mapped to that module's dotted path."""
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                aliases[a.asname or a.name.split(".")[0]] = a.name
+                # `import a.b.c` binds `a` and `a` IS the module reload would take.
+                # Only `as` binds the full dotted module.
+                aliases[a.asname or a.name.split(".")[0]] = (
+                    a.name if a.asname else a.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for a in node.names:
+                # `from pkg import mod as m` -- if it is not a module, _module_source
+                # simply finds no file and the entry is ignored.
+                aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+    return aliases
 
+
+def _reloaded_modules(tree: ast.AST) -> set[str]:
+    """Modules passed to ``importlib.reload`` in *tree*.
+
+    Covers every literal form: ``importlib.reload`` and a bare ``reload`` imported via
+    ``from importlib import reload``; and as the argument, a literal
+    ``import_module("x.y")``, a bound alias, a dotted ``a.b.c``, or
+    ``sys.modules["x.y"]``. A target assembled at run time from a computed string is
+    still out of reach -- see the limitations section of
+    jarvis/docs/V69_S5F_D39_ORDER_ISOLATION.md.
+    """
+    aliases = _module_aliases(tree)
     found: set[str] = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "reload" and node.args):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        is_reload = ((isinstance(func, ast.Attribute) and func.attr == "reload")
+                     or (isinstance(func, ast.Name) and func.id == "reload"))
+        if not is_reload:
             continue
         arg = node.args[0]
-        if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute)
-                and arg.func.attr == "import_module" and arg.args
+        # importlib.import_module("x.y"), or a bare import_module("x.y")
+        if (isinstance(arg, ast.Call) and arg.args
+                and ((isinstance(arg.func, ast.Attribute)
+                      and arg.func.attr == "import_module")
+                     or (isinstance(arg.func, ast.Name)
+                         and arg.func.id == "import_module"))
                 and isinstance(arg.args[0], ast.Constant)
                 and isinstance(arg.args[0].value, str)):
             found.add(arg.args[0].value)
+        # sys.modules["x.y"]
+        elif (isinstance(arg, ast.Subscript) and isinstance(arg.slice, ast.Constant)
+              and isinstance(arg.slice.value, str)):
+            found.add(arg.slice.value)
+        # a bound alias
         elif isinstance(arg, ast.Name) and arg.id in aliases:
             found.add(aliases[arg.id])
+        # a dotted a.b.c written out
+        elif isinstance(arg, ast.Attribute):
+            dotted = _dotted(arg)
+            if dotted:
+                found.add(dotted)
     return found
 
 
@@ -135,8 +191,26 @@ def _module_source(dotted: str) -> Path | None:
 
 
 def _classes_defined_in(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
+    """Module-level classes, including those under a module-level ``if``/``try``.
+
+    Does NOT descend into functions: a class defined inside one is not a module
+    attribute, so a reload cannot leave a stale reference to it.
+    """
+    names: set[str] = set()
+
+    def visit(body: list[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                names.add(node.name)
+            elif isinstance(node, (ast.If, ast.Try)):
+                visit(node.body)
+                visit(node.orelse)
+                visit(getattr(node, "finalbody", []))
+                for handler in getattr(node, "handlers", []):
+                    visit(handler.body)
+
+    visit(ast.parse(path.read_text(encoding="utf-8")).body)
+    return names
 
 
 def _module_scope_imports(tree: ast.AST) -> set[tuple[str, str]]:
@@ -150,12 +224,13 @@ def test_no_test_reloads_a_module_whose_classes_are_bound_elsewhere():
     """The D39 mechanism as a rule: reload rebinds classes; a held reference goes stale.
 
     Reloading is only safe when nothing holds a class from the reloaded module across
-    the reload. This walks every test module, finds each ``importlib.reload`` target,
-    and reports any class that target DEFINES which some test module also imports by
-    name at module scope — the precise condition under which ``pytest.raises`` and
-    ``isinstance`` silently stop matching.
+    the reload. This walks both test trees, finds each ``importlib.reload`` target, and
+    reports any class that target DEFINES which some test module also imports by name at
+    module scope -- the precise condition under which ``pytest.raises`` and ``isinstance``
+    silently stop matching.
     """
-    sources = sorted(_TESTS_DIR.glob("test_*.py"))
+    sources = _test_sources()
+    assert len(sources) > 100, f"only {len(sources)} test sources found; scan is broken"
     trees = {path: ast.parse(path.read_text(encoding="utf-8")) for path in sources}
     imports = {path: _module_scope_imports(tree) for path, tree in trees.items()}
 
@@ -176,7 +251,7 @@ def test_no_test_reloads_a_module_whose_classes_are_bound_elsewhere():
                         f"{path.name} reloads {dotted}, but {holder.name} binds "
                         f"{', '.join(stale)} from it at import time")
     assert violations == [], (
-        "in-process importlib.reload of a module whose classes are held elsewhere — "
+        "in-process importlib.reload of a module whose classes are held elsewhere -- "
         "this is D39. Measure the property in a subprocess instead (see V69 M61 RC1 "
         "and jarvis/docs/V69_S5F_D39_ORDER_ISOLATION.md):\n  "
         + "\n  ".join(violations))
