@@ -380,3 +380,60 @@ Nothing is lost. `jarvis/tests/test_order_isolation_d39_v69_s5f.py` lives in `ja
 which the authoritative command names, so all three sentinel nodes are collected and run on
 every CI run — verified: `pytest --collect-only jarvis/tests tests` reports 3 matching nodes.
 The D39 gate executes remotely; it simply is not a separately named step.
+
+## 13 — Gates
+
+| Gate | Result |
+|---|---|
+| Authoritative suite, developer tree (`python -m pytest -q --tb=short jarvis/tests tests`) | **10621 passed, 45 skipped, exit 0** |
+| Authoritative suite, clean full clone | **10583 passed, 83 skipped, exit 0** |
+| D39 sentinel, clean clone | 3 passed |
+| Control plane verifier, both trees | 12 categories PASS, **PROBLEMS 0** |
+| Scientific suite (54 modules, `state/m62/scientific-suite.json`) | **3179 passed, 2 skipped** — unchanged from gen 32 |
+| M65A / M65B / M65C protected suites | 156 / 172 / 173 passed |
+| Release consistency · Ruff · compileall · Bandit `-ll` · soak · doctor | all PASS |
+
+The three totals differ only in the skip split: 10621+45, 10583+83 and 10591+75 are all
+**10666 nodes**. The gitignored runtime artefacts a developer tree carries turn some skips
+into passes; no test is lost in either direction.
+
+### Remote CI
+
+Real GitHub Actions, `workflow_dispatch` on the S5F branch:
+
+```
+run:        34045322366
+headSha:    2a4c608c8d03d5761cdeac253d9c49404c72f506
+conclusion: SUCCESS
+```
+
+All 8 jobs green — the 7 mandatory gates plus the advisory dependency audit:
+
+```
+success  Release truth & dependency authority
+success  Ruff & compileall (3.11)
+success  Deterministic suite (3.11, authoritative)   10591 passed, 75 skipped
+success  Compatibility smoke (3.12)
+success  Base text-mode install purity
+success  Wheel & sdist build + manifest scan
+success  Static security analysis (medium/high — blocking)
+success  Dependency audit (advisory)
+```
+
+The D39 sentinel is **not** a separate remote step (§12); it runs inside the authoritative
+job. It genuinely executed there: the job runs the same command on the same commit,
+collection is deterministic, the node total matches, and the sentinel carries no skip
+marker — so its three nodes ran, and the job is green.
+
+## 14 — What S5F did not do
+
+No merge, no tag, no release, no deployment. Master is unchanged at
+`3705114228edef2f665be349c5c4429b7b16777a` and is an ancestor of this branch; the merge
+simulation is clean and no side branch has commits this one strands. No model was loaded or
+trained, no holdout was read, no authority was created or spent. candidate 004 remains
+`EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`, candidate 005 `EVALUATED_NOT_ELIGIBLE`, eval-v7
+`USED_IMMUTABLE`; candidate 006 and eval-v8 do not exist. Seven of the control plane's eight
+records are carried forward from generation 32 **by digest**; only `defects` differs, and
+only in D39's `status`, `summary` and `evidence`.
+
+The branch is ready for a human merge decision. It has not been merged.
