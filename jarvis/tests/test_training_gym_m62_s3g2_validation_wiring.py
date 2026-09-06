@@ -38,6 +38,7 @@ costing minutes per test.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -1082,17 +1083,43 @@ def test_verification_refuses_a_manifest_that_describes_the_other_split(scratch)
 # ══════════════════════════════════════════════════════════════════════════════
 #  Nothing new reaches the network, and no framework is imported by planning
 # ══════════════════════════════════════════════════════════════════════════════
-def test_the_validation_export_authority_imports_no_framework():
-    before = {name for name in sys.modules
-              if name.split(".")[0] in {"torch", "transformers", "peft", "trl",
-                                        "accelerate", "datasets"}}
-    import importlib
+#: Frameworks the export authority must not drag in. Module-level so the subprocess
+#: probe below and its assertion cannot drift apart.
+_BANNED_FRAMEWORKS = ("torch", "transformers", "peft", "trl", "accelerate", "datasets")
 
-    importlib.reload(importlib.import_module("training_gym.datasets.export"))
-    after = {name for name in sys.modules
-             if name.split(".")[0] in {"torch", "transformers", "peft", "trl",
-                                       "accelerate", "datasets"}}
-    assert after == before
+
+def test_the_validation_export_authority_imports_no_framework():
+    """Measured in a SUBPROCESS. Never ``importlib.reload`` — that was D39.
+
+    Reloading rebinds the module's classes, so ``export.ExportError`` after the reload
+    is a DIFFERENT class object from the one every other test module bound at import
+    time. The four ``pytest.raises(ExportError)`` tests in
+    ``test_training_gym_m62_dataset_exports.py`` then stopped catching it and failed —
+    but only when this file was collected FIRST, which is why the alphabetical
+    authoritative collection never saw it. V69 M61 RC1 already forbids this pattern on
+    shared ``core`` modules for precisely this reason; this was the one place still
+    doing it.
+
+    A subprocess is also the only honest measurement of the claim. In-process,
+    ``before`` and ``after`` were both sampled after the rest of the suite had already
+    imported whatever it imports — and a reload cannot un-import ``torch`` — so the
+    assertion held no matter what this module pulled in. A virgin interpreter actually
+    tests it.
+    """
+    probe = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(_APP_ROOT)!r})\n"
+        "import training_gym.datasets.export\n"
+        f"banned = {set(_BANNED_FRAMEWORKS)!r}\n"
+        "print(' '.join(sorted(n for n in sys.modules"
+        " if n.split('.')[0] in banned)))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                            text=True, timeout=180)
+    assert result.returncode == 0, f"probe failed: {result.stderr[-400:]}"
+    assert result.stdout.split() == [], (
+        "importing training_gym.datasets.export pulled in "
+        f"{result.stdout.split()}")
 
 
 def test_planning_a_validation_enabled_config_still_creates_nothing(corpus, tmp_path):
