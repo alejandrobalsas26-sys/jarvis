@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0032-s5e-reality-gate-branch.json",
-  "latest_snapshot_sha256": "25eb25b143b6c6160310c182e270c296f56498efad484715cbd08ae119452c27",
+  "latest_snapshot_path": "state/m62/snapshots/0033-s5f-d39-order-isolation-branch.json",
+  "latest_snapshot_sha256": "8b8b0f05c6ad34f4256c5a9d33276d5aa87717cbd66f3534276d736a8ca51cfa",
   "schema_version": "m62.control_plane.3",
-  "state_generation": 32,
-  "subject_state_commit": "04f433c8079e7b6491e57a12f2e0a959c094c5d5",
+  "state_generation": 33,
+  "subject_state_commit": "45cbab2858a73225dfc346548f6608b9b1a5af6a",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

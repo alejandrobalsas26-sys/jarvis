@@ -778,7 +778,10 @@ STRUCTURAL_ADAPTER_TARGET_MODULES = (
 FROZEN_DEFECT_STATUSES: dict[str, str] = {
     "D37": "FIXED",
     "D38": "FIXED_OBSERVABILITY_ONLY",
-    "D39": "OPEN",
+    # S5F. An in-process importlib.reload rebound ExportError, so four
+    # pytest.raises sites caught a dead class whenever the reloading file was
+    # collected first. The reload is gone; import purity is a subprocess probe.
+    "D39": "FIXED",
     # S3Q.0.2. The three ways `m62.eval_receipt.2` refused a measurement that was
     # correct. All three were defects in the RECEIPT, and all three were closed by
     # moving the contract to the evidence -- never the evidence to the contract.

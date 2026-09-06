@@ -900,7 +900,7 @@ def test_a_promotion_claim_is_refused(sandbox):
 
 @pytest.mark.parametrize("defect,status", [("D37", "FIXED"),
                                            ("D38", "FIXED_OBSERVABILITY_ONLY"),
-                                           ("D39", "OPEN")])
+                                           ("D39", "FIXED")])
 def test_the_defect_statuses_are_unchanged(defect, status):
     """Properties 27, 28, 30."""
     assert V.FROZEN_DEFECT_STATUSES[defect] == status

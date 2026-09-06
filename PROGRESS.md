@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **32** |
+| **Control plane** | V3 · schema `m62.control_plane.3` · state generation **33** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0032-s5e-reality-gate-branch.json` |
-| **Snapshot SHA256** | `25eb25b143b6c6160310c182e270c296f56498efad484715cbd08ae119452c27` |
-| **Subject state commit** | `04f433c8079e7b6491e57a12f2e0a959c094c5d5` (S5E repository reality; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0033-s5f-d39-order-isolation-branch.json` |
+| **Snapshot SHA256** | `8b8b0f05c6ad34f4256c5a9d33276d5aa87717cbd66f3534276d736a8ca51cfa` |
+| **Subject state commit** | `45cbab2858a73225dfc346548f6608b9b1a5af6a` (S5F test isolation; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (V3 content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -301,7 +301,7 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
 | **D36** | FIXED | The identity redactor matches unless flanked by ASCII letters on both sides. Do not simplify to a substring match; do not widen to `\b`. |
 | **D37** | FIXED | Training binds a reasoning policy; `chat_render_policy_hash` binds the *call*. One live run (003, S3P, render `8619f96c…`). **Historical causality NOT_ESTABLISHED**. |
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic. **No gate reads it and none may be added without a separate operator decision.** |
-| **D39** | **OPEN** | Order-dependent test isolation between the S3G.2 validation-wiring file and the dataset-exports file. No recorded figure was ever affected. **Not a rider fix.** S5E: alphabetical collection puts exports first, so the authoritative run misses it — **117 passed, 4 failed reversed**. Ordering, not a fix. |
+| **D39** | **FIXED · S5F** | An in-process `importlib.reload` of the export module rebound `ExportError`, so its four `pytest.raises` sites caught a dead class whenever the wiring file was collected first. Alphabetical collection hid it. Import purity is now a subprocess probe. `…S5F_D39_ORDER_ISOLATION.md`. |
 | **D40–D42** | FIXED at `.3` | The three refusals `m62.eval_receipt.2` produced: the paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding, never by discarding evidence. Full text in the `defects` record. |
 | **D43** | FIXED (obs. only) | `EXTRA_DATA` was indistinguishable from an unclosed document. Fixed **prospectively** at S3T.0. **No gate reads it**; nothing is backfilled. |
 | **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — including `repr` of a **bound method**. `schemas.body_free_repr` renders identity and digests only, guarded **by type**. `…S3X0_…md`. |

@@ -864,11 +864,12 @@ def test_the_configured_and_default_generation_policies_stay_different(snapshot)
         "1b4696d6cc278f7a778f5c3917f015635efb076d81e5143235778ca8f8de2fc9"
 
 
-def test_d37_is_fixed_d38_is_fixed_and_d39_is_open(snapshot):
+def test_d37_is_fixed_d38_is_fixed_and_d39_is_fixed(snapshot):
+    """D39 moved OPEN -> FIXED at S5F. RESOLVED is not a value DEFECT_STATES holds."""
     defects = {d["id"]: d for d in snapshot["defects"]}
     assert defects["D37"]["status"] == "FIXED"
     assert defects["D38"]["status"] == "FIXED_OBSERVABILITY_ONLY"
-    assert defects["D39"]["status"] == "OPEN"
+    assert defects["D39"]["status"] == "FIXED"
 
 
 #: The ONLY defect that is a gate, and it is one by explicit operator ruling at S3X.0.
@@ -898,9 +899,16 @@ def test_d38_is_not_a_gate_in_the_state_or_in_the_source(snapshot):
 
 
 def test_a_defect_status_that_contradicts_the_milestone_authority_fails(sandbox):
+    """The mutation must CONTRADICT FROZEN_DEFECT_STATUSES to prove anything.
+
+    D39 was OPEN and this wrote FIXED. S5F fixed D39, so that write became a
+    no-op and the test passed against a verifier that had stopped being asked a
+    question. The direction is reversed, not the assertion.
+    """
+    assert V.FROZEN_DEFECT_STATUSES["D39"] == "FIXED"
     plane = _plane_from(sandbox)
     mutated = copy.deepcopy(plane.snapshot)
-    next(d for d in mutated["defects"] if d["id"] == "D39")["status"] = "FIXED"
+    next(d for d in mutated["defects"] if d["id"] == "D39")["status"] = "OPEN"
     _rewrite(sandbox, plane.current["latest_snapshot_path"], mutated)
     _repoint(sandbox)
     report = V.Report()
