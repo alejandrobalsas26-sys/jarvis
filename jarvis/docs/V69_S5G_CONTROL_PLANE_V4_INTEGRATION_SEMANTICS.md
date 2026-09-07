@@ -250,6 +250,34 @@ equality for everything else. A test walks every entry of both surfaces and asse
 `entry + "EVIL"` and `entry + "/child.py"` are refused while the entry itself is admitted,
 so a future entry cannot silently reopen it.
 
+### 5.3 — Rename detection hid the source of every rename
+
+Found by an independent red team, not by the author. `git diff --name-only` prints only the
+**destination** of a detected rename, and detection is on by default. So the closure never
+saw the path a rename came *from*:
+
+    git mv jarvis/scripts/evaluate_adapter.py jarvis/docs/evaluate_adapter.py
+
+deleted a state-bearing evaluation entrypoint from the runtime and presented the closure with
+one governed `jarvis/docs/` path. Measured: **PASS, 0 problems**, and after a fast-forward,
+`INTEGRATED_FAST_FORWARD`. The closure classifies paths; it cannot classify a path its input
+never mentions. All three lineage diffs now pass `--no-renames`, and a test walks the AST of
+each caller asserting the flag is present, because one call site left without it reopens it.
+
+### 5.4 — The record store was verified only where the current generation looked
+
+Also found by the red team. `check_record_store` walked `snapshot_stored["records"]` — the
+current generation's **8** blocks, of **18** files present. The other 10 are what sealed
+generations rehydrate from, and nothing hashed them. Rewriting a historical `candidates`
+record to flip a sealed candidate verdict verified **PASS**, with the tampered file sitting
+inside `state/m62/records/`, which the trailing surface calls governed.
+
+The suite caught it (`test_every_record_file_is_its_own_content_address`) but the **verifier**
+did not, and the verifier is what the integration authority rests on. The store is
+content-addressed and append-only, so the invariant is total and cheap: every file in it must
+hash to its own name, cited by a live generation or not. A record no live generation cites is
+still the evidence some sealed generation rests on.
+
 Eleven trailing paths were then measured in the staged context. Permitted: `jarvis/docs/`,
 `jarvis/tests/`, `state/m62/`, `PROGRESS.md`. Refused: a new `jarvis/core/` module, a new
 top-level module, a new unclassified `jarvis/scripts/` script, the training entrypoint,
@@ -319,7 +347,28 @@ quietly fixed, because a migration that only reports its successes is not eviden
   S5G moves them, but they carry the same shape `merged_into_master` did. The day a milestone
   needs to record a real tag, it should follow §3.2, not add a boolean.
 - **The observation trusts the refs it is given.** It is evidence about this checkout, not an
-  attestation about the remote.
+  attestation about the remote. Concretely, only `refs/remotes/origin/master` and
+  `refs/heads/master` are consulted: a `refs/remotes/upstream/master` in a fork topology, or
+  an `origin/master` nobody has fetched, yields a confident answer about the wrong ref.
+- **Advancing the governed subject is how new work becomes governed, and that is the whole
+  authorisation.** A generation whose `governed_subject` is a commit containing arbitrary
+  runtime and state-bearing changes passes — by design, since sealing a generation IS the act
+  that authorises them. The consequence, stated plainly: `UNGOVERNED_STATE_ADVANCE` and
+  `UNGOVERNED_TRAILING_COMMIT` constrain what rides along *after* the subject, never what is
+  inside it. The control for what goes into a subject is human review of the seal, not this
+  check, and `check_stale_state`'s "the snapshot moved with it" is satisfied by any edit under
+  `state/m62/` — it does not require a receipt, candidate or dataset record to move.
+- **The lineage diff is tree-to-tree.** A state-bearing file changed and then reverted inside
+  the range is invisible, because the end states match. The enforced statement is "the endpoints
+  agree", which is weaker than "nothing changed in between" for anything that trained or
+  measured at an intermediate commit.
+- **Top-level `tests/` is on the governed trailing surface and CI executes it.** `ci.yml` runs
+  `pytest jarvis/tests tests`, so a trailing `tests/conftest.py` is code that runs in CI, not
+  merely a test edit. Same class as the docs-and-tests gap above, named separately because a
+  conftest executes at collection for the whole run.
+- **`state/m62/` and `jarvis/docs/` admit arbitrary new files, including executable ones.**
+  The exec-bit check covers the enumerated record store, not every path under the governed
+  surface.
 
 ---
 

@@ -12,7 +12,7 @@
 | **Latest snapshot** | `state/m62/snapshots/0034-s5g-control-plane-v4-integration-authority.json` |
 | **Snapshot SHA256** | `67f10df17370b933c0fc5b8f6304000491d8f97f31c7da36d08e33d0807ae641` |
 | **Subject state commit** | `7d1a0216bb2d55238bc54501f2820023c1195245` (S5G control-plane V4; eval-v7 still spent once, 005 not eligible, 004 still held) |
-| **Integration authority** | base `3705114228edef2f665be349c5c4429b7b16777a` → `refs/heads/master`, **FAST_FORWARD_ONLY**. Observed: **`TARGET_AT_AUTHORIZED_BASE`** — authorised, **NOT** integrated |
+| **Integration authority** | base `3705114228edef2f665be349c5c4429b7b16777a` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run and deliberately not recorded here |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
@@ -68,7 +68,7 @@ name the commit that carries it (§2).
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, terminal `completed` |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** loads / generations / authorities. `…S4H_INSTRUMENT_HARDENING.md` |
 | Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME or REPOSITORY, no science** (gens 29–33, GOVERNANCE-ONLY). **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE` (M65C). S5E found CI's authoritative job **exiting 2 and running zero tests**. All five moved **0** loads / generations / authorities / spends. Rows verbatim: `jarvis/docs/m62/history/PROGRESS_MILESTONE_ROWS_THROUGH_S5F.md`; deep authority in each milestone document |
-| Last milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3 could not represent its own master integration: `project.master_commit` had to EQUAL the live master ref, so a generation committed onto master invalidated the value it declared — a **self-reference in the schema**, not a Git problem. V4 declares an **immutable integration authority** over commits that **already exist** and **DERIVES** the observation every run. `merged_into_master` is gone; branch-name authority is replaced by **ancestry**, which no detached checkout can bypass. **0** loads / generations / authorities / spends; master **NOT** moved. `…V69_S5G_CONTROL_PLANE_V4_INTEGRATION_SEMANTICS.md` |
+| Last milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3's `project.master_commit` had to EQUAL the live master ref, so committing a generation onto master invalidated it — a **self-reference in the schema**, not a Git problem. V4 declares an **immutable integration authority** over commits that **already exist** and **DERIVES** the observation every run; `merged_into_master` is gone and branch-name authority is replaced by **ancestry**, which no detached checkout bypasses. **0** loads / generations / authorities / spends; master **NOT** moved. `…V69_S5G_CONTROL_PLANE_V4_INTEGRATION_SEMANTICS.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -336,12 +336,13 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
   integration observation refuses any path outside governance, docs and tests between the
   governed subject and master; inside that surface, the CI suite is the control, not the
   control plane. Stated because it is the one gap the S5G matrix does not close.
-- **Two closure defects were MEASURED and closed in S5G**, both PASSed before the fix.
-  (a) It ran only on `subject..TARGET`, so while the target sits staged at its base it never
-  ran and an ungoverned `jarvis/core/` module rode free — closed by step 2b, the same
-  `closure_offenders` over `subject..HEAD`. (b) `startswith` was applied to allowlist entries
-  naming a FILE, so `PROGRESS.mdEVIL/` was a whole ungoverned tree — a trailing `/` now means
-  "and everything beneath"; all else matches exactly.
+- **Four closure defects were MEASURED and closed in S5G**, each PASSing beforehand, two found
+  by a red team. (a) It ran only on `subject..TARGET`, not the staged
+  `subject..HEAD`; (b) `startswith` matched allowlist entries naming a FILE, so
+  `PROGRESS.mdEVIL/` was governed; (c) `--name-only` hides a rename's SOURCE, so `git mv` of a state-bearing
+  entrypoint into `jarvis/docs/` was invisible; (d) only the 8 records the live
+  generation cites were hashed, leaving 10 open. All closed; reproductions in
+  `…V69_S5G_CONTROL_PLANE_V4_INTEGRATION_SEMANTICS.md` §5.1–5.4.
 
 The snapshot's `limitations` record carries the full list; this is the operational subset.
 

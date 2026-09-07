@@ -3397,6 +3397,13 @@ def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
     a new top-level script, a workflow that changes enforcement -- fails rather than
     slips through an "unknown, therefore harmless" default.
 
+    Every caller must supply the diff with ``--no-renames``. Git detects renames by
+    default and ``--name-only`` then prints ONLY the destination, so
+    ``git mv jarvis/scripts/evaluate_adapter.py jarvis/docs/`` deleted a state-bearing
+    production entrypoint while presenting a single governed ``jarvis/docs/`` path --
+    measured passing as INTEGRATED_FAST_FORWARD. The closure classifies paths; it
+    cannot classify a path its input never mentions.
+
     It is ONE function because it is applied to two different lineages, and a closure
     that exists twice is a closure that can be weakened once. See
     :func:`check_integration_authority` step 2b for the lineage the second caller
@@ -3427,7 +3434,7 @@ def _observe_one(ref: str, target: str, base: str, subject: str,
                 f"subject {subject[:12]}; this authorisation does not cover it", [])
     # The target contains the subject. That alone is NOT enough: bare ancestry admits
     # arbitrary later commits, so what rode along has to be governed too.
-    code, out = _git("diff", "--name-only", subject, target)
+    code, out = _git("diff", "--no-renames", "--name-only", subject, target)
     if code != 0:
         return ("TARGET_UNRESOLVABLE",
                 f"the {subject[:12]}..{target[:12]} diff could not be computed, so what "
@@ -3525,7 +3532,7 @@ def check_integration_authority(cp: ControlPlane, report: Report) -> None:
     # ``check_stale_state`` does not cover this: it denies only the hardcoded
     # STATE_BEARING_PRODUCTION list, so every path nobody thought to enumerate passed.
     # That is the "unknown, therefore allowed" default this check exists to remove.
-    code, out = _git("diff", "--name-only", subject, head)
+    code, out = _git("diff", "--no-renames", "--name-only", subject, head)
     if code != 0:
         report.fail("INTEGRATION_AUTHORITY",
                     f"the {subject[:12]}..HEAD diff could not be computed, so what this "
@@ -3626,7 +3633,7 @@ def check_stale_state(cp: ControlPlane, report: Report) -> None:
     state-bearing milestone writes a new generation.
     """
     subject = cp.snapshot.get("subject_state_commit", "")
-    code, out = _git("diff", "--name-only", f"{subject}..HEAD")
+    code, out = _git("diff", "--no-renames", "--name-only", f"{subject}..HEAD")
     if code != 0:
         report.fail("STALE_STATE",
                     "the subject..HEAD diff could not be computed, so staleness is "
@@ -5843,6 +5850,35 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
         report.fail("RECORD_STORE", f"{RECORD_DIR} is missing but the generation "
                                     f"references records")
         return
+
+    # ── Every record in the store, not merely the ones this generation cites ──
+    #
+    # The loop below walks `referenced`, which is the CURRENT generation's blocks --
+    # 8 of the 18 files present. The other 10 are what earlier generations rehydrate
+    # from, and nothing here hashed them: a historical `candidates` record could be
+    # rewritten to flip a sealed candidate verdict and the verifier reported PASS with
+    # the tampered file sitting inside `state/m62/records/`, which the trailing surface
+    # calls governed. Measured, integrated, and clean.
+    #
+    # The store is content-addressed and append-only, so the invariant is total and
+    # cheap: EVERY file in it must hash to its own name. A record no live generation
+    # cites is still the evidence some sealed generation rests on.
+    for path in sorted(directory.glob("*.json")):
+        rel = f"{RECORD_DIR}/{path.name}"
+        if path.is_symlink():
+            report.fail("RECORD_STORE", f"{rel} is a symlink")
+            continue
+        measured = sha256_file(path)
+        if measured != path.stem:
+            report.fail("RECORD_STORE",
+                        f"{rel} hashes to {measured}; a content-addressed record must "
+                        f"BE its own name, so this file has been rewritten since it "
+                        f"was sealed")
+    strays = sorted(q.name for q in directory.iterdir()
+                    if q.is_file() and q.suffix != ".json")
+    if strays:
+        report.fail("RECORD_STORE",
+                    f"{RECORD_DIR} holds {len(strays)} non-record file(s): {strays[:5]}")
 
     referenced = set(cp.snapshot_stored.get("records", {}).values())
     rel_paths = []

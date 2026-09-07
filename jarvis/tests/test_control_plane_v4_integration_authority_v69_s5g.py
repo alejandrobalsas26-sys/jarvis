@@ -772,7 +772,7 @@ def test_an_unresolvable_subject_to_head_diff_is_unknown_not_clean(lab):
 
     def broken(*args: str):
         # HEAD is passed RESOLVED, so match the shape rather than the literal name.
-        if args[:3] == ("diff", "--name-only", lab.subject):
+        if args[0] == "diff" and lab.subject in args:
             return 128, "fatal: bad object"
         return original(*args)
 
@@ -880,3 +880,97 @@ def test_state_bearing_production_paths_are_still_detected():
         "jarvis/training_gym/a.py"]
     assert V.closure_offenders(["jarvis/scripts/train_experiment.py"])[0] == [
         "jarvis/scripts/train_experiment.py"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Rename detection hid the SOURCE of every rename
+#
+#  `git diff --name-only` prints only the DESTINATION of a detected rename, and
+#  detection is on by default. So `git mv jarvis/scripts/evaluate_adapter.py
+#  jarvis/docs/` deleted a state-bearing evaluation entrypoint while presenting a
+#  single governed `jarvis/docs/` path — measured passing as
+#  INTEGRATED_FAST_FORWARD with 0 problems, in a real clone. The closure classifies
+#  paths; it cannot classify a path its input never mentions.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_a_state_bearing_path_renamed_into_the_governed_surface_is_still_seen(lab):
+    _run(lab.root, "checkout", "-q", "--detach", lab.tip)
+    _run(lab.root, "mv", "jarvis/training_gym/data.py", "jarvis/docs/data.py")
+    _run(lab.root, "commit", "-q", "-m", "relocate a state-bearing path into docs")
+    head = _run(lab.root, "rev-parse", "HEAD")
+
+    # Git really does report this as a rename, so the hazard is present rather than
+    # hypothetical -- and with detection on, the SOURCE path is absent from --name-only.
+    status = _run(lab.root, "diff", "--name-status", lab.subject, head)
+    assert any(line.startswith("R") for line in status.splitlines()), status
+    detected = _run(lab.root, "diff", "--name-only", lab.subject, head)
+    assert "jarvis/training_gym/data.py" not in detected.splitlines()
+
+    report = _staged_authority_report(lab, head)
+    assert report.status("INTEGRATION_AUTHORITY") == "FAIL"
+    assert any("jarvis/training_gym/data.py" in message
+               for _, message in report.problems), report.problems
+
+
+def test_every_lineage_diff_disables_rename_detection():
+    """Pins the flag itself. One call site left without it reopens the hole."""
+    import ast
+    import inspect
+
+    for func in (V._observe_one, V.check_integration_authority, V.check_stale_state):
+        for node in ast.walk(ast.parse(inspect.getsource(func).strip())):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name) and node.func.id == "_git"):
+                continue
+            args = [a.value for a in node.args if isinstance(a, ast.Constant)]
+            if args and args[0] == "diff":
+                assert "--no-renames" in args, (
+                    f"{func.__name__} diffs a lineage with rename detection ON, which "
+                    f"hides the source path of every rename")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The record store is verified WHOLE, not merely where the current generation looks
+#
+#  `check_record_store` walked only the current generation's blocks — 8 of the 18
+#  files present. The other 10 are what sealed generations rehydrate from, and
+#  nothing hashed them: a historical `candidates` record was rewritten to flip a
+#  sealed candidate verdict and the verifier reported PASS, with the tampered file
+#  inside `state/m62/records/`, which the trailing surface calls governed.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_the_record_store_verifies_every_file_not_only_the_referenced_ones():
+    current = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
+    stored = json.loads(
+        (REPO / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
+    referenced = set(stored["records"].values())
+    on_disk = {p.stem for p in (REPO / V.RECORD_DIR).glob("*.json")}
+    assert on_disk - referenced, (
+        "this test is only meaningful while unreferenced historical records exist")
+    for stem in on_disk:
+        assert V.sha256_file(REPO / V.RECORD_DIR / f"{stem}.json") == stem, stem
+
+
+def test_a_tampered_unreferenced_record_is_refused(tmp_path, monkeypatch):
+    """The exact shape that passed: rewrite a record no live generation cites."""
+    import shutil
+
+    root = tmp_path / "repo"
+    (root / V.RECORD_DIR).mkdir(parents=True)
+    for src in (REPO / V.RECORD_DIR).glob("*.json"):
+        shutil.copy2(src, root / V.RECORD_DIR / src.name)
+    monkeypatch.setattr(V, "REPO_ROOT", root)
+
+    stored = {"schema_version": V.CONTROL_PLANE_V4_SCHEMA_VERSION, "records": {}}
+    plane = V.ControlPlane(current={}, current_bytes=b"", snapshot={},
+                           snapshot_bytes=b"", snapshot_path=Path("x"), migration={},
+                           snapshot_stored=stored, records={})
+
+    clean = V.Report()
+    V.check_record_store(plane, clean)
+    tampered = sorted((root / V.RECORD_DIR).glob("*.json"))[0]
+    assert not any("hashes to" in m for _, m in clean.problems), "baseline must be clean"
+
+    tampered.write_bytes(tampered.read_bytes() + b"\n")
+    report = V.Report()
+    V.check_record_store(plane, report)
+    assert any("hashes to" in message and "rewritten since it was sealed" in message
+               for _, message in report.problems), report.problems
