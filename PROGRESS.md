@@ -336,6 +336,11 @@ Only what still binds operation; D1–D27 live in the archive, indexed in
   integration observation refuses any path outside governance, docs and tests between the
   governed subject and master; inside that surface, the CI suite is the control, not the
   control plane. Stated because it is the one gap the S5G matrix does not close.
+- **The V4 closure first ran on the wrong lineage, and it was measured** (S5G). It lived only
+  in `_observe_one`, which compares the subject to the TARGET; while the target is still
+  staged at its base that scan never executes, so an ungoverned `jarvis/core/` module between
+  the subject and HEAD verified PASS. Closed by step 2b — the same `closure_offenders`
+  applied to `subject..HEAD`, deny-by-default, one implementation, both callers.
 
 The snapshot's `limitations` record carries the full list; this is the operational subset.
 

@@ -205,6 +205,35 @@ Every case below is built as a real throwaway Git repository, not a mock.
 | 13 | V4 state read under V3 rules | impossible — same dispatch |
 | 14 | emptied record store under V4 | refused (see §7) |
 | 15 | detached HEAD | same verdict as attached, asserted |
+| 16 | ungoverned runtime path while the target is STILL STAGED | refused (see §5.1) |
+
+### 5.1 — The closure ran on the wrong lineage, and it was measured
+
+The first implementation put the whole governance closure inside `_observe_one`, which
+compares the governed subject to the **target**. That is the wrong lineage to rely on alone.
+While the target still sits at the authorised base — the staged case, which is *every run
+made before anyone integrates, including the run an operator reads to decide whether to* —
+`_observe_one` returns `TARGET_AT_AUTHORIZED_BASE` on its first comparison and the
+trailing-path scan never executes at all.
+
+Measured on the real tree, not argued: a commit adding `jarvis/core/new_runtime_engine.py`
+between the governed subject and HEAD verified **PASS, 0 problems**, and became visible only
+once master had already been moved onto it. `check_stale_state` did not cover it either — it
+denies the hardcoded `STATE_BEARING_PRODUCTION` list and nothing else, so every path nobody
+had thought to enumerate passed by default. That is exactly the "unknown, therefore harmless"
+default a deny-by-default closure exists to remove, surviving in the half of the design
+nobody had pointed a test at.
+
+The fix is step **2b** of `check_integration_authority`: the same closure, applied to
+`subject..HEAD` — the lineage that actually accumulates commits. `closure_offenders` is now a
+single function called by both sites, because a closure that exists twice is a closure that
+can be weakened once, and a test asserts neither caller re-implements the membership test.
+An uncomputable `subject..HEAD` diff fails closed as UNKNOWN rather than clean.
+
+Eleven trailing paths were then measured in the staged context. Permitted: `jarvis/docs/`,
+`jarvis/tests/`, `state/m62/`, `PROGRESS.md`. Refused: a new `jarvis/core/` module, a new
+top-level module, a new unclassified `jarvis/scripts/` script, the training entrypoint,
+`pyproject.toml`, `.github/workflows/ci.yml`, `requirements/base.txt`.
 
 ---
 
@@ -256,6 +285,11 @@ quietly fixed, because a migration that only reports its successes is not eviden
   trailing surface must permit docs and tests, because generation 33 genuinely has two such
   commits after its seal and a stricter rule would fail the repository as it stands. The CI
   suite is the control for that surface, not the control plane. This is the one gap in §5.
+- **The verifier itself is inside the permitted trailing surface.** `VERIFIER_PATH` has to
+  be, since changing it is what a control-plane milestone does. It is not an additional
+  exposure — the verifier that runs is whatever is at HEAD regardless of what any allowlist
+  says — but it does mean the closure cannot be the control for a weakened verifier. The
+  suite and review are.
 - **An exact rollback to the declared base is invisible.** If the target is integrated and
   then force-reset to exactly `integration_base`, the observation reads
   `TARGET_AT_AUTHORIZED_BASE` — indistinguishable from "never integrated". No point-in-time

@@ -634,3 +634,120 @@ def test_both_target_refs_are_resolved_when_both_exist(lab):
     assert [ref for ref, _ in resolved] == [
         "refs/remotes/origin/master", "refs/heads/master"]
     assert V._resolve_all_targets("refs/heads/anything-else") == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The governance closure runs on the lineage that ACCUMULATES commits
+#
+#  Measured hole, not a hypothetical one. The closure lived only inside
+#  `_observe_one`, which compares the governed subject to the TARGET. While the
+#  target still sits at the authorised base — the staged case, which is every run
+#  made before anyone integrates — `_observe_one` returns TARGET_AT_AUTHORIZED_BASE
+#  on its first comparison and the trailing-path scan never executes. A commit
+#  adding `jarvis/core/new_runtime_engine.py` between the governed subject and HEAD
+#  verified CLEAN, and became visible only once master had already moved onto it.
+#  `check_stale_state` did not cover it either: it denies the hardcoded
+#  STATE_BEARING_PRODUCTION list and nothing else, so every path nobody had
+#  enumerated passed by default. That is the "unknown, therefore allowed" default
+#  the closure exists to remove.
+# ══════════════════════════════════════════════════════════════════════════════
+def _staged_authority_report(lab: Lab, head: str) -> V.Report:
+    """Run the authority check with the target parked at its authorised base."""
+    lab.set_target(lab.base)
+    _run(lab.root, "checkout", "-q", "--detach", head)
+    snapshot = {"subject_state_commit": lab.subject,
+                "integration_authority": lab.authority()}
+    report = V.Report()
+    V.check_integration_authority(_plane(snapshot), report)
+    return report
+
+
+def test_an_ungoverned_runtime_path_is_refused_while_the_target_is_still_staged(lab):
+    """THE regression. Staged is the context an operator reads to decide to integrate."""
+    ungoverned = lab.commit_on(lab.tip, "jarvis/core/new_runtime_engine.py", "engine")
+    report = _staged_authority_report(lab, ungoverned)
+
+    assert report.status("INTEGRATION_AUTHORITY") == "FAIL"
+    assert any("jarvis/core/new_runtime_engine.py" in message
+               for _, message in report.problems)
+    # And the observation alone would NOT have caught it: the target never moved.
+    assert _observe(lab) == "TARGET_AT_AUTHORIZED_BASE"
+
+
+@pytest.mark.parametrize("relpath", [
+    "jarvis/core/new_runtime_engine.py",   # a runtime module no classifier knows
+    "new_top_level_module.py",             # a new top-level Python module
+    "jarvis/scripts/new_helper.py",        # a new script, not classified governance
+    "jarvis/training_gym/probe.py",        # state-bearing production
+    "pyproject.toml",                      # package metadata that changes behaviour
+    ".github/workflows/ci.yml",            # a workflow that changes enforcement
+    "requirements/base.txt",               # the dependency surface
+])
+def test_unknown_and_ungoverned_trailing_paths_all_fail_closed(lab, relpath):
+    """Deny by default: being unclassified is a REASON to fail, never an exemption."""
+    head = lab.commit_on(lab.tip, relpath, "trailing change")
+    assert _staged_authority_report(lab, head).status("INTEGRATION_AUTHORITY") == "FAIL"
+
+
+@pytest.mark.parametrize("relpath", [
+    "jarvis/docs/EVIDENCE.md", "jarvis/tests/test_probe.py",
+    "state/m62/notes.txt", "PROGRESS.md",
+])
+def test_the_explicitly_governed_trailing_surface_still_passes(lab, relpath):
+    """The closure is narrow, not merely strict: the permitted classes stay permitted."""
+    head = lab.commit_on(lab.tip, relpath, "governed trailing change")
+    assert _staged_authority_report(lab, head).status("INTEGRATION_AUTHORITY") == "PASS"
+
+
+def test_the_closure_has_exactly_one_implementation():
+    """A closure that exists twice is a closure that can be weakened once.
+
+    Both callers must route through :func:`closure_offenders`; a second inline copy of
+    the membership test is how one lineage silently keeps a permissive default.
+    """
+    import ast
+    import inspect
+
+    for func in (V._observe_one, V.check_integration_authority):
+        code = ast.unparse(ast.parse(inspect.getsource(func).strip()))
+        assert "closure_offenders" in code, func.__name__
+        assert "INTEGRATION_TRAILING_PATHS" not in code, (
+            f"{func.__name__} re-implements the closure instead of calling it")
+
+
+def test_the_closure_denies_by_default_rather_than_allowing_by_default():
+    """Pins the polarity itself, so an inverted membership test cannot pass."""
+    state_bearing, ungoverned = V.closure_offenders(
+        ["jarvis/docs/a.md", "jarvis/core/b.py", "jarvis/training_gym/c.py",
+         "totally/unheard/of/path.bin"])
+    assert state_bearing == ["jarvis/training_gym/c.py"]
+    assert ungoverned == ["jarvis/core/b.py", "jarvis/training_gym/c.py",
+                          "totally/unheard/of/path.bin"]
+    assert V.closure_offenders([]) == ([], [])
+
+
+def test_an_unresolvable_subject_to_head_diff_is_unknown_not_clean(lab):
+    """Fail closed: "git could not tell me" is never evidence that nothing moved."""
+    snapshot = {"subject_state_commit": lab.subject,
+                "integration_authority": lab.authority()}
+    report = V.Report()
+    V.check_integration_authority(_plane(snapshot), report)
+    assert report.status("INTEGRATION_AUTHORITY") == "PASS"
+
+    # Same record, but the diff cannot be computed.
+    original = V._git
+
+    def broken(*args: str):
+        # HEAD is passed RESOLVED, so match the shape rather than the literal name.
+        if args[:3] == ("diff", "--name-only", lab.subject):
+            return 128, "fatal: bad object"
+        return original(*args)
+
+    V._git = broken
+    try:
+        broke = V.Report()
+        V.check_integration_authority(_plane(snapshot), broke)
+    finally:
+        V._git = original
+    assert broke.status("INTEGRATION_AUTHORITY") == "FAIL"
+    assert any("UNKNOWN rather than clean" in message for _, message in broke.problems)

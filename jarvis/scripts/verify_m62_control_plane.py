@@ -3369,6 +3369,29 @@ def observe_integration_state(authority: dict) -> "tuple[str, str, list[str]]":
     return seen[0]
 
 
+def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
+    """The governance closure, DENY BY DEFAULT, in exactly one place.
+
+    Returns ``(state_bearing, ungoverned)``. A path is governed only by being matched
+    by :data:`INTEGRATION_TRAILING_PATHS`; anything the list does not name is
+    ungoverned, so a path nobody has classified yet -- a new ``jarvis/core/`` module,
+    a new top-level script, a workflow that changes enforcement -- fails rather than
+    slips through an "unknown, therefore harmless" default.
+
+    It is ONE function because it is applied to two different lineages, and a closure
+    that exists twice is a closure that can be weakened once. See
+    :func:`check_integration_authority` step 2b for the lineage the second caller
+    covers and why leaving it uncovered was a real hole rather than a theoretical one.
+    """
+    state_bearing = sorted(
+        path for path in changed
+        if any(path == q or path.startswith(q) for q in STATE_BEARING_PRODUCTION))
+    ungoverned = sorted(
+        path for path in changed
+        if not any(path == q or path.startswith(q) for q in INTEGRATION_TRAILING_PATHS))
+    return state_bearing, ungoverned
+
+
 def _observe_one(ref: str, target: str, base: str, subject: str,
                  ) -> "tuple[str, str, list[str]]":
     """The relationship between ONE resolved target ref and the authorisation."""
@@ -3391,18 +3414,13 @@ def _observe_one(ref: str, target: str, base: str, subject: str,
         return ("TARGET_UNRESOLVABLE",
                 f"the {subject[:12]}..{target[:12]} diff could not be computed, so what "
                 f"advanced past the governed subject is UNKNOWN", [])
-    changed = [line for line in out.splitlines() if line]
-    state_bearing = sorted(
-        path for path in changed
-        if any(path == q or path.startswith(q) for q in STATE_BEARING_PRODUCTION))
+    state_bearing, ungoverned = closure_offenders(
+        [line for line in out.splitlines() if line])
     if state_bearing:
         return ("UNGOVERNED_STATE_ADVANCE",
                 f"{len(state_bearing)} state-bearing production path(s) changed between "
                 f"the governed subject and {ref} without a generation covering them",
                 state_bearing)
-    ungoverned = sorted(
-        path for path in changed
-        if not any(path == q or path.startswith(q) for q in INTEGRATION_TRAILING_PATHS))
     if ungoverned:
         return ("UNGOVERNED_TRAILING_COMMIT",
                 f"{len(ungoverned)} path(s) outside the governed trailing surface changed "
@@ -3473,6 +3491,43 @@ def check_integration_authority(cp: ControlPlane, report: Report) -> None:
         report.fail("INTEGRATION_AUTHORITY",
                     f"HEAD {head[:12]} does not descend from the governed subject "
                     f"{subject[:12]}; this record does not govern this lineage")
+
+    # ── 2b. Governance closure over the lineage THIS TREE is on ──
+    #
+    # Step 3 closes ``subject..target``. That is the WRONG lineage to rely on alone,
+    # and the gap was measured rather than reasoned about: while the target still sits
+    # at the authorised base -- the STAGED case, which is every run made BEFORE anyone
+    # integrates, including the run an operator reads to decide whether to -- step 3
+    # returns TARGET_AT_AUTHORIZED_BASE on its first comparison and the trailing-path
+    # scan never executes at all. A commit adding ``jarvis/core/new_runtime_engine.py``
+    # between the governed subject and HEAD therefore verified CLEAN, and only became
+    # visible at the moment master had already moved onto it. The closure has to run
+    # on the lineage that is actually accumulating commits, which is this one.
+    #
+    # ``check_stale_state`` does not cover this: it denies only the hardcoded
+    # STATE_BEARING_PRODUCTION list, so every path nobody thought to enumerate passed.
+    # That is the "unknown, therefore allowed" default this check exists to remove.
+    code, out = _git("diff", "--name-only", subject, head)
+    if code != 0:
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"the {subject[:12]}..HEAD diff could not be computed, so what this "
+                    f"tree added past the governed subject is UNKNOWN rather than clean")
+    else:
+        state_bearing, ungoverned = closure_offenders(
+            [line for line in out.splitlines() if line])
+        if state_bearing:
+            report.fail("INTEGRATION_AUTHORITY",
+                        f"{len(state_bearing)} state-bearing production path(s) changed "
+                        f"between the governed subject and HEAD without a generation "
+                        f"covering them ({', '.join(state_bearing[:5])})")
+        if ungoverned:
+            report.fail("INTEGRATION_AUTHORITY",
+                        f"{len(ungoverned)} path(s) outside the governed trailing "
+                        f"surface changed between the governed subject and HEAD; this "
+                        f"lineage carries work no generation authorises "
+                        f"({', '.join(ungoverned[:5])})")
+        if not state_bearing and not ungoverned:
+            report.note("the subject..HEAD lineage carries only governed trailing work")
 
     # ── 3. Observation — derived from live refs, never declared ──
     state, detail, offenders = observe_integration_state(authority)
