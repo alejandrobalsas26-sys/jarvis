@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0033-s5f-d39-order-isolation-branch.json",
-  "latest_snapshot_sha256": "8b8b0f05c6ad34f4256c5a9d33276d5aa87717cbd66f3534276d736a8ca51cfa",
-  "schema_version": "m62.control_plane.3",
-  "state_generation": 33,
-  "subject_state_commit": "45cbab2858a73225dfc346548f6608b9b1a5af6a",
+  "latest_snapshot_path": "state/m62/snapshots/0034-s5g-control-plane-v4-integration-authority.json",
+  "latest_snapshot_sha256": "67f10df17370b933c0fc5b8f6304000491d8f97f31c7da36d08e33d0807ae641",
+  "schema_version": "m62.control_plane.4",
+  "state_generation": 34,
+  "subject_state_commit": "7d1a0216bb2d55238bc54501f2820023c1195245",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
