@@ -39,7 +39,6 @@ tree is never written. This file reads no holdout task body and contains none.
 """
 from __future__ import annotations
 
-import copy
 import json
 import subprocess  # nosec B404 - fixed argv, shell=False, test fixtures only
 import sys
