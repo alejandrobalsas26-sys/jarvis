@@ -88,8 +88,30 @@ CONTROL_PLANE_SCHEMA_VERSION = "m62.control_plane.1"
 #: — so every check below is written against the V2 shape and is unaware the
 #: format changed. The budget is NOT raised; the snapshot simply got smaller.
 CONTROL_PLANE_V3_SCHEMA_VERSION = "m62.control_plane.3"
+#: V69 S5G — the INTEGRATION-AUTHORITY generation format.
+#:
+#: V3 could not represent its own master integration. ``project.master_commit``
+#: had to EQUAL the live master ref, so a snapshot committed onto master declared
+#: a value that committing it invalidated: declare X, commit, master becomes Y,
+#: X != Y; declare Y, commit, master becomes Z. The declaration lags the ref it
+#: describes by exactly one commit, permanently, and closing the gap would require
+#: a commit to contain its own SHA. That is a self-reference in the schema, not a
+#: Git problem, and no generation number fixes it.
+#:
+#: V4 keeps the V3 content-addressed container byte-for-byte and changes only WHAT
+#: IS DECLARED. It separates an IMMUTABLE AUTHORISATION — an integration base, a
+#: governed subject, a target ref and a method, every one of them a commit or a
+#: constant that ALREADY EXISTED when the record was written — from a LIVE
+#: OBSERVATION derived fresh on every run. Nothing time-varying is written down,
+#: so nothing can go stale, and the SAME record validates before and after the
+#: integration it authorises.
+#:
+#: V3 generations stay V3. The dispatch is on ``schema_version`` and the V2/V3 code
+#: path is untouched; a V3 snapshot is never reinterpreted under V4 rules.
+CONTROL_PLANE_V4_SCHEMA_VERSION = "m62.control_plane.4"
 CONTROL_PLANE_SCHEMA_VERSIONS = frozenset({
-    CONTROL_PLANE_SCHEMA_VERSION, CONTROL_PLANE_V3_SCHEMA_VERSION})
+    CONTROL_PLANE_SCHEMA_VERSION, CONTROL_PLANE_V3_SCHEMA_VERSION,
+    CONTROL_PLANE_V4_SCHEMA_VERSION})
 
 #: S3P. The schema of the portable, tracked, root-independent receipt that a
 #: ``TRAINED_UNEVALUATED`` claim must be backed by. It is a SEPARATE contract from the
@@ -215,6 +237,11 @@ SCHEMA_DIR = f"{STATE_DIR}/schema"
 CURRENT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-current.schema.json"
 SNAPSHOT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot.schema.json"
 SNAPSHOT_V3_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot-v3.schema.json"
+#: S5G. The V4 CONTAINER and the V4 SEMANTIC shape it rehydrates to. Two files
+#: because a V4 generation must satisfy BOTH contracts, exactly as V3 does.
+SNAPSHOT_V4_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-snapshot-v4.schema.json"
+SNAPSHOT_V4_SEMANTIC_SCHEMA_PATH = (
+    f"{SCHEMA_DIR}/m62-snapshot-v4-semantic.schema.json")
 TRAIN_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-train-receipt.schema.json"
 EVAL_RECEIPT_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt.schema.json"
 EVAL_RECEIPT_V2_SCHEMA_PATH = f"{SCHEMA_DIR}/m62-eval-receipt-v2.schema.json"
@@ -260,6 +287,54 @@ STATE_BEARING_PRODUCTION = (
 #: Paths that are the control plane itself. Changing these is what a control-plane
 #: milestone does, and it is not evidence that the SUBJECT state moved.
 CONTROL_PLANE_PATHS = (STATE_DIR + "/", PROGRESS_PATH, VERIFIER_PATH)
+
+
+# ── S5G: integration authority vocabulary ────────────────────────────────────────────
+#: The ONLY ref a V4 record may authorise an integration toward. Hardcoded rather than
+#: matched: a wildcard or a pattern would let an unrelated branch present itself as the
+#: target, and ``fetch-depth: 0`` puts every branch in the repository within reach of a
+#: bare name lookup.
+INTEGRATION_TARGET_REFS = ("refs/heads/master",)
+
+#: How the target may be reached from the base. Fast-forward only: a merge commit would
+#: introduce a parent that no generation governs.
+INTEGRATION_METHODS = ("FAST_FORWARD_ONLY",)
+
+#: Paths a commit BETWEEN the governed subject and the target may touch and still be
+#: covered by the authorisation. Everything else is ungoverned movement.
+#:
+#: This list is not cosmetic and it is not a guess: at generation 33 the two commits
+#: after the seal touch exactly ``jarvis/docs/`` and ``jarvis/tests/``, so a rule
+#: demanding the target BE the seal commit would fail the repository as it stands. The
+#: honest constraint is that trailing commits may carry governance, documentation and
+#: tests — never runtime, never state-bearing production.
+#:
+#: WHAT THIS DOES NOT CATCH is recorded rather than papered over: a hostile edit confined
+#: to ``jarvis/tests/`` or ``jarvis/docs/`` rides along inside the allowance. The suite
+#: that runs in CI is the control for that one, not this check.
+INTEGRATION_TRAILING_PATHS = (
+    STATE_DIR + "/", PROGRESS_PATH, VERIFIER_PATH, "jarvis/docs/", "jarvis/tests/",
+    "tests/",
+)
+
+#: Every value :func:`observe_integration_state` can return. An OBSERVATION, derived on
+#: every run from live refs; never a declared field, because a declared one would be the
+#: fixed point again.
+OBSERVED_INTEGRATION_STATES = (
+    "TARGET_AT_AUTHORIZED_BASE",
+    "INTEGRATED_FAST_FORWARD",
+    "TARGET_ADVANCED_WITHOUT_SUBJECT",
+    "TARGET_REWRITTEN",
+    "UNGOVERNED_STATE_ADVANCE",
+    "UNGOVERNED_TRAILING_COMMIT",
+    "TARGET_UNRESOLVABLE",
+)
+
+#: The two observations that are authority. Everything else FAILS, and that includes
+#: ``TARGET_UNRESOLVABLE`` — "the ref was not available" is not evidence that the target
+#: is where the authorisation says it may be.
+ADMITTED_INTEGRATION_STATES = frozenset({
+    "TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"})
 
 #: Immutable historical record. Append-never-edit.
 HISTORY_PATHS = ("jarvis/docs/m62/history/",)
@@ -2457,6 +2532,68 @@ def snapshot_v3_schema() -> dict:
             "properties": inline}
 
 
+def snapshot_v4_semantic_schema() -> dict:
+    """The V4 SEMANTIC shape — what a V4 generation MEANS, after rehydration.
+
+    Identical to the V2/V3 semantics except in the one place V3 could not represent
+    its own integration:
+
+    * ``project.master_commit`` is GONE. It demanded equality with a live ref, and a
+      snapshot committed onto that ref can never satisfy it.
+    * ``project.merged_into_master`` is GONE. It was a frozen boolean that no check
+      ever verified against Git — false before the push, still false after it — and a
+      time-varying fact has no place in an immutable record.
+    * ``integration_authority`` is NEW, and every field in it names something that
+      ALREADY EXISTED when the record was written.
+
+    ``project.branch`` SURVIVES as provenance and is deliberately NOT authority. Under
+    V3 it was a gate that ``git rev-parse --abbrev-ref HEAD`` skipped entirely whenever
+    HEAD was detached, which is every ``pull_request`` run — so it was never enforcing
+    what it appeared to enforce. Lineage is established by ancestry instead, which no
+    checkout shape can bypass.
+    """
+    base = snapshot_schema()
+    props = {k: v for k, v in base["properties"].items()}
+    props["project"] = _obj({
+        "branch": _SHORT, "milestone": _SHORT,
+        "tagged": {"const": False},
+        "released": {"const": False},
+    }, description="Provenance. `branch` records where the generation was authored "
+                   "and is NOT authority under V4; lineage is proved by ancestry.")
+    props["integration_authority"] = _obj({
+        "integration_base": _COMMIT,
+        "governed_subject": _COMMIT,
+        "target_ref": {"enum": list(INTEGRATION_TARGET_REFS)},
+        "method": {"enum": list(INTEGRATION_METHODS)},
+    }, description="An IMMUTABLE authorisation over commits that already exist. It "
+                   "states what MAY happen, never what HAS happened; the observation "
+                   "is derived from live refs on every run.")
+    props["schema_version"] = {"const": CONTROL_PLANE_V4_SCHEMA_VERSION}
+    required = sorted(set(base["required"]) | {"integration_authority"})
+    return {"type": "object", "additionalProperties": False,
+            "required": required, "properties": props}
+
+
+def snapshot_v4_schema() -> dict:
+    """The V4 CONTAINER — the content-addressed document as stored on disk.
+
+    The container is V3's, unchanged: the same eight blocks by digest, the same record
+    store. S5G is an AUTHORITY migration, not a representation one.
+    """
+    base = snapshot_v4_semantic_schema()
+    inline = {k: v for k, v in base["properties"].items()
+              if k not in V3_RECORD_BLOCKS}
+    inline["records"] = {
+        "type": "object", "additionalProperties": False,
+        "required": list(V3_RECORD_BLOCKS),
+        "properties": {name: _SHA256 for name in V3_RECORD_BLOCKS},
+    }
+    required = [k for k in base.get("required", []) if k not in V3_RECORD_BLOCKS]
+    return {"type": "object", "additionalProperties": False,
+            "required": sorted(set(required) | {"records", "schema_version"}),
+            "properties": inline}
+
+
 def snapshot_schema() -> dict:
     """The state schema. Strict, closed and enum-bound in every security-relevant place."""
     dataset = _obj({
@@ -2606,6 +2743,7 @@ def snapshot_schema() -> dict:
 # ── Problem reporting ────────────────────────────────────────────────────────────────
 CATEGORIES = (
     "SCHEMA", "CURRENT_POINTER", "SNAPSHOT_CHAIN", "ARCHIVE_INTEGRITY", "GIT_AUTHORITY",
+    "INTEGRATION_AUTHORITY",
     "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "EVALUATION_RECEIPT",
     "POLICY_IDENTITIES",
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
@@ -2674,6 +2812,18 @@ class ControlPlane:
         return self.snapshot_stored.get(
             "schema_version") == CONTROL_PLANE_V3_SCHEMA_VERSION
 
+    @property
+    def is_v4(self) -> bool:
+        """A V4 generation. True for the container AND for its rehydrated semantics,
+        because both are V4 -- what differs is only whether the blocks are inline."""
+        return self.snapshot_stored.get(
+            "schema_version") == CONTROL_PLANE_V4_SCHEMA_VERSION
+
+    @property
+    def is_content_addressed(self) -> bool:
+        """V3 and V4 share one container. V2 has no record store at all."""
+        return self.is_v3 or self.is_v4
+
 
 def _load_json(path: Path, label: str) -> "tuple[dict, bytes]":
     raw = path.read_bytes()
@@ -2715,12 +2865,19 @@ def load_record_store(directory: Path) -> "dict[str, dict]":
     return out
 
 
-def rehydrate_v3(stored: dict, records: "dict[str, dict]") -> "tuple[dict, tuple]":
-    """Reconstruct the V2-shaped document from a V3 generation.
+def rehydrate_v3(stored: dict, records: "dict[str, dict]",
+                 semantic_version: str = CONTROL_PLANE_SCHEMA_VERSION,
+                 ) -> "tuple[dict, tuple]":
+    """Reconstruct the SEMANTIC document from a content-addressed generation.
 
     Returns ``(payload, problems)``. Fails closed and reports rather than
     raising, so a broken record store produces a verifier FAILURE with a reason
     instead of a traceback.
+
+    ``semantic_version`` is what the rehydrated document declares itself to be: the
+    V2 shape for a V3 generation, the V4 shape for a V4 one. S5G reuses this
+    function unchanged in every other respect, because V4 did not change the
+    container — only what the inline fields declare.
     """
     problems: list[str] = []
     reference = stored.get("records")
@@ -2732,7 +2889,7 @@ def rehydrate_v3(stored: dict, records: "dict[str, dict]") -> "tuple[dict, tuple
             f"{sorted(V3_RECORD_BLOCKS)}")
 
     out = {k: v for k, v in stored.items() if k != "records"}
-    out["schema_version"] = CONTROL_PLANE_SCHEMA_VERSION
+    out["schema_version"] = semantic_version
     for name in sorted(reference):
         digest = reference[name]
         if not isinstance(digest, str) or not SHA256_RE.match(digest):
@@ -2760,6 +2917,47 @@ def rehydrate_v3(stored: dict, records: "dict[str, dict]") -> "tuple[dict, tuple
     return out, tuple(problems)
 
 
+def semantic_version_for(stored_version: str) -> str:
+    """The shape a stored container rehydrates TO.
+
+    One place decides this. Before S5G the mapping lived, copied, in half a dozen test
+    helpers as ``if version == V3: rehydrate``, and a V4 generation silently skipped
+    rehydration in every one of them — the semantic document came back as the raw
+    container, missing every content-addressed block. That is exactly the drift
+    :func:`load_semantic_snapshot` was written to prevent, so the dispatch is exported
+    rather than repeated.
+    """
+    if stored_version == CONTROL_PLANE_V4_SCHEMA_VERSION:
+        return CONTROL_PLANE_V4_SCHEMA_VERSION
+    return CONTROL_PLANE_SCHEMA_VERSION
+
+
+def is_content_addressed(stored: dict) -> bool:
+    """True when the document is a CONTAINER that must be rehydrated to be read.
+
+    V3 could tell a container from its rehydrated form by version alone, because it
+    rehydrates to V2's version string. V4 cannot: its semantic shape is not V2 -- it
+    carries an integration authority and no ``master_commit`` -- so it keeps the V4
+    version and the RECORDS MAP is what distinguishes the two.
+
+    Without this the rehydrated document looks like a container again and gets
+    rehydrated a second time, which yields an empty snapshot and a KeyError far from
+    the cause. A V4 container that genuinely lacks ``records`` still fails loudly: it
+    is validated against :func:`snapshot_v4_schema`, which requires the map.
+    """
+    version = stored.get("schema_version")
+    if version == CONTROL_PLANE_V4_SCHEMA_VERSION:
+        return "records" in stored
+    return version == CONTROL_PLANE_V3_SCHEMA_VERSION
+
+
+def semantic_from_stored(stored: dict, records: "dict[str, dict]",
+                         ) -> "tuple[dict, tuple]":
+    """Rehydrate any content-addressed generation to what it MEANS. Version-aware."""
+    return rehydrate_v3(
+        stored, records, semantic_version_for(stored.get("schema_version", "")))
+
+
 def load_semantic_snapshot(root: "Path | None" = None) -> dict:
     """The current generation in its V2 SEMANTIC shape, whatever the storage format.
 
@@ -2772,9 +2970,10 @@ def load_semantic_snapshot(root: "Path | None" = None) -> dict:
     current = json.loads((root / CURRENT_PATH).read_text(encoding="utf-8"))
     stored = json.loads(
         (root / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
-    if stored.get("schema_version") != CONTROL_PLANE_V3_SCHEMA_VERSION:
+    if not is_content_addressed(stored):
         return stored
-    payload, problems = rehydrate_v3(stored, load_record_store(root / RECORD_DIR))
+    payload, problems = semantic_from_stored(
+        stored, load_record_store(root / RECORD_DIR))
     if problems:
         raise SystemExit(f"S3N1_CONTROL_PLANE_UNREADABLE: rehydration: {problems[0]}")
     return payload
@@ -2814,9 +3013,9 @@ def load(report: Report) -> "ControlPlane | None":
     stored = snapshot
     records: dict = {}
     problems: tuple = ()
-    if snapshot.get("schema_version") == CONTROL_PLANE_V3_SCHEMA_VERSION:
+    if is_content_addressed(stored):
         records = load_record_store(REPO_ROOT / RECORD_DIR)
-        snapshot, problems = rehydrate_v3(stored, records)
+        snapshot, problems = semantic_from_stored(stored, records)
         for problem in problems:
             report.fail("SCHEMA", f"snapshot rehydration: {problem}")
     return ControlPlane(current, current_raw, snapshot, snapshot_raw, snapshot_file,
@@ -2835,13 +3034,20 @@ def _is_inside(path: Path, root: Path) -> bool:
 # ── Checks ───────────────────────────────────────────────────────────────────────────
 def check_schema(cp: ControlPlane, report: Report) -> None:
     """V1, V2, V28 — both documents strictly valid; unknown keys refused."""
+    # A V4 generation MEANS something different from a V2/V3 one, so it is validated
+    # against a different semantic contract. Dispatch, never widen: loosening
+    # snapshot_schema() to accept both would silently let a V3 snapshot drop
+    # master_commit, which is precisely the history rewrite S5G must not perform.
+    semantic_schema = snapshot_v4_semantic_schema() if cp.is_v4 else snapshot_schema()
     checks = [("current.json", current_schema(), cp.current),
-              ("snapshot", snapshot_schema(), cp.snapshot)]
+              ("snapshot", semantic_schema, cp.snapshot)]
     if cp.is_v3:
         # BOTH contracts must hold: the stored container AND the semantics it
         # rehydrates to. Validating only one of them would let a well-formed V3
         # document carry a malformed V2 meaning, or the reverse.
         checks.append(("snapshot (stored v3)", snapshot_v3_schema(), cp.snapshot_stored))
+    if cp.is_v4:
+        checks.append(("snapshot (stored v4)", snapshot_v4_schema(), cp.snapshot_stored))
     for label, schema, payload in checks:
         for problem in validate_against_schema(schema, payload):
             report.fail("SCHEMA", f"{label}: {problem}")
@@ -2851,6 +3057,9 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
     for rel, builder in ((CURRENT_SCHEMA_PATH, current_schema),
                          (SNAPSHOT_SCHEMA_PATH, snapshot_schema),
                          (SNAPSHOT_V3_SCHEMA_PATH, snapshot_v3_schema),
+                         (SNAPSHOT_V4_SCHEMA_PATH, snapshot_v4_schema),
+                         (SNAPSHOT_V4_SEMANTIC_SCHEMA_PATH,
+                          snapshot_v4_semantic_schema),
                          (TRAIN_RECEIPT_SCHEMA_PATH, train_receipt_schema),
                          (EVAL_RECEIPT_SCHEMA_PATH, eval_receipt_schema),
                          (EVAL_RECEIPT_V2_SCHEMA_PATH, eval_receipt_v2_schema),
@@ -2875,7 +3084,7 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
         return
     for label, schema, payload in (
             ("current.json", current_schema(), cp.current),
-            ("snapshot", snapshot_schema(), cp.snapshot)):
+            ("snapshot", semantic_schema, cp.snapshot)):
         errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(payload),
                         key=lambda e: list(e.path))
         mine = validate_against_schema(schema, payload)
@@ -3080,8 +3289,184 @@ def check_paths(cp: ControlPlane, report: Report) -> None:
             report.fail("PATH_INTEGRITY", f"{rel} carries an executable bit")
 
 
+def _commit_exists(sha: str) -> bool:
+    code, kind = _git("cat-file", "-t", sha)
+    return code == 0 and kind == "commit"
+
+
+def _is_ancestor(earlier: str, later: str) -> bool:
+    """True when ``earlier`` is an ancestor of ``later``. Equality is NOT ancestry here.
+
+    Existence is checked separately and always PAIRED with this: ``fetch-depth: 0``
+    puts every branch of the origin within reach, so "the commit resolves" says only
+    that it exists SOMEWHERE, never that it is on the lineage under test.
+    """
+    return _git("merge-base", "--is-ancestor", earlier, later)[0] == 0
+
+
+def _reaches(earlier: str, later: str) -> bool:
+    """Ancestor-or-equal."""
+    return earlier == later or _is_ancestor(earlier, later)
+
+
+def _resolve_target(target_ref: str) -> "tuple[str, str] | None":
+    """Resolve the authorised target, remote mirror first, then the local ref.
+
+    The remote is preferred because it is the ref an integration actually has to
+    reach. The names are DERIVED FROM THE HARDCODED ALLOW-LIST, never from a pattern:
+    a wildcard lookup would let any branch in a full-history checkout answer to the
+    name of the target.
+    """
+    if target_ref not in INTEGRATION_TARGET_REFS:
+        return None
+    short = target_ref.split("refs/heads/", 1)[1]
+    for ref in (f"refs/remotes/origin/{short}", target_ref):
+        code, value = _git("rev-parse", "--verify", "--quiet", ref)
+        if code == 0 and value:
+            return ref, value
+    return None
+
+
+def observe_integration_state(authority: dict) -> "tuple[str, str, list[str]]":
+    """Derive — never read — where the target stands against the authorisation.
+
+    Returns ``(state, detail, offending_paths)``. This function writes nothing and is
+    called fresh on every run, which is the whole point: the moment the answer is
+    stored, it is a fact that can go stale, and a stale fact about the target ref is
+    exactly the fixed point V3 could not escape.
+    """
+    base = authority.get("integration_base", "")
+    subject = authority.get("governed_subject", "")
+    resolved = _resolve_target(authority.get("target_ref", ""))
+    if resolved is None:
+        return ("TARGET_UNRESOLVABLE",
+                "the authorised target ref does not resolve, so the target's position "
+                "is UNKNOWN rather than acceptable", [])
+    ref, target = resolved
+    if target == base:
+        return ("TARGET_AT_AUTHORIZED_BASE",
+                f"{ref} is still the authorised integration base {base[:12]}", [])
+    if not _is_ancestor(base, target):
+        return ("TARGET_REWRITTEN",
+                f"{ref} is {target[:12]}, which does not descend from the authorised "
+                f"base {base[:12]}: the target was rolled back, force-moved sideways or "
+                f"rebuilt on an unrelated history", [])
+    if not _reaches(subject, target):
+        return ("TARGET_ADVANCED_WITHOUT_SUBJECT",
+                f"{ref} advanced to {target[:12]} but does not contain the governed "
+                f"subject {subject[:12]}; this authorisation does not cover it", [])
+    # The target contains the subject. That alone is NOT enough: bare ancestry admits
+    # arbitrary later commits, so what rode along has to be governed too.
+    code, out = _git("diff", "--name-only", subject, target)
+    if code != 0:
+        return ("TARGET_UNRESOLVABLE",
+                f"the {subject[:12]}..{target[:12]} diff could not be computed, so what "
+                f"advanced past the governed subject is UNKNOWN", [])
+    changed = [line for line in out.splitlines() if line]
+    state_bearing = sorted(
+        path for path in changed
+        if any(path == q or path.startswith(q) for q in STATE_BEARING_PRODUCTION))
+    if state_bearing:
+        return ("UNGOVERNED_STATE_ADVANCE",
+                f"{len(state_bearing)} state-bearing production path(s) changed between "
+                f"the governed subject and {ref} without a generation covering them",
+                state_bearing)
+    ungoverned = sorted(
+        path for path in changed
+        if not any(path == q or path.startswith(q) for q in INTEGRATION_TRAILING_PATHS))
+    if ungoverned:
+        return ("UNGOVERNED_TRAILING_COMMIT",
+                f"{len(ungoverned)} path(s) outside the governed trailing surface changed "
+                f"between the governed subject and {ref}; the authorisation covers the "
+                f"subject, not whatever was appended after it", ungoverned)
+    return ("INTEGRATED_FAST_FORWARD",
+            f"{ref} is {target[:12]}, a governed fast-forward from the authorised base",
+            [])
+
+
+def check_integration_authority(cp: ControlPlane, report: Report) -> None:
+    """S5G — the V4 authority check. Declaration, evidence and observation, separately.
+
+    V3 reported one opaque ``GIT_AUTHORITY`` failure for four different questions. This
+    reports them apart, because "the declaration is malformed", "Git cannot supply the
+    evidence" and "the target is somewhere the authorisation does not permit" are
+    different facts and only the last one is about the repository having moved.
+    """
+    authority = cp.snapshot.get("integration_authority", {})
+    base = authority.get("integration_base", "")
+    subject = authority.get("governed_subject", "")
+    declared_subject = cp.snapshot.get("subject_state_commit", "")
+
+    # ── 1. Declaration validity — true or false without consulting any live ref ──
+    ok = True
+    for label, sha in (("integration_base", base), ("governed_subject", subject)):
+        if not _commit_exists(sha):
+            report.fail("INTEGRATION_AUTHORITY",
+                        f"{label} {sha} is not a commit in this repository")
+            ok = False
+    if authority.get("target_ref") not in INTEGRATION_TARGET_REFS:
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"target_ref {authority.get('target_ref')!r} is not an authorised "
+                    f"integration target")
+        ok = False
+    if authority.get("method") not in INTEGRATION_METHODS:
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"method {authority.get('method')!r} is not an authorised "
+                    f"integration method")
+        ok = False
+    if not ok:
+        return
+    if not _is_ancestor(base, subject):
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"governed_subject {subject[:12]} does not descend from "
+                    f"integration_base {base[:12]}; the authorisation is internally "
+                    f"incoherent and no live state can repair it")
+        return
+    if not _reaches(subject, declared_subject):
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"governed_subject {subject[:12]} does not reach "
+                    f"subject_state_commit {declared_subject[:12]}; the authorisation "
+                    f"and the state it rides on describe different lineages")
+    report.note("integration authority declaration is internally coherent")
+
+    # ── 2. Git evidence — this working tree is on the governed lineage ──
+    #
+    # This REPLACES V3's branch-name gate. That gate compared
+    # `git rev-parse --abbrev-ref HEAD` to a declared name and skipped itself entirely
+    # when the name came back "HEAD", which is every detached checkout — so it was
+    # absent exactly where it was most needed. Ancestry is evidence, is identical
+    # attached and detached, and cannot be bypassed by how the tree was checked out.
+    code, head = _git("rev-parse", "HEAD")
+    if code != 0:
+        report.fail("INTEGRATION_AUTHORITY", "HEAD could not be resolved")
+        return
+    if not _reaches(subject, head):
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"HEAD {head[:12]} does not descend from the governed subject "
+                    f"{subject[:12]}; this record does not govern this lineage")
+
+    # ── 3. Observation — derived from live refs, never declared ──
+    state, detail, offenders = observe_integration_state(authority)
+    if state not in ADMITTED_INTEGRATION_STATES:
+        extra = f" ({', '.join(offenders[:5])})" if offenders else ""
+        report.fail("INTEGRATION_AUTHORITY",
+                    f"observed integration state {state}: {detail}{extra}")
+    else:
+        report.note(f"observed integration state {state}: {detail}")
+
+
 def check_git_authority(cp: ControlPlane, report: Report) -> None:
-    """V10-V13 — the subject commit exists, HEAD descends from it, refs are as declared."""
+    """V10-V13 — the subject commit exists, HEAD descends from it, refs are as declared.
+
+    V2 and V3 ONLY. A V4 generation declares an integration authority instead of a
+    branch name and a live master SHA, and is dispatched to
+    :func:`check_integration_authority` here rather than inside this body, so that
+    everything below stays exactly the check the first 33 generations were sealed
+    under. A V3 snapshot is never reinterpreted under V4 rules.
+    """
+    if cp.is_v4:
+        check_integration_authority(cp, report)
+        return
     subject = cp.snapshot.get("subject_state_commit", "")
     code, kind = _git("cat-file", "-t", subject)
     if code != 0 or kind != "commit":
@@ -4706,9 +5091,9 @@ def _parent_snapshot(cp: ControlPlane) -> "dict | None":
     for path in sorted(directory.iterdir()):
         if path.suffix == ".json" and path.name.startswith(f"{generation - 1:04d}-"):
             payload, _ = _load_json(path, path.name)
-            if payload.get("schema_version") != CONTROL_PLANE_V3_SCHEMA_VERSION:
+            if not is_content_addressed(payload):
                 return payload
-            rehydrated, problems = rehydrate_v3(
+            rehydrated, problems = semantic_from_stored(
                 payload, load_record_store(REPO_ROOT / RECORD_DIR))
             # A parent that cannot be rehydrated is NOT treated as "no parent": that
             # would skip the transition table entirely, which is the one outcome a
@@ -5326,14 +5711,20 @@ def _scan_leaks(text: str) -> list[str]:
 
 
 def check_record_store(cp: ControlPlane, report: Report) -> None:
-    """V69 M63 — the V3 record store is complete, tracked and self-verifying.
+    """V69 M63 — the record store is complete, tracked and self-verifying.
 
     Under V2 this is a no-op: there is no store, and its absence is correct.
+
+    RESCOPED AT S5G. The gate was ``if not cp.is_v3: return``, so a V4 generation —
+    which uses the SAME content-addressed store — skipped this check entirely and an
+    emptied store was accepted in silence. V4 shares V3's container, so it shares
+    V3's obligation to prove it.
     """
-    if not cp.is_v3:
+    if not cp.is_content_addressed:
         if (REPO_ROOT / RECORD_DIR).is_dir():
             report.note(f"{RECORD_DIR} exists while the newest generation is V2; "
-                        f"records are inert until a V3 generation references them")
+                        f"records are inert until a content-addressed generation "
+                        f"references them")
         return
 
     if cp.rehydration_problems:
@@ -5396,15 +5787,18 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
         report.fail("RECORD_STORE", "git ls-files failed; record tracking "
                                     "cannot be verified")
 
-    # A round-trip proof, run live rather than trusted from migration time.
-    restored, problems = rehydrate_v3(cp.snapshot_stored, cp.records)
+    # A round-trip proof, run live rather than trusted from migration time. The
+    # dispatch matters: rehydrating a V4 container to the V2 shape would produce a
+    # document that differs from the loaded one in exactly one field, and report it
+    # as a corrupt record store.
+    restored, problems = semantic_from_stored(cp.snapshot_stored, cp.records)
     if problems:
         report.fail("RECORD_STORE", f"live rehydration failed: {problems[0]}")
     elif canonical_bytes(restored) != canonical_bytes(cp.snapshot):
         report.fail("RECORD_STORE",
                     "live rehydration does not reproduce the loaded snapshot")
     else:
-        report.note(f"V3 generation: {len(referenced)} records resolved, "
+        report.note(f"content-addressed generation: {len(referenced)} records resolved, "
                     f"snapshot {len(cp.snapshot_bytes)} bytes on disk vs "
                     f"{len(canonical_bytes(cp.snapshot))} rehydrated")
 

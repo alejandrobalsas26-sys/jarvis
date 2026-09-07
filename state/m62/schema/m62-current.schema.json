@@ -17,7 +17,8 @@
     "schema_version": {
       "enum": [
         "m62.control_plane.1",
-        "m62.control_plane.3"
+        "m62.control_plane.3",
+        "m62.control_plane.4"
       ]
     },
     "state_generation": {
