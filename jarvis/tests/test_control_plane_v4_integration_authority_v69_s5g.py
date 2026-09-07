@@ -88,6 +88,10 @@ class Lab:
         _run(root, "init", "-q", "-b", "work")
         _run(root, "config", "user.email", "s5g@example.invalid")
         _run(root, "config", "user.name", "S5G Lab")
+        # A commit BEFORE the authorised base. Without it `base` IS the root commit,
+        # and a "roll the target back past its base" case cannot be expressed at all —
+        # which is exactly how the rollback assertion below went vacuous.
+        self.pre_base = _commit(root, "SEED.md", "seed\n", "seed before the base")
         self.base = _commit(root, "README.md", "base\n", "base")
         _commit(root, "jarvis/core/runtime.py", "RUNTIME = 1\n", "runtime")
         self.subject = _commit(
@@ -249,12 +253,16 @@ def test_a_target_on_unrelated_history_is_rewritten(lab):
 
 def test_a_rollback_behind_the_authorized_base_is_rewritten(lab):
     """J — the target moved BACK past the base it was authorised from."""
-    root_commit = _run(lab.root, "rev-list", "--max-parents=0", "HEAD")
+    # `pre_base` is a STRICT ANCESTOR of the authorised base, which is what makes this
+    # a rollback rather than an unrelated history. The earlier form guarded on
+    # `root_commit != lab.base` and, since base WAS the root, never executed its
+    # assertion at all: the mutation "accept any target that base can reach" survived
+    # the whole suite. Measured, then closed.
+    assert V._is_ancestor(lab.pre_base, lab.base)
     lab.set_target(lab.tip)
     assert _observe(lab) == "INTEGRATED_FAST_FORWARD"
-    if root_commit != lab.base:
-        lab.set_target(root_commit)
-        assert _observe(lab) == "TARGET_REWRITTEN"
+    lab.set_target(lab.pre_base)
+    assert _observe(lab) == "TARGET_REWRITTEN"
 
 
 def test_a_target_advancing_without_the_governed_subject_is_refused(lab):
@@ -348,12 +356,38 @@ def test_a_record_copied_onto_an_unrelated_lineage_is_refused(lab):
 
 
 def test_every_non_admitted_observation_actually_fails_the_report(lab):
-    """No observation may be reachable, non-admitted, and still leave the report clean."""
+    """No observation may be reachable, non-admitted, and still leave the report clean.
+
+    The admitted set is pinned EXACTLY rather than by a subset relation. A subset test
+    is satisfied by widening the set, so "admit UNGOVERNED_TRAILING_COMMIT too" passed
+    it — which is the one edit that would silently turn every refusal into a pass.
+    """
+    assert set(V.ADMITTED_INTEGRATION_STATES) == {
+        "TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"}
     assert set(V.ADMITTED_INTEGRATION_STATES) < set(V.OBSERVED_INTEGRATION_STATES)
     for state in V.OBSERVED_INTEGRATION_STATES:
         if state in V.ADMITTED_INTEGRATION_STATES:
             continue
         assert "UNKNOWN" not in state or state == "TARGET_UNRESOLVABLE"
+
+
+def test_the_declaration_itself_refuses_a_target_it_does_not_authorize(lab):
+    """Which control fired matters: asserting only "FAIL" let the check be deleted.
+
+    With the declaration check removed the report still failed -- via
+    TARGET_UNRESOLVABLE, because the unauthorised name resolves to nothing -- so the
+    status-only assertion passed. That makes the declaration gate the redundant one,
+    and redundancy nobody pins is redundancy that gets deleted.
+    """
+    for override, needle in (({"target_ref": "refs/heads/some-feature"},
+                              "is not an authorised integration target"),
+                             ({"method": "MERGE_COMMIT"},
+                              "is not an authorised integration method")):
+        report = V.Report()
+        snapshot = {"subject_state_commit": lab.subject,
+                    "integration_authority": lab.authority(**override)}
+        V.check_integration_authority(_plane(snapshot), report)
+        assert any(needle in message for _, message in report.problems), override
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -751,3 +785,44 @@ def test_an_unresolvable_subject_to_head_diff_is_unknown_not_clean(lab):
         V._git = original
     assert broke.status("INTEGRATION_AUTHORITY") == "FAIL"
     assert any("UNKNOWN rather than clean" in message for _, message in broke.problems)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The current pointer is the only thing that says WHICH generation is live
+#
+#  Nothing pinned these three comparisons, so deleting any of them left the whole
+#  suite green while a stale pointer, a downgraded schema or a swapped subject
+#  became acceptable. The pointer is what every reader trusts first; it needs its
+#  own test rather than the incidental coverage of whatever else happened to read it.
+# ══════════════════════════════════════════════════════════════════════════════
+def _pointer_plane(**pointer) -> V.ControlPlane:
+    snapshot = {"state_generation": 34, "subject_state_commit": "a" * 40,
+                "schema_version": V.CONTROL_PLANE_V4_SCHEMA_VERSION}
+    current = {"state_generation": 34, "subject_state_commit": "a" * 40,
+               "schema_version": V.CONTROL_PLANE_V4_SCHEMA_VERSION,
+               "latest_snapshot_sha256": V.sha256_bytes(b"")}
+    current.update(pointer)
+    return V.ControlPlane(
+        current=current, current_bytes=V.canonical_bytes(current), snapshot=snapshot,
+        snapshot_bytes=b"", snapshot_path=Path("x"), migration={},
+        snapshot_stored=snapshot)
+
+
+def test_a_coherent_pointer_passes_so_the_refusals_below_are_not_vacuous():
+    report = V.Report()
+    V.check_current_pointer(_pointer_plane(), report)
+    assert report.status("CURRENT_POINTER") == "PASS"
+
+
+@pytest.mark.parametrize("pointer,needle", [
+    ({"state_generation": 33}, "in the pointer !="),
+    ({"schema_version": V.CONTROL_PLANE_SCHEMA_VERSION}, "schema_version differs"),
+    ({"subject_state_commit": "b" * 40}, "subject_state_commit differs"),
+    ({"latest_snapshot_sha256": "0" * 64}, "latest_snapshot_sha256"),
+])
+def test_the_pointer_must_agree_with_the_snapshot_it_points_at(pointer, needle):
+    """A stale pointer, a schema downgrade and a swapped subject each fail on their own."""
+    report = V.Report()
+    V.check_current_pointer(_pointer_plane(**pointer), report)
+    assert report.status("CURRENT_POINTER") == "FAIL"
+    assert any(needle in message for _, message in report.problems), pointer
