@@ -3310,21 +3310,34 @@ def _reaches(earlier: str, later: str) -> bool:
 
 
 def _resolve_target(target_ref: str) -> "tuple[str, str] | None":
-    """Resolve the authorised target, remote mirror first, then the local ref.
+    """The single most authoritative resolution of the target: remote mirror, else local.
 
-    The remote is preferred because it is the ref an integration actually has to
-    reach. The names are DERIVED FROM THE HARDCODED ALLOW-LIST, never from a pattern:
-    a wildcard lookup would let any branch in a full-history checkout answer to the
-    name of the target.
+    The names are DERIVED FROM THE HARDCODED ALLOW-LIST, never from a pattern: a
+    wildcard lookup would let any branch in a full-history checkout answer to the name
+    of the target.
+    """
+    resolved = _resolve_all_targets(target_ref)
+    return resolved[0] if resolved else None
+
+
+def _resolve_all_targets(target_ref: str) -> "list[tuple[str, str]]":
+    """EVERY resolvable form of the authorised target, remote mirror first.
+
+    Both are returned, not just the first, and every one of them is observed. V3
+    resolved ``origin/master`` and stopped, so a local ``master`` moved anywhere at all
+    was invisible while the remote still matched -- measured, and it is why this
+    function exists. An authorisation toward a ref is an authorisation toward every ref
+    that answers to that name in this repository.
     """
     if target_ref not in INTEGRATION_TARGET_REFS:
-        return None
+        return []
     short = target_ref.split("refs/heads/", 1)[1]
+    out = []
     for ref in (f"refs/remotes/origin/{short}", target_ref):
         code, value = _git("rev-parse", "--verify", "--quiet", ref)
         if code == 0 and value:
-            return ref, value
-    return None
+            out.append((ref, value))
+    return out
 
 
 def observe_integration_state(authority: dict) -> "tuple[str, str, list[str]]":
@@ -3337,12 +3350,28 @@ def observe_integration_state(authority: dict) -> "tuple[str, str, list[str]]":
     """
     base = authority.get("integration_base", "")
     subject = authority.get("governed_subject", "")
-    resolved = _resolve_target(authority.get("target_ref", ""))
-    if resolved is None:
+    resolved = _resolve_all_targets(authority.get("target_ref", ""))
+    if not resolved:
         return ("TARGET_UNRESOLVABLE",
                 "the authorised target ref does not resolve, so the target's position "
                 "is UNKNOWN rather than acceptable", [])
-    ref, target = resolved
+    # Observe EVERY ref answering to the target name and report the worst answer. A
+    # local ref moved somewhere the authorisation does not permit is a finding even
+    # while the remote mirror still sits innocently at the base.
+    seen = [(_observe_one(ref, target, base, subject)) for ref, target in resolved]
+    for state, detail, offenders in seen:
+        if state not in ADMITTED_INTEGRATION_STATES:
+            return state, detail, offenders
+    # All admitted: report the most advanced, which is the one that says the most.
+    for state, detail, offenders in seen:
+        if state == "INTEGRATED_FAST_FORWARD":
+            return state, detail, offenders
+    return seen[0]
+
+
+def _observe_one(ref: str, target: str, base: str, subject: str,
+                 ) -> "tuple[str, str, list[str]]":
+    """The relationship between ONE resolved target ref and the authorisation."""
     if target == base:
         return ("TARGET_AT_AUTHORIZED_BASE",
                 f"{ref} is still the authorised integration base {base[:12]}", [])

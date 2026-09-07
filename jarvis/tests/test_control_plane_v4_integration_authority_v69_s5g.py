@@ -603,3 +603,34 @@ def test_the_record_store_is_still_checked_under_v4():
     code = "\n".join(ast.unparse(node) for node in body)
     assert "is_content_addressed" in code
     assert "is_v3" not in code
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Every ref answering to the target name is observed, not just the first
+# ══════════════════════════════════════════════════════════════════════════════
+def test_a_pending_push_is_reported_not_hidden(lab):
+    """Local target advanced, remote mirror still at the base — the real interim state."""
+    _run(lab.root, "update-ref", "refs/heads/master", lab.tip)
+    _run(lab.root, "update-ref", "refs/remotes/origin/master", lab.base)
+    assert _observe(lab) == "INTEGRATED_FAST_FORWARD"
+
+
+def test_a_local_target_moved_somewhere_unauthorized_is_not_masked(lab):
+    """V3 resolved origin/master and stopped, so this was invisible. Measured.
+
+    An authorisation toward a ref is an authorisation toward every ref that answers to
+    that name here; a hostile local `master` is a finding even while the remote mirror
+    still sits innocently at the authorised base.
+    """
+    hostile = lab.commit_on(lab.base, "hostile.md", "hostile sideways move")
+    _run(lab.root, "update-ref", "refs/heads/master", hostile)
+    _run(lab.root, "update-ref", "refs/remotes/origin/master", lab.base)
+    assert V._resolve_target("refs/heads/master")[0] == "refs/remotes/origin/master"
+    assert _observe(lab) == "TARGET_ADVANCED_WITHOUT_SUBJECT"
+
+
+def test_both_target_refs_are_resolved_when_both_exist(lab):
+    resolved = V._resolve_all_targets("refs/heads/master")
+    assert [ref for ref, _ in resolved] == [
+        "refs/remotes/origin/master", "refs/heads/master"]
+    assert V._resolve_all_targets("refs/heads/anything-else") == []
