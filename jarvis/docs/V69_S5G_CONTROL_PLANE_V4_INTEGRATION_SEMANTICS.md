@@ -230,6 +230,26 @@ single function called by both sites, because a closure that exists twice is a c
 can be weakened once, and a test asserts neither caller re-implements the membership test.
 An uncomputable `subject..HEAD` diff fails closed as UNKNOWN rather than clean.
 
+### 5.2 — A trailing "/" turned out to be load-bearing punctuation
+
+The membership test was `path == q or path.startswith(q)`, applied to every entry of the
+allowlist. That is correct for a directory prefix and **wrong for the two entries that name
+a single file**: `PROGRESS.md` and `VERIFIER_PATH`. `startswith` admits anything merely
+*beginning* with them, so an attacker never had to touch a governed path at all:
+
+    PROGRESS.mdEVIL/runtime_engine.py              -> admitted (an entire ungoverned tree)
+    jarvis/scripts/verify_m62_control_plane.py.bak -> admitted (a copy of the checker)
+
+Measured on a real clone, this verified **PASS, 0 problems** in the staged context *and* in
+the integrated context — the closure would have carried both onto master while reporting a
+governed fast-forward. Directory-shaped entries were never affected: `jarvis/docsEVIL/`,
+`tests_evil/` and `state/m62evil/` were always refused, because those entries end in `/`.
+
+`_governed_by` now treats a trailing `/` as "and everything beneath it" and requires exact
+equality for everything else. A test walks every entry of both surfaces and asserts that
+`entry + "EVIL"` and `entry + "/child.py"` are refused while the entry itself is admitted,
+so a future entry cannot silently reopen it.
+
 Eleven trailing paths were then measured in the staged context. Permitted: `jarvis/docs/`,
 `jarvis/tests/`, `state/m62/`, `PROGRESS.md`. Refused: a new `jarvis/core/` module, a new
 top-level module, a new unclassified `jarvis/scripts/` script, the training entrypoint,

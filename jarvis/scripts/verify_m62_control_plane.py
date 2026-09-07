@@ -3369,6 +3369,25 @@ def observe_integration_state(authority: dict) -> "tuple[str, str, list[str]]":
     return seen[0]
 
 
+def _governed_by(path: str, surface: "tuple[str, ...]") -> bool:
+    """Does ``path`` belong to ``surface``? Directory prefixes end in "/"; nothing else.
+
+    The rule used to be ``path == q or path.startswith(q)`` for every entry, which is
+    right for a directory prefix and WRONG for the two entries that name a single file.
+    ``PROGRESS.md`` and the verifier path are exact paths, and ``startswith`` admitted
+    anything merely BEGINNING with them -- so ``PROGRESS.mdEVIL/runtime_engine.py`` was
+    a whole ungoverned directory tree that the closure called governed, and
+    ``verify_m62_control_plane.py.bak`` was an untracked copy of the checker admitted
+    beside it. Both were measured riding to PASS in the staged AND the integrated
+    context before this existed.
+
+    A trailing "/" is therefore load-bearing punctuation, not formatting: it is what
+    says "and everything beneath it".
+    """
+    directories = tuple(entry for entry in surface if entry.endswith("/"))
+    return path.startswith(directories) or path in surface
+
+
 def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
     """The governance closure, DENY BY DEFAULT, in exactly one place.
 
@@ -3384,11 +3403,10 @@ def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
     covers and why leaving it uncovered was a real hole rather than a theoretical one.
     """
     state_bearing = sorted(
-        path for path in changed
-        if any(path == q or path.startswith(q) for q in STATE_BEARING_PRODUCTION))
+        path for path in changed if _governed_by(path, STATE_BEARING_PRODUCTION))
     ungoverned = sorted(
         path for path in changed
-        if not any(path == q or path.startswith(q) for q in INTEGRATION_TRAILING_PATHS))
+        if not _governed_by(path, INTEGRATION_TRAILING_PATHS))
     return state_bearing, ungoverned
 
 
@@ -3616,8 +3634,7 @@ def check_stale_state(cp: ControlPlane, report: Report) -> None:
         return
     changed = [line for line in out.splitlines() if line]
     offenders = sorted(
-        path for path in changed
-        if any(path == p or path.startswith(p) for p in STATE_BEARING_PRODUCTION))
+        path for path in changed if _governed_by(path, STATE_BEARING_PRODUCTION))
     if offenders:
         report.fail("STALE_STATE",
                     f"{len(offenders)} state-bearing production path(s) changed since "

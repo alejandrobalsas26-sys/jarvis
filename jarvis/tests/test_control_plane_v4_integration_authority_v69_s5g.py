@@ -826,3 +826,58 @@ def test_the_pointer_must_agree_with_the_snapshot_it_points_at(pointer, needle):
     V.check_current_pointer(_pointer_plane(**pointer), report)
     assert report.status("CURRENT_POINTER") == "FAIL"
     assert any(needle in message for _, message in report.problems), pointer
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  A trailing "/" is load-bearing punctuation
+#
+#  The membership test was `path == q or path.startswith(q)` for EVERY entry. That
+#  is right for a directory prefix and wrong for the two entries naming a single
+#  file: `PROGRESS.md` and the verifier path. `startswith` admitted anything merely
+#  BEGINNING with them, so `PROGRESS.mdEVIL/runtime_engine.py` was an entire
+#  ungoverned directory tree the closure called governed — measured riding to PASS
+#  in the staged AND the integrated context on a real clone.
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("path", [
+    "PROGRESS.md.evil",
+    "PROGRESS.mdEVIL/runtime_engine.py",
+    "jarvis/scripts/verify_m62_control_plane.py.bak",
+    "jarvis/scripts/verify_m62_control_plane.pyEVIL",
+    "jarvis/docsEVIL/x.py",
+    "tests_evil/x.py",
+    "state/m62evil/x.py",
+])
+def test_a_path_that_merely_starts_with_a_governed_one_is_not_governed(path):
+    assert V.closure_offenders([path])[1] == [path]
+    assert not V._governed_by(path, V.INTEGRATION_TRAILING_PATHS)
+
+
+@pytest.mark.parametrize("path", [
+    "PROGRESS.md", "jarvis/scripts/verify_m62_control_plane.py",
+    "jarvis/docs/x.md", "jarvis/tests/test_x.py", "tests/test_x.py",
+    "state/m62/current.json",
+])
+def test_the_genuinely_governed_paths_are_still_governed(path):
+    """The tightening must not have closed the surface the repository actually needs."""
+    assert V.closure_offenders([path])[1] == []
+    assert V._governed_by(path, V.INTEGRATION_TRAILING_PATHS)
+
+
+def test_every_file_shaped_entry_is_matched_exactly_and_only_exactly():
+    """Pins the rule itself, so a future entry cannot silently reopen the hole."""
+    for surface in (V.INTEGRATION_TRAILING_PATHS, V.STATE_BEARING_PRODUCTION):
+        for entry in surface:
+            assert V._governed_by(entry, surface), entry
+            if entry.endswith("/"):
+                assert V._governed_by(entry + "nested/file.py", surface), entry
+            else:
+                # A sibling that shares the whole name as a prefix is NOT the file.
+                assert not V._governed_by(entry + "EVIL", surface), entry
+                assert not V._governed_by(entry + "/child.py", surface), entry
+
+
+def test_state_bearing_production_paths_are_still_detected():
+    assert V.closure_offenders(["jarvis/training_gym/a.py"])[0] == [
+        "jarvis/training_gym/a.py"]
+    assert V.closure_offenders(["jarvis/scripts/train_experiment.py"])[0] == [
+        "jarvis/scripts/train_experiment.py"]
