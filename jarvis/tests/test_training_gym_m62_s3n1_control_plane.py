@@ -69,13 +69,19 @@ MASTER_COMMIT = "3705114228edef2f665be349c5c4429b7b16777a"
 
 
 def _semantic_snapshot(root: Path, current: dict) -> dict:
-    """Load a snapshot and rehydrate it if it is a V3 generation."""
+    """Load a snapshot and rehydrate it if it is a content-addressed generation.
+
+    RESCOPED AT S5G: the version test was ``== V3``, which silently returned the raw
+    CONTAINER for a V4 generation — every content-addressed block missing, and every
+    assertion below reading a document that does not mean what it appears to.
+    The dispatch now lives in one exported place.
+    """
     stored = json.loads(
         (root / current["latest_snapshot_path"]).read_text(encoding="utf-8"))
-    if stored.get("schema_version") != V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+    if not V.is_content_addressed(stored):
         return stored
     records = V.load_record_store(root / V.RECORD_DIR)
-    payload, problems = V.rehydrate_v3(stored, records)
+    payload, problems = V.semantic_from_stored(stored, records)
     assert not problems, f"rehydration failed: {problems}"
     return payload
 
@@ -148,9 +154,9 @@ def _plane_from(root: Path) -> V.ControlPlane:
     records: dict = {}
     problems: tuple = ()
     semantic = stored
-    if stored.get("schema_version") == V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+    if V.is_content_addressed(stored):
         records = V.load_record_store(root / V.RECORD_DIR)
-        semantic, problems = V.rehydrate_v3(stored, records)
+        semantic, problems = V.semantic_from_stored(stored, records)
     return V.ControlPlane(
         current=current,
         current_bytes=(root / V.CURRENT_PATH).read_bytes(),
@@ -159,6 +165,23 @@ def _plane_from(root: Path) -> V.ControlPlane:
         snapshot_path=snapshot_path,
         migration=json.loads(migration_path.read_text(encoding="utf-8")),
         snapshot_stored=stored, records=records, rehydration_problems=problems)
+
+
+def _live_semantic_schema() -> dict:
+    """The contract the LIVE generation is under.
+
+    S5G: a V4 generation MEANS something a V2/V3 one cannot -- it carries an
+    integration authority and no ``master_commit``. Validating it against
+    ``snapshot_schema()`` would report the migration as corruption. Dispatch, never
+    widen: widening the V2/V3 schema to accept both would let a V3 generation drop
+    ``master_commit``, which is the history rewrite S5G must not perform.
+    """
+    stored = json.loads((REPO / V.CURRENT_PATH).read_text(encoding="utf-8"))
+    path = REPO / stored["latest_snapshot_path"]
+    version = json.loads(path.read_text(encoding="utf-8"))["schema_version"]
+    if version == V.CONTROL_PLANE_V4_SCHEMA_VERSION:
+        return V.snapshot_v4_semantic_schema()
+    return V.snapshot_schema()
 
 
 def _categories(report: V.Report) -> set[str]:
@@ -253,7 +276,7 @@ def test_the_published_schemas_are_the_ones_the_verifier_enforces():
 
 def test_both_live_documents_validate(current, snapshot):
     assert V.validate_against_schema(V.current_schema(), current) == []
-    assert V.validate_against_schema(V.snapshot_schema(), snapshot) == []
+    assert V.validate_against_schema(_live_semantic_schema(), snapshot) == []
 
 
 def test_every_security_critical_object_refuses_unknown_keys():
@@ -337,7 +360,7 @@ def test_the_builtin_validator_refuses_a_schema_keyword_it_cannot_enforce():
 def test_the_two_validators_agree_on_the_live_documents(current, snapshot):
     jsonschema = pytest.importorskip("jsonschema")
     for schema, payload in ((V.current_schema(), current),
-                            (V.snapshot_schema(), snapshot)):
+                            (_live_semantic_schema(), snapshot)):
         library = list(jsonschema.Draft202012Validator(schema).iter_errors(payload))
         assert library == []
         assert V.validate_against_schema(schema, payload) == []
@@ -520,20 +543,34 @@ def test_the_snapshot_names_the_subject_commit_and_master(snapshot, current):
     # both planes name the SAME one and that Git recognises it as a real ancestor of HEAD.
     assert snapshot["subject_state_commit"] == current["subject_state_commit"]
     assert re.fullmatch(r"[0-9a-f]{40}", snapshot["subject_state_commit"])
-    assert snapshot["project"]["master_commit"] == MASTER_COMMIT
-    # S4A moved development off the completed M62 history branch and S5A moved it
-    # again to M64's. The control plane declares where work happens and the
-    # verifier cross-checks that declaration against the live branch, so what
-    # this file owns is that the declaration EXISTS and is the branch Git is
-    # actually on -- not which name it happens to carry this milestone. Pinning
-    # the name here would make every future branch move a test edit while
-    # proving nothing the verifier does not already prove.
+    # RESCOPED AT S5G. The historical master is still named and still exactly what it
+    # always was -- as the INTEGRATION BASE, which is a fact about the past that cannot
+    # go stale, rather than as a value required to equal a live ref. That equality was
+    # the fixed point: a generation committed onto master invalidated the very number
+    # it declared.
+    authority = snapshot["integration_authority"]
+    assert authority["integration_base"] == MASTER_COMMIT
+    assert authority["target_ref"] == "refs/heads/master"
+    assert authority["method"] == "FAST_FORWARD_ONLY"
+
+    # The branch declaration still EXISTS and is still well-formed, but under V4 it is
+    # provenance, not authority. V3 compared it to `git rev-parse --abbrev-ref HEAD`,
+    # a check that skipped itself entirely whenever HEAD was detached -- every
+    # pull_request run -- so it was absent exactly where it mattered. What replaces it
+    # is ancestry, which no checkout shape can bypass, and that is asserted here
+    # against Git rather than against a name.
     branch = snapshot["project"]["branch"]
     assert branch and re.fullmatch(r"[A-Za-z0-9._/-]{3,64}", branch)
-    live = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
         cwd=REPO, capture_output=True, text=True, check=False)
-    assert live.returncode == 0 and live.stdout.strip() == branch
+    assert head.returncode == 0
+    descends = subprocess.run(
+        ["git", "merge-base", "--is-ancestor",
+         authority["governed_subject"], head.stdout.strip()],
+        cwd=REPO, capture_output=True, text=True, check=False)
+    assert descends.returncode == 0 or (
+        authority["governed_subject"] == head.stdout.strip())
 
 
 def test_a_snapshot_claiming_the_wrong_master_fails_against_git(plane):

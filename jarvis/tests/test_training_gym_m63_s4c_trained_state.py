@@ -638,11 +638,15 @@ def test_the_project_block_did_not_move_master(snapshot):
     untouched, unmerged, untagged and unreleased is an invariant every later
     generation inherits, so that half is asserted on the LIVE snapshot."""
     assert _s4c_snapshot()["project"]["branch"] == "jarvis-v69-m63-world-state"
-    project = snapshot["project"]
-    assert project["master_commit"] == "3705114228edef2f665be349c5c4429b7b16777a"
-    assert project["merged_into_master"] is False
-    assert project["released"] is False
-    assert project["tagged"] is False
+    # RESCOPED AT S5G. Generation 18's own declaration above is untouched. The live
+    # generation is V4, where the historical master is the integration base and "not
+    # merged" is derived from the live ref rather than frozen into a boolean.
+    authority = snapshot["integration_authority"]
+    assert authority["integration_base"] == "3705114228edef2f665be349c5c4429b7b16777a"
+    state, _, _ = V.observe_integration_state(authority)
+    assert state == "TARGET_AT_AUTHORIZED_BASE"
+    assert snapshot["project"]["released"] is False
+    assert snapshot["project"]["tagged"] is False
 
 
 def test_the_generation_stays_far_inside_its_budget():

@@ -124,7 +124,13 @@ def test_the_budget_was_not_raised():
 # ── the live V3 generation ───────────────────────────────────────────────────
 def test_the_live_generation_is_v3_and_rehydrates():
     stored = _current_snapshot()
-    assert stored["schema_version"] == V.CONTROL_PLANE_V3_SCHEMA_VERSION
+    # RESCOPED AT S5G. This file owns the V2 -> V3 migration, and what proves that is
+    # generation 16 -- the generation the migration produced, asserted V3 elsewhere in
+    # this file and immutable. Read from the LIVE pointer it also asserted, silently,
+    # that no later migration would ever happen. S5G is that migration. The container
+    # contract this test actually cares about -- content-addressed, and it rehydrates
+    # -- is unchanged and is checked below.
+    assert V.is_content_addressed(stored)
     records = V.load_record_store(RECORD_DIR)
     payload, problems = V.rehydrate_v3(stored, records)
     assert not problems, problems

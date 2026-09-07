@@ -156,9 +156,9 @@ def _plane_from(root: Path) -> V.ControlPlane:
     _records: dict = {}
     _problems: tuple = ()
     _semantic = _stored
-    if _stored.get("schema_version") == V.CONTROL_PLANE_V3_SCHEMA_VERSION:
+    if V.is_content_addressed(_stored):
         _records = V.load_record_store(root / V.RECORD_DIR)
-        _semantic, _problems = V.rehydrate_v3(_stored, _records)
+        _semantic, _problems = V.semantic_from_stored(_stored, _records)
     return V.ControlPlane(
         current=current,
         current_bytes=(root / V.CURRENT_PATH).read_bytes(),

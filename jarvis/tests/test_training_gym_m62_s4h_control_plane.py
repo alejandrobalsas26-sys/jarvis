@@ -71,7 +71,7 @@ def record(stored: dict, block: str):
 # ══════════════════════════════════════════════════════════════════════════════
 #  §69 THE SUCCESSOR IS APPEND-ONLY AND TRUTHFUL
 # ══════════════════════════════════════════════════════════════════════════════
-def test_generation_28_is_still_present_and_the_pointer_never_regresses(pointer):
+def test_generation_28_is_still_present_and_the_pointer_never_regresses(pointer, V):
     """What S4H can honestly assert about the LIVE pointer.
 
     Not "the pointer still names 28" — a successor generation is a normal event
@@ -80,7 +80,11 @@ def test_generation_28_is_still_present_and_the_pointer_never_regresses(pointer)
     not change under it, and that the chain only ever moves forward.
     """
     assert (REPO_ROOT / GENERATION_28).is_file()
-    assert pointer["schema_version"] == "m62.control_plane.3"
+    # RESCOPED AT S5G: the pointer tracks whichever CONTAINER the newest generation
+    # uses. What this test owns is that the pointer never REGRESSES, not which
+    # container is current. Generation 28 itself is asserted V3 above and stays V3.
+    assert pointer["schema_version"] in (
+        V.CONTROL_PLANE_V3_SCHEMA_VERSION, V.CONTROL_PLANE_V4_SCHEMA_VERSION)
     assert pointer["state_generation"] >= 28
 
 

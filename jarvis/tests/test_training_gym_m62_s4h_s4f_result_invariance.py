@@ -30,6 +30,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts import verify_m62_control_plane as V  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE = REPO_ROOT / "state" / "m62"
 INSTRUMENTS = REPO_ROOT / "jarvis" / "training_gym" / "evaluation" / "instruments"
@@ -194,12 +196,22 @@ def test_the_production_assignment_is_unchanged():
 
 
 def test_master_is_unchanged_and_nothing_was_merged_tagged_or_released():
-    project = snapshot()["project"]
-    assert project["master_commit"] == (
+    """RESCOPED AT S5G. The same four facts, none of them weakened.
+
+    ``master_commit`` and ``merged_into_master`` were a live-equality demand and a
+    frozen boolean no check ever verified. Under V4 the historical master is the
+    INTEGRATION BASE, and "not merged" is DERIVED from the live ref instead of
+    asserted by a field that would have gone on reading false after a merge.
+    """
+    live = snapshot()
+    authority = live["integration_authority"]
+    assert authority["integration_base"] == (
         "3705114228edef2f665be349c5c4429b7b16777a")
-    assert project["merged_into_master"] is False
-    assert project["tagged"] is False
-    assert project["released"] is False
+    state, _, _ = V.observe_integration_state(authority)
+    assert state == "TARGET_AT_AUTHORIZED_BASE", (
+        "master must still be at the authorised base: nothing was merged")
+    assert live["project"]["tagged"] is False
+    assert live["project"]["released"] is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════

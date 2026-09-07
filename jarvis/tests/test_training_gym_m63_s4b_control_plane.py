@@ -513,11 +513,18 @@ def test_the_project_block_did_not_move_master_or_merge():
     assert project["released"] is False
     assert project["tagged"] is False
 
-    live = V.load(V.Report()).snapshot["project"]
-    assert live["master_commit"] == project["master_commit"]
-    assert live["merged_into_master"] is False
-    assert live["released"] is False
-    assert live["tagged"] is False
+    # RESCOPED AT S5G, live half only. Generation 17's own facts above are UNTOUCHED.
+    # The live generation is V4: the historical master is the INTEGRATION BASE (same
+    # value, a fact about the past instead of a demand on a live ref), and "not merged"
+    # is DERIVED rather than declared -- so it cannot go on reading false after a merge
+    # the way merged_into_master would have.
+    live = V.load(V.Report()).snapshot
+    authority = live["integration_authority"]
+    assert authority["integration_base"] == project["master_commit"]
+    state, _, _ = V.observe_integration_state(authority)
+    assert state == "TARGET_AT_AUTHORIZED_BASE"
+    assert live["project"]["released"] is False
+    assert live["project"]["tagged"] is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
