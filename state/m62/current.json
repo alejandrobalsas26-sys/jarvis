@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0034-s5g-control-plane-v4-integration-authority.json",
-  "latest_snapshot_sha256": "67f10df17370b933c0fc5b8f6304000491d8f97f31c7da36d08e33d0807ae641",
+  "latest_snapshot_path": "state/m62/snapshots/0035-s5g1-preintegration-hardening.json",
+  "latest_snapshot_sha256": "60660e492b0d0573b1ff55b5bca13fed6277b2ac0dba38d7f8a814c39c0dc526",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 34,
-  "subject_state_commit": "7d1a0216bb2d55238bc54501f2820023c1195245",
+  "state_generation": 35,
+  "subject_state_commit": "7dda0f50ca0e9e6ffd7ef88dda953b1855b1a308",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
