@@ -196,20 +196,39 @@ def test_the_production_assignment_is_unchanged():
 
 
 def test_master_is_unchanged_and_nothing_was_merged_tagged_or_released():
-    """RESCOPED AT S5G. The same four facts, none of them weakened.
+    """RESCOPED AT S5G, AND AGAIN AT S5G.1. The name is kept for the audit trail; what
+    it asserts is stated here.
 
     ``master_commit`` and ``merged_into_master`` were a live-equality demand and a
     frozen boolean no check ever verified. Under V4 the historical master is the
-    INTEGRATION BASE, and "not merged" is DERIVED from the live ref instead of
-    asserted by a field that would have gone on reading false after a merge.
+    INTEGRATION BASE, and "not merged" is DERIVED from the live ref instead of asserted
+    by a field that would have gone on reading false after a merge.
+
+    S5G.1: this no longer asserts that master is unchanged. It asserts that master is
+    where the authorisation PERMITS it to be -- still at the base, or fast-forwarded
+    onto a governed lineage -- because "unchanged forever" is a claim V4 exists to stop
+    making, and pinning it turned the first post-integration CI run red. Tagged and
+    released stay false, and those are unweakened.
     """
     live = snapshot()
     authority = live["integration_authority"]
     assert authority["integration_base"] == (
         "3705114228edef2f665be349c5c4429b7b16777a")
-    state, _, _ = V.observe_integration_state(authority)
-    assert state == "TARGET_AT_AUTHORIZED_BASE", (
-        "master must still be at the authorised base: nothing was merged")
+    # RESCOPED AGAIN AT S5G.1. S5G derived "not merged" from the live ref -- right --
+    # and then pinned the PRE-INTEGRATION value as though it were permanent, which is
+    # wrong under V4: an authorised fast-forward moves the observation to
+    # INTEGRATED_FAST_FORWARD, `ci.yml` runs on `push: branches: [master]`, and the
+    # first run after the integration was therefore deterministically red. Measured.
+    # The invariant that survives is MEMBERSHIP IN THE ADMITTED SET -- master is where
+    # the authorisation permits it to be, integrated or not -- and the set is written
+    # out literally here rather than imported, so widening the verifier's own constant
+    # cannot widen this assertion with it.
+    admitted = {"TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"}
+    assert set(V.ADMITTED_INTEGRATION_STATES) == admitted
+    state, detail, offenders = V.observe_integration_state(authority)
+    assert state in admitted, (
+        f"master is somewhere the authorisation does not permit: {state} -- {detail} "
+        f"{offenders}")
     assert live["project"]["tagged"] is False
     assert live["project"]["released"] is False
 

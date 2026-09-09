@@ -640,11 +640,25 @@ def test_the_project_block_did_not_move_master(snapshot):
     assert _s4c_snapshot()["project"]["branch"] == "jarvis-v69-m63-world-state"
     # RESCOPED AT S5G. Generation 18's own declaration above is untouched. The live
     # generation is V4, where the historical master is the integration base and "not
-    # merged" is derived from the live ref rather than frozen into a boolean.
+    # merged" is derived from the live ref rather than frozen into a boolean. S5G.1
+    # corrects which half is asserted; generation 18's frozen facts do not move.
     authority = snapshot["integration_authority"]
     assert authority["integration_base"] == "3705114228edef2f665be349c5c4429b7b16777a"
-    state, _, _ = V.observe_integration_state(authority)
-    assert state == "TARGET_AT_AUTHORIZED_BASE"
+    # RESCOPED AGAIN AT S5G.1. S5G derived "not merged" from the live ref -- right --
+    # and then pinned the PRE-INTEGRATION value as though it were permanent, which is
+    # wrong under V4: an authorised fast-forward moves the observation to
+    # INTEGRATED_FAST_FORWARD, `ci.yml` runs on `push: branches: [master]`, and the
+    # first run after the integration was therefore deterministically red. Measured.
+    # The invariant that survives is MEMBERSHIP IN THE ADMITTED SET -- master is where
+    # the authorisation permits it to be, integrated or not -- and the set is written
+    # out literally here rather than imported, so widening the verifier's own constant
+    # cannot widen this assertion with it.
+    admitted = {"TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"}
+    assert set(V.ADMITTED_INTEGRATION_STATES) == admitted
+    state, detail, offenders = V.observe_integration_state(authority)
+    assert state in admitted, (
+        f"master is somewhere the authorisation does not permit: {state} -- {detail} "
+        f"{offenders}")
     assert snapshot["project"]["released"] is False
     assert snapshot["project"]["tagged"] is False
 

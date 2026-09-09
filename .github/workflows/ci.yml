@@ -54,6 +54,78 @@ jobs:
         working-directory: jarvis
         run: python scripts/check_release_consistency.py
 
+  # ── Gate 1b: the control plane, run DIRECTLY. BLOCKING. ────────────────────
+  #
+  # V69 S5G.1. This job exists because an independent red team measured its absence.
+  # The control-plane verifier was reachable from CI only THROUGH pytest — a handful of
+  # tests called it — and the authoritative command names both test trees, so a trailing
+  # `tests/conftest.py` collection hook could deselect exactly those tests. Measured on the
+  # S5G.1 branch: verifier FAIL with an ungoverned runtime module present, `pytest -q
+  # jarvis/tests tests` exit 0 on the same tree. Nothing sequenced one before the other,
+  # because the checker was not in this file at all.
+  #
+  # It runs as its own step, not as a test. A collection hook cannot deselect a step, and
+  # this job installs nothing, so no dependency resolution can silence it either.
+  #
+  # FULL HISTORY is required for the same reason the deterministic suite needs it: the
+  # verifier resolves `subject_state_commit`, requires HEAD to descend from it, and
+  # compares the integration target against the declared authority. `check_git_authority`
+  # FAILS CLOSED when master does not resolve, which on a depth-1 checkout is every run.
+  control-plane:
+    name: M62 control plane (verifier, authoritative)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Deliberately NO dependency install: the verifier is pure stdlib and treats an
+      # absent `jsonschema` as "one opinion instead of two", which it reports.
+      # Deliberately BEFORE the verifier, and deliberately not written in Python: this
+      # step depends on no constant the checker owns. A commit that weakens the checker
+      # can make the verifier say PASS about itself; it cannot make `git ls-files` stop
+      # listing a file. The two collection hooks below are the only ones this repository
+      # has, and a third is how F3/D52 masked 3 real failures into `exit 0`.
+      #
+      # No `|| true` anywhere: `test_no_mandatory_job_swallows_a_failure` forbids it in a
+      # mandatory job, and it is right to. `case` does the allowlisting, and the file list
+      # is materialised FIRST so a `git` failure is a step failure rather than an empty
+      # loop that reports "only the allowlisted ones" having enumerated nothing.
+      #
+      # It covers every file pytest will read as configuration, not just conftests. A red
+      # team took this whole gate green with a tracked ROOT `pyproject.toml` whose
+      # `[tool.pytest.ini_options] addopts` `--ignore`d the two control-plane modules:
+      # collection fell from 10,830 to 10,659, zero control-plane tests ran, and the suite
+      # exited 0. A conftest-only guard never looked at it.
+      - name: No ungoverned pytest collection or configuration surfaces
+        run: |
+          set -euo pipefail
+          # REDIRECTED, not captured. `x=$(git ...)` makes git's exit status the
+          # assignment's, which `set -e` does not act on -- so outside a repository the
+          # loop ran zero times and the step reported "only the allowlisted ones" having
+          # enumerated nothing at all. Measured. A redirect makes git the command.
+          git ls-files \
+            '*conftest.py' '*pyproject.toml' '*pytest.ini' '*tox.ini' '*setup.cfg' \
+            > pytest-surfaces.txt
+          ungoverned=""
+          while read -r file; do
+            [ -n "$file" ] || continue
+            case "$file" in
+              jarvis/conftest.py|jarvis/tests/conftest.py|jarvis/pyproject.toml) ;;
+              *) ungoverned="$ungoverned $file" ;;
+            esac
+          done < pytest-surfaces.txt
+          rm -f pytest-surfaces.txt
+          if [ -n "$ungoverned" ]; then
+            echo "::error::ungoverned pytest surface(s):$ungoverned"
+            exit 1
+          fi
+          echo "pytest surfaces: jarvis/conftest.py, jarvis/tests/conftest.py, jarvis/pyproject.toml"
+      - name: Verify the M62 control plane
+        run: python jarvis/scripts/verify_m62_control_plane.py
+
   # ── Gate 2: lint + grammar on the authoritative interpreter. ────────────────
   lint:
     name: Ruff & compileall (3.11)
@@ -132,6 +204,54 @@ jobs:
       - name: Doctor (must not error a service-free environment)
         working-directory: jarvis
         run: python scripts/doctor.py
+
+  # ── Gate 3b: the authoritative collection must still contain the gate. ─────
+  #
+  # V69 S5G.1 / D54. A red team took the whole suite green with a tracked ROOT
+  # `pyproject.toml` whose `[tool.pytest.ini_options] addopts` `--ignore`d the two
+  # control-plane modules: collection fell from 10,830 to 10,659, zero control-plane tests
+  # ran, and `pytest -q jarvis/tests tests` exited 0. Its sibling check — the
+  # ungoverned-surface allowlist — lives in `control-plane` because it is pure `git`.
+  # This half has to ask pytest, so it needs the install.
+  #
+  # It is a SEPARATE JOB rather than a step in `tests` for a reason S5E pinned first:
+  # `test_the_authoritative_command_names_both_trees` requires EXACTLY ONE pytest
+  # invocation in the authoritative job, so that which command is authoritative is never
+  # ambiguous. A second invocation there would have broken that guard, and the guard is
+  # right.
+  collection-integrity:
+    name: Authoritative collection contains the control plane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Install dev + soc (the suite must be importable to be collectable)
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c requirements/constraints-ci.txt \
+            -r requirements/dev.txt -r requirements/soc.txt
+      # The AUTHORITATIVE argument list, not the two modules by name: `--ignore` does not
+      # apply to a path given explicitly on the command line, so naming them collected 171
+      # on exactly the tree this exists to catch. Measured.
+      - name: The control-plane modules must survive authoritative collection
+        run: |
+          set -euo pipefail
+          python -m pytest -q --collect-only --no-header jarvis/tests tests \
+            > authoritative-collection.txt
+          collected=$(grep -c 'test_control_plane_v4' authoritative-collection.txt)
+          total=$(grep -c '::test_' authoritative-collection.txt)
+          rm -f authoritative-collection.txt
+          echo "authoritative collection: $total tests, $collected control-plane"
+          if [ "$collected" -lt 150 ]; then
+            echo "::error::only $collected control-plane tests survive collection (need 150+)"
+            exit 1
+          fi
 
   # ── Gate 4: compatibility. Lightweight — smoke, not the full suite. ─────────
   compat:

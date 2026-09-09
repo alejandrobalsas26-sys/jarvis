@@ -91,14 +91,32 @@ class Lab:
         # and a "roll the target back past its base" case cannot be expressed at all —
         # which is exactly how the rollback assertion below went vacuous.
         self.pre_base = _commit(root, "SEED.md", "seed\n", "seed before the base")
+        # A minimal but COHERENT control plane, added at S5G.1. The observation now reads
+        # the TARGET's own pointer -- a target carrying a forged `current.json`, or none
+        # at all, used to be observed as "a governed fast-forward" -- so a lab whose
+        # master carries no control plane models a broken repository, not this one.
+        (root / "state/m62/snapshots").mkdir(parents=True, exist_ok=True)
+        (root / "state/m62/snapshots/0001-lab.json").write_text("{}\n", encoding="utf-8")
+        (root / "state/m62/current.json").write_text(
+            '{"latest_snapshot_path": "state/m62/snapshots/0001-lab.json"}\n',
+            encoding="utf-8")
+        (root / "PROGRESS.md").write_text("lab\n", encoding="utf-8")
         self.base = _commit(root, "README.md", "base\n", "base")
         _commit(root, "jarvis/core/runtime.py", "RUNTIME = 1\n", "runtime")
         self.subject = _commit(
             root, "jarvis/training_gym/data.py", "CORPUS = 1\n", "subject")
-        # Trailing commits of exactly the shape generation 33 really has: docs + tests.
+        # Trailing commits of exactly the shape a governance close really has. Until
+        # S5G.1 the second one was `jarvis/tests/test_x.py`, because generation 33's
+        # trailing commits genuinely touched `jarvis/tests/`. That surface is no longer
+        # governed trailing state -- it was the F3 hole -- so the lab models what a
+        # close writes now: prose and state, both inert.
         _commit(root, "jarvis/docs/NOTE.md", "note\n", "docs after the seal")
-        self.tip = _commit(root, "jarvis/tests/test_x.py", "def test_x(): pass\n",
-                           "tests after the seal")
+        # A real close: ADD a snapshot, then move the pointer at it.
+        (root / "state/m62/snapshots/0099-seal.json").write_text("{}\n", encoding="utf-8")
+        self.tip = _commit(
+            root, "state/m62/current.json",
+            '{"latest_snapshot_path": "state/m62/snapshots/0099-seal.json"}\n',
+            "state after the seal")
         self.set_target(self.base)
 
     def set_target(self, sha: str) -> None:
@@ -290,16 +308,19 @@ def test_an_unauthorized_state_bearing_commit_is_refused_more_specifically(lab):
 
 
 def test_governed_trailing_commits_are_still_a_fast_forward(lab):
-    """The allowance is real: docs and tests after the seal do NOT fail the target.
+    """The allowance is real: an evidence-only close after the seal does NOT fail.
 
-    Generation 33 genuinely has two such commits. A rule that refused them would fail
-    this repository as it stands, which is how the strict carrier rule was falsified.
+    Generation 33 genuinely had two trailing commits, which is how the strict
+    "the target must BE the seal" rule was falsified. NARROWED AT S5G.1: the permitted
+    shape is prose and state, not tests -- but it must still be a shape a real close
+    can produce, or the tightening has replaced a hole with a deadlock.
     """
     lab.set_target(lab.tip)
     assert _observe(lab) == "INTEGRATED_FAST_FORWARD"
     changed = _run(lab.root, "diff", "--name-only", lab.subject, lab.tip).split()
     assert changed and all(
-        p.startswith(("jarvis/docs/", "jarvis/tests/")) for p in changed)
+        p.startswith(("jarvis/docs/", "state/m62/")) for p in changed)
+    assert all(V._is_inert(p) for p in changed)
 
 
 def test_a_missing_target_ref_fails_closed_and_is_never_admitted(lab):
@@ -723,11 +744,18 @@ def test_unknown_and_ungoverned_trailing_paths_all_fail_closed(lab, relpath):
 
 
 @pytest.mark.parametrize("relpath", [
-    "jarvis/docs/EVIDENCE.md", "jarvis/tests/test_probe.py",
-    "state/m62/notes.txt", "PROGRESS.md",
+    "jarvis/docs/EVIDENCE.md", "state/m62/snapshots/0099-x.json", "PROGRESS.md",
 ])
 def test_the_explicitly_governed_trailing_surface_still_passes(lab, relpath):
-    """The closure is narrow, not merely strict: the permitted classes stay permitted."""
+    """The closure is narrow, not merely strict: the permitted classes stay permitted.
+
+    NARROWED AT S5G.1. ``jarvis/tests/test_probe.py`` and ``state/m62/notes.txt`` used
+    to be on this list. The first was the F3 hole -- executable test infrastructure on
+    the trailing surface, measured deselecting the failures it was the control for --
+    and the second is inert but off the suffix allowlist, which is deny-by-default one
+    level below the path. Both now belong in a governed subject; see
+    ``test_control_plane_v41_preintegration_hardening_v69_s5g1.py``.
+    """
     head = lab.commit_on(lab.tip, relpath, "governed trailing change")
     assert _staged_authority_report(lab, head).status("INTEGRATION_AUTHORITY") == "PASS"
 
@@ -749,14 +777,19 @@ def test_the_closure_has_exactly_one_implementation():
 
 
 def test_the_closure_denies_by_default_rather_than_allowing_by_default():
-    """Pins the polarity itself, so an inverted membership test cannot pass."""
-    state_bearing, ungoverned = V.closure_offenders(
+    """Pins the polarity itself, so an inverted membership test cannot pass.
+
+    S5G.1 added a third returned class -- on the surface but not inert -- so this
+    unpacks three lists. The polarity being pinned is unchanged.
+    """
+    state_bearing, executable, ungoverned = V.closure_offenders(
         ["jarvis/docs/a.md", "jarvis/core/b.py", "jarvis/training_gym/c.py",
          "totally/unheard/of/path.bin"])
     assert state_bearing == ["jarvis/training_gym/c.py"]
+    assert executable == []
     assert ungoverned == ["jarvis/core/b.py", "jarvis/training_gym/c.py",
                           "totally/unheard/of/path.bin"]
-    assert V.closure_offenders([]) == ([], [])
+    assert V.closure_offenders([]) == ([], [], [])
 
 
 def test_an_unresolvable_subject_to_head_diff_is_unknown_not_clean(lab):
@@ -847,24 +880,32 @@ def test_the_pointer_must_agree_with_the_snapshot_it_points_at(pointer, needle):
     "state/m62evil/x.py",
 ])
 def test_a_path_that_merely_starts_with_a_governed_one_is_not_governed(path):
-    assert V.closure_offenders([path])[1] == [path]
+    assert V.closure_offenders([path])[2] == [path]
     assert not V._governed_by(path, V.INTEGRATION_TRAILING_PATHS)
 
 
 @pytest.mark.parametrize("path", [
-    "PROGRESS.md", "jarvis/scripts/verify_m62_control_plane.py",
-    "jarvis/docs/x.md", "jarvis/tests/test_x.py", "tests/test_x.py",
-    "state/m62/current.json",
+    "PROGRESS.md", "jarvis/docs/x.md", "state/m62/current.json",
 ])
 def test_the_genuinely_governed_paths_are_still_governed(path):
-    """The tightening must not have closed the surface the repository actually needs."""
+    """The tightening must not have closed the surface the repository actually needs.
+
+    NARROWED AT S5G.1: the checker and both test trees came off this list, which is the
+    F2/F3 remediation. What a governance close actually writes -- the pointer, a
+    snapshot and prose -- still passes, and that is asserted here and again against the
+    real tree in the S5G.1 suite.
+    """
     assert V.closure_offenders([path])[1] == []
+    assert V.closure_offenders([path])[2] == []
     assert V._governed_by(path, V.INTEGRATION_TRAILING_PATHS)
 
 
 def test_every_file_shaped_entry_is_matched_exactly_and_only_exactly():
     """Pins the rule itself, so a future entry cannot silently reopen the hole."""
-    for surface in (V.INTEGRATION_TRAILING_PATHS, V.STATE_BEARING_PRODUCTION):
+    assert any(not e.endswith("/") for e in V.INTEGRATION_TRAILING_PATHS), (
+        "a file-shaped entry must remain, or the exact-match half goes vacuous")
+    for surface in (V.INTEGRATION_TRAILING_PATHS, V.STATE_BEARING_PRODUCTION,
+                    V.AUTHORITY_CRITICAL_PATHS):
         for entry in surface:
             assert V._governed_by(entry, surface), entry
             if entry.endswith("/"):
@@ -880,6 +921,9 @@ def test_state_bearing_production_paths_are_still_detected():
         "jarvis/training_gym/a.py"]
     assert V.closure_offenders(["jarvis/scripts/train_experiment.py"])[0] == [
         "jarvis/scripts/train_experiment.py"]
+    # And they are ungoverned as well as state-bearing: two refusals, not one.
+    assert V.closure_offenders(["jarvis/training_gym/a.py"])[2] == [
+        "jarvis/training_gym/a.py"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

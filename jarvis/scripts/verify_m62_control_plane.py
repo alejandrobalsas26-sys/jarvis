@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -303,18 +304,52 @@ INTEGRATION_METHODS = ("FAST_FORWARD_ONLY",)
 #: Paths a commit BETWEEN the governed subject and the target may touch and still be
 #: covered by the authorisation. Everything else is ungoverned movement.
 #:
-#: This list is not cosmetic and it is not a guess: at generation 33 the two commits
-#: after the seal touch exactly ``jarvis/docs/`` and ``jarvis/tests/``, so a rule
-#: demanding the target BE the seal commit would fail the repository as it stands. The
-#: honest constraint is that trailing commits may carry governance, documentation and
-#: tests — never runtime, never state-bearing production.
+#: S5G.1 REMOVED three entries, and the removals ARE the milestone: ``VERIFIER_PATH``,
+#: ``jarvis/tests/`` and ``tests/``. S5G recorded the hazard honestly -- "a hostile edit
+#: confined to ``jarvis/tests/`` or ``jarvis/docs/`` rides along inside the allowance" --
+#: and assigned the control to "the suite that runs in CI". Both halves of that were
+#: measured false at S5G.1:
 #:
-#: WHAT THIS DOES NOT CATCH is recorded rather than papered over: a hostile edit confined
-#: to ``jarvis/tests/`` or ``jarvis/docs/`` rides along inside the allowance. The suite
-#: that runs in CI is the control for that one, not this check.
-INTEGRATION_TRAILING_PATHS = (
-    STATE_DIR + "/", PROGRESS_PATH, VERIFIER_PATH, "jarvis/docs/", "jarvis/tests/",
-    "tests/",
+#: * The suite cannot be the control for the suite. The authoritative command names BOTH
+#:   trees (``pytest jarvis/tests tests``), so a trailing ``tests/conftest.py`` receives
+#:   every ``jarvis/tests`` item in ``pytest_collection_modifyitems`` and can deselect the
+#:   failures it is supposed to be caught by. Measured: real failures -> exit 0.
+#: * The suite cannot be the control for the verifier either, because the verifier was
+#:   inside its own allowance. Deleting one dispatch line certified an ungoverned runtime
+#:   module with 0 problems, in the staged AND the integrated context.
+#:
+#: What is left is the surface governance EVIDENCE lives on. Executable authority -- the
+#: checker, the suite, collection configuration, workflows, packaging, runtime -- may
+#: change only INSIDE a governed subject, which means a successor generation and a human
+#: reading it. That is the whole of the S5G.1 trust model.
+INTEGRATION_TRAILING_PATHS = (STATE_DIR + "/", PROGRESS_PATH, "jarvis/docs/")
+
+#: Being ON the trailing surface is necessary and NOT sufficient: the file must also be
+#: inert. A closed suffix allowlist, deny by default -- ``jarvis/docs/conftest.py`` and
+#: ``state/m62/sitecustomize.py`` sit on the permitted surface and are code, and an
+#: "unknown extension, therefore harmless" default is the same mistake as an unknown path.
+#:
+#: The two entries are what the permitted surface ACTUALLY holds: every tracked file under
+#: ``state/m62/`` is ``.json`` and every tracked file under ``jarvis/docs/`` is ``.md``. That
+#: is MEASURED against the live tree by
+#: ``test_the_permitted_surface_holds_only_what_the_allowlist_admits`` rather than counted
+#: here -- a literal count in a comment is stale the first time a milestone closes, and this
+#: one was: S5G.1's own governance commit moved it. Widening this tuple is a control-plane
+#: decision, not a convenience.
+TRAILING_INERT_SUFFIXES = (".md", ".json")
+
+#: Paths whose CONTENT decides what the checks themselves do, named here as well as
+#: classified by the closure. The redundancy is deliberate and it is the point: S5G's
+#: hole was one deleted dispatch line, after which the closure never executed at all, so
+#: a second control that does not share that dispatch is worth more than its duplication
+#: costs. :func:`check_verifier_integrity` owns this one.
+AUTHORITY_CRITICAL_PATHS = (
+    VERIFIER_PATH,
+    "jarvis/tests/", "tests/", "jarvis/conftest.py", "conftest.py",
+    ".github/workflows/",
+    "pyproject.toml", "setup.py", "setup.cfg", "pytest.ini", "tox.ini",
+    "jarvis/pyproject.toml", "jarvis/setup.py", "jarvis/setup.cfg", "jarvis/pytest.ini",
+    "jarvis/tox.ini",
 )
 
 #: Every value :func:`observe_integration_state` can return. An OBSERVATION, derived on
@@ -326,6 +361,9 @@ OBSERVED_INTEGRATION_STATES = (
     "TARGET_ADVANCED_WITHOUT_SUBJECT",
     "TARGET_REWRITTEN",
     "UNGOVERNED_STATE_ADVANCE",
+    "SEALED_STATE_REWRITTEN",
+    "TARGET_STATE_INCOHERENT",
+    "UNGOVERNED_EXECUTABLE_TRAILING",
     "UNGOVERNED_TRAILING_COMMIT",
     "TARGET_UNRESOLVABLE",
 )
@@ -335,6 +373,36 @@ OBSERVED_INTEGRATION_STATES = (
 #: is where the authorisation says it may be.
 ADMITTED_INTEGRATION_STATES = frozenset({
     "TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"})
+
+#: Trees whose files are SEALED THE MOMENT THEY ARE WRITTEN: a trailing lineage may ADD
+#: one, never modify or delete one. ``current.json`` is the single exception, by
+#: construction -- it is the pointer, and a generation that could not move it could not be
+#: published at all.
+#:
+#: MEASURED, and it is why this exists. S5G.1's first attempt pinned the checker's digest in
+#: ``governed_implementation`` and called that byte identity. It was not: the digest's
+#: REFERENCE VALUE lives in the live snapshot, and the live snapshot is a ``.json`` on the
+#: permitted trailing surface. One commit that weakened the checker AND rewrote that one line
+#: verified ``PASS / PROBLEMS: 0`` with every authority category green. The same class of
+#: edit rewrote an evaluation receipt's measured delta, gutted ``scientific-suite.json`` from
+#: 54 modules to 12, and rewrote the "append-never-edit" archive while ARCHIVE_INTEGRITY
+#: still read PASS -- because the record carrying the expected digest was rewritten beside it.
+#:
+#: A pin whose reference value is editable in the same commit is not a pin. Append-only is
+#: what the control plane always claimed for these paths; this is the check that enforces it.
+SEALED_TRAILING_ROOTS = (STATE_DIR + "/", "jarvis/docs/m62/history/")
+
+#: Substrings PROGRESS.md must still carry. The external-control statement is the milestone's
+#: own conclusion, and it was deletable in a trailing commit with the verifier still green.
+PROGRESS_REQUIRED_CLAUSES = (
+    "EXTERNAL_CONTROL_PENDING",
+    "PROSE_CANNOT_GRANT_AUTHORITY",
+)
+
+#: The first generation that must declare the checker it was sealed under. Generations
+#: 1-34 predate ``governed_implementation`` and are never retrofitted: a sealed record is
+#: not rewritten to satisfy a control invented after it.
+VERIFIER_PIN_FIRST_GENERATION = 35
 
 #: Immutable historical record. Append-never-edit.
 HISTORY_PATHS = ("jarvis/docs/m62/history/",)
@@ -866,6 +934,26 @@ FROZEN_DEFECT_STATUSES: dict[str, str] = {
     # S3T.0. Observability, PROSPECTIVE, and emphatically not a gate. Pinned here so a
     # later snapshot cannot quietly re-record it as one.
     "D43": "FIXED_OBSERVABILITY_ONLY",
+    # S5G.1. The three pre-integration findings, each reproduced on the S5G source
+    # before it was repaired. Pinned because each one PASSED every gate this repository
+    # had while it was live, so "the suite would catch a regression" is exactly the
+    # assumption that already failed here once.
+    "D49": "FIXED",
+    "D50": "FIXED",
+    "D51": "FIXED",
+    # S5G.1, found by an independent red team ON THIS MILESTONE'S OWN FIRST ATTEMPT, and
+    # both falsified a closure this document had already claimed. D52: no workflow ran the
+    # checker, so it reached CI only through tests a trailing conftest deselects. D53: the
+    # checker's digest pin had its reference value on the permitted trailing surface, so
+    # one commit could weaken the checker and reseal it. Pinned because a claim that was
+    # wrong once is the claim most worth pinning.
+    "D52": "FIXED",
+    "D53": "FIXED",
+    # S5G.1, found by a SECOND red team against the fix for D52/D53. The masking route
+    # needed no third conftest -- a root pyproject.toml `addopts --ignore` dropped both
+    # control-plane modules from collection while the conftest-only guard reported clean
+    # -- and a target carrying a forged current.json read as "a governed fast-forward".
+    "D54": "FIXED",
 }
 
 DEFECT_STATES = (
@@ -2568,6 +2656,13 @@ def snapshot_v4_semantic_schema() -> dict:
     }, description="An IMMUTABLE authorisation over commits that already exist. It "
                    "states what MAY happen, never what HAS happened; the observation "
                    "is derived from live refs on every run.")
+    props["governed_implementation"] = _obj({
+        "verifier_path": _REPO_PATH,
+        "verifier_sha256": _SHA256,
+    }, description="S5G.1. The checker this generation was sealed under, by digest. "
+                   "OPTIONAL in the schema and REQUIRED by check_verifier_integrity "
+                   "from generation 35, because generations 1-34 predate it and a "
+                   "sealed record is never retrofitted.")
     props["schema_version"] = {"const": CONTROL_PLANE_V4_SCHEMA_VERSION}
     required = sorted(set(base["required"]) | {"integration_authority"})
     return {"type": "object", "additionalProperties": False,
@@ -2744,6 +2839,7 @@ def snapshot_schema() -> dict:
 CATEGORIES = (
     "SCHEMA", "CURRENT_POINTER", "SNAPSHOT_CHAIN", "ARCHIVE_INTEGRITY", "GIT_AUTHORITY",
     "INTEGRATION_AUTHORITY",
+    "VERIFIER_INTEGRITY",
     "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "EVALUATION_RECEIPT",
     "POLICY_IDENTITIES",
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
@@ -2752,11 +2848,61 @@ CATEGORIES = (
     "CONTROL_PLANE_BUDGET",
 )
 
+#: The checks :func:`run` dispatches, in order, and the report categories each entry
+#: OWNS. S5G.1 turned this from twenty-one bare call statements into data for one
+#: measured reason: deleting the single line ``check_git_authority(cp, report)`` left
+#: the machine-readable block printing ``GIT_AUTHORITY: PASS`` and
+#: ``INTEGRATION_AUTHORITY: PASS`` for two checks that never executed, with 0 problems,
+#: while the same commit added an ungoverned runtime module -- and the full 10,662-test
+#: authoritative suite passed on it too.
+#:
+#: A category is now PASS only if the entry that owns it actually ran, so the same
+#: deletion prints NOT_RUN and fails the report. :func:`check_verifier_integrity`
+#: separately refuses a table that does not name every check this module defines, so
+#: deleting the entry AND the function is caught as well. Neither control can be the
+#: only one: they share no code path on purpose.
+CHECK_DISPATCH = (
+    ("check_schema", ("SCHEMA",)),
+    ("check_current_pointer", ("CURRENT_POINTER",)),
+    ("check_snapshot_chain", ("SNAPSHOT_CHAIN",)),
+    ("check_archive", ("ARCHIVE_INTEGRITY",)),
+    ("check_paths", ("PATH_INTEGRITY",)),
+    ("check_git_authority", ("GIT_AUTHORITY", "INTEGRATION_AUTHORITY")),
+    ("check_verifier_integrity", ("VERIFIER_INTEGRITY",)),
+    ("check_stale_state", ("STALE_STATE",)),
+    ("check_dataset_state", ("DATASET_STATE",)),
+    ("check_candidate_state", ("CANDIDATE_STATE",)),
+    ("check_candidate_design", ()),
+    ("check_training_receipt", ("TRAINING_RECEIPT",)),
+    ("check_evaluation_receipt", ("EVALUATION_RECEIPT",)),
+    ("check_policy_identities", ("POLICY_IDENTITIES",)),
+    ("check_authority_separation", ("AUTHORITY_SEPARATION",)),
+    ("check_operator_ruling", ()),
+    ("check_holdout_firewall", ("HOLDOUT_FIREWALL",)),
+    ("check_holdout_retirement", ()),
+    ("check_record_store", ("RECORD_STORE",)),
+    ("check_instrument_stack", ("INSTRUMENT_STACK",)),
+    ("check_budgets", ("CONTROL_PLANE_BUDGET",)),
+    ("check_next", ()),
+)
+
+#: Checks another check dispatches rather than :func:`run`. ``check_git_authority``
+#: routes a V4 generation to ``check_integration_authority`` and a V2/V3 one to its own
+#: body, which is why the V4 category is owned by the entry above rather than by a
+#: second table row that would be skipped on three quarters of the chain.
+INTERNALLY_DISPATCHED_CHECKS = ("check_integration_authority",)
+
 
 @dataclass
 class Report:
     problems: list[tuple[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: Categories a check CLAIMED, by executing. S5G.1. Silence used to be indis-
+    #: tinguishable from success here: ``status`` returned PASS for any category with no
+    #: recorded problem, so a check that was never dispatched at all reported exactly
+    #: what a check that ran and found nothing reports. Measured, on a real clone, with
+    #: one line deleted.
+    ran: set = field(default_factory=set)
 
     def fail(self, category: str, message: str) -> None:
         assert category in CATEGORIES, category  # nosec B101 - developer invariant
@@ -2765,12 +2911,25 @@ class Report:
     def note(self, message: str) -> None:
         self.notes.append(message)
 
+    def claim(self, *categories: str) -> None:
+        """Record that the check owning these categories actually executed."""
+        for category in categories:
+            assert category in CATEGORIES, category  # nosec B101 - developer invariant
+            self.ran.add(category)
+
     def status(self, category: str) -> str:
-        return "FAIL" if any(c == category for c, _ in self.problems) else "PASS"
+        if any(c == category for c, _ in self.problems):
+            return "FAIL"
+        return "PASS" if category in self.ran else "NOT_RUN"
+
+    @property
+    def not_run(self) -> "tuple[str, ...]":
+        """Categories no check claimed. Only meaningful on a report :func:`run` built."""
+        return tuple(c for c in CATEGORIES if c not in self.ran)
 
     @property
     def ok(self) -> bool:
-        return not self.problems
+        return not self.problems and not self.not_run
 
 
 # ── Git, read-only ───────────────────────────────────────────────────────────────────
@@ -3034,6 +3193,7 @@ def _is_inside(path: Path, root: Path) -> bool:
 # ── Checks ───────────────────────────────────────────────────────────────────────────
 def check_schema(cp: ControlPlane, report: Report) -> None:
     """V1, V2, V28 — both documents strictly valid; unknown keys refused."""
+    report.claim("SCHEMA")
     # A V4 generation MEANS something different from a V2/V3 one, so it is validated
     # against a different semantic contract. Dispatch, never widen: loosening
     # snapshot_schema() to accept both would silently let a V3 snapshot drop
@@ -3098,6 +3258,7 @@ def check_schema(cp: ControlPlane, report: Report) -> None:
 
 def check_current_pointer(cp: ControlPlane, report: Report) -> None:
     """V3, V26 — the pointer's digest is the snapshot's bytes, recomputed here."""
+    report.claim("CURRENT_POINTER")
     measured = sha256_bytes(cp.snapshot_bytes)
     claimed = cp.current.get("latest_snapshot_sha256")
     if measured != claimed:
@@ -3129,6 +3290,7 @@ def check_current_pointer(cp: ControlPlane, report: Report) -> None:
 
 def check_snapshot_chain(cp: ControlPlane, report: Report) -> None:
     """V4, V5 + one-writer and monotonicity — the append-only hash chain."""
+    report.claim("SNAPSHOT_CHAIN")
     directory = REPO_ROOT / SNAPSHOT_DIR
     if not directory.is_dir():
         report.fail("SNAPSHOT_CHAIN", f"{SNAPSHOT_DIR} is missing")
@@ -3206,6 +3368,7 @@ def check_snapshot_chain(cp: ControlPlane, report: Report) -> None:
 
 def check_archive(cp: ControlPlane, report: Report) -> None:
     """V6, V7 — the archive exists and its bytes are the pinned ones. No auto-repair."""
+    report.claim("ARCHIVE_INTEGRITY")
     declared = cp.snapshot.get("archive", {})
     rel = declared.get("path")
     if rel != ARCHIVE_PATH:
@@ -3250,6 +3413,7 @@ def check_archive(cp: ControlPlane, report: Report) -> None:
 
 def check_paths(cp: ControlPlane, report: Report) -> None:
     """V8, V9 — every control-plane file is a regular tracked file, never a symlink."""
+    report.claim("PATH_INTEGRITY")
     required = [ARCHIVE_PATH, CURRENT_PATH, HISTORY_INDEX_PATH, PROGRESS_PATH,
                 CURRENT_SCHEMA_PATH, SNAPSHOT_SCHEMA_PATH, MIGRATION_MANIFEST_PATH,
                 VERIFIER_PATH, str(cp.snapshot_path.relative_to(REPO_ROOT))]
@@ -3388,14 +3552,53 @@ def _governed_by(path: str, surface: "tuple[str, ...]") -> bool:
     return path.startswith(directories) or path in surface
 
 
-def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
+def sealed_rewrites(status_lines: "list[str]") -> "list[str]":
+    """Sealed control-plane artefacts a lineage MODIFIED or DELETED rather than added.
+
+    Takes ``git diff --name-status`` output, because the question is not "which paths
+    moved" but "which of them existed already". ``--name-only`` cannot answer it, and that
+    is exactly the blindness the digest-reseal attack used.
+    """
+    violations = []
+    for line in status_lines:
+        status, _, path = line.partition("\t")
+        if not path or status.startswith("A"):
+            continue
+        if path == CURRENT_PATH:
+            continue
+        if _governed_by(path, SEALED_TRAILING_ROOTS):
+            violations.append(f"{status} {path}")
+    return sorted(violations)
+
+
+def _is_inert(path: str) -> bool:
+    """Is this path inert data or prose, rather than something that executes?
+
+    Suffix-based and deliberately crude, because the question it answers is not "does
+    this file run today" but "can a reviewer be sure it never will". A closed allowlist
+    answers that. A denylist of known-executable suffixes answers the opposite question
+    and is wrong every time somebody invents a new one -- which is the same
+    "unknown, therefore harmless" default the path closure exists to remove, moved one
+    level down into the filename.
+    """
+    return path.endswith(TRAILING_INERT_SUFFIXES)
+
+
+def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str], list[str]]":
     """The governance closure, DENY BY DEFAULT, in exactly one place.
 
-    Returns ``(state_bearing, ungoverned)``. A path is governed only by being matched
-    by :data:`INTEGRATION_TRAILING_PATHS`; anything the list does not name is
-    ungoverned, so a path nobody has classified yet -- a new ``jarvis/core/`` module,
-    a new top-level script, a workflow that changes enforcement -- fails rather than
-    slips through an "unknown, therefore harmless" default.
+    Returns ``(state_bearing, executable, ungoverned)`` -- three classes, reported
+    apart, because "this moves the science", "this is code on the evidence surface" and
+    "nobody has ever classified this" are different findings and only the middle one is
+    new at S5G.1.
+
+    A path is governed only by being matched by :data:`INTEGRATION_TRAILING_PATHS` AND
+    by being inert; anything the list does not name is ungoverned, so a path nobody has
+    classified yet -- a new ``jarvis/core/`` module, a new top-level script, a workflow
+    that changes enforcement -- fails rather than slips through an "unknown, therefore
+    harmless" default. Being ON the surface is no longer enough on its own: S5G admitted
+    every ``.py`` under two test trees and the checker itself, and both were measured
+    certifying their own weakening.
 
     Every caller must supply the diff with ``--no-renames``. Git detects renames by
     default and ``--name-only`` then prints ONLY the destination, so
@@ -3411,10 +3614,70 @@ def closure_offenders(changed: "list[str]") -> "tuple[list[str], list[str]]":
     """
     state_bearing = sorted(
         path for path in changed if _governed_by(path, STATE_BEARING_PRODUCTION))
+    executable = sorted(
+        path for path in changed
+        if _governed_by(path, INTEGRATION_TRAILING_PATHS) and not _is_inert(path))
     ungoverned = sorted(
         path for path in changed
         if not _governed_by(path, INTEGRATION_TRAILING_PATHS))
-    return state_bearing, ungoverned
+    return state_bearing, executable, ungoverned
+
+
+def _checker_generation_delta(generation: int, actual: str) -> str:
+    """One line saying whether the checker changed since the previous generation."""
+    previous = None
+    directory = REPO_ROOT / SNAPSHOT_DIR
+    if isinstance(generation, int) and directory.is_dir():
+        for path in directory.iterdir():
+            if path.suffix != ".json" or not path.name.startswith(
+                    f"{generation - 1:04d}-"):
+                continue
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                previous = None
+            break
+    if previous is None:
+        return (f"generation {generation - 1} is not readable here, so whether the "
+                f"checker changed since it cannot be stated")
+    sealed = (previous.get("governed_implementation") or {}).get("verifier_sha256")
+    if sealed is None:
+        return (f"generation {generation - 1} sealed no checker, so generation "
+                f"{generation} is the first to pin one")
+    if sealed == actual:
+        return f"the checker is UNCHANGED since generation {generation - 1}"
+    return (f"THE CHECKER CHANGED between generation {generation - 1} and {generation}: "
+            f"{sealed[:12]} -> {actual[:12]}. Legitimate for a milestone that revises it, "
+            f"and worth a reviewer's eye on the governed subject either way")
+
+
+def _target_state_incoherence(target: str) -> str:
+    """Why the TARGET's own control plane cannot be read, or "" when it reads fine.
+
+    Read out of the target tree with ``git show``, never from the working tree: every
+    other content check in this file describes HERE, and "here is healthy" says nothing
+    about a ref somebody else can write to.
+    """
+    for rel in (CURRENT_PATH, PROGRESS_PATH):
+        code, _ = _git("cat-file", "-e", f"{target}:{rel}")
+        if code != 0:
+            return f"{rel} is missing from the target tree"
+    code, raw = _git("show", f"{target}:{CURRENT_PATH}")
+    if code != 0:
+        return f"{CURRENT_PATH} could not be read out of the target tree"
+    try:
+        pointer = json.loads(raw)
+    except (ValueError, TypeError):
+        return f"{CURRENT_PATH} is not valid JSON in the target tree"
+    if not isinstance(pointer, dict):
+        return f"{CURRENT_PATH} is not an object in the target tree"
+    path = pointer.get("latest_snapshot_path")
+    if not isinstance(path, str) or not path:
+        return f"{CURRENT_PATH} names no snapshot in the target tree"
+    code, _ = _git("cat-file", "-e", f"{target}:{path}")
+    if code != 0:
+        return f"{CURRENT_PATH} points at {path}, which the target tree does not carry"
+    return ""
 
 
 def _observe_one(ref: str, target: str, base: str, subject: str,
@@ -3439,18 +3702,49 @@ def _observe_one(ref: str, target: str, base: str, subject: str,
         return ("TARGET_UNRESOLVABLE",
                 f"the {subject[:12]}..{target[:12]} diff could not be computed, so what "
                 f"advanced past the governed subject is UNKNOWN", [])
-    state_bearing, ungoverned = closure_offenders(
+    state_bearing, executable, ungoverned = closure_offenders(
         [line for line in out.splitlines() if line])
     if state_bearing:
         return ("UNGOVERNED_STATE_ADVANCE",
                 f"{len(state_bearing)} state-bearing production path(s) changed between "
                 f"the governed subject and {ref} without a generation covering them",
                 state_bearing)
+    code, status = _git("diff", "--no-renames", "--name-status", subject, target)
+    if code != 0:
+        return ("TARGET_UNRESOLVABLE",
+                f"the {subject[:12]}..{target[:12]} name-status diff could not be "
+                f"computed, so whether a sealed artefact was rewritten is UNKNOWN", [])
+    rewritten = sealed_rewrites(status.splitlines())
+    if rewritten:
+        return ("SEALED_STATE_REWRITTEN",
+                f"{len(rewritten)} sealed control-plane artefact(s) were modified or "
+                f"deleted between the governed subject and {ref}; these are append-only, "
+                f"and a pin whose reference value can be edited beside it is not a pin",
+                rewritten)
+    if executable:
+        return ("UNGOVERNED_EXECUTABLE_TRAILING",
+                f"{len(executable)} path(s) on the governed evidence surface are not "
+                f"provably inert and changed between the governed subject and {ref}; "
+                f"that surface carries evidence, and anything deciding what the checks "
+                f"do belongs inside a governed subject",
+                executable)
     if ungoverned:
         return ("UNGOVERNED_TRAILING_COMMIT",
                 f"{len(ungoverned)} path(s) outside the governed trailing surface changed "
                 f"between the governed subject and {ref}; the authorisation covers the "
                 f"subject, not whatever was appended after it", ungoverned)
+    # The path classification says WHICH files moved. It cannot say whether what they
+    # now contain is a control plane at all, and `current.json` is exempt from the
+    # append-only rule by construction -- it is the pointer, it has to move. So a target
+    # carrying `{"pointer": "forged"}`, or one that simply deleted PROGRESS.md, was
+    # observed as "a governed fast-forward". Measured by a red team. An operator reads
+    # this line to decide whether to integrate, so it has to be about the target's state
+    # and not only about the target's filenames.
+    incoherent = _target_state_incoherence(target)
+    if incoherent:
+        return ("TARGET_STATE_INCOHERENT",
+                f"{ref} is {target[:12]} and its own control plane does not read as one: "
+                f"{incoherent}", [])
     return ("INTEGRATED_FAST_FORWARD",
             f"{ref} is {target[:12]}, a governed fast-forward from the authorised base",
             [])
@@ -3464,6 +3758,7 @@ def check_integration_authority(cp: ControlPlane, report: Report) -> None:
     evidence" and "the target is somewhere the authorisation does not permit" are
     different facts and only the last one is about the repository having moved.
     """
+    report.claim("INTEGRATION_AUTHORITY")
     authority = cp.snapshot.get("integration_authority", {})
     base = authority.get("integration_base", "")
     subject = authority.get("governed_subject", "")
@@ -3538,21 +3833,29 @@ def check_integration_authority(cp: ControlPlane, report: Report) -> None:
                     f"the {subject[:12]}..HEAD diff could not be computed, so what this "
                     f"tree added past the governed subject is UNKNOWN rather than clean")
     else:
-        state_bearing, ungoverned = closure_offenders(
+        state_bearing, executable, ungoverned = closure_offenders(
             [line for line in out.splitlines() if line])
         if state_bearing:
             report.fail("INTEGRATION_AUTHORITY",
                         f"{len(state_bearing)} state-bearing production path(s) changed "
                         f"between the governed subject and HEAD without a generation "
                         f"covering them ({', '.join(state_bearing[:5])})")
+        if executable:
+            report.fail("INTEGRATION_AUTHORITY",
+                        f"{len(executable)} path(s) on the governed evidence surface "
+                        f"are not provably inert and changed between the governed "
+                        f"subject and HEAD; anything deciding what the checks do "
+                        f"belongs inside a governed subject "
+                        f"({', '.join(executable[:5])})")
         if ungoverned:
             report.fail("INTEGRATION_AUTHORITY",
                         f"{len(ungoverned)} path(s) outside the governed trailing "
                         f"surface changed between the governed subject and HEAD; this "
                         f"lineage carries work no generation authorises "
                         f"({', '.join(ungoverned[:5])})")
-        if not state_bearing and not ungoverned:
-            report.note("the subject..HEAD lineage carries only governed trailing work")
+        if not state_bearing and not executable and not ungoverned:
+            report.note("the subject..HEAD lineage carries only inert governed "
+                        "trailing evidence")
 
     # ── 3. Observation — derived from live refs, never declared ──
     state, detail, offenders = observe_integration_state(authority)
@@ -3573,6 +3876,7 @@ def check_git_authority(cp: ControlPlane, report: Report) -> None:
     everything below stays exactly the check the first 33 generations were sealed
     under. A V3 snapshot is never reinterpreted under V4 rules.
     """
+    report.claim("GIT_AUTHORITY", "INTEGRATION_AUTHORITY")
     if cp.is_v4:
         check_integration_authority(cp, report)
         return
@@ -3620,6 +3924,182 @@ def check_git_authority(cp: ControlPlane, report: Report) -> None:
         report.note(f"master verified against {resolved[0]}")
 
 
+def check_verifier_integrity(cp: ControlPlane, report: Report) -> None:
+    """S5G.1 — the checker may not be rewritten inside the state it is certifying.
+
+    THE MEASURED HOLE. ``VERIFIER_PATH`` was on :data:`INTEGRATION_TRAILING_PATHS`, so a
+    commit after the governed subject could edit the checker, and the checker would then
+    be the thing that certified the lineage that edited it. Deleting one line --
+    ``check_git_authority(cp, report)`` from :func:`run` -- in the same commit that added
+    ``jarvis/core/s5g1_repro_runtime_engine.py`` produced ``M62_CONTROL_PLANE_VERIFY:
+    PASS``, ``PROBLEMS: 0``, with ``GIT_AUTHORITY: PASS`` and ``INTEGRATION_AUTHORITY:
+    PASS`` printed for two checks that never executed. The 10,662-test authoritative
+    suite passed on that tree too, so "the suite that runs in CI is the control for that
+    one" was not true of the checker either.
+
+    WHAT THIS IS NOT. It is not a proof against an attacker who can edit this file,
+    because it IS this file: whoever can rewrite the checker can rewrite the checker's
+    self-audit. What S5G.1 removes is the SILENT version of that attack. A lineage that
+    touches the checker, the authoritative suite, collection configuration, a workflow
+    or packaging is no longer a governed lineage at all -- it requires a new governed
+    subject and a successor generation, which is a commit a human reads and the chain
+    seals. The residual is stated rather than papered over and is the same one the
+    milestone's §27 names: only repository-level anti-rewrite protection closes it from
+    outside the code.
+
+    Three questions, deliberately sharing no code path with the closure, because the
+    hole was a single deleted dispatch line and a second control that dies with the
+    first is not a second control:
+
+    1. Does the dispatch table still name every check this module defines, and does
+       exactly one entry own each reported category?
+    2. Are the checker's bytes the ones the live generation sealed?
+    3. Did any authority-critical path move between the governed subject and HEAD?
+    """
+    report.claim("VERIFIER_INTEGRITY")
+
+    # ── 1. structural self-audit of the dispatch table ──
+    defined = {name for name, obj in globals().items()
+               if name.startswith("check_") and inspect.isfunction(obj)
+               and obj.__module__ == __name__}
+    dispatched = {name for name, _ in CHECK_DISPATCH}
+    undispatched = sorted(defined - dispatched - set(INTERNALLY_DISPATCHED_CHECKS))
+    if undispatched:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"{len(undispatched)} check(s) are defined and never dispatched: "
+                    f"{', '.join(undispatched)}. A check nobody calls is a category "
+                    f"reporting on nothing")
+    phantom = sorted(dispatched - defined)
+    if phantom:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"the dispatch table names {', '.join(phantom)}, which this module "
+                    f"does not define, so the run is incomplete rather than clean")
+    owners: dict = {}
+    for _name, categories in CHECK_DISPATCH:
+        for category in categories:
+            owners[category] = owners.get(category, 0) + 1
+    for category in CATEGORIES:
+        if owners.get(category, 0) != 1:
+            report.fail("VERIFIER_INTEGRITY",
+                        f"category {category} is owned by {owners.get(category, 0)} "
+                        f"dispatch entries; exactly one must claim it or NOT_RUN stops "
+                        f"distinguishing a silent check from a clean one")
+    stray = sorted(set(owners) - set(CATEGORIES))
+    if stray:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"the dispatch table claims {', '.join(stray)}, which is not a "
+                    f"reported category")
+
+    # ── 2. the checker's bytes are the ones this generation sealed ──
+    #
+    # No self-reference and no fixed point: the snapshot names the checker's digest, the
+    # checker never names its own. The sequence is finalise the checker, commit it as
+    # the governed subject, digest it, then write the generation -- so the declaration
+    # is always ABOUT something that already exists, which is the same discipline
+    # `integration_authority` follows.
+    generation = cp.snapshot.get("state_generation", 0)
+    declared = cp.snapshot.get("governed_implementation") or {}
+    if not declared:
+        if isinstance(generation, int) and generation >= VERIFIER_PIN_FIRST_GENERATION:
+            report.fail("VERIFIER_INTEGRITY",
+                        f"generation {generation} declares no governed_implementation; "
+                        f"from generation {VERIFIER_PIN_FIRST_GENERATION} a generation "
+                        f"must seal the checker it was written under")
+    else:
+        rel = declared.get("verifier_path")
+        if rel != VERIFIER_PATH:
+            report.fail("VERIFIER_INTEGRITY",
+                        f"governed_implementation names {rel!r}, not the checker this "
+                        f"repository runs ({VERIFIER_PATH})")
+        elif not (REPO_ROOT / rel).is_file():
+            # FAIL CLOSED, and never raise. A tree that does not carry the checker
+            # cannot be certified BY it, and an unhandled FileNotFoundError here would
+            # abort the run mid-dispatch -- turning every category after this one into
+            # no answer at all rather than into a refusal.
+            report.fail("VERIFIER_INTEGRITY",
+                        f"{rel} is declared by the live generation and is not present "
+                        f"in this tree, so what certified this state is UNKNOWN")
+        else:
+            actual = sha256_file(REPO_ROOT / rel)
+            if actual != declared.get("verifier_sha256"):
+                report.fail("VERIFIER_INTEGRITY",
+                            f"{rel} hashes to {actual}, the live generation sealed "
+                            f"{declared.get('verifier_sha256')}. The checker running "
+                            f"here is not the checker this state was written under")
+            else:
+                report.note(f"checker pinned: {rel} matches the digest generation "
+                            f"{generation} sealed")
+                # And SAY SO when the checker changed. A red team pointed out that the
+                # two-commit route -- weaken the checker in the governed subject, then
+                # publish a generation that seals the weakened bytes -- ends with the
+                # verifier affirming "checker pinned" and "no authority-critical path
+                # moved", with nothing anywhere reporting that the checker itself is not
+                # the one the previous generation was written under. That is a legitimate
+                # thing for a milestone to do and an illegitimate thing to do quietly, so
+                # this is a NOTE and not a refusal: it puts the fact in front of the
+                # reviewer the design already relies on.
+                report.note(_checker_generation_delta(generation, actual))
+
+    # ── 2b. PROGRESS keeps the standing conclusion ──
+    #
+    # Deliberately BEFORE step 3, which returns early when Git cannot answer. A check
+    # placed after an early return is a check that does not run on the days it matters,
+    # and this one was: its own non-vacuity test caught it.
+    # Prospective from the same generation as the checker pin, for the same reason: a
+    # sealed record is never retrofitted, and generations 1-34 were written before the
+    # clause existed.
+    if isinstance(generation, int) and generation >= VERIFIER_PIN_FIRST_GENERATION:
+        progress = REPO_ROOT / PROGRESS_PATH
+        if not progress.is_file():
+            report.fail("VERIFIER_INTEGRITY", f"{PROGRESS_PATH} is missing")
+        else:
+            text = progress.read_text(encoding="utf-8")
+            for clause in PROGRESS_REQUIRED_CLAUSES:
+                if clause not in text:
+                    report.fail("VERIFIER_INTEGRITY",
+                                f"PROGRESS.md no longer carries {clause!r}; a trailing "
+                                f"commit may update the current state, never delete the "
+                                f"standing conclusion the state depends on")
+
+    # ── 3. no authority-critical path moved past the governed subject ──
+    subject = (cp.snapshot.get("integration_authority", {}).get("governed_subject")
+               or cp.snapshot.get("subject_state_commit", ""))
+    if not COMMIT_RE.fullmatch(subject or ""):
+        report.fail("VERIFIER_INTEGRITY",
+                    "no governed subject to measure authority-critical drift against")
+        return
+    code, out = _git("diff", "--no-renames", "--name-only", subject, "HEAD")
+    if code != 0:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"the {subject[:12]}..HEAD diff could not be computed, so whether "
+                    f"the checker or the suite moved is UNKNOWN rather than clean")
+        return
+    code, status = _git("diff", "--no-renames", "--name-status", subject, "HEAD")
+    if code != 0:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"the {subject[:12]}..HEAD name-status diff could not be computed, so "
+                    f"whether a sealed artefact was rewritten is UNKNOWN rather than clean")
+    else:
+        rewritten = sealed_rewrites(status.splitlines())
+        if rewritten:
+            report.fail("VERIFIER_INTEGRITY",
+                        f"{len(rewritten)} sealed control-plane artefact(s) were modified "
+                        f"or deleted past the governed subject "
+                        f"({', '.join(rewritten[:5])}). Snapshots, records, receipts, "
+                        f"schemas and the archive are APPEND-ONLY; only current.json moves")
+
+    moved = sorted(path for path in out.splitlines()
+                   if path and _governed_by(path, AUTHORITY_CRITICAL_PATHS))
+    if moved:
+        report.fail("VERIFIER_INTEGRITY",
+                    f"{len(moved)} authority-critical path(s) changed between the "
+                    f"governed subject and HEAD ({', '.join(moved[:5])}). The checker, "
+                    f"the authoritative suite, collection configuration, workflows and "
+                    f"packaging change only inside a governed subject")
+    else:
+        report.note("no authority-critical path moved past the governed subject")
+
+
 def check_stale_state(cp: ControlPlane, report: Report) -> None:
     """The stale-state detector, and an honest statement of what it cannot see.
 
@@ -3632,6 +4112,18 @@ def check_stale_state(cp: ControlPlane, report: Report) -> None:
     papered over; the discipline that closes it is the milestone-close rule that every
     state-bearing milestone writes a new generation.
     """
+    report.claim("STALE_STATE")
+    # BEFORE the Git work, which returns early when Git cannot answer. Reading
+    # PROGRESS.md unguarded raised FileNotFoundError on a tree whose trailing commit had
+    # deleted it -- aborting the run mid-dispatch, so every category after this one
+    # became no answer at all rather than a refusal. That is precisely the rule
+    # `check_verifier_integrity` states, and this line broke it.
+    if not (REPO_ROOT / PROGRESS_PATH).is_file():
+        report.fail("STALE_STATE",
+                    f"{PROGRESS_PATH} is missing, so doc/state drift is UNKNOWN "
+                    f"rather than clean")
+        return
+
     subject = cp.snapshot.get("subject_state_commit", "")
     code, out = _git("diff", "--no-renames", "--name-only", f"{subject}..HEAD")
     if code != 0:
@@ -3667,6 +4159,7 @@ def check_stale_state(cp: ControlPlane, report: Report) -> None:
 
 def check_dataset_state(cp: ControlPlane, report: Report) -> None:
     """V15-V17, V22, V30 — dataset vocabulary, the frozen identities, and the firewall."""
+    report.claim("DATASET_STATE")
     datasets = cp.snapshot.get("datasets", [])
     by_key = {}
     for entry in datasets:
@@ -3765,6 +4258,7 @@ def check_dataset_state(cp: ControlPlane, report: Report) -> None:
 
 def check_candidate_state(cp: ControlPlane, report: Report) -> None:
     """V14, V18, V19, V29 — candidate vocabulary, the sealed verdicts, evidence shape."""
+    report.claim("CANDIDATE_STATE")
     candidates = cp.snapshot.get("candidates", [])
     by_id = {}
     for entry in candidates:
@@ -4124,6 +4618,7 @@ def check_training_receipt(cp: ControlPlane, report: Report) -> None:
     This check loads no model, no tokenizer and no weights: the render identity that IS
     candidate 003's experimental axis re-derives from strings.
     """
+    report.claim("TRAINING_RECEIPT")
     trained = [c for c in cp.snapshot.get("candidates", [])
                if c.get("status") == "TRAINED_UNEVALUATED"]
     if not trained:
@@ -4518,6 +5013,7 @@ def check_evaluation_receipt(cp: ControlPlane, report: Report) -> None:
 
     This check loads no model, opens no socket and reads no held-out material.
     """
+    report.claim("EVALUATION_RECEIPT")
     for entry in cp.snapshot.get("candidates", []):
         cid = str(entry.get("candidate_id") or "")
         status = str(entry.get("status") or "")
@@ -5238,6 +5734,7 @@ FROZEN_POLICY_DIGESTS: dict[str, str] = {
 
 def check_policy_identities(cp: ControlPlane, report: Report) -> None:
     """V21 — re-derive the policy digests from the production classes, do not read them."""
+    report.claim("POLICY_IDENTITIES")
     declared = cp.snapshot.get("policy_identities", {})
     if str(_PACKAGE_ROOT) not in sys.path:
         sys.path.insert(0, str(_PACKAGE_ROOT))
@@ -5367,6 +5864,7 @@ def check_instrument_stack(cp: ControlPlane, report: Report) -> None:
     3. No historical scoring module imports the instruments package. That is what keeps
        the four frozen scorer digests and every sealed receipt meaning what they meant.
     """
+    report.claim("INSTRUMENT_STACK")
     if str(_PACKAGE_ROOT) not in sys.path:
         sys.path.insert(0, str(_PACKAGE_ROOT))
     try:
@@ -5445,6 +5943,7 @@ def check_instrument_stack(cp: ControlPlane, report: Report) -> None:
 
 def check_authority_separation(cp: ControlPlane, report: Report) -> None:
     """V25 — nothing in the control plane may read as a grant, and none of it is one."""
+    report.claim("AUTHORITY_SEPARATION")
     observation = cp.snapshot.get("authority_observation", {})
     for key in ("train", "eval", "promotion"):
         if observation.get(key) not in AUTHORITY_OBSERVATIONS:
@@ -5625,6 +6124,7 @@ def check_holdout_firewall(cp: ControlPlane, report: Report) -> None:
     may not cite a body-bearing source as evidence, and may not carry a long free-text
     string or a body-shaped key for one to hide in.
     """
+    report.claim("HOLDOUT_FIREWALL")
     for rel in SCANNED_SURFACES:
         path = REPO_ROOT / rel
         if not path.is_file():
@@ -5828,6 +6328,7 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
     emptied store was accepted in silence. V4 shares V3's container, so it shares
     V3's obligation to prove it.
     """
+    report.claim("RECORD_STORE")
     if not cp.is_content_addressed:
         if (REPO_ROOT / RECORD_DIR).is_dir():
             report.note(f"{RECORD_DIR} exists while the newest generation is V2; "
@@ -5942,6 +6443,7 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
 
 def check_budgets(cp: ControlPlane, report: Report) -> None:
     """The size guards that stop the control plane becoming monolithic again."""
+    report.claim("CONTROL_PLANE_BUDGET")
     progress = REPO_ROOT / PROGRESS_PATH
     text = progress.read_text(encoding="utf-8")
     lines = text.count("\n")
@@ -6156,27 +6658,18 @@ def run() -> Report:
     cp = load(report)
     if cp is None:
         return report
-    check_schema(cp, report)
-    check_current_pointer(cp, report)
-    check_snapshot_chain(cp, report)
-    check_archive(cp, report)
-    check_paths(cp, report)
-    check_git_authority(cp, report)
-    check_stale_state(cp, report)
-    check_dataset_state(cp, report)
-    check_candidate_state(cp, report)
-    check_candidate_design(cp, report)
-    check_training_receipt(cp, report)
-    check_evaluation_receipt(cp, report)
-    check_policy_identities(cp, report)
-    check_authority_separation(cp, report)
-    check_operator_ruling(cp, report)
-    check_holdout_firewall(cp, report)
-    check_holdout_retirement(cp, report)
-    check_record_store(cp, report)
-    check_instrument_stack(cp, report)
-    check_budgets(cp, report)
-    check_next(cp, report)
+    # Dispatched from :data:`CHECK_DISPATCH` rather than written out as twenty-two
+    # call statements. Twenty-two statements is twenty-two places a single deleted
+    # line leaves a category printing PASS for a check that never ran -- measured, in
+    # a real clone, with the full authoritative suite green on top of it.
+    for name, _categories in CHECK_DISPATCH:
+        check = globals().get(name)
+        if not callable(check):
+            report.fail("VERIFIER_INTEGRITY",
+                        f"the dispatch table names {name}, which this module does not "
+                        f"define; the run is incomplete rather than clean")
+            continue
+        check(cp, report)
     return report
 
 

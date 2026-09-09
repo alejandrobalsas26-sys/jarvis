@@ -49,6 +49,27 @@
       "pattern": "^[A-Z0-9_]{3,64}$",
       "type": "string"
     },
+    "governed_implementation": {
+      "additionalProperties": false,
+      "description": "S5G.1. The checker this generation was sealed under, by digest. OPTIONAL in the schema and REQUIRED by check_verifier_integrity from generation 35, because generations 1-34 predate it and a sealed record is never retrofitted.",
+      "properties": {
+        "verifier_path": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "type": "string"
+        },
+        "verifier_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verifier_path",
+        "verifier_sha256"
+      ],
+      "type": "object"
+    },
     "integration_authority": {
       "additionalProperties": false,
       "description": "An IMMUTABLE authorisation over commits that already exist. It states what MAY happen, never what HAS happened; the observation is derived from live refs on every run.",

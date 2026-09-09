@@ -517,12 +517,26 @@ def test_the_project_block_did_not_move_master_or_merge():
     # The live generation is V4: the historical master is the INTEGRATION BASE (same
     # value, a fact about the past instead of a demand on a live ref), and "not merged"
     # is DERIVED rather than declared -- so it cannot go on reading false after a merge
-    # the way merged_into_master would have.
+    # the way merged_into_master would have. S5G.1 corrects which half is asserted; the
+    # frozen generation-17 facts above are still untouched.
     live = V.load(V.Report()).snapshot
     authority = live["integration_authority"]
     assert authority["integration_base"] == project["master_commit"]
-    state, _, _ = V.observe_integration_state(authority)
-    assert state == "TARGET_AT_AUTHORIZED_BASE"
+    # RESCOPED AGAIN AT S5G.1. S5G derived "not merged" from the live ref -- right --
+    # and then pinned the PRE-INTEGRATION value as though it were permanent, which is
+    # wrong under V4: an authorised fast-forward moves the observation to
+    # INTEGRATED_FAST_FORWARD, `ci.yml` runs on `push: branches: [master]`, and the
+    # first run after the integration was therefore deterministically red. Measured.
+    # The invariant that survives is MEMBERSHIP IN THE ADMITTED SET -- master is where
+    # the authorisation permits it to be, integrated or not -- and the set is written
+    # out literally here rather than imported, so widening the verifier's own constant
+    # cannot widen this assertion with it.
+    admitted = {"TARGET_AT_AUTHORIZED_BASE", "INTEGRATED_FAST_FORWARD"}
+    assert set(V.ADMITTED_INTEGRATION_STATES) == admitted
+    state, detail, offenders = V.observe_integration_state(authority)
+    assert state in admitted, (
+        f"master is somewhere the authorisation does not permit: {state} -- {detail} "
+        f"{offenders}")
     assert live["project"]["released"] is False
     assert live["project"]["tagged"] is False
 
