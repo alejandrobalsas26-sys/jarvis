@@ -7,12 +7,12 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **35** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **36** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0035-s5g1-preintegration-hardening.json` |
-| **Snapshot SHA256** | `60660e492b0d0573b1ff55b5bca13fed6277b2ac0dba38d7f8a814c39c0dc526` |
-| **Subject state commit** | `7dda0f50ca0e9e6ffd7ef88dda953b1855b1a308` (S5G.1 pre-integration hardening; eval-v7 still spent once, 005 not eligible, 004 still held) |
-| **Integration authority** | base `3705114228edef2f665be349c5c4429b7b16777a` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run and deliberately not recorded here |
+| **Latest snapshot** | `state/m62/snapshots/0036-m65d-truthful-uncertain-effects.json` |
+| **Snapshot SHA256** | `9f7e301c9e4c848721af4a6ea69f40f35215590c5c28856394cfed50f6666cc1` |
+| **Subject state commit** | `5667747eb61dddaadb696f7ce1b7a0531e3a0230` (M65D; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Integration authority** | base `72e2948bbc4f0b1da7b82eda8500c637a726903c` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a` is integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
@@ -43,12 +43,12 @@ asks Git, not prose, about branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-s5g-control-plane-v4-integration-semantics` — gen 34 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `7d1a0216bb2d55238bc54501f2820023c1195245` — the commit gen 34 describes AND the commit its integration authority governs |
+| Branch | `jarvis-v69-m65d-truthful-uncertain-effects` — gen 36 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
+| Governed subject | `5667747eb61dddaadb696f7ce1b7a0531e3a0230` — the commit gen 36 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
-| `origin/master` | `3705114228edef2f665be349c5c4429b7b16777a` — **untouched by M62**, and now also the **integration base** gen 34 authorises a fast-forward FROM |
+| `origin/master` | `72e2948bbc4f0b1da7b82eda8500c637a726903c` — **untouched by M62**, gen 35 integrated, and the **integration base** gen 36 authorises a fast-forward FROM |
 | Merge / tag / release / version bump | **none** — `core/version.py` still declares `MILESTONE = 61`, deliberately |
 
 **Every hash here is a current identity, not a restart target.** Start from current HEAD; do
@@ -68,13 +68,14 @@ name the commit that carries it (§2).
 | Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, terminal `completed` |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends. `…S4H_INSTRUMENT_HARDENING.md` |
-| Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME or REPOSITORY, no science** (gens 29–33, GOVERNANCE-ONLY). **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE` (M65C). S5E found CI's authoritative job **exiting 2 and running zero tests**. All five moved **0** spends. Rows verbatim: `jarvis/docs/m62/history/PROGRESS_MILESTONE_ROWS_THROUGH_S5F.md` |
-| Earlier milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3's `master_commit` had to equal a live ref, so committing a generation onto master invalidated it — a **self-reference in the schema**. V4 declares only commits that **already exist** and **DERIVES** the observation. **0** spends. `…V69_S5G_CONTROL_PLANE_V4_INTEGRATION_SEMANTICS.md` |
-| Last milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Three findings, each **reproduced before repair**: (a) three tests pinned the *pre-integration* observation, so an authorised FF turned master CI **red**; (b) the checker sat on its **own** trailing surface — one deleted dispatch line certified an ungoverned runtime module, `PROBLEMS: 0`, **full suite green**; (c) a trailing `tests/conftest.py` turned *3 failed, exit 1* into *3 deselected, exit 0*. Now **executable authority changes only inside a governed subject**; an unclaimed category reports **NOT_RUN**. **0** spends. `…V69_S5G1_PREINTEGRATION_HARDENING.md` |
+| Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME or REPOSITORY, no science** (gens 29–33, GOVERNANCE-ONLY). **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE`, still true at M65D. All five moved **0** spends. Rows verbatim: `jarvis/docs/m62/history/PROGRESS_MILESTONE_ROWS_THROUGH_S5F.md` |
+| Earlier milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3's `master_commit` had to equal a live ref — a **self-reference in the schema**. V4 declares only commits that **already exist** and **DERIVES** the observation. **0** spends. `…V69_S5G_…md` |
+| Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Six findings, each **reproduced before repair** (D49–D54, §7). Now **executable authority changes only inside a governed subject**; an unclaimed category reports **NOT_RUN**. **0** spends. `…V69_S5G1_PREINTEGRATION_HARDENING.md` |
+| Last milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36, RUNTIME + GOVERNANCE. An observed error after the boundary stopped meaning *nothing happened* — **2** external effects for one **NON_REPLAYABLE** identity, and two red teams then reached **2** again through the *identity* rather than the decision (D55–D63, §7). One retry decision; schema **v2**, old rows read `UNKNOWN`. **0** reclassified tools, **0** spends. `…V69_M65D_TRUTHFUL_UNCERTAIN_EFFECTS.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
-| Next | **A separate human governance decision.** The axis is closed and no holdout remains: a further measurement needs a NEW corpus authored by a session that will not run it. **Readiness is never authority**, and **no `TRAIN`, `EVAL` or promotion authority exists in this repository**. Before `master` may move: **GitHub anti-rewrite protection**, which does not exist yet |
+| Next | **A separate human governance decision.** The axis is closed and no holdout remains: a further measurement needs a NEW corpus authored by a session that will not run it. **Readiness is never authority**, and **no `TRAIN`, `EVAL` or promotion authority exists in this repository**. Repository anti-rewrite protection now **exists** (`master-anti-rewrite`), and is external state |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline grading defensive
 episodes, building immutable leakage-checked datasets, running a bounded LoRA fine-tune under
@@ -270,10 +271,11 @@ the archive and the snapshot's `defects` record, which carries every defect in f
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic. **No gate reads it; adding one needs a separate operator decision.** |
 | **D39** | **FIXED · S5F** | An in-process `importlib.reload` rebound `ExportError`, so four `pytest.raises` sites caught a dead class. **Import purity is a subprocess probe.** `…S5F_…md`. |
 | **D40–D42** | FIXED at `.3` | The paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question is closed by **defining** the encoding. |
-| **D44** | **FIXED · GATE** | A held-out body reached a session **before any authorisation existed**, through representation alone — `repr` of a **bound method** included. `body_free_repr` renders identity and digests only. |
+| **D44** | **FIXED · GATE** | A held-out body reached a session through representation alone, `repr` of a **bound method** included. `body_free_repr` renders identity and digests only. |
 | **D43 · D45–D47** | FIXED (obs. only) | `EXTRA_DATA` vs an unclosed document; S4H's instrument findings. **PROSPECTIVE**, read by **no gate**; **005 not rescored**. |
 | **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. **A filename substring is not a scientific boundary.** `state/m62/scientific-suite.json`. |
-| **D49–D54** | **FIXED · S5G.1** | A pinned *pre-integration* observation turned master CI red; the checker sat on its **own** trailing surface; a trailing `tests/conftest.py` deselected `jarvis/tests` failures; **no CI job ran the checker at all** (D52); the digest pin was **resealable beside it** (D53). **Executable authority changes only inside a governed subject, and sealed artefacts are append-only.** `…S5G1_…md`. |
+| **D49–D54** | **FIXED · S5G.1** | A pinned observation turned master CI red; the checker sat on its **own** trailing surface; a trailing `tests/conftest.py` deselected failures; **no CI job ran the checker** (D52); the digest pin was **resealable beside it** (D53). **Executable authority changes only inside a governed subject, and sealed artefacts are append-only.** `…S5G1_…md`. |
+| **D55–D63** | **FIXED · M65D** | `FAILED_OBSERVED` shared the generic *retry after a non-effect outcome* path, so an error seen **after** the boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: five tests pinned `integration_base`; **advance-only, never rewind**. **D58/D61 BLOCKERS** (two red teams): the decision was right and was asked about the wrong **identity** — a spelled-out **default**, then a value the handler itself normalises, each ran one effect **twice**. A tool now **declares** its equivalence with proof. D59/D60/D62/D63: 14 MAJOR + 5 MINOR. `…M65D_…md`. |
 
 ### Limitations that travel into any successor run
 
@@ -303,22 +305,24 @@ the archive and the snapshot's `defects` record, which carries every defect in f
 - **The D44 exposure is PERMANENT** — no fix restores `v5`'s freshness, and it was **not**
   re-measured: re-opening the material to size it would repeat the disclosure. One rendered
   body is a **floor**, not a proved bound.
-- ~~**V4 leaves a hostile docs-or-tests trailing commit to the CI suite**~~ (S5G) —
-  **SUPERSEDED BY S5G.1, measured false**: the suite cannot be that control, because a
-  trailing `tests/conftest.py` silences it (*3 failed → 3 deselected, exit 0*). Trailing
-  surface is now `state/m62/` · `PROGRESS.md` · `jarvis/docs/`, **and `.md` or `.json` only**.
+- ~~**V4 leaves a hostile trailing commit to the CI suite**~~ (S5G) — **SUPERSEDED BY S5G.1,
+  measured false**. Trailing surface: `state/m62/` · `PROGRESS.md` · `jarvis/docs/`, **`.md`
+  or `.json` only**.
 - **The checker cannot prove itself** (S5G.1): `check_verifier_integrity` is IN the checker.
-  Closed is the **silent** case — such a lineage is ungoverned and needs a **successor**. A red
-  team falsified S5G.1's own first draft twice (**D52, D53**); both are closed and recorded.
-  Inside a subject, a `.json`/`.md` a gate READS is still authority as data — **review is the
-  control there**, not the closure.
-- **EXTERNAL_CONTROL_PENDING.** `master` has **no** protection and **no** ruleset. An
-  exact-base rollback is **DETECTED, PREVENTED by nothing**. S5G.1 does not fix this.
-- **Nine closure defects have been MEASURED and closed** — four at S5G (wrong lineage,
-  `startswith` on a FILE entry, rename-hidden sources, unhashed records) and five at S5G.1
-  (D49–D53, two of them against S5G.1's own first draft). **Every one PASSed every gate this
-  repository had while it was live**, so "the suite would catch it" is the assumption that has
-  now failed nine times. `…S5G_…SEMANTICS.md` §5.1–5.4 · `…S5G1_…md` §5.
+  Closed is the **silent** case. Inside a subject, a `.json`/`.md` a gate READS is still
+  authority as data — **review is the control there**, not the closure.
+- **EXTERNAL_CONTROL_PENDING.** `master` now carries ruleset `master-anti-rewrite` —
+  deletion and non-fast-forward blocked, **0 bypass actors**, observed active 2026-09-10.
+  It is GitHub-side: **no repository-local check can confirm it**, and none should claim to.
+- **Nine closure defects have been MEASURED and closed** — four at S5G, five at S5G.1
+  (D49–D53). **Every one PASSed every gate this repository had while it was live**, so "the
+  suite would catch it" is the assumption that has now failed nine times.
+  `…S5G_…SEMANTICS.md` §5.1–5.4 · `…S5G1_…md` §5.
+
+- **An observed error is never proof that nothing happened** (M65D), and the identity it is
+  applied to is the **effective call** — override stripped, defaults bound, the tool's own
+  declared equivalence applied — not the caller's dict. After the boundary the outcome is
+  `UNKNOWN` unless typed evidence, a reconciler or a durability contract says otherwise.
 
 The snapshot's `limitations` record carries the full list; this is the operational subset.
 
@@ -399,7 +403,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 | Merging M62, tagging, releasing, bumping `core/version.py` | M62 closure is an explicit operator decision |
 | Touching the global environment, or any network or model-hub contact at run time | the no-global-mutation and offline-first invariants |
 | Changing the checker, either test tree, `conftest`, a workflow or packaging | S5G.1: those are a **governed subject**, never trailing state |
-| Moving `master` | a **successor generation** AND repository anti-rewrite protection, which does **not** exist yet |
+| Moving `master` | a **successor generation**; `master-anti-rewrite` exists but is GitHub-side and unverifiable here |
 
 ---
 
@@ -408,29 +412,26 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            10805 passed · 45 skipped · 0 failed      [S5G.1, measured]
+result            10978 passed · 45 skipped · 0 failed      [M65D, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
-result            3179 passed · 2 skipped · 0 failed        [S5G.1, re-measured]
+result            3179 passed · 2 skipped · 0 failed        [M65D, re-measured]
 ```
 
-**S5G.1 also measures it with `master` FAST-FORWARDED onto the tip**, in a disposable clone:
-`10768 passed · 82 skipped · 0 failed`, **exit 0**. That run is the F1 proof and is **mandatory
-before any integration** — the three rescoped tests PASS there, and before S5G.1 the same three
-FAILED. The skip delta is a *clone* property
-(gitignored runtime evidence absent), not an integration one.
+**A FAST-FORWARDED-`master` run in a disposable clone is MANDATORY before any integration**
+(S5G.1: `10768 passed · 82 skipped`, exit 0). The skip delta is a *clone* property, not an
+integration one.
 
 **The first row is new in S5E, and its absence WAS the milestone.** Counts are **one**
 interpreter's; **never reconcile across interpreters.** **`-k m62` is not the authority (D48):**
 it deselected all **212** tests in three `m63`-named modules asserting M62 state.
 **Rescoped assertions are not regressions** — one comparing a *sealed* milestone's property
-against *live* state also, silently, asserts no later generation exists, and S5G.1 found three
-asserting **integration has not happened**; each rescoping is argued in its own document.
+against *live* state silently asserts no later generation exists; each rescoping is argued in
+its own document.
 
-**Known invocation-context artefact — RESOLVED by S5E, 8 → 0.** `pytest` from the
-**repository root** instead of `jarvis/` used to fail **8** tests in
-`…s3g2_validation_wiring.py`, which read production source relative to the CWD; it is
-**distinct from D39**. The repository root **is** the authoritative invocation. Now anchored to
+**Known invocation-context artefact — RESOLVED by S5E, 8 → 0.** `pytest` from the repository
+root used to fail **8** tests in `…s3g2_validation_wiring.py`, which read source relative to
+the CWD; **distinct from D39**. The root **is** the authoritative invocation, now anchored to
 `_APP_ROOT`.
 
 ---
@@ -470,30 +471,26 @@ regression **body-free**.
 
 **What the result decided, and what it did not.** It measured one axis once; it did **not**
 make candidate 004 promotable, whose HOLD rests on its own `v6` evidence. `RECOMMENDED_REMEDY`
-is still **TOOLING** and the candidate still
-**`TRAINING_EXPERIMENTALLY_ALLOWED_NOT_PROVEN_NECESSARY`**; the receipt records
-`validation_is_held_out_eligibility_evidence: false`. **The S4B, S4C and S4E authorities are
-spent** and single-use tokens are **never replayed** — no second seed, no 005b, no resume, no
-retry because a result looks unappealing. Neither learning-rate ruling is general. `…S4C_…md`.
+is still **TOOLING**. **The S4B, S4C and S4E authorities are spent** and single-use tokens are
+**never replayed** — no second seed, no 005b, no resume, no retry because a result looks
+unappealing. Neither learning-rate ruling is general. `…S4C_…md`.
 
 **The HOLD on candidate 004 stands.** Nothing since has reopened, re-measured or
 reinterpreted it; serving as the `eval-v7` REFERENCE arm does not either. It remains
 `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW`, not promoted; the only legal move out is `→ PROMOTED`
 under a `HUMAN_PROMOTION_AUTHORITY` that does not exist. **No second look:** `v4`, `v6` and
-`v7` are `USED_IMMUTABLE` — no rerun, re-score, alternate seed, partial replay, ablation, task
-inspection, qualitative review or threshold experimentation — and `v5` is RETIRED unspent,
-`spent_by` null. Every spent holdout stays **unread**.
+`v7` are `USED_IMMUTABLE` — no rerun, re-score, seed, replay, ablation or inspection — and
+`v5` is RETIRED unspent, `spent_by` null. Every spent holdout stays **unread**.
 
-**Master is NOT merged, and the next gate is not code.** S5G.1 closed the code boundary; it
-did **not** give `master` an anti-rewrite rule, and the repository has none (0 rulesets,
-`protected: false`). **Configure repository protection BEFORE integration is retried.**
+**`master` is at generation 35 and carries `master-anti-rewrite`** — deletion and
+non-fast-forward blocked, 0 bypass actors, observed 2026-09-10. That is **external** state no
+check here can confirm. **M65D is NOT merged**; its integration is a separate decision.
 
 **Explicitly NOT authorised** — the snapshot's `next_milestone.ruled_out` is the authority
 and is longer: promotion, activation, registry mutation, merge, tag, release or version bump ·
-**candidate 006** · recording 005 as eligible · spending `eval-v7` twice or editing it · a
-second run, seed or value of the axis · retraining or patching 003, 004 **or 005** ·
-any epoch, rank, alpha, dropout or module change · a second axis · `train-v3` · changing gates,
-graders, thresholds or the refusal detector · reading `v4`–`v7` bodies · raising a budget ·
+**candidate 006** · recording 005 as eligible · spending `eval-v7` twice · a second run, seed or
+value of the axis · retraining 003, 004 **or 005** · any epoch, rank, alpha or module change ·
+a second axis · `train-v3` · changing gates, graders or thresholds · reading `v4`–`v7` bodies ·
 **`SYNTHETIC_CALIBRATION` cited as calibration** · **executable trailing state** ·
 **rewriting a sealed artefact**.
 

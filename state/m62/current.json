@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0035-s5g1-preintegration-hardening.json",
-  "latest_snapshot_sha256": "60660e492b0d0573b1ff55b5bca13fed6277b2ac0dba38d7f8a814c39c0dc526",
+  "latest_snapshot_path": "state/m62/snapshots/0036-m65d-truthful-uncertain-effects.json",
+  "latest_snapshot_sha256": "9f7e301c9e4c848721af4a6ea69f40f35215590c5c28856394cfed50f6666cc1",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 35,
-  "subject_state_commit": "7dda0f50ca0e9e6ffd7ef88dda953b1855b1a308",
+  "state_generation": 36,
+  "subject_state_commit": "5667747eb61dddaadb696f7ce1b7a0531e3a0230",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
