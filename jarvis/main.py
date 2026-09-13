@@ -1693,6 +1693,14 @@ async def _main_async() -> None:
                 f"EFFECT_JOURNAL: {report['already_indeterminate']} effect(s) "
                 f"have an UNKNOWN outcome and will not be retried "
                 f"automatically; reconcile them against the external system")
+        # V69 M65D. A previous process saw a call fail AFTER the effect
+        # boundary. That proves the local invocation failed and nothing about
+        # the external system, so these are reported rather than reclaimed.
+        if report.get("uncertain_observed"):
+            logger.warning(
+                f"EFFECT_JOURNAL: {report['uncertain_observed']} effect(s) "
+                f"failed locally after the effect boundary with an UNKNOWN "
+                f"external outcome; JARVIS will not repeat them")
         if report["reclaimable_pre_effect"]:
             logger.info(
                 f"EFFECT_JOURNAL: {report['reclaimable_pre_effect']} "

@@ -954,9 +954,18 @@ def test_a_concurrent_duplicate_receives_the_recorded_result(h):
     assert all(r == {"stdout": "canonical"} for r in results)
 
 
-def test_a_failed_effect_is_never_ledgered_so_a_retry_is_legitimate(h):
-    """A failed call left the world unchanged; refusing to repeat it would be
-    the ledger inventing a policy it does not have."""
+def test_a_failed_effect_is_never_ledgered_and_is_not_blindly_repeated(h):
+    """The ledger records only successes; M65D decides what may follow one.
+
+    Was ``..._so_a_retry_is_legitimate``, asserting ``calls["n"] == 2`` on the
+    grounds that "a failed call left the world unchanged". It does not, for a
+    tool that talks to something over a network, and V69 M65D reproduced the
+    duplicate that follows. ``code_execute`` is NON_REPLAYABLE, so the retry
+    authority for an unknown outcome is BLOCKED and the handler runs once.
+
+    Team execution reaches ToolExecutor like every other path, so this is also
+    the team surface's parity check for the new policy (§15).
+    """
     calls = {"n": 0}
 
     def _handler(**kwargs):
@@ -968,10 +977,14 @@ def test_a_failed_effect_is_never_ledgered_so_a_retry_is_legitimate(h):
     async def scenario():
         h.executor.begin_effect_epoch("turn:failing")
         await h.executor.aexecute("code_execute", {"code": "x"}, "first")
-        await h.executor.aexecute("code_execute", {"code": "x"}, "second")
+        note: dict = {}
+        await h.executor.aexecute("code_execute", {"code": "x"}, "second",
+                                  effect_note=note)
+        return note
 
-    asyncio.run(scenario())
-    assert calls["n"] == 2
+    note = asyncio.run(scenario())
+    assert calls["n"] == 1
+    assert note["retry_authority"] == "BLOCKED_INDETERMINATE"
     assert h.executor.effect_count("code_execute") == 0
 
 

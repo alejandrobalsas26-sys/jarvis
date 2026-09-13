@@ -1089,7 +1089,12 @@ def test_the_status_surface_has_a_fixed_body_safe_shape(tmp_path):
         "path", "schema_version", "instance_id", "lease_s", "busy_timeout_ms",
         "by_state", "total", "committed", "reserved", "executing",
         "indeterminate", "stale_reservations", "integrity", "healthy",
-        "recovery_required", "db_bytes", "counters"}, (
+        "recovery_required", "db_bytes", "counters",
+        # V69 M65D. Two bounded COUNTS, in keeping with the property this test
+        # pins: `failed_observed` is a per-state tally like the four beside it,
+        # and `uncertain_observed` is the subset of those an operator has to
+        # act on. Neither is a per-effect collection.
+        "failed_observed", "uncertain_observed"}, (
         f"the status surface changed shape: {sorted(keys)}")
     assert all(not isinstance(v, (list, tuple)) or k == "counters"
                for k, v in j.status().items()), (

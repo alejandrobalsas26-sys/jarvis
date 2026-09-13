@@ -1127,6 +1127,28 @@ class _NativeFastUnavailable(Exception):
     OpenAI-compatible loop. Never surfaced to the user."""
 
 
+
+def mcp_result_envelope(mcp_result) -> dict:
+    """Turn an MCP ``CallToolResult`` into the dict contract every tool obeys.
+
+    V69 M65D, red team round 2 (M3). The adapter used to return
+    ``{"result": text}`` unconditionally and DROP ``isError`` — the MCP
+    protocol's own failure signal. To the effect protocol a dict without an
+    ``error`` key is a success, so every remote failure was durably COMMITTED as
+    PROVEN_COMMITTED and every later attempt at the same identity was
+    deduplicated against an effect that never happened. Module-level so the
+    contract can be tested without a session.
+    """
+    content = (
+        mcp_result.content[0].text
+        if getattr(mcp_result, "content", None)
+        else "Sin respuesta del bridge MCP."
+    )
+    if getattr(mcp_result, "isError", False):
+        return {"error": content, "error_class": "mcp_tool_error"}
+    return {"result": content}
+
+
 class LLM:
     def __init__(self, tool_executor):
         # V69 M54.1.5 — THE unbounded wait. This was constructed with no `timeout=`
@@ -3573,12 +3595,7 @@ class LLM:
                 elif tool_name in self._mcp_tool_names and self._mcp_session:
                     async def _call_mcp(name: str, args: dict) -> dict:
                         mcp_result = await self._mcp_session.call_tool(name, args)
-                        content = (
-                            mcp_result.content[0].text
-                            if mcp_result.content
-                            else "Sin respuesta del bridge MCP."
-                        )
-                        return {"result": content}
+                        return mcp_result_envelope(mcp_result)
 
                     result = await self.tool_executor.aexecute_mcp(
                         tool_name, tool_input, _call_mcp, thinking

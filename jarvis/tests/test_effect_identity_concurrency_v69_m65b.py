@@ -293,8 +293,14 @@ def test_an_owner_refused_before_the_effect_lets_a_duplicate_run(h):
 
 
 def test_an_owner_whose_effect_fails_is_not_recorded_as_committed(h):
-    """§8 — the ledger represents reality, not control flow. A failed effect
-    left the world unchanged, so a retry is legitimate."""
+    """§8 — the ledger represents reality, not control flow.
+
+    The waiter must not be handed a fabricated success: that property is what
+    this test is for and it is unchanged. What the waiter does NEXT is a
+    different question, and V69 M65D answered it differently — the owner's
+    failure happened after the effect boundary, so for a NON_REPLAYABLE tool
+    the waiter is blocked rather than sent to run the same effect again.
+    """
     h.add_tool(fails=True)
 
     async def scenario():
@@ -306,10 +312,12 @@ def test_an_owner_whose_effect_fails_is_not_recorded_as_committed(h):
         return await asyncio.wait_for(
             asyncio.gather(owner, duplicate), timeout=DEADLINE_S)
 
-    asyncio.run(scenario())
+    refused = asyncio.run(scenario())
     assert h.executor.effect_count(TOOL) == 0, "a failed effect was ledgered"
-    assert h.count() == 2, (
-        "the waiter was told a failed effect had committed and did not retry")
+    assert h.count() == 1, (
+        "the waiter re-ran a NON_REPLAYABLE effect whose outcome is unknown")
+    assert all("stdout" not in r for r in refused if isinstance(r, dict)), (
+        "the waiter was told a failed effect had committed")
     assert h.inflight == {}
 
 

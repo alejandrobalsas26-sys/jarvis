@@ -1266,8 +1266,19 @@ def test_the_ledger_never_keys_a_read_only_call(h):
 
 
 def test_a_failed_effect_is_never_ledgered(h):
-    """Only a SUCCESSFUL effect is recorded: a failed call left the world
-    unchanged, so retrying it is legitimate."""
+    """Only a SUCCESSFUL effect is recorded in the ledger.
+
+    The ledger property is unchanged and is the point of this test: a call that
+    returned an error must never be recorded as committed, or a later caller
+    would be handed a result for something that did not produce one.
+
+    The SECOND assertion was ``h.count(EFFECT_TOOL) == 2``, on the reasoning
+    that "a failed call left the world unchanged, so retrying it is
+    legitimate". V69 M65D falsified that reasoning — a network-mediated tool
+    can apply the effect and lose the response — so ``code_execute``, which is
+    NON_REPLAYABLE, must now run exactly once. Inverted rather than deleted,
+    because the scenario is what makes the ledger property observable.
+    """
     h.add_tool(EFFECT_TOOL, fails=True)
     h.executor.begin_effect_epoch("turn:failures")
 
@@ -1276,7 +1287,8 @@ def test_a_failed_effect_is_never_ledgered(h):
             await h.executor.aexecute(EFFECT_TOOL, dict(EFFECT_ARGS))
 
     asyncio.run(_twice())
-    assert h.count(EFFECT_TOOL) == 2
+    assert h.count(EFFECT_TOOL) == 1, (
+        "a NON_REPLAYABLE effect whose external outcome is unknown was re-run")
     assert h.executor.effect_count(EFFECT_TOOL) == 0
 
 

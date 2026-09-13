@@ -690,7 +690,24 @@ def check_effect_journal() -> list[Finding]:
         f"{status['total']} effect identit(ies) recorded: "
         f"{status['committed']} committed, {status['reserved']} reserved, "
         f"{status['executing']} executing, "
-        f"{status['indeterminate']} indeterminate"))
+        f"{status['indeterminate']} indeterminate, "
+        f"{status.get('failed_observed', 0)} observed failure(s)"))
+
+    # V69 M65D. A post-boundary failure whose external outcome is unknown is a
+    # task for a human in exactly the way an INDETERMINATE row is. Under M65C
+    # these were invisible here — they read as ordinary finished failures, and
+    # the next caller silently re-ran them — so an operator had no surface on
+    # which to see the state that most needs one.
+    uncertain = int(status.get("uncertain_observed", 0))
+    out.append(Finding(
+        "effects.uncertain", "effect_durability",
+        DoctorStatus.DEGRADED if uncertain > 0 else DoctorStatus.PASS,
+        Severity.HIGH if uncertain > 0 else Severity.INFO,
+        f"{uncertain} effect(s) failed locally after the effect boundary with "
+        f"an UNKNOWN external outcome and a durability class that cannot "
+        f"safely repeat",
+        "reconcile each against the external system; JARVIS will not retry "
+        "them automatically" if uncertain > 0 else ""))
 
     stale = int(status.get("stale_reservations", 0))
     out.append(Finding(

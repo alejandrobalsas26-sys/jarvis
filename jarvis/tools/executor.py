@@ -15,6 +15,7 @@ Security layers:
 """
 
 import asyncio
+import inspect
 import ipaddress
 import json
 import random
@@ -22,6 +23,7 @@ import re
 import sys
 import os
 import shlex
+import sqlite3
 import subprocess
 import platform
 import shutil
@@ -510,6 +512,68 @@ def _strip_override(tool_name: str, tool_input: dict) -> dict:
     return {k: v for k, v in tool_input.items() if k != "FORCE_OVERRIDE"}
 
 
+#: The one handler parameter the effect protocol fills in. Named once, so the
+#: identity helper and the gate cannot disagree about which argument it is.
+_IDEMPOTENCY_ARG = "idempotency_key"
+
+
+def _effective_call(handler, tool_input: dict) -> dict:
+    """The arguments the tool will ACTUALLY receive, for identity purposes.
+
+    V69 M65D. The effect identity used to be hashed from the caller's dict AS
+    GIVEN, and the dict that reaches the handler is a different thing:
+    `_strip_override` removes a model-supplied flag, and Python fills defaults
+    at call time. So two spellings of ONE action hashed to two identities, and
+    the block on a NON_REPLAYABLE uncertain effect was walked around by adding
+    a parameter that changes nothing —
+
+        {"ip": "10.0.0.1"}                          -> blocked, correctly
+        {"ip": "10.0.0.1", "reason": "containment"} -> a NEW identity, and the
+                                                       handler ran a second time
+                                                       with byte-identical arguments
+
+    Measured at 2 external effects for one logical effect, in one epoch, in one
+    process, on `network_quarantine`-shaped signatures. The decision was never
+    wrong; it was being asked about the wrong thing.
+
+    Normalisation is deliberately conservative: anything this cannot bind
+    exactly is returned untouched, because a WRONG normalisation would merge
+    two genuinely different calls into one identity and suppress a real effect.
+    That failure direction is worse than the one being fixed.
+    """
+    if handler is None or not isinstance(tool_input, dict):
+        return tool_input
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):          # pragma: no cover - exotic callable
+        return tool_input
+    kinds = {p.kind for p in signature.parameters.values()}
+    if (inspect.Parameter.POSITIONAL_ONLY in kinds
+            or inspect.Parameter.VAR_POSITIONAL in kinds):
+        # Neither can be addressed by name, so a bound form cannot be rendered
+        # back to a keyword dict. Leave the identity exactly as it was.
+        return tool_input
+    try:
+        bound = signature.bind(**tool_input)
+        bound.apply_defaults()
+    except TypeError:
+        # The call does not fit the handler. Preflight will refuse it; do not
+        # invent an identity for a call that is never going to run.
+        return tool_input
+    effective: dict = {}
+    for name, value in bound.arguments.items():
+        if signature.parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+            effective.update(value)
+        else:
+            effective[name] = value
+    # `idempotency_key` is supplied BY the protocol and derived FROM this
+    # identity, so it is not part of what the caller asked for. Dropping it also
+    # closes the obvious split: a caller passing one explicitly would otherwise
+    # mint a second identity for the same action.
+    effective.pop(_IDEMPOTENCY_ARG, None)
+    return effective
+
+
 def _trusted_lab_enabled() -> bool:
     """True only when the operator has explicitly enabled trusted-lab mode.
 
@@ -728,13 +792,54 @@ class _EffectHooks:
     ``invoked`` is therefore the durable meaning of "the external effect may
     have started". It is set AFTER the journal write succeeds, so a journal that
     could not record EXECUTING aborts the call instead of running unrecorded.
+
+    V69 M65D adds ``declared``: the one channel by which a tool's own adapter
+    can tell the protocol something it KNOWS about the external world. It
+    travels here rather than in the returned payload on purpose — a payload
+    field could be written by a remote MCP server or echoed out of a model's
+    tool argument, and a claim that the effect did not happen is precisely the
+    claim an untrusted party must not be able to make (§10/§12).
     """
 
-    __slots__ = ("_on_invoke", "invoked")
+    __slots__ = ("_on_invoke", "invoked", "declared", "ledger_key",
+                 "idempotency_key", "succeeded")
 
-    def __init__(self, on_invoke) -> None:
+    def __init__(self, on_invoke, ledger_key=None, idempotency_key: str = "") -> None:
         self._on_invoke = on_invoke
         self.invoked = False
+        self.declared = None
+        #: V69 M65D. THE ledger key, computed once by the protocol and carried
+        #: here. Each gate used to recompute it from its own copy of the input,
+        #: so the read key and the write key could differ — and did, whenever
+        #: `_strip_override` fired: a call that SUCCEEDED was recorded as an
+        #: uncertain failure, because the protocol looked up a key the gate had
+        #: never written. One identity, computed in one place.
+        self.ledger_key = ledger_key
+        #: The durable idempotency key for this effect, for a tool whose
+        #: contract is IDEMPOTENT_WITH_KEY. See `_aexecute_gated`.
+        self.idempotency_key = idempotency_key
+        #: Set by the gate when the call returned successfully, so a result the
+        #: in-process ledger cannot hold (anything but a dict — an ordinary MCP
+        #: content list, for one) is still durably COMMITTED rather than read
+        #: back as an unknown outcome.
+        self.succeeded = False
+
+    def declare_outcome(self, evidence) -> None:
+        """Record a tool adapter's TYPED claim about the external world.
+
+        Refused before the boundary and refused if it is not the typed thing:
+        evidence about an effect that provably never started is meaningless,
+        and an untyped one is an assertion rather than a contract.
+        """
+        from core.effect_journal import EffectOutcomeEvidence
+
+        if not isinstance(evidence, EffectOutcomeEvidence):
+            raise TypeError(f"{evidence!r} is not an EffectOutcomeEvidence")
+        if not self.invoked:
+            raise RuntimeError(
+                "outcome evidence declared before the effect boundary; a call "
+                "that never started needs no evidence that it did nothing")
+        self.declared = evidence
 
     def before_invoke(self) -> None:
         """Durably record that the tool is about to run. Raises to abort."""
@@ -745,6 +850,39 @@ class _EffectHooks:
                 "the durable effect journal refused to mark this effect "
                 "EXECUTING; refusing to invoke the tool unrecorded")
         self.invoked = True
+
+
+#: V69 M65D — what a post-boundary failure IS, by what is known about the world.
+#:
+#: Keyed and valued by the enum's string values rather than by the members, so
+#: this file keeps importing `core.effect_journal` lazily. That is a real trade:
+#: a table of bare strings can drift from the enum silently, so
+#: `test_effect_semantics_v69_m65d.py` re-derives both sides from the enums and
+#: fails if either drifts. A comment would not have caught it.
+_OBSERVED_FAILURE_DISPOSITION: dict[str, str] = {
+    "UNKNOWN": "FAILED_OBSERVED_UNKNOWN",
+    "PROVEN_NOT_EXECUTED": "FAILED_OBSERVED_NOT_EXECUTED",
+    "PROVEN_COMMITTED": "FAILED_OBSERVED_COMMITTED",
+}
+
+#: The operator-facing sentence for each (§31). Plain, specific, and neither
+#: alarming nor falsely certain: "JARVIS cannot prove whether it happened" is
+#: the honest thing to say, and "Tool failed. Retrying." is the thing that
+#: produced the duplicate this milestone exists to prevent.
+_OBSERVED_FAILURE_DETAIL: dict[str, str] = {
+    "UNKNOWN": (
+        "The tool call failed locally, but JARVIS cannot prove whether the "
+        "external effect occurred. Automatic retry is governed by this tool's "
+        "durability class, not by the fact that an error was seen."),
+    "PROVEN_NOT_EXECUTED": (
+        "The tool call failed after the effect boundary, and the tool's own "
+        "typed evidence proves the external system applied nothing. A fresh "
+        "attempt is legitimate."),
+    "PROVEN_COMMITTED": (
+        "The tool call failed locally AFTER the external effect was applied. "
+        "The effect exists; the result body does not. This will not be run "
+        "again."),
+}
 
 
 class ToolExecutor:
@@ -888,7 +1026,14 @@ class ToolExecutor:
         if not journal_enabled():
             self._journal = None
             return None
-        self._journal = DurableEffectJournal()
+        journal = DurableEffectJournal()
+        # V69 M65D. Opening proves the FILE is there, not that it is usable: a
+        # corrupt-but-openable database passed this point and then raised a raw
+        # sqlite3.DatabaseError out of `reserve`, past the refusal envelope §25
+        # promises. `assert_healthy` is the check that already knew; it simply
+        # was never called on the effect path.
+        journal.assert_healthy()
+        self._journal = journal
         return self._journal
 
     @staticmethod
@@ -951,8 +1096,13 @@ class ToolExecutor:
             reservation = journal.reserve(**reserve_kw)
         return reservation
 
+    #: How long a reconciliation probe has to answer. Bounded for the same
+    #: reason every other wait here is (§24): an unbounded one is a deadlock
+    #: with extra steps, and "it never answered" is UNKNOWN, not permission.
+    RECONCILE_TIMEOUT_S: float = 20.0
+
     async def _resolve_indeterminate(self, journal, reservation, reserve_kw,
-                                     tool_id: str):
+                                     tool_id: str, note_verdict=None):
         """Try to turn an INDETERMINATE effect into a proven one (§15/§16).
 
         The ONLY route out is a reconciliation answer from the tool itself.
@@ -963,15 +1113,36 @@ class ToolExecutor:
             ReconciliationVerdict, ReservationOutcome, reconcile,
         )
 
+        if note_verdict is None:
+            note_verdict = [None]
         if reservation.outcome is not ReservationOutcome.RECONCILE_REQUIRED:
             return reservation
         record = reservation.record
-        verdict = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: reconcile(tool_id, record.effect_id,
-                                    record.idempotency_key))
+        # V69 M65D — BOUNDED. `reconcile`'s own docstring said "bounded,
+        # fail-UNKNOWN" and the call had no deadline: a probe that simply never
+        # returned hung the effect call forever and consumed a default-executor
+        # thread for the life of the process. A probe that has not answered
+        # within the deadline has not answered, which is UNKNOWN — the same
+        # thing a raising probe reports, for the same reason.
+        try:
+            verdict = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    None, lambda: reconcile(tool_id, record.effect_id,
+                                            record.idempotency_key)),
+                timeout=self.RECONCILE_TIMEOUT_S)
+        except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
+            logger.warning(f"EFFECT_JOURNAL: reconciler for '{tool_id}' did not "
+                           f"answer ({type(exc).__name__}); treating as UNKNOWN")
+            verdict = ReconciliationVerdict.UNKNOWN
+        # D4 — the answer travels with the reservation. Without it the caller
+        # could not tell "not asked yet" from "asked, and it could not say",
+        # and published REQUIRES_RECONCILIATION forever: an invitation to keep
+        # re-asking a probe that has already failed to answer.
+        note_verdict[0] = verdict
         if verdict is ReconciliationVerdict.UNKNOWN:
             return reservation
-        journal.apply_reconciliation(record.effect_id, verdict)
+        journal.apply_reconciliation(record.effect_id, verdict,
+                                     expect_attempt=record.owner_attempt)
         if verdict is ReconciliationVerdict.CONFIRMED_COMMITTED:
             # Proven present. Recovered, never replayed.
             return journal.reserve(**reserve_kw)
@@ -1251,10 +1422,29 @@ class ToolExecutor:
         note = effect_note if effect_note is not None else {}
         note.update({"deduplicated": False, "effect_key": None,
                      "committed": False, "disposition": None,
-                     "effect_id": None, "durable": False})
+                     "effect_id": None, "durable": False,
+                     # V69 M65D §16 — the caller must be able to tell "it
+                     # definitely did nothing" from "it failed and nobody can
+                     # say". These keys are always present, so reading them is
+                     # never a guess about which branch ran.
+                     "external_outcome": None, "retry_authority": None,
+                     "reconciliation_required": False})
 
         if classify_tool(tool_name) is RiskClass.READ_ONLY:
             return await self._aexecute_gated(tool_name, tool_input, reasoning)
+
+        # V69 M65D. The identity is the EFFECTIVE call: the flag JARVIS itself
+        # deletes is removed first, and the handler's own defaults are bound, so
+        # two spellings of one action are one effect. The gate still receives
+        # the caller's dict — normalising what the TOOL is handed would change
+        # behaviour for a handler that distinguishes "omitted" from "passed".
+        tool_input = _strip_override(tool_name, tool_input)
+        identity_input = _effective_call(
+            getattr(self, f"_tool_{tool_name}", None), tool_input)
+        # ...and then the tool's OWN declared equivalence (round-2 B1): the
+        # structural fix cannot know that a handler upper-cases a method.
+        from core.effect_journal import normalise_identity
+        identity_input = normalise_identity(tool_name, identity_input)
 
         def _gated(hooks):
             return self._aexecute_gated(tool_name, tool_input, reasoning,
@@ -1262,7 +1452,8 @@ class ToolExecutor:
 
         return await self._execute_effect_protocol(
             surface="native", tool_id=tool_name, ledger_tool=tool_name,
-            tool_input=tool_input, reasoning=reasoning, note=note, gated=_gated)
+            identity_input=identity_input, reasoning=reasoning, note=note,
+            gated=_gated)
 
     #: How many times the exactly-once wrapper will wait on another caller's
     #: in-flight effect before giving up and running the gate itself. Each
@@ -1298,7 +1489,7 @@ class ToolExecutor:
             reservation.set_result(dict(recorded) if recorded is not None else None)
 
     async def _execute_effect_protocol(self, *, surface: str, tool_id: str,
-                                       ledger_tool: str, tool_input: dict,
+                                       ledger_tool: str, identity_input: dict,
                                        reasoning: str, note: dict, gated) -> Any:
         """THE effect protocol, shared by the native and MCP paths (§19).
 
@@ -1315,7 +1506,10 @@ class ToolExecutor:
         """
         from core.effect_journal import ExecutionDisposition
 
-        key = self._effect_key(self._effect_epoch, ledger_tool, tool_input)
+        # V69 M65D — `identity_input` is the EFFECTIVE call, not the caller's
+        # dict. It is computed once, by the surface, and is the only thing this
+        # protocol ever hashes; the gate runs the caller's own arguments.
+        key = self._effect_key(self._effect_epoch, ledger_tool, identity_input)
         note["effect_key"] = key
 
         # ── layers 1+2: this process's ledger and in-flight reservation ─────
@@ -1369,36 +1563,40 @@ class ToolExecutor:
                              "disposition": ExecutionDisposition
                              .DEDUPLICATED_IN_PROCESS.value})
                 return dict(stale)
-            return await gated(_EffectHooks(None))
+            return await gated(_EffectHooks(None, ledger_key=key))
 
         reservation = self._effect_reserve(key)
         try:
             return await self._durable_effect(
-                surface=surface, tool_id=tool_id, tool_input=tool_input,
+                surface=surface, tool_id=tool_id, identity_input=identity_input,
                 reasoning=reasoning, note=note, gated=gated, key=key)
         finally:
             self._effect_release(key, reservation)
 
     async def _durable_effect(self, *, surface: str, tool_id: str,
-                              tool_input: dict, reasoning: str, note: dict,
+                              identity_input: dict, reasoning: str, note: dict,
                               gated, key: str) -> Any:
         """Layer 3: durable ownership, recovery, and the P0-P5 crash windows."""
         from core.effect_journal import (
             EffectJournalRefused, ExecutionDisposition, JournalUnhealthy,
-            ReservationOutcome, compute_effect_id, durability_class,
+            ReservationOutcome, RetryAuthority, compute_effect_id,
+            durability_class,
         )
 
         try:
             journal = self._effect_journal()
-        except JournalUnhealthy as exc:
+        except (JournalUnhealthy, sqlite3.Error) as exc:
             # Fail closed (§25). An effectful call cannot proceed without the
             # component that would stop it duplicating, and continuing anyway
             # would drop the guarantee at the exact moment it is needed.
             self._journal_error = str(exc)
             self._audit.log_action(tool_id, reasoning, "blocked:journal_unhealthy",
                                    "blocked", self._journal_error[:200])
-            note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
-            note["journal_unhealthy"] = True
+            note.update({
+                "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
+                "external_outcome": "UNKNOWN",
+                "retry_authority": "BLOCKED_INDETERMINATE",
+                "journal_unhealthy": True})
             return {"error": (
                 "Efecto rechazado: el diario durable de efectos no está sano, "
                 "así que no se puede garantizar que esta acción no se duplique. "
@@ -1408,23 +1606,57 @@ class ToolExecutor:
         if journal is None:
             # Explicitly switched off by the operator. In-process guarantees
             # only; the disposition says so rather than implying durability.
-            result = await gated(_EffectHooks(None))
-            note["committed"] = self._effect_ledger_get(key) is not None
-            note["disposition"] = (
-                ExecutionDisposition.EXECUTED_NOW.value if note["committed"]
-                else ExecutionDisposition.FAILED_BEFORE_EFFECT.value)
+            #
+            # V69 M65D. Switching the journal OFF removes the protection, not
+            # the physics: a call that failed after the boundary still has an
+            # unknown external outcome, and reporting FAILED_BEFORE_EFFECT here
+            # — which is what M65C did — is the same false statement in a
+            # branch where nothing is left to catch it.
+            hooks = _EffectHooks(None, ledger_key=key)
+            result = await gated(hooks)
+            note["committed"] = (hooks.succeeded
+                                 or self._effect_ledger_get(key) is not None)
+            if note["committed"]:
+                note.update({
+                    "disposition": ExecutionDisposition.EXECUTED_NOW.value,
+                    "external_outcome": "PROVEN_COMMITTED",
+                    "retry_authority": "ALREADY_COMMITTED"})
+            elif hooks.invoked:
+                outcome = (hooks.declared.outcome.value if hooks.declared
+                           is not None else "UNKNOWN")
+                note.update({
+                    "disposition": _OBSERVED_FAILURE_DISPOSITION[outcome],
+                    "observed_failure": True,
+                    "external_outcome": outcome,
+                    "retry_authority": "BLOCKED_INDETERMINATE"
+                                       if outcome == "UNKNOWN" else "SAFE_TO_RETRY"})
+            else:
+                note.update({
+                    "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
+                    "external_outcome": "PROVEN_NOT_EXECUTED",
+                    "retry_authority": "SAFE_TO_RETRY"})
             return result
 
         cls = durability_class(tool_id, classify_tool(tool_id))
+        # Round-2 M1. Only the chat turn declares an epoch; the containment,
+        # runbook, task-graph, incident and playbook paths reach here with
+        # self._effect_epoch == "". An empty scope is DURABLE and UNBOUNDED, so
+        # a legitimate quarantine of the same address on a later boot was
+        # answered with a "recovered" envelope and never applied — a real
+        # containment suppressed. A caller that declared no epoch gets this
+        # process as its epoch: same-process repeats still dedupe, a restart is
+        # a new decision, which is what "a retyped question does not recover"
+        # always meant.
+        scope = self._effect_epoch or f"process:{journal.instance_id}"
         effect_id = compute_effect_id(surface=surface, tool_id=tool_id,
-                                      identity_scope=self._effect_epoch,
-                                      tool_input=tool_input)
+                                      identity_scope=scope,
+                                      tool_input=identity_input)
         note.update({"effect_id": effect_id, "durable": True,
                      "durability_class": cls.value})
         auth_digest, scope_digest = self._authority_digests(self.authority)
         reserve_kw = {
             "effect_id": effect_id, "tool_id": tool_id, "surface": surface,
-            "durability_class": cls, "tool_input": tool_input,
+            "durability_class": cls, "tool_input": identity_input,
             "authority_digest": auth_digest, "scope_digest": scope_digest,
         }
         try:
@@ -1432,13 +1664,17 @@ class ToolExecutor:
             if reservation.outcome is ReservationOutcome.OWNED_ELSEWHERE:
                 reservation = await self._durable_wait_for_owner(
                     journal, reservation, reserve_kw)
+            verdict_seen: list = [None]
             reservation = await self._resolve_indeterminate(
-                journal, reservation, reserve_kw, tool_id)
-        except JournalUnhealthy as exc:
+                journal, reservation, reserve_kw, tool_id, verdict_seen)
+        except (JournalUnhealthy, sqlite3.Error) as exc:
             self._audit.log_action(tool_id, reasoning, "blocked:journal_unhealthy",
                                    "blocked", str(exc)[:200])
-            note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
-            note["journal_unhealthy"] = True
+            note.update({
+                "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
+                "external_outcome": "UNKNOWN",
+                "retry_authority": "BLOCKED_INDETERMINATE",
+                "journal_unhealthy": True})
             return {"error": f"Efecto rechazado: diario durable no disponible "
                              f"({str(exc)[:160]})",
                     "error_class": "journal_unhealthy"}
@@ -1457,32 +1693,65 @@ class ToolExecutor:
                 tool_id, reasoning, "deduplicated:durable", "blocked",
                 "duplicate effect suppressed by the durable effect journal")
             note.update({"deduplicated": True, "committed": True,
-                         "disposition": disposition.value})
+                         "disposition": disposition.value,
+                         "external_outcome": "PROVEN_COMMITTED",
+                         "retry_authority": "ALREADY_COMMITTED",
+                         "reconciliation_required": False})
             return self._durable_recovery_envelope(reservation.record, disposition)
 
         if outcome in (ReservationOutcome.INDETERMINATE,
                        ReservationOutcome.RECONCILE_REQUIRED):
-            # The P2/P3 window. An automatic retry here is exactly the duplicate
-            # this milestone exists to prevent, so it is refused and named (§12).
+            # The P2/P3 window, and since M65D also a post-boundary failure
+            # whose external outcome nothing could establish. An automatic retry
+            # here is exactly the duplicate this milestone exists to prevent, so
+            # it is refused and named (§12).
+            # V69 M65D — D4. ASK THE DECISION FUNCTION. This used to publish
+            # the authority as an if-expression over the reservation outcome,
+            # which is a second policy: a probe that had already answered
+            # UNKNOWN five times still produced REQUIRES_RECONCILIATION, telling
+            # the caller a reconciliation might yet settle it. "Asked and
+            # unanswered is not the same as unasked" was written in the table
+            # and never reached the runtime.
+            from core.effect_journal import EffectState, retry_authority
+            # Round-2 m2: the ROW's class, which is what the journal decided
+            # on — a runtime re-registration must not make the message disagree
+            # with the decision.
+            row_cls = reservation.record.durability_class
+            authority = retry_authority(state=EffectState.INDETERMINATE,
+                                        durability_class=row_cls,
+                                        verdict=verdict_seen[0])
+            reconcile_next = authority is RetryAuthority.REQUIRES_RECONCILIATION
             logger.error(
-                f"EFFECT_JOURNAL: '{tool_id}' is INDETERMINATE — a previous "
-                f"attempt may or may not have taken effect; automatic retry is "
-                f"blocked")
+                f"EFFECT_JOURNAL: '{tool_id}' has an UNKNOWN external outcome — "
+                f"a previous attempt may or may not have taken effect; "
+                f"automatic retry is blocked")
             self._audit.log_action(
                 tool_id, reasoning, "blocked:indeterminate", "blocked",
                 "effect outcome unknown; retry blocked to prevent duplication")
             note.update({
                 "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
-                "recovery_required": True})
+                "recovery_required": True,
+                "external_outcome": "UNKNOWN",
+                "retry_authority": authority.value,
+                "reconciliation_required": reconcile_next})
             return {
+                # §31: uncertain, not alarming, and never falsely certain. It
+                # says what is unknown, what class of tool this is, and whether
+                # anything other than a human can settle it.
                 "error": (
-                    "Efecto bloqueado: un intento anterior pudo haberse "
-                    "ejecutado y no se puede confirmar. No se reintenta "
-                    "automáticamente para no duplicarlo; requiere "
-                    "reconciliación manual."),
+                    "Efecto bloqueado: la llamada falló localmente, pero no se "
+                    "puede probar si el efecto externo llegó a ocurrir. No se "
+                    "reintenta automáticamente para no duplicarlo. "
+                    f"Clase de durabilidad: {row_cls.value}. "
+                    + ("Existe reconciliación para esta herramienta y no pudo "
+                       "confirmar el resultado." if reconcile_next else
+                       "No existe reconciliación automática para esta "
+                       "herramienta; requiere reconciliación manual.")),
                 "error_class": "indeterminate_effect",
                 "effect_id": effect_id,
-                "durability_class": cls.value,
+                "durability_class": row_cls.value,
+                "external_outcome": "UNKNOWN",
+                "reconciliation_available": reconcile_next,
             }
 
         if not reservation.owned:
@@ -1490,7 +1759,10 @@ class ToolExecutor:
             self._audit.log_action(
                 tool_id, reasoning, "blocked:owned_elsewhere", "blocked",
                 "another process owns this effect identity")
-            note["disposition"] = ExecutionDisposition.BLOCKED_OWNED_ELSEWHERE.value
+            note.update({
+                "disposition": ExecutionDisposition.BLOCKED_OWNED_ELSEWHERE.value,
+                "external_outcome": "UNKNOWN",
+                "retry_authority": "BLOCKED_INDETERMINATE"})
             return {
                 "error": ("Efecto en curso en otro proceso; no se ejecuta una "
                           "segunda vez."),
@@ -1499,7 +1771,9 @@ class ToolExecutor:
             }
 
         # ── we own it: run the tool ─────────────────────────────────────────
-        hooks = _EffectHooks(lambda: journal.mark_executing(effect_id))
+        hooks = _EffectHooks(lambda: journal.mark_executing(effect_id),
+                             ledger_key=key,
+                             idempotency_key=reservation.record.idempotency_key)
         try:
             result = await gated(hooks)
         except asyncio.CancelledError:
@@ -1522,33 +1796,128 @@ class ToolExecutor:
             if hooks.invoked:
                 journal.mark_indeterminate(
                     effect_id, "the gate raised after the tool was invoked")
-                note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+                note.update({
+                    "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
+                    "external_outcome": "UNKNOWN",
+                    "retry_authority": "BLOCKED_INDETERMINATE"})
             else:
                 journal.fail_before_effect(effect_id, "gate_raised")
-                note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+                note.update({
+                    "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
+                    "external_outcome": "PROVEN_NOT_EXECUTED",
+                    "retry_authority": "SAFE_TO_RETRY"})
             raise
 
-        committed = self._effect_ledger_get(key) is not None
+        committed = hooks.succeeded or self._effect_ledger_get(key) is not None
         note["committed"] = committed
         if not hooks.invoked:
             # Refused by a gate: preflight, guardrail, authority/scope, HITL or
             # an unknown tool. Provably pre-effect, so a later attempt is
             # legitimate and the identity is NOT poisoned.
             journal.fail_before_effect(effect_id, "refused_before_effect")
-            note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+            note.update({
+                "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
+                "external_outcome": "PROVEN_NOT_EXECUTED",
+                "retry_authority": "SAFE_TO_RETRY",
+                "reconciliation_required": False})
             return result
         if committed:
-            journal.commit(effect_id, receipt=result)
-            note["disposition"] = ExecutionDisposition.EXECUTED_NOW.value
+            # Round-2 M7. This process HAS the receipt: the effect is proven.
+            # A journal that cannot record that fact (locked, corrupt, or a
+            # concurrent classifier moved the row to INDETERMINATE while the
+            # tool outlived its lease) must not turn the owner's known success
+            # into a raw exception and a `disposition` of None. The result is
+            # returned, the note says what is known, and the durable row —
+            # EXECUTING or INDETERMINATE — is the conservative one either way.
+            try:
+                recorded = journal.commit(effect_id, receipt=result)
+            except (JournalUnhealthy, sqlite3.Error) as exc:
+                logger.error(f"EFFECT_JOURNAL: could not record a commit: "
+                             f"{str(exc)[:160]}")
+                recorded = False
+                note["journal_write_failed"] = True
+            note.update({
+                "disposition": ExecutionDisposition.EXECUTED_NOW.value,
+                "external_outcome": "PROVEN_COMMITTED",
+                "retry_authority": "ALREADY_COMMITTED",
+                "reconciliation_required": False,
+                "durably_recorded": bool(recorded)})
             return result
-        # Invoked, and the ledger recorded no success: the call returned an error
-        # and THIS process observed it. Distinct from INDETERMINATE, where nobody
-        # came back at all. The retry policy attached to this state is M64.1's,
-        # inherited unchanged and named as a limitation in the milestone doc.
-        journal.fail_observed(effect_id, "tool_returned_error")
+        # Invoked, and the ledger recorded no success: the call failed and THIS
+        # process saw it fail. That is a fact about the software.
+        #
+        # V69 M65D — and it is NOT a fact about the world. Under M65C this
+        # branch recorded FAILED_OBSERVED and published the disposition
+        # FAILED_BEFORE_EFFECT, which is a statement that the effect had not
+        # started about a call that had already crossed the boundary; the next
+        # caller for the identity was then handed ownership and ran the tool
+        # again. What is known about the external system now comes from the
+        # tool's own typed evidence, if it produced any, and is UNKNOWN
+        # otherwise (§10) — never from the exception, the status or the message.
+        return self._settle_observed_failure(
+            journal, effect_id, cls, hooks.declared, note, result)
+
+    def _settle_observed_failure(self, journal, effect_id: str, cls,
+                                 evidence, note: dict, result):
+        """Record a post-boundary failure truthfully and say so to the caller.
+
+        One place, reached from the one protocol, so the native and MCP
+        surfaces cannot end up with different answers about the same window.
+        """
+        from core.effect_journal import (
+            EffectState, ExternalOutcome, JournalUnhealthy,
+            RetryAuthority, external_outcome_of, retry_authority,
+        )
+
+        outcome = (evidence.outcome if evidence is not None
+                   else ExternalOutcome.UNKNOWN)
+        try:
+            journal.fail_observed(effect_id, "tool_returned_error",
+                                  evidence=evidence)
+        except JournalUnhealthy as exc:
+            # The durable write failed, so the row is still EXECUTING — which
+            # reads as UNKNOWN and blocks the next caller anyway. Fail closed
+            # and say which of the two happened rather than silently reporting
+            # the tidier one.
+            logger.error(f"EFFECT_JOURNAL: could not record an observed "
+                         f"failure: {str(exc)[:160]}")
+            note["journal_write_failed"] = True
+            outcome = external_outcome_of(EffectState.EXECUTING)
+
+        authority = retry_authority(state=EffectState.FAILED_OBSERVED,
+                                    durability_class=cls,
+                                    recorded_outcome=outcome)
+        disposition = _OBSERVED_FAILURE_DISPOSITION[outcome.value]
+        reconcilable = cls.value == "RECONCILABLE"
         note.update({
-            "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
-            "observed_failure": True})
+            "disposition": disposition,
+            "observed_failure": True,
+            "external_outcome": outcome.value,
+            "retry_authority": authority.value,
+            "reconciliation_required":
+                authority is RetryAuthority.REQUIRES_RECONCILIATION,
+            "outcome_evidence": evidence.reason_code if evidence is not None else "",
+            # V69 M65D — D7. The CREATING call was silent about this, so the
+            # specialist receipt and ARGUS saw an ordinary error envelope and
+            # the single-attempt case — the common one — never surfaced. An
+            # effect nobody can resolve is a task for a human at the moment it
+            # is created, not only when a later caller is refused.
+            "recovery_required": authority not in (
+                RetryAuthority.SAFE_TO_RETRY, RetryAuthority.ALREADY_COMMITTED),
+        })
+        if isinstance(result, dict):
+            # The smallest backward-compatible structured signal (§16): one
+            # extra key, bounded, body-free, and never overwriting anything the
+            # tool itself returned.
+            result = dict(result)
+            result["effect_uncertainty"] = {
+                "effect_id": effect_id,
+                "durability_class": cls.value,
+                "external_outcome": outcome.value,
+                "retry_authority": authority.value,
+                "reconciliation_available": reconcilable,
+                "detail": _OBSERVED_FAILURE_DETAIL[outcome.value],
+            }
         return result
 
     def _settle_cancelled(self, journal, effect_id: str, hooks, note) -> None:
@@ -1563,12 +1932,20 @@ class ToolExecutor:
 
         try:
             if hooks.invoked:
+                # The handler is on a thread pool and keeps going; a caller
+                # changing its mind is not evidence about the world (§23).
                 journal.mark_indeterminate(
                     effect_id, "caller cancelled after the tool was invoked")
-                note["disposition"] = ExecutionDisposition.BLOCKED_INDETERMINATE.value
+                note.update({
+                    "disposition": ExecutionDisposition.BLOCKED_INDETERMINATE.value,
+                    "external_outcome": "UNKNOWN",
+                    "retry_authority": "BLOCKED_INDETERMINATE"})
             else:
                 journal.fail_before_effect(effect_id, "cancelled_before_effect")
-                note["disposition"] = ExecutionDisposition.FAILED_BEFORE_EFFECT.value
+                note.update({
+                    "disposition": ExecutionDisposition.FAILED_BEFORE_EFFECT.value,
+                    "external_outcome": "PROVEN_NOT_EXECUTED",
+                    "retry_authority": "SAFE_TO_RETRY"})
         except Exception:  # noqa: BLE001 — never mask the cancellation
             logger.warning("EFFECT_JOURNAL: could not settle a cancelled effect")
 
@@ -1652,9 +2029,13 @@ class ToolExecutor:
         # to keep correct. One reader, one writer, one identity.
         #
         # Read-only calls are never keyed: repeating a read is not an effect.
-        _effect_key = None
-        if risk_class is not RiskClass.READ_ONLY:
-            _effect_key = self._effect_key(self._effect_epoch, tool_name, tool_input)
+        # V69 M65D — carried, not recomputed. Deriving it here from this
+        # method's own copy of the input is what let the read key and the write
+        # key disagree the moment `_strip_override` fired.
+        _effect_key = (effect_hooks.ledger_key if effect_hooks is not None
+                       else (None if risk_class is RiskClass.READ_ONLY
+                             else self._effect_key(self._effect_epoch, tool_name,
+                                                   tool_input)))
         if requires_trusted_lab(risk_class) and not _trusted_lab_enabled():
             self._audit.log_action(
                 tool_name, reasoning, "blocked:lab_only", "blocked",
@@ -1703,11 +2084,58 @@ class ToolExecutor:
         # effect. Everything above this line is provably pre-effect, which is
         # what makes FAILED_BEFORE_EFFECT truthful.
         #
+        # Round-2 M5. `idempotency_key` is a RESERVED protocol argument and is
+        # never part of a caller's vocabulary, so it is removed BEFORE anything
+        # else looks at the call — before the bind check, so its mere presence
+        # cannot change whether an otherwise-valid call is accepted, and before
+        # the injection below, so a model-authored value can never become the
+        # key the far side deduplicates on. A `**kwargs` handler would
+        # otherwise absorb it silently.
+        tool_input = {k: v for k, v in tool_input.items() if k != _IDEMPOTENCY_ARG}
+
+        # Round-2 M6: refuse an unbindable call BEFORE the boundary. The
+        # identity helper already knew the bind fails and said "preflight will
+        # refuse it" — preflight checked nothing of the sort, so the call
+        # crossed EXECUTING, raised TypeError inside the handler, and was
+        # journalled as an UNKNOWN post-boundary failure needing a human, about
+        # a call that provably never entered the handler. Provably pre-effect,
+        # so provably harmless.
+        try:
+            inspect.signature(handler).bind(**tool_input)
+        except TypeError as exc:
+            self._audit.log_action(tool_name, reasoning, "blocked:unbindable",
+                                   "blocked", str(exc)[:200])
+            return {"error": f"Tool '{tool_name}' no acepta esos argumentos: "
+                             f"{str(exc)[:160]}",
+                    "error_class": "invalid_arguments"}
+        except ValueError:      # pragma: no cover - a signature-less callable
+            pass
+
         # Deliberately OUTSIDE the try below: a journal refusal is not a tool
         # fault and must not be sanitised into one, or the operator would read
         # "the tool failed" for a call that never ran.
         if effect_hooks is not None:
             effect_hooks.before_invoke()
+
+        # V69 M65D. The IDEMPOTENT_WITH_KEY contract is "the external system
+        # deduplicates a replay under the same key". The key was derived,
+        # stored and never handed to anything, so an authorised replay was an
+        # undeduplicated second external effect and the class was a fiction.
+        # Delivery is opt-in by signature: a handler that declares
+        # `idempotency_key` is given it; nothing else sees a new argument.
+        if effect_hooks is not None and effect_hooks.idempotency_key:
+            try:
+                accepts = _IDEMPOTENCY_ARG in inspect.signature(handler).parameters
+            except (TypeError, ValueError):     # pragma: no cover - exotic callable
+                accepts = False
+            if accepts:
+                tool_input = {**tool_input,
+                              _IDEMPOTENCY_ARG: effect_hooks.idempotency_key}
+
+        # Imported here rather than at module scope for the reason every other
+        # journal import in this file is: a broken journal must not be able to
+        # break importing the executor. Naming the class is all this costs.
+        from core.effect_journal import DeclaredEffectOutcome
 
         try:
             # Layer 4: run synchronous tool handler in thread pool
@@ -1721,6 +2149,14 @@ class ToolExecutor:
             # this epoch can repeat it. Only a SUCCESSFUL effect is recorded: a
             # failed call left the world unchanged, so retrying it is legitimate
             # and the existing per-turn retry ledger still governs that.
+            # V69 M65D — say it, do not let it be inferred. `committed` used to
+            # be read back from the LEDGER, and the ledger can only hold a dict,
+            # so a successful call returning anything else (an ordinary MCP
+            # content list, for one) was durably recorded as an UNKNOWN outcome
+            # and its identity poisoned. The ledger's shape is an in-process
+            # dedup detail; it is not evidence about the external world.
+            if effect_hooks is not None:
+                effect_hooks.succeeded = status == "success"
             if _effect_key is not None and status == "success" and isinstance(result, dict):
                 self._effect_ledger[_effect_key] = (time.monotonic(), dict(result))
 
@@ -1735,6 +2171,34 @@ class ToolExecutor:
             })
 
             return result
+        except DeclaredEffectOutcome as declared:
+            # V69 M65D. The tool's own adapter is stating what it KNOWS about
+            # the external system. Handed to the protocol out of band and then
+            # sanitised into an ordinary failure envelope, so the caller sees a
+            # failure and the journal sees the evidence.
+            if effect_hooks is not None:
+                effect_hooks.declare_outcome(declared.evidence)
+            from core.tool_result import make_failure
+
+            logger.error(f"Error en tool '{tool_name}': declared outcome "
+                         f"{declared.evidence.outcome.value}")
+            self._audit.log_action(tool_name, reasoning, auth_audit, "error",
+                                   f"declared:{declared.evidence.outcome.value}")
+            await _aura_broadcast({
+                "type": "error",
+                "tool": tool_name,
+                "message": (declared.safe_message
+                            or "the tool declared a typed external outcome")[:200],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return make_failure(
+                tool=tool_name,
+                error_class="declared_effect_outcome",
+                safe_message=(declared.safe_message
+                              or "the tool reported a typed external outcome"),
+                retryable=False,
+                fallback_allowed=True,
+            )
         except Exception as e:
             # V68.1 M46: never surface a raw exception / dependency stack trace to
             # the model. Log the real error; return a typed, sanitized envelope so
@@ -1750,11 +2214,17 @@ class ToolExecutor:
                 "message": safe_message[:200],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
+            # V69 M65D. `retryable` is advice to the CALLER — the journal is the
+            # authority either way — but advice may not be false. A timeout is
+            # retryable only while nothing can have happened yet; once the
+            # effect boundary has been crossed, "it timed out" says nothing
+            # about the external world and must not read as "so try again".
+            crossed = effect_hooks is not None and effect_hooks.invoked
             return make_failure(
                 tool=tool_name,
                 error_class=error_class,
                 safe_message=safe_message,
-                retryable=(error_class == "timeout"),
+                retryable=(error_class == "timeout" and not crossed),
                 fallback_allowed=True,
             )
 
@@ -1838,7 +2308,13 @@ class ToolExecutor:
         note = effect_note if effect_note is not None else {}
         note.update({"deduplicated": False, "effect_key": None,
                      "committed": False, "disposition": None,
-                     "effect_id": None, "durable": False})
+                     "effect_id": None, "durable": False,
+                     # V69 M65D §16 — the caller must be able to tell "it
+                     # definitely did nothing" from "it failed and nobody can
+                     # say". These keys are always present, so reading them is
+                     # never a guess about which branch ran.
+                     "external_outcome": None, "retry_authority": None,
+                     "reconciliation_required": False})
         tool_input = _strip_override(tool_name, tool_input)
 
         if classify_tool(tool_name) is RiskClass.READ_ONLY:
@@ -1849,9 +2325,15 @@ class ToolExecutor:
             return self._aexecute_mcp_gated(tool_name, tool_input, call_fn,
                                             reasoning, effect_hooks=hooks)
 
+        # No local handler exists, so there are no defaults to bind: an MCP
+        # tool's defaults live in the remote server's schema and are not
+        # knowable here. Both surfaces strip; only the native one can normalise
+        # further, and that asymmetry is stated rather than papered over.
+        from core.effect_journal import normalise_identity
         return await self._execute_effect_protocol(
             surface="mcp", tool_id=tool_name, ledger_tool=f"mcp:{tool_name}",
-            tool_input=tool_input, reasoning=reasoning, note=note, gated=_gated)
+            identity_input=normalise_identity(tool_name, tool_input),
+            reasoning=reasoning, note=note, gated=_gated)
 
     async def _aexecute_mcp_gated(self, tool_name: str, tool_input: dict, call_fn,
                                   reasoning: str = "", *,
@@ -1933,18 +2415,41 @@ class ToolExecutor:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
-        _effect_key = None
-        if risk_class is not RiskClass.READ_ONLY:
-            _effect_key = self._effect_key(self._effect_epoch, f"mcp:{tool_name}",
-                                           tool_input)
+        _effect_key = (effect_hooks.ledger_key if effect_hooks is not None
+                       else (None if risk_class is RiskClass.READ_ONLY
+                             else self._effect_key(self._effect_epoch,
+                                                   f"mcp:{tool_name}", tool_input)))
         # V69 M65C — the durable EXECUTING commit, at the same point in the MCP
         # surface as in the native one: immediately before the external call and
         # nowhere else. Outside the try for the same reason as the native gate.
         if effect_hooks is not None:
             effect_hooks.before_invoke()
 
+        from core.effect_journal import DeclaredEffectOutcome
+
         try:
             result = await call_fn(tool_name, tool_input)
+        except DeclaredEffectOutcome as declared:
+            # V69 M65D — the SAME branch the native gate has, so the two
+            # surfaces cannot diverge on what counts as evidence (§14). Note
+            # that only `call_fn` — JARVIS-side code — can raise this; nothing
+            # a remote server puts in a response body reaches here.
+            if effect_hooks is not None:
+                effect_hooks.declare_outcome(declared.evidence)
+            logger.error(f"Error en tool MCP '{tool_name}': declared outcome "
+                         f"{declared.evidence.outcome.value}")
+            self._audit.log_action(tool_name, reasoning, "mcp", "error",
+                                   f"declared:{declared.evidence.outcome.value}")
+            await _aura_broadcast({
+                "type": "error",
+                "tool": f"mcp:{tool_name}",
+                "message": (declared.safe_message
+                            or "declared external outcome")[:200],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"error": f"MCP error en '{tool_name}': "
+                             f"{declared.safe_message or 'declared outcome'}",
+                    "error_class": "declared_effect_outcome"}
         except Exception as e:
             logger.error(f"Error en tool MCP '{tool_name}': {e}")
             self._audit.log_action(tool_name, reasoning, "mcp", "error", str(e)[:200])
@@ -1963,6 +2468,8 @@ class ToolExecutor:
 
         # V69 M64.1 §17 — same ledger, same epoch, one keyspace. An MCP effect
         # and a local effect are both effects.
+        if effect_hooks is not None:
+            effect_hooks.succeeded = status == "success"
         if _effect_key is not None and status == "success" and isinstance(result, dict):
             self._effect_ledger[_effect_key] = (time.monotonic(), dict(result))
 
@@ -2442,7 +2949,15 @@ class ToolExecutor:
             return {"error": "host_firewall_rule requires the authorization_id "
                              "that permitted it; refusing (fail-closed)"}
         ok = _sa._block_port_firewall(int(port), str(proto))
-        return {"blocked": bool(ok), "port": int(port), "proto": str(proto),
+        if not ok:
+            # Round-2 M3: "not applied" carried no error key, so the effect
+            # protocol read it as a SUCCESS and durably COMMITTED a rule that
+            # was never installed — then deduplicated every later attempt.
+            return {"error": f"host_firewall_rule could not block {proto} "
+                             f"port {int(port)}; nothing was applied",
+                    "blocked": False, "port": int(port), "proto": str(proto),
+                    "authorization_id": authorization_id}
+        return {"blocked": True, "port": int(port), "proto": str(proto),
                 "authorization_id": authorization_id}
 
     def _tool_run_shell_command(self, command: str) -> dict:

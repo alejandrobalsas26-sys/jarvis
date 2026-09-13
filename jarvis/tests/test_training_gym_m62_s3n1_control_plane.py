@@ -549,7 +549,19 @@ def test_the_snapshot_names_the_subject_commit_and_master(snapshot, current):
     # the fixed point: a generation committed onto master invalidated the very number
     # it declared.
     authority = snapshot["integration_authority"]
-    assert authority["integration_base"] == MASTER_COMMIT
+    # V69 M65D — D57, the same defect in another place. S5G's rescoping argued the
+    # integration base was "a fact about the past that cannot go stale". It is not: the
+    # base is the master a generation authorises a fast-forward FROM, so it ADVANCES
+    # every time a generation is integrated. Generation 36 declaring base 72e2948 — the
+    # master generation 35 was integrated onto — turned this red, and declaring the
+    # stale base instead would have made the derived observation claim M65D was already
+    # merged. What survives is advance-only: the authorisation may move forward and may
+    # never rewind behind an already-integrated master.
+    base = authority["integration_base"]
+    assert V._commit_exists(base), f"integration_base {base[:12]} is not a commit"
+    assert V._is_ancestor(MASTER_COMMIT, base), (
+        f"integration_base {base[:12]} is behind the historically integrated "
+        f"master; the authorisation rewound")
     assert authority["target_ref"] == "refs/heads/master"
     assert authority["method"] == "FAST_FORWARD_ONLY"
 

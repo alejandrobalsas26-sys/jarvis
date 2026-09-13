@@ -454,6 +454,22 @@ def test_no_rescoped_test_is_disabled_on_the_live_tree():
         _test_block(relpath, name)          # raises if skipped/xfailed or bodiless
 
 
+def assert_advance_only(base: str, historical: str = HISTORICAL_MASTER) -> None:
+    """THE D57 rule, in ONE place: the authorisation may advance, never rewind.
+
+    A mutation campaign found the previous arrangement dead. The live assertion
+    and its "does this guard actually bite?" companion asserted the SAME thing
+    two ways, so deleting either was invisible — which is the M65C
+    DEAD_REDUNDANT_CODE shape: a guard that cannot fail is not defence in depth,
+    it is a second place to keep correct. One validator, exercised positively by
+    the live test below and NEGATIVELY by the one after it.
+    """
+    assert V._commit_exists(base), f"integration_base {base[:12]} is not a commit"
+    assert V._is_ancestor(historical, base), (
+        f"integration_base {base[:12]} is behind the historically integrated "
+        f"master {historical[:12]}; the authorisation rewound")
+
+
 def test_the_live_repository_is_in_an_admitted_state_whatever_master_has_done():
     """The replacement invariant, run against the REAL repository.
 
@@ -464,13 +480,47 @@ def test_the_live_repository_is_in_an_admitted_state_whatever_master_has_done():
     """
     live = V.load(V.Report()).snapshot
     authority = live["integration_authority"]
-    assert authority["integration_base"] == HISTORICAL_MASTER
+    # V69 M65D — D57. This line read `base == HISTORICAL_MASTER`, which is D49's
+    # own mistake surviving one layer down: F1 removed the pin on the OBSERVATION
+    # and left a pin on the generation-specific VALUE the observation is taken
+    # against. The moment a successor legitimately declares a base at the master
+    # its predecessor integrated — which is what integration IS — this test went
+    # red, and the only cure would have been the exact-base rollback this
+    # programme forbids. Measured at generation 36: base 72e2948, expected
+    # 3705114, one failure, and the docstring above already said the test says
+    # "nothing at all about whether integration has happened yet".
+    assert_advance_only(authority["integration_base"])
     assert authority["method"] == "FAST_FORWARD_ONLY"
     assert authority["target_ref"] == "refs/heads/master"
     state, detail, offenders = V.observe_integration_state(authority)
     assert state in ADMITTED, f"{state}: {detail} {offenders}"
     assert live["project"]["tagged"] is False
     assert live["project"]["released"] is False
+
+
+def test_the_advance_only_rule_actually_bites():
+    """The NEGATIVE half. A guard that cannot fail certifies anything.
+
+    The assertion D57 replaced could only ever have failed by a successor doing
+    the right thing. This one feeds `assert_advance_only` the thing that is
+    actually dangerous — an authorisation whose base sits BEHIND a master that
+    has already been integrated, which would authorise a fast-forward onto a
+    rollback — and requires it to refuse.
+    """
+    # HISTORICAL_MASTER's own parent stands in for any earlier commit a rewound
+    # authorisation could name.
+    code, rewound = V._git("rev-parse", f"{HISTORICAL_MASTER}^")
+    assert code == 0 and rewound, "the historical master has no parent to test with"
+
+    live = V.load(V.Report()).snapshot
+    base = live["integration_authority"]["integration_base"]
+    assert_advance_only(base)                       # the live one passes
+
+    with pytest.raises(AssertionError, match="rewound"):
+        assert_advance_only(rewound)                # a rewind does not
+
+    with pytest.raises(AssertionError, match="not a commit"):
+        assert_advance_only("0" * 40)               # nor does a fiction
 
 
 # ══════════════════════════════════════════════════════════════════════════════

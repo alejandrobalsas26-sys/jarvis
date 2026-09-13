@@ -196,8 +196,21 @@ def test_an_observed_failure_is_not_marked_committed(h):
     assert h.journal.get(h.effect_id()).state is EffectState.FAILED_OBSERVED
 
 
-def test_an_observed_failure_can_be_retried(h):
-    """The M64.1 policy, inherited unchanged and named as a limitation."""
+def test_an_observed_failure_is_not_retried_for_a_non_replayable_tool(h):
+    """SUPERSEDED BY M65D, and deliberately kept as the same scenario.
+
+    This test used to be ``test_an_observed_failure_can_be_retried`` and used
+    to assert ``calls["n"] == 2``, on the grounds that the M64.1 retry policy
+    was "inherited unchanged and named as a limitation". The limitation was
+    real and the assertion encoded it: the second call is a second external
+    effect for an identity whose first attempt may already have landed.
+
+    ``code_execute`` is NON_REPLAYABLE, so the handler must run exactly ONCE.
+    The assertion is inverted rather than deleted, because the scenario is the
+    thing worth keeping — see
+    ``tests/test_effect_semantics_v69_m65d.py`` for the historical duplicate
+    reproduced end to end against a real external counter.
+    """
     outcomes = [True, False]
     calls = {"n": 0}
 
@@ -210,10 +223,42 @@ def test_an_observed_failure_can_be_retried(h):
     async def scenario():
         await h.call()
         h.executor._effect_ledger.clear()
-        await h.call()
+        second: dict = {}
+        await h.call(note=second)
+        return second
 
-    asyncio.run(scenario())
-    assert calls["n"] == 2
+    second = asyncio.run(scenario())
+    assert calls["n"] == 1, (
+        f"a NON_REPLAYABLE effect whose outcome is unknown ran "
+        f"{calls['n']} times")
+    assert second["disposition"] == ExecutionDisposition.BLOCKED_INDETERMINATE.value
+    assert second["external_outcome"] == "UNKNOWN"
+
+
+def test_an_observed_failure_is_replayed_when_the_contract_allows_it(h):
+    """The other half: permission comes from the CLASS, not from asking twice."""
+    from core.effect_journal import EffectDurabilityClass, register_durability
+
+    register_durability(TOOL, EffectDurabilityClass.IDEMPOTENT)
+    try:
+        outcomes = [True, False]
+        calls = {"n": 0}
+
+        def _handler(**kwargs):
+            calls["n"] += 1
+            return {"error": "boom"} if outcomes.pop(0) else {"stdout": "ok"}
+
+        h.executor._tool_code_execute = _handler
+
+        async def scenario():
+            await h.call()
+            h.executor._effect_ledger.clear()
+            await h.call()
+
+        asyncio.run(scenario())
+        assert calls["n"] == 2
+    finally:
+        unregister_durability(TOOL)
 
 
 def test_the_disposition_is_stated_not_inferred_from_a_counter(h):

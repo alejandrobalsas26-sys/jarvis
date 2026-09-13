@@ -212,8 +212,19 @@ def test_master_is_unchanged_and_nothing_was_merged_tagged_or_released():
     """
     live = snapshot()
     authority = live["integration_authority"]
-    assert authority["integration_base"] == (
-        "3705114228edef2f665be349c5c4429b7b16777a")
+    # V69 M65D — D57, the same defect in another place. S5G's rescoping argued the
+    # integration base was "a fact about the past that cannot go stale". It is not: the
+    # base is the master a generation authorises a fast-forward FROM, so it ADVANCES
+    # every time a generation is integrated. Generation 36 declaring base 72e2948 — the
+    # master generation 35 was integrated onto — turned this red, and declaring the
+    # stale base instead would have made the derived observation claim M65D was already
+    # merged. What survives is advance-only: the authorisation may move forward and may
+    # never rewind behind an already-integrated master.
+    base = authority["integration_base"]
+    assert V._commit_exists(base), f"integration_base {base[:12]} is not a commit"
+    assert V._is_ancestor("3705114228edef2f665be349c5c4429b7b16777a", base), (
+        f"integration_base {base[:12]} is behind the historically integrated "
+        f"master; the authorisation rewound")
     # RESCOPED AGAIN AT S5G.1. S5G derived "not merged" from the live ref -- right --
     # and then pinned the PRE-INTEGRATION value as though it were permanent, which is
     # wrong under V4: an authorised fast-forward moves the observation to

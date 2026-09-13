@@ -1,5 +1,5 @@
 """
-core/effect_journal.py — V69 M65C: the durable effect journal.
+core/effect_journal.py — V69 M65C/M65D: the durable effect journal.
 
 WHAT THIS MODULE IS FOR
 =======================
@@ -29,6 +29,36 @@ owner that reached :attr:`EffectState.EXECUTING` and never came back becomes
 :attr:`EffectState.INDETERMINATE`, and what may happen next is decided by the
 tool's :class:`EffectDurabilityClass` — never by the fact that a lease expired.
 
+WHAT M65D ADDED, AND WHY IT WAS NOT COSMETIC
+============================================
+M65C got the CRASH window right and the LIVE one wrong. When the owning process
+survived and merely saw the call fail, the row went to
+:attr:`EffectState.FAILED_OBSERVED` and the next caller for that identity was
+handed ownership — for every durability class — because the state sat in a
+tuple beside two states that really are proven pre-effect, under a comment
+calling them all "a non-effect outcome".
+
+But these are not the same window seen twice. They are the same window:
+
+        the effect happened  ->  the response is lost  ->  the handler raises
+
+and a lost response is one dropped TCP segment, not an exotic fault. Measured on
+a localhost fixture that applies the effect and then closes the connection: one
+logical NON_REPLAYABLE effect, two external mutations.
+
+M65D therefore separates four things that M65C spelled with two:
+
+  * the execution PHASE            :class:`EffectState`   (RESERVED / EXECUTING)
+  * the local OBSERVATION          returned / raised / timed out / cancelled
+  * KNOWLEDGE of the world         :class:`ExternalOutcome`
+  * the DECISION                   :class:`RetryAuthority`
+
+Only the first is a state machine. The third is a separate axis, stored beside
+the state and defaulting to :attr:`ExternalOutcome.UNKNOWN`; the fourth is one
+pure function, :func:`retry_authority`, that every path consults. Nothing in
+this module derives knowledge of the external world from an exception type, a
+status code, a message, a lease expiry or a caller asking twice.
+
 STORAGE
 ========
 stdlib ``sqlite3``, one file on the local NVMe, WAL. The engine and the
@@ -53,6 +83,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -72,7 +103,13 @@ except ModuleNotFoundError:  # pragma: no cover — mirrors runtime_doctor's fal
 #: Bumped only for a schema change that needs a migration step. A journal
 #: written by a NEWER schema than this code understands is refused, never
 #: rewritten (§21) — a forward-compatible read of an unknown layout is a guess.
-SCHEMA_VERSION = 1
+#:
+#: v2 (M65D) adds ``external_outcome``/``outcome_evidence``. It is a real
+#: change of PERSISTED MEANING, not ceremony: without those columns there is
+#: nowhere on disk to say that a post-boundary failure was proven harmless, so
+#: every such row would have to be read as the same thing, and one of the two
+#: readings would be a guess about the external world.
+SCHEMA_VERSION = 2
 
 _JARVIS_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_JOURNAL_PATH = _JARVIS_DIR / "data" / "effect_journal.db"
@@ -127,6 +164,94 @@ class EffectJournalRefused(RuntimeError):
     """
 
 
+class ExternalOutcome(str, Enum):
+    """What is KNOWN about the external world — never what was observed locally.
+
+    This is the axis M65C did not have, and its absence is what made
+    ``FAILED_OBSERVED`` unsafe. A handler that returns an error proves that the
+    LOCAL INVOCATION failed. It does not prove that the remote system did
+    nothing: the effect can land and the response can be lost on the way back,
+    which is one lost TCP segment, not an exotic fault.
+
+    So there are three values and not two. ``UNKNOWN`` is a first-class answer
+    and is never rounded to either certainty by anything in this module.
+    """
+
+    #: The effect is in the external world. Proven by a receipt, by a
+    #: reconciliation answer, or by typed evidence from the tool's own adapter.
+    PROVEN_COMMITTED = "PROVEN_COMMITTED"
+    #: The effect is NOT in the external world. Proven by never having crossed
+    #: the boundary, or by an authoritative downstream contract that says so.
+    PROVEN_NOT_EXECUTED = "PROVEN_NOT_EXECUTED"
+    #: Neither has been established. The default after the boundary, and the
+    #: only honest reading of a generic exception, a timeout, a cancellation or
+    #: a reset connection.
+    UNKNOWN = "UNKNOWN"
+
+
+#: Bounded, body-safe reason codes. A reason code names a CLASS of evidence; it
+#: is not a place to put an error message, a response body or a remote id, and
+#: the charset is what enforces that rather than a review comment (§28).
+_REASON_CODE_MAX = 64
+_REASON_CODE_RE = re.compile(r"\A[a-z0-9][a-z0-9_.:-]*\Z")
+
+
+@dataclass(frozen=True)
+class EffectOutcomeEvidence:
+    """A tool adapter's TYPED claim about the external world.
+
+    The only way ``UNKNOWN`` ever becomes a certainty outside reconciliation,
+    and deliberately awkward to produce: it cannot be built from an exception
+    type, an HTTP status, a substring of a message or anything else that
+    arrived in a response body (§10). It has to be constructed, in JARVIS's own
+    in-process adapter code, by something that actually knows.
+
+    ``reason_code`` is validated, not trusted — a bounded lowercase token, so
+    the evidence path can never become a channel for a body to reach the
+    journal in instalments.
+    """
+
+    outcome: ExternalOutcome
+    reason_code: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.outcome, ExternalOutcome):
+            raise TypeError(f"{self.outcome!r} is not an ExternalOutcome")
+        if self.outcome is ExternalOutcome.UNKNOWN:
+            # UNKNOWN is the default, so "evidence of uncertainty" is either a
+            # no-op or a way to overwrite a certainty with one. Neither is a
+            # thing a caller should be able to express.
+            raise ValueError(
+                "EffectOutcomeEvidence cannot assert UNKNOWN; omit the evidence")
+        code = str(self.reason_code)
+        if len(code) > _REASON_CODE_MAX or not _REASON_CODE_RE.match(code):
+            raise ValueError(
+                f"reason_code must be <= {_REASON_CODE_MAX} chars of "
+                f"[a-z0-9_.:-], got {len(code)} char(s)")
+
+
+class DeclaredEffectOutcome(Exception):
+    """Raised by a tool's own trusted adapter to state what it KNOWS.
+
+    The trust boundary is the point. This is a Python exception raised by
+    in-process JARVIS code, so a remote MCP server cannot produce one, a model
+    cannot put one in a tool argument, and a response body cannot contain one.
+    A field in a returned payload would have all three problems, which is why
+    the evidence does not travel that way.
+
+    The gate turns it into an ordinary sanitised failure envelope for the
+    caller and hands the evidence to the effect protocol out of band.
+    """
+
+    def __init__(self, evidence: EffectOutcomeEvidence,
+                 safe_message: str = "") -> None:
+        if not isinstance(evidence, EffectOutcomeEvidence):
+            raise TypeError(f"{evidence!r} is not an EffectOutcomeEvidence")
+        self.evidence = evidence
+        self.safe_message = str(safe_message)[:200]
+        super().__init__(f"{evidence.outcome.value}:{evidence.reason_code}")
+
+
 class EffectState(str, Enum):
     """Durable lifecycle of one effect identity.
 
@@ -141,8 +266,12 @@ class EffectState(str, Enum):
     #: Proven pre-effect: a gate refused, a preflight failed, or the caller
     #: cancelled before EXECUTING was durably committed. Retry is legitimate.
     FAILED_BEFORE_EFFECT = "FAILED_BEFORE_EFFECT"
-    #: The handler returned an error or raised and THIS PROCESS observed it.
-    #: Distinct from INDETERMINATE, where the owner never came back at all.
+    #: THIS PROCESS observed a failed local invocation AFTER the effect
+    #: boundary was durably entered. That is a fact about the software. It is
+    #: NOT a fact about the external world, and M65D is the milestone that
+    #: stopped it being read as one: the external outcome of a FAILED_OBSERVED
+    #: row is carried separately, defaults to UNKNOWN, and is the ONLY state
+    #: whose outcome the state does not already determine.
     FAILED_OBSERVED = "FAILED_OBSERVED"
     #: An owner reached EXECUTING and is gone. The P2/P3 window.
     INDETERMINATE = "INDETERMINATE"
@@ -161,6 +290,52 @@ _TERMINAL: frozenset[EffectState] = frozenset({
 _PROVEN_COMMITTED: frozenset[EffectState] = frozenset({
     EffectState.COMMITTED, EffectState.RECONCILED_COMMITTED,
 })
+
+#: What each durable state says, on its own, about the external world.
+#:
+#: ``None`` means the state does NOT determine the answer and the recorded
+#: ``external_outcome`` must be consulted. Exactly one state is None, and that
+#: is the whole shape of the M65D fix: everywhere else the phase and the
+#: knowledge coincide, and only after the boundary — where a local error and a
+#: lost response look identical — do they come apart.
+_STATE_OUTCOME: "dict[EffectState, ExternalOutcome | None]" = {
+    # The boundary has not been crossed; mark_executing is durable BEFORE the
+    # handler runs, so a row still in RESERVED provably invoked nothing.
+    EffectState.RESERVED: ExternalOutcome.PROVEN_NOT_EXECUTED,
+    # The boundary HAS been crossed and no answer came back yet.
+    EffectState.EXECUTING: ExternalOutcome.UNKNOWN,
+    EffectState.COMMITTED: ExternalOutcome.PROVEN_COMMITTED,
+    EffectState.FAILED_BEFORE_EFFECT: ExternalOutcome.PROVEN_NOT_EXECUTED,
+    EffectState.FAILED_OBSERVED: None,
+    EffectState.INDETERMINATE: ExternalOutcome.UNKNOWN,
+    EffectState.RECONCILED_COMMITTED: ExternalOutcome.PROVEN_COMMITTED,
+    EffectState.RECONCILED_NOT_EXECUTED: ExternalOutcome.PROVEN_NOT_EXECUTED,
+}
+
+
+def external_outcome_of(state: EffectState,
+                        recorded: "ExternalOutcome | str | None" = None
+                        ) -> ExternalOutcome:
+    """What is known about the external world for a row in *state*.
+
+    *recorded* is the row's stored ``external_outcome`` and is consulted ONLY
+    where the state leaves the question open, so a stored value can never
+    contradict a state that already settles it — a COMMITTED row cannot be
+    talked into reading PROVEN_NOT_EXECUTED by a column, whoever wrote it.
+
+    An unparseable or absent stored value reads as UNKNOWN. That is the
+    fail-closed direction: it costs a reconciliation, where the opposite costs
+    a duplicated irreversible action.
+    """
+    settled = _STATE_OUTCOME.get(state, ExternalOutcome.UNKNOWN)
+    if settled is not None:
+        return settled
+    if isinstance(recorded, ExternalOutcome):
+        return recorded
+    try:
+        return ExternalOutcome(str(recorded))
+    except ValueError:
+        return ExternalOutcome.UNKNOWN
 
 #: The ONLY edges the journal will write. Anything else raises
 #: InvalidTransition, so a caller cannot invent a path through the machine —
@@ -181,10 +356,30 @@ _ALLOWED_EDGES: frozenset[tuple[EffectState, EffectState]] = frozenset({
     (EffectState.EXECUTING, EffectState.RESERVED),
     (EffectState.INDETERMINATE, EffectState.RECONCILED_COMMITTED),
     (EffectState.INDETERMINATE, EffectState.RECONCILED_NOT_EXECUTED),
+    # M65D round-2 M7: the ORIGINAL owner, back late with the tool's own
+    # receipt, after a concurrent caller classified its lost lease as
+    # INDETERMINATE. A receipt in hand is the strongest evidence there is, and
+    # the compare-and-swap on owner_attempt refuses it if anyone took over.
+    (EffectState.INDETERMINATE, EffectState.COMMITTED),
     (EffectState.INDETERMINATE, EffectState.EXECUTING),     # authorised replay
+    # M65D: the same authorised replay, taken the way every other take-over is
+    # — through RESERVED, so the new attempt gets an owner, an attempt number
+    # and a fresh lease. Guarded by `_take_over`, like the two edges above it.
+    (EffectState.INDETERMINATE, EffectState.RESERVED),
     (EffectState.RECONCILED_NOT_EXECUTED, EffectState.RESERVED),
     (EffectState.FAILED_BEFORE_EFFECT, EffectState.RESERVED),
+    # M65D: this edge SURVIVES but is no longer free. Before M65D it was taken
+    # for any class, on the strength of a handler having returned an error —
+    # the historical duplicate. `_take_over` now refuses it unless
+    # `retry_authority` says the world is known or the class makes a repeat
+    # safe, so the edge existing is not permission to traverse it.
     (EffectState.FAILED_OBSERVED, EffectState.RESERVED),
+    # M65D: a post-boundary failure nobody owns any more, whose external
+    # outcome is UNKNOWN and whose class cannot repeat, is classified so an
+    # operator (or a reconciler) can see it. INDETERMINATE is where uncertainty
+    # already lives; giving it a second home would be a second thing to keep
+    # correct.
+    (EffectState.FAILED_OBSERVED, EffectState.INDETERMINATE),
 })
 # RESERVED -> INDETERMINATE exists for one case only: a reservation whose owner
 # is gone AND whose durability class forbids assuming anything. It is never
@@ -230,6 +425,93 @@ class ReconciliationVerdict(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class RetryAuthority(str, Enum):
+    """What may happen next to an effect identity nobody is currently running.
+
+    The fourth axis. Execution phase, local observation and external-effect
+    knowledge are all FACTS; this is the DECISION taken from them, and keeping
+    it a separate name is what stops "the tool errored" being spelled the same
+    way as "you may run it again".
+    """
+
+    #: The effect is in the world. Deduplicate or recover — never re-run.
+    ALREADY_COMMITTED = "ALREADY_COMMITTED"
+    #: The effect is provably NOT in the world. A fresh attempt is legitimate.
+    SAFE_TO_RETRY = "SAFE_TO_RETRY"
+    #: The outcome is unknown, but the tool's durability contract makes a
+    #: repeat converge (IDEMPOTENT) or be deduplicated remotely under the same
+    #: durable key (IDEMPOTENT_WITH_KEY). Permission comes from the CONTRACT,
+    #: never from the fact that a caller asked twice.
+    REPLAY_SAFE_BY_CONTRACT = "REPLAY_SAFE_BY_CONTRACT"
+    #: The outcome is unknown and the external system can be asked. Ask first.
+    REQUIRES_RECONCILIATION = "REQUIRES_RECONCILIATION"
+    #: The outcome is unknown and nothing available can resolve it. Blocked,
+    #: and blocked is the correct, final, non-degrading answer.
+    BLOCKED_INDETERMINATE = "BLOCKED_INDETERMINATE"
+
+
+def retry_authority(*, state: EffectState,
+                    durability_class: EffectDurabilityClass,
+                    recorded_outcome: "ExternalOutcome | str | None" = None,
+                    verdict: "ReconciliationVerdict | None" = None
+                    ) -> RetryAuthority:
+    """THE retry decision. One function, one table, every caller (§13).
+
+    Pure, total and offline: it reads no clock, touches no database and calls
+    no tool, so the whole truth table can be exercised directly rather than
+    inferred from end-to-end behaviour.
+
+    It answers a question that has ALREADY been narrowed: *given that no live
+    owner holds this identity, what may happen next?* Liveness is a separate,
+    prior question — a leased row is OWNED_ELSEWHERE and never reaches here —
+    and conflating the two would let an unexpired lease read as permission.
+
+    *verdict* is the reconciliation answer if one has been obtained. ``None``
+    means "not asked yet", which is the difference between "go and ask" and
+    "we asked and it could not say".
+    """
+    outcome = external_outcome_of(state, recorded_outcome)
+    if verdict is ReconciliationVerdict.CONFIRMED_COMMITTED:
+        outcome = ExternalOutcome.PROVEN_COMMITTED
+    elif verdict is ReconciliationVerdict.CONFIRMED_NOT_EXECUTED:
+        outcome = ExternalOutcome.PROVEN_NOT_EXECUTED
+
+    # Knowledge first, and in this order. PROVEN_COMMITTED outranks every
+    # durability class: an IDEMPOTENT tool whose effect is proven present has
+    # nothing to gain from a replay, and re-running it would be a second
+    # external call made for no reason.
+    if outcome is ExternalOutcome.PROVEN_COMMITTED:
+        return RetryAuthority.ALREADY_COMMITTED
+    if outcome is ExternalOutcome.PROVEN_NOT_EXECUTED:
+        return RetryAuthority.SAFE_TO_RETRY
+
+    # ── outcome is UNKNOWN: only the durability contract may speak ──────────
+    if durability_class is EffectDurabilityClass.READ_ONLY:
+        # No external effect exists by contract, so there is no ambiguity to
+        # resolve. Kept explicit and kept SEPARATE from the replay classes
+        # (§9): this is not "a replay we decided was safe", it is "there was
+        # never an effect". Read-only tools are not journalled at all, so this
+        # branch is a statement of the contract rather than a live path.
+        return RetryAuthority.SAFE_TO_RETRY
+    if durability_class in _REPLAYABLE_AFTER_AMBIGUITY:
+        return RetryAuthority.REPLAY_SAFE_BY_CONTRACT
+    if durability_class is EffectDurabilityClass.RECONCILABLE:
+        # Asked and unanswered is not the same as unasked. A reconciler that
+        # said UNKNOWN — or that raised, which `reconcile` reports as UNKNOWN —
+        # has been consulted and produced nothing, so asking again in a loop is
+        # not a route out and must not read as one.
+        if verdict is ReconciliationVerdict.UNKNOWN:
+            return RetryAuthority.BLOCKED_INDETERMINATE
+        return RetryAuthority.REQUIRES_RECONCILIATION
+    return RetryAuthority.BLOCKED_INDETERMINATE
+
+
+#: The authorities under which a caller may actually invoke the tool again.
+_MAY_EXECUTE_AGAIN: frozenset[RetryAuthority] = frozenset({
+    RetryAuthority.SAFE_TO_RETRY, RetryAuthority.REPLAY_SAFE_BY_CONTRACT,
+})
+
+
 class ExecutionDisposition(str, Enum):
     """What a call to the effect protocol actually DID (§18).
 
@@ -246,6 +528,14 @@ class ExecutionDisposition(str, Enum):
     RECONCILED_COMMITTED = "RECONCILED_COMMITTED"
     FAILED_BEFORE_EFFECT = "FAILED_BEFORE_EFFECT"
     BLOCKED_INDETERMINATE = "BLOCKED_INDETERMINATE"
+    #: M65D. The three post-boundary failures, which M65C reported to the
+    #: caller as the literal string FAILED_BEFORE_EFFECT — a disposition that
+    #: said the effect had not started about a call that had already crossed
+    #: the boundary. They differ in what is known about the world, and an
+    #: operator needs that difference more than they need a shorter enum.
+    FAILED_OBSERVED_UNKNOWN = "FAILED_OBSERVED_UNKNOWN"
+    FAILED_OBSERVED_NOT_EXECUTED = "FAILED_OBSERVED_NOT_EXECUTED"
+    FAILED_OBSERVED_COMMITTED = "FAILED_OBSERVED_COMMITTED"
     #: A live owner in another process holds the reservation and did not finish
     #: within this caller's bounded wait. Nothing was executed here.
     BLOCKED_OWNED_ELSEWHERE = "BLOCKED_OWNED_ELSEWHERE"
@@ -423,10 +713,27 @@ class EffectRecord:
     receipt_digest: str
     failure_class: str
     recovery_note: str
+    #: M65D. Consulted only where the state leaves the question open — see
+    #: `external_outcome_of`. Bounded enum value; never a message.
+    external_outcome: str = ExternalOutcome.UNKNOWN.value
+    #: M65D. The bounded reason code of the typed evidence that set the field
+    #: above, or "". Validated on the way in by `EffectOutcomeEvidence`.
+    outcome_evidence: str = ""
+
+    @property
+    def external_effect(self) -> ExternalOutcome:
+        """What is KNOWN about the world for this row (§7C)."""
+        return external_outcome_of(self.state, self.external_outcome)
 
     @property
     def proven_committed(self) -> bool:
-        return self.state in _PROVEN_COMMITTED
+        """Whether the effect is proven to be in the external world.
+
+        Derived from the KNOWLEDGE axis, not from the state list, so a
+        post-boundary failure carrying typed committed evidence is recognised
+        as committed rather than as a state that happens not to be in a set.
+        """
+        return self.external_effect is ExternalOutcome.PROVEN_COMMITTED
 
     def to_dict(self) -> dict:
         return {
@@ -444,6 +751,8 @@ class EffectRecord:
             "receipt_digest": self.receipt_digest,
             "failure_class": self.failure_class,
             "recovery_note": self.recovery_note,
+            "external_outcome": self.external_effect.value,
+            "outcome_evidence": self.outcome_evidence,
         }
 
 
@@ -493,7 +802,9 @@ _SCHEMA: tuple[str, ...] = (
     committed_at            TEXT NOT NULL DEFAULT '',
     receipt_digest          TEXT NOT NULL DEFAULT '',
     failure_class           TEXT NOT NULL DEFAULT '',
-    recovery_note           TEXT NOT NULL DEFAULT ''
+    recovery_note           TEXT NOT NULL DEFAULT '',
+    external_outcome        TEXT NOT NULL DEFAULT 'UNKNOWN',
+    outcome_evidence        TEXT NOT NULL DEFAULT ''
 )""",
     """CREATE INDEX IF NOT EXISTS idx_effects_state ON effects(state)""",
     """CREATE TABLE IF NOT EXISTS transitions (
@@ -515,7 +826,7 @@ _COLUMNS = (
     "authority_digest, scope_digest, approval_digest, plan_id, task_id, "
     "idempotency_key, reservation_created_at, lease_expires_at, "
     "state_changed_at, committed_at, receipt_digest, failure_class, "
-    "recovery_note"
+    "recovery_note, external_outcome, outcome_evidence"
 )
 
 #: Every statement this module runs, named and finished at import time.
@@ -531,7 +842,8 @@ _SELECT_EFFECT = (
     "canonical_args_digest, authority_digest, scope_digest, "
     "approval_digest, plan_id, task_id, idempotency_key, "
     "reservation_created_at, lease_expires_at, state_changed_at, "
-    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "committed_at, receipt_digest, failure_class, recovery_note, "
+    "external_outcome, outcome_evidence FROM "
     "effects WHERE effect_id=?"
 )
 _SELECT_OPEN_EFFECTS = (
@@ -540,7 +852,8 @@ _SELECT_OPEN_EFFECTS = (
     "canonical_args_digest, authority_digest, scope_digest, "
     "approval_digest, plan_id, task_id, idempotency_key, "
     "reservation_created_at, lease_expires_at, state_changed_at, "
-    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "committed_at, receipt_digest, failure_class, recovery_note, "
+    "external_outcome, outcome_evidence FROM "
     "effects WHERE state IN (?,?) ORDER BY state_changed_at LIMIT ?"
 )
 _SELECT_BY_STATE = (
@@ -549,13 +862,20 @@ _SELECT_BY_STATE = (
     "canonical_args_digest, authority_digest, scope_digest, "
     "approval_digest, plan_id, task_id, idempotency_key, "
     "reservation_created_at, lease_expires_at, state_changed_at, "
-    "committed_at, receipt_digest, failure_class, recovery_note FROM "
+    "committed_at, receipt_digest, failure_class, recovery_note, "
+    "external_outcome, outcome_evidence FROM "
     "effects WHERE state=? ORDER BY state_changed_at LIMIT ?"
 )
+#: M65D adds two columns and the same "empty parameter keeps the stored value"
+#: idiom the committed_at/receipt_digest pair already used, so a transition that
+#: says nothing about the external world cannot silently erase what an earlier
+#: one proved.
 _TRANSITION_SET = (
     "UPDATE effects SET state=?, state_changed_at=?, failure_class=?, "
     "recovery_note=?, committed_at=CASE WHEN ?='' THEN committed_at ELSE ? END, "
-    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END "
+    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END, "
+    "external_outcome=CASE WHEN ?='' THEN external_outcome ELSE ? END, "
+    "outcome_evidence=CASE WHEN ?='' THEN outcome_evidence ELSE ? END "
     "WHERE effect_id=? AND state=? AND owner_attempt=?"
 )
 #: The same UPDATE, additionally guarded on the owner. Two finished statements
@@ -563,8 +883,33 @@ _TRANSITION_SET = (
 _TRANSITION_SET_OWNED = (
     "UPDATE effects SET state=?, state_changed_at=?, failure_class=?, "
     "recovery_note=?, committed_at=CASE WHEN ?='' THEN committed_at ELSE ? END, "
-    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END "
+    "receipt_digest=CASE WHEN ?='' THEN receipt_digest ELSE ? END, "
+    "external_outcome=CASE WHEN ?='' THEN external_outcome ELSE ? END, "
+    "outcome_evidence=CASE WHEN ?='' THEN outcome_evidence ELSE ? END "
     "WHERE effect_id=? AND state=? AND owner_attempt=? AND owner_instance_id=?"
+)
+#: M65D. Bounded operator triage: post-boundary failures whose external outcome
+#: is unknown AND whose class cannot repeat. Static text, bound parameters.
+#: M65D — NOT `external_outcome='UNKNOWN'`. `external_outcome_of` maps anything
+#: unparseable to UNKNOWN, so a row holding 'unknown' or '' or a typo BLOCKS
+#: correctly and was invisible to this count: the reader failed closed and the
+#: counter failed open, and the doctor reported "nothing to do" about an effect
+#: that needed a human. Asking for "not one of the two certainties" makes the
+#: two agree by construction.
+_COUNT_UNCERTAIN_OBSERVED = (
+    "SELECT COUNT(*) AS n FROM effects WHERE state=? AND external_outcome NOT IN (?,?) "
+    "AND durability_class NOT IN (?,?)"
+)
+_SELECT_UNCERTAIN_OBSERVED = (
+    "SELECT effect_id, tool_id, surface, durability_class, state, "
+    "owner_instance_id, owner_attempt, canonical_action_digest, "
+    "canonical_args_digest, authority_digest, scope_digest, "
+    "approval_digest, plan_id, task_id, idempotency_key, "
+    "reservation_created_at, lease_expires_at, state_changed_at, "
+    "committed_at, receipt_digest, failure_class, recovery_note, "
+    "external_outcome, outcome_evidence FROM "
+    "effects WHERE state=? AND external_outcome NOT IN (?,?) "
+    "AND durability_class NOT IN (?,?) ORDER BY state_changed_at LIMIT ?"
 )
 #: Structural probes, one per table, so no table name is ever interpolated.
 _TABLE_PROBES = (
@@ -779,9 +1124,10 @@ class DurableEffectJournal:
     def _migrate(self, frm: int, to: int) -> None:
         """Forward-only, deterministic, bounded (§21).
 
-        v1 is the baseline, so there is no step to run yet. A future version
-        adds an explicit, ordered step here; there is deliberately no generic
-        "recreate the table" path, because the destructive repair is the bug.
+        Each step is an entry in `_MIGRATIONS`, applied in order, each in its
+        own transaction with its own version bump. A missing step raises rather
+        than guessing: there is deliberately no generic "recreate the table"
+        path, because the destructive repair is the bug.
         """
         applied = 0
         for step in range(frm, to):
@@ -894,7 +1240,9 @@ class DurableEffectJournal:
             committed_at=row["committed_at"],
             receipt_digest=row["receipt_digest"],
             failure_class=row["failure_class"],
-            recovery_note=row["recovery_note"])
+            recovery_note=row["recovery_note"],
+            external_outcome=row["external_outcome"],
+            outcome_evidence=row["outcome_evidence"])
 
     def get(self, effect_id: str) -> "EffectRecord | None":
         row = self._db.execute(
@@ -1016,6 +1364,15 @@ class DurableEffectJournal:
             except (sqlite3.Error, InvalidTransition):
                 self._rollback_quietly()
                 raise
+            except ValueError as exc:
+                # Round-2 m1: an unparseable enum in one row raised past this
+                # block with BEGIN IMMEDIATE still open, wedging this process
+                # and locking the file for every other one. It is a corrupt
+                # journal and is reported as one.
+                self._rollback_quietly()
+                raise JournalUnhealthy(
+                    f"effect {effect_id[:12]} holds an unreadable value: "
+                    f"{type(exc).__name__}") from exc
         return outcome
 
     def _resolve_existing(self, existing: EffectRecord, now: datetime,
@@ -1030,26 +1387,57 @@ class DurableEffectJournal:
         eid = existing.effect_id
 
         # P4/P5 — the effect is proven done. Recovery, never re-execution.
-        if state in _PROVEN_COMMITTED:
+        # Asked of the KNOWLEDGE axis rather than of a list of states, so a
+        # post-boundary failure carrying typed committed evidence lands here
+        # too instead of falling through to a retry branch.
+        if existing.external_effect is ExternalOutcome.PROVEN_COMMITTED:
             self._bump("durable_dedupe_hits")
             return Reservation(ReservationOutcome.ALREADY_COMMITTED, existing, False)
 
-        # Already resolved as never-having-happened: a fresh attempt is
-        # legitimate and takes ownership again.
+        # Proven never to have happened: a fresh attempt is legitimate and
+        # takes ownership again. M65D removed FAILED_OBSERVED from this list —
+        # that grouping, under a note calling it "a non-effect outcome", is the
+        # exact line that let one NON_REPLAYABLE effect run twice.
         if state in (EffectState.FAILED_BEFORE_EFFECT,
-                     EffectState.FAILED_OBSERVED,
                      EffectState.RECONCILED_NOT_EXECUTED):
             return self._take_over(existing, state, now_iso, lease_iso,
                                    approval_digest, authority_digest,
                                    scope_digest, ReservationOutcome.OWNED,
-                                   "retry after a non-effect outcome")
+                                   "retry after a proven pre-effect outcome")
+
+        # M65D — a failure THIS-or-another process observed after the boundary.
+        # Nobody owns it; the local observation is settled and the external
+        # world is not. What happens next is decided by `retry_authority` and
+        # by nothing else on this branch.
+        if state is EffectState.FAILED_OBSERVED:
+            return self._resolve_observed_failure(
+                existing, now_iso, lease_iso, approval_digest,
+                authority_digest, scope_digest)
 
         # The P2/P3 window, already classified by someone. Blocked until
         # reconciliation says otherwise — a caller asking again is not evidence.
         if state is EffectState.INDETERMINATE:
+            # M65D — ASK, do not branch on the class by hand. This read the
+            # durability class directly and returned "blocked" for every class,
+            # which is a second retry policy: `retry_authority` says an
+            # IDEMPOTENT row whose outcome is unknown is REPLAY_SAFE_BY_CONTRACT,
+            # and the `INDETERMINATE -> EXECUTING` edge is annotated "authorised
+            # replay" — so the only production IDEMPOTENT tool was permanently
+            # stuck after a cancellation. Safe-direction, and still exactly the
+            # "two policies" shape this milestone exists to remove.
+            authority = retry_authority(
+                state=state, durability_class=existing.durability_class,
+                recorded_outcome=existing.external_outcome)
+            if authority is RetryAuthority.REPLAY_SAFE_BY_CONTRACT:
+                self._bump("replay_permitted_by_contract")
+                return self._take_over(existing, state, now_iso, lease_iso,
+                                       approval_digest, authority_digest,
+                                       scope_digest, ReservationOutcome.RECLAIMED,
+                                       f"replay permitted: "
+                                       f"{existing.durability_class.value}")
             self._bump("indeterminate_blocked")
             outcome = (ReservationOutcome.RECONCILE_REQUIRED
-                       if existing.durability_class is EffectDurabilityClass.RECONCILABLE
+                       if authority is RetryAuthority.REQUIRES_RECONCILIATION
                        else ReservationOutcome.INDETERMINATE)
             return Reservation(outcome, existing, False)
 
@@ -1076,10 +1464,17 @@ class DurableEffectJournal:
         # the effect landed". An expired lease is therefore never, on its own,
         # permission to run the tool again (§11/§39).
         self._bump("stale_executing_owners")
-        if existing.durability_class in _REPLAYABLE_AFTER_AMBIGUITY:
+        authority = retry_authority(
+            state=state, durability_class=existing.durability_class,
+            recorded_outcome=existing.external_outcome)
+        if authority is RetryAuthority.REPLAY_SAFE_BY_CONTRACT:
             # IDEMPOTENT converges; IDEMPOTENT_WITH_KEY replays under the SAME
             # derived key and is deduplicated by the external system. Both are
-            # safe to re-run, and both keep the identity's key stable.
+            # safe to re-run, and both keep the identity's key stable. The
+            # permission comes from `retry_authority`, which is also what the
+            # observed-failure branch and `_take_over`'s guard consult — one
+            # table, so the two ambiguous paths cannot drift apart.
+            self._bump("replay_permitted_by_contract")
             return self._take_over(existing, state, now_iso, lease_iso,
                                    approval_digest, authority_digest,
                                    scope_digest, ReservationOutcome.RECLAIMED,
@@ -1102,6 +1497,67 @@ class DurableEffectJournal:
                    else ReservationOutcome.INDETERMINATE)
         return Reservation(outcome, updated, False)
 
+    def _resolve_observed_failure(self, existing: EffectRecord, now_iso: str,
+                                  lease_iso: str, approval_digest: str,
+                                  authority_digest: str,
+                                  scope_digest: str) -> Reservation:
+        """What a FAILED_OBSERVED row means for the next caller (§11).
+
+        THE M65D branch. Before this milestone the answer was "run it again",
+        unconditionally, because the state sat in a tuple next to two states
+        that really are proven pre-effect. The answer is now taken from
+        `retry_authority`, which reads the row's external-outcome knowledge and
+        the tool's durability contract and nothing else — not the failure
+        class, not how the handler failed, not how many times a caller has
+        asked.
+
+        Runs inside the caller's write transaction.
+        """
+        authority = retry_authority(
+            state=EffectState.FAILED_OBSERVED,
+            durability_class=existing.durability_class,
+            recorded_outcome=existing.external_outcome)
+
+        if authority is RetryAuthority.SAFE_TO_RETRY:
+            # Typed evidence proved the external system applied nothing. This
+            # is the ONLY way a post-boundary failure becomes retryable without
+            # a durability contract, and it cannot be reached from an exception
+            # type or a message — see `EffectOutcomeEvidence`.
+            self._bump("failed_observed_retry_proven_safe")
+            return self._take_over(existing, EffectState.FAILED_OBSERVED,
+                                   now_iso, lease_iso, approval_digest,
+                                   authority_digest, scope_digest,
+                                   ReservationOutcome.OWNED,
+                                   "retry after typed proven-no-effect evidence")
+
+        if authority is RetryAuthority.REPLAY_SAFE_BY_CONTRACT:
+            self._bump("replay_permitted_by_contract")
+            self._bump("failed_observed_replayed_by_contract")
+            return self._take_over(existing, EffectState.FAILED_OBSERVED,
+                                   now_iso, lease_iso, approval_digest,
+                                   authority_digest, scope_digest,
+                                   ReservationOutcome.RECLAIMED,
+                                   f"replay permitted: "
+                                   f"{existing.durability_class.value}")
+
+        # REQUIRES_RECONCILIATION or BLOCKED_INDETERMINATE. The outcome is
+        # unknown and no contract makes a repeat safe, so the row moves to the
+        # state uncertainty already lives in — which is also where the
+        # reconciliation machinery and the operator inspection paths look.
+        self._transition_locked(
+            existing, EffectState.INDETERMINATE, now_iso,
+            failure_class="observed_failure_unknown_outcome",
+            recovery_note=("a local failure was observed after the effect "
+                           "boundary; the external outcome is unknown"))
+        self._bump("indeterminate_effects")
+        self._bump("failed_observed_blocked")
+        updated = self._row_to_record(self._db.execute(
+            _SELECT_EFFECT, (existing.effect_id,)).fetchone())
+        outcome = (ReservationOutcome.RECONCILE_REQUIRED
+                   if authority is RetryAuthority.REQUIRES_RECONCILIATION
+                   else ReservationOutcome.INDETERMINATE)
+        return Reservation(outcome, updated, False)
+
     def _take_over(self, existing: EffectRecord, frm: EffectState, now_iso: str,
                    lease_iso: str, approval_digest: str, authority_digest: str,
                    scope_digest: str, outcome: ReservationOutcome,
@@ -1116,20 +1572,33 @@ class DurableEffectJournal:
         attempt's, never inherited. A durable row must not be able to lend a
         later attempt an approval it did not obtain (§43/§44).
         """
-        if (frm is EffectState.EXECUTING
-                and existing.durability_class not in _REPLAYABLE_AFTER_AMBIGUITY):
-            # Defence in depth against a future caller reaching this helper by a
-            # path that skipped the class check. Taking over an EXECUTING row is
-            # re-running an effect whose occurrence is unknown; only a class that
-            # is safe to repeat may do it (§12/§39).
+        # Defence in depth against a future caller reaching this helper by a
+        # path that skipped the decision. Taking over a row whose external
+        # outcome is UNKNOWN is re-running an effect that may already exist;
+        # only an authority that says the world is known, or a class whose
+        # contract makes a repeat safe, may do it (§12/§39).
+        #
+        # M65D widened this from `frm is EXECUTING` to the authority itself.
+        # The old shape is exactly why the historical duplicate got through:
+        # the caller arrived with frm=FAILED_OBSERVED, the comparison did not
+        # fire, and a NON_REPLAYABLE effect was handed back as OWNED.
+        authority = retry_authority(
+            state=frm, durability_class=existing.durability_class,
+            recorded_outcome=existing.external_outcome)
+        if authority not in _MAY_EXECUTE_AGAIN:
             raise InvalidTransition(
-                f"refusing to reclaim an EXECUTING "
-                f"{existing.durability_class.value} effect: its outcome is "
-                f"unknown and a replay could duplicate it")
+                f"refusing to reclaim a {frm.value} "
+                f"{existing.durability_class.value} effect: retry authority is "
+                f"{authority.value} and a replay could duplicate it")
+        # M65D adds external_outcome/outcome_evidence to the reset, for the
+        # same reason the approval and authority digests were already reset: a
+        # durable row must not be able to lend a later attempt a fact it did
+        # not establish. The new attempt starts knowing nothing about the world.
         cur = self._db.execute(
             "UPDATE effects SET owner_instance_id=?, owner_attempt=owner_attempt+1, "
             "state=?, lease_expires_at=?, state_changed_at=?, failure_class='', "
-            "recovery_note=?, approval_digest=?, authority_digest=?, scope_digest=? "
+            "recovery_note=?, approval_digest=?, authority_digest=?, scope_digest=?, "
+            "external_outcome='UNKNOWN', outcome_evidence='' "
             "WHERE effect_id=? AND state=? AND owner_attempt=?",
             (self._instance_id, EffectState.RESERVED.value, lease_iso, now_iso,
              note[:200], approval_digest, authority_digest, scope_digest,
@@ -1156,7 +1625,9 @@ class DurableEffectJournal:
                            now_iso: str, *, failure_class: str = "",
                            recovery_note: str = "", committed_at: str = "",
                            receipt: str = "", expect_owner: "str | None" = None,
-                           note: str = "") -> bool:
+                           note: str = "",
+                           evidence: "EffectOutcomeEvidence | None" = None
+                           ) -> bool:
         """Move *existing* to *to*. Caller holds the write transaction.
 
         ``expect_owner`` guards the update so a process that has since LOST
@@ -1177,9 +1648,15 @@ class DurableEffectJournal:
         # clauses. The compare-and-swap on state and owner_attempt is what makes
         # this safe if the write transaction is ever downgraded, so it is part of
         # the statement text rather than something a future edit can drop.
+        # M65D. Evidence is written only when a typed one was supplied; an
+        # empty pair leaves whatever the row already held, so an ordinary
+        # transition can never quietly downgrade a proven outcome to UNKNOWN.
+        outcome = evidence.outcome.value if evidence is not None else ""
+        reason = evidence.reason_code if evidence is not None else ""
         params: list = [
             to.value, now_iso, failure_class[:80], recovery_note[:200],
             committed_at, committed_at, receipt, receipt,
+            outcome, outcome, reason, reason,
             existing.effect_id, existing.state.value, existing.owner_attempt,
         ]
         statement = _TRANSITION_SET
@@ -1198,7 +1675,9 @@ class DurableEffectJournal:
     def _apply(self, effect_id: str, to: EffectState, *, expect_owner: "str | None",
                failure_class: str = "", recovery_note: str = "",
                receipt: str = "", stamp_committed: bool = False,
-               note: str = "") -> bool:
+               note: str = "",
+               evidence: "EffectOutcomeEvidence | None" = None,
+               expect_attempt: "int | None" = None) -> bool:
         """Open a short write transaction and apply one transition."""
         now_iso = _iso(self._clock())
         with self._lock:
@@ -1217,6 +1696,13 @@ class DurableEffectJournal:
                     self._db.execute("ROLLBACK")
                     return False
                 existing = self._row_to_record(row)
+                if (expect_attempt is not None
+                        and existing.owner_attempt != expect_attempt):
+                    # The row moved on since the caller read it. Whatever the
+                    # caller knows is about an earlier attempt (M2).
+                    self._db.execute("ROLLBACK")
+                    self._bump("stale_attempt_writes")
+                    return False
                 if (expect_owner is not None
                         and existing.owner_instance_id != expect_owner):
                     # This caller has LOST the reservation — another process
@@ -1233,7 +1719,8 @@ class DurableEffectJournal:
                     existing, to, now_iso, failure_class=failure_class,
                     recovery_note=recovery_note,
                     committed_at=now_iso if stamp_committed else "",
-                    receipt=receipt, expect_owner=expect_owner, note=note)
+                    receipt=receipt, expect_owner=expect_owner, note=note,
+                    evidence=evidence)
                 self._db.execute("COMMIT" if ok else "ROLLBACK")
                 return ok
             except (sqlite3.Error, InvalidTransition):
@@ -1290,21 +1777,40 @@ class DurableEffectJournal:
             self._bump("failed_before_effect")
         return applied
 
-    def fail_observed(self, effect_id: str, failure_class: str) -> bool:
-        """EXECUTING -> FAILED_OBSERVED: the call returned an error and we saw it.
+    def fail_observed(self, effect_id: str, failure_class: str, *,
+                      evidence: "EffectOutcomeEvidence | None" = None) -> bool:
+        """EXECUTING -> FAILED_OBSERVED: the call failed and we saw it fail.
 
-        NOT the same as FAILED_BEFORE_EFFECT and NOT the same as INDETERMINATE.
-        The retry policy attached to this state is inherited unchanged from
-        M64.1 and is a named limitation, not a proof — see the milestone
-        document.
+        Records a fact about the SOFTWARE. What it records about the WORLD is
+        *evidence*, and the default — no evidence — is
+        :attr:`ExternalOutcome.UNKNOWN`, because a local error after the
+        boundary is consistent with the effect having landed and the response
+        having been lost.
+
+        M65D changed the meaning of this call, not its name. Under M65C the
+        state carried M64.1's retry policy and the next caller for the identity
+        was handed ownership; it now carries an explicit outcome, and what
+        happens next is `retry_authority`'s answer.
+
+        *evidence* must be an :class:`EffectOutcomeEvidence` built by the
+        tool's own in-process adapter. Nothing in this module derives one from
+        an exception type, a status code or a message (§10).
         """
+        if evidence is not None and not isinstance(evidence, EffectOutcomeEvidence):
+            raise TypeError(f"{evidence!r} is not an EffectOutcomeEvidence")
+        outcome = (evidence.outcome if evidence is not None
+                   else ExternalOutcome.UNKNOWN)
         applied = self._apply(effect_id, EffectState.FAILED_OBSERVED,
                               expect_owner=self._instance_id,
                               failure_class=failure_class,
-                              recovery_note="the tool returned an error to a live caller",
-                              note="observed failure")
+                              recovery_note=(
+                                  "a local failure was observed after the "
+                                  f"effect boundary; external outcome "
+                                  f"{outcome.value}"),
+                              note="observed failure", evidence=evidence)
         if applied:
             self._bump("failed_observed")
+            self._bump(f"failed_observed_{outcome.value.lower()}")
         return applied
 
     def mark_indeterminate(self, effect_id: str, reason: str,
@@ -1319,7 +1825,8 @@ class DurableEffectJournal:
         return applied
 
     def apply_reconciliation(self, effect_id: str,
-                             verdict: ReconciliationVerdict) -> bool:
+                             verdict: ReconciliationVerdict, *,
+                             expect_attempt: "int | None" = None) -> bool:
         """Record a reconciliation answer (§15).
 
         ``UNKNOWN`` writes nothing and returns False: uncertainty is not an
@@ -1332,11 +1839,21 @@ class DurableEffectJournal:
         target = (EffectState.RECONCILED_COMMITTED
                   if verdict is ReconciliationVerdict.CONFIRMED_COMMITTED
                   else EffectState.RECONCILED_NOT_EXECUTED)
+        # Round-2 M2. A probe answers about the attempt it was asked about. The
+        # M65D timeout bounds HOW LONG it may take, not WHICH attempt it is
+        # about: a slow probe that truthfully read "not executed" for attempt 1
+        # returned after attempt 2 had taken over and landed, and its answer
+        # was written against attempt 2 — one RECONCILABLE effect, two external
+        # effects. `expect_attempt` is the attempt the caller read when it
+        # asked; a row whose attempt has moved rejects the verdict as stale.
         applied = self._apply(
             effect_id, target, expect_owner=None,
+            expect_attempt=expect_attempt,
             recovery_note=f"reconciliation said {verdict.value}",
             stamp_committed=(verdict is ReconciliationVerdict.CONFIRMED_COMMITTED),
             note="reconciled")
+        if not applied and expect_attempt is not None:
+            self._bump("reconciliations_stale")
         if applied:
             self._bump("reconciliations")
         return applied
@@ -1382,6 +1899,25 @@ class DurableEffectJournal:
             (EffectState.INDETERMINATE.value, limit))
         return [self._row_to_record(r) for r in rows]
 
+    def uncertain_observed_failures(self, *, limit: int = MAX_STARTUP_SCAN
+                                    ) -> list[EffectRecord]:
+        """M65D. Post-boundary failures nothing can currently resolve.
+
+        Rows in FAILED_OBSERVED whose external outcome is UNKNOWN and whose
+        class cannot repeat. Under M65C these were invisible — they read as
+        ordinary finished failures and the next caller silently re-ran them —
+        so an operator had no surface on which to see the thing that most needs
+        a human. Read-only and bounded; this never transitions anything.
+        """
+        rows = self._db.execute(
+            _SELECT_UNCERTAIN_OBSERVED,
+            (EffectState.FAILED_OBSERVED.value,
+             ExternalOutcome.PROVEN_COMMITTED.value,
+             ExternalOutcome.PROVEN_NOT_EXECUTED.value,
+             EffectDurabilityClass.IDEMPOTENT.value,
+             EffectDurabilityClass.IDEMPOTENT_WITH_KEY.value, limit))
+        return [self._row_to_record(r) for r in rows]
+
     def startup_recovery(self, *, limit: int = MAX_STARTUP_SCAN) -> dict:
         """Classify what a previous process left behind. CLASSIFY, never run (§49).
 
@@ -1394,6 +1930,12 @@ class DurableEffectJournal:
             "scanned": 0, "reclaimable_pre_effect": 0,
             "classified_indeterminate": 0, "already_indeterminate": 0,
             "replayable_pending": 0, "truncated": False,
+            # M65D. Rows a previous process left in FAILED_OBSERVED with an
+            # unknown external outcome. Counted, never executed and never
+            # transitioned here: classification happens when a caller actually
+            # asks for the identity again, so a boot cannot change the meaning
+            # of a row nobody is asking about.
+            "uncertain_observed": 0,
         }
         try:
             stale = self.stale_reservations(limit=limit)
@@ -1420,6 +1962,13 @@ class DurableEffectJournal:
                 report["classified_indeterminate"] += 1
         report["already_indeterminate"] = len(
             self.indeterminate_effects(limit=limit))
+        try:
+            report["uncertain_observed"] = len(
+                self.uncertain_observed_failures(limit=limit))
+        except sqlite3.Error as exc:
+            raise JournalUnhealthy(
+                f"startup recovery could not read observed failures: "
+                f"{type(exc).__name__}") from exc
         return report
 
     def status(self) -> dict:
@@ -1446,6 +1995,18 @@ class DurableEffectJournal:
         out["reserved"] = by_state.get(EffectState.RESERVED.value, 0)
         out["executing"] = by_state.get(EffectState.EXECUTING.value, 0)
         out["indeterminate"] = by_state.get(EffectState.INDETERMINATE.value, 0)
+        out["failed_observed"] = by_state.get(EffectState.FAILED_OBSERVED.value, 0)
+        try:
+            row = self._db.execute(
+                _COUNT_UNCERTAIN_OBSERVED,
+                (EffectState.FAILED_OBSERVED.value,
+                 ExternalOutcome.PROVEN_COMMITTED.value,
+                 ExternalOutcome.PROVEN_NOT_EXECUTED.value,
+                 EffectDurabilityClass.IDEMPOTENT.value,
+                 EffectDurabilityClass.IDEMPOTENT_WITH_KEY.value)).fetchone()
+            out["uncertain_observed"] = int(row["n"]) if row else 0
+        except sqlite3.Error:
+            out["uncertain_observed"] = -1
         try:
             out["stale_reservations"] = len(self.stale_reservations())
         except sqlite3.Error:
@@ -1453,7 +2014,12 @@ class DurableEffectJournal:
         integrity = self.integrity_check()
         out["integrity"] = integrity
         out["healthy"] = integrity == "ok"
-        out["recovery_required"] = out["indeterminate"] > 0
+        # M65D. An uncertain post-boundary failure is a task for a human in
+        # exactly the way an INDETERMINATE row is, so it counts here too —
+        # otherwise the doctor would report "nothing to do" about the state
+        # this milestone exists to make visible.
+        out["recovery_required"] = (out["indeterminate"] > 0
+                                    or out["uncertain_observed"] > 0)
         try:
             db_bytes = self._path.stat().st_size if self._path.exists() else 0
             for suffix in ("-wal", "-shm"):
@@ -1467,10 +2033,35 @@ class DurableEffectJournal:
         return out
 
 
-#: Ordered, explicit migration steps: key N upgrades schema vN -> v(N+1). v1 is
-#: the baseline so this is empty; a future version adds a step rather than a
-#: "drop and recreate", which would silently discard committed identities.
-_MIGRATIONS: dict = {}
+def _migrate_v1_to_v2(db) -> None:
+    """M65C -> M65D. Add the external-outcome axis. Forward-only, in place.
+
+    Two ``ADD COLUMN``s and nothing else. No row is rewritten, no row is
+    deleted, the ``transitions`` audit is untouched, and every pre-existing row
+    lands on the constant default ``UNKNOWN``.
+
+    That default is the entire safety argument for the upgrade. A journal
+    written by M65C contains ``FAILED_OBSERVED`` rows recorded under semantics
+    that treated them as proven harmless; after this step they read as
+    "post-boundary failure, external outcome unknown", which for a
+    NON_REPLAYABLE tool is a block. The migration therefore makes historical
+    rows MORE conservative, never less, and it does it without needing to know
+    anything about them — which is what makes it safe to run against a journal
+    this code has never seen.
+
+    Runs inside the ``BEGIN IMMEDIATE`` its caller opened, so a failure rolls
+    back with the version bump rather than leaving a half-migrated file.
+    """
+    db.execute("ALTER TABLE effects ADD COLUMN external_outcome "
+               "TEXT NOT NULL DEFAULT 'UNKNOWN'")
+    db.execute("ALTER TABLE effects ADD COLUMN outcome_evidence "
+               "TEXT NOT NULL DEFAULT ''")
+
+
+#: Ordered, explicit migration steps: key N upgrades schema vN -> v(N+1).
+#: There is deliberately no generic "recreate the table" path: the destructive
+#: repair is the bug, because the committed identities ARE the protection.
+_MIGRATIONS: dict = {1: _migrate_v1_to_v2}
 
 
 # ── per-tool durability policy (§13) ────────────────────────────────────────
@@ -1495,6 +2086,97 @@ _TOOL_DURABILITY: dict[str, EffectDurabilityClass] = {
 #: Runtime registrations (tests, plugins). Separate from the audited table so a
 #: registration can never silently rewrite an audited classification.
 _REGISTERED_DURABILITY: dict[str, EffectDurabilityClass] = {}
+
+# ── per-tool identity normalisation (M65D, red team round 2 B1) ─────────────
+#: The identity is the EFFECTIVE call: override stripped, defaults bound. That
+#: closes the STRUCTURAL split (D58). It cannot close the VALUE split, because
+#: whether ``"post"`` and ``"POST"`` are one request is a fact about the
+#: handler, not about the dict: `_tool_http_request` upper-cases the method,
+#: `_tool_project_note` lower-cases the kind, and neither fact is visible from
+#: outside. Measured: five spellings of one POST, five POSTs on the wire, each
+#: individually "blocked".
+#:
+#: So a tool may DECLARE its own equivalence, exactly as it declares its
+#: durability class, and under the same rule: only with proof from the
+#: handler's own code, because the failure direction of a WRONG normaliser is a
+#: real second effect SUPPRESSED — worse than the duplicate it prevents.
+#:
+#: Each entry below cites the line that proves it. A normaliser receives the
+#: bound call and returns the call the handler will behave as if it received;
+#: it must never add, drop or reorder semantics it cannot point at.
+def _normalise_http_request(call: dict) -> dict:
+    """`_tool_http_request`: ``method = method.upper()``; ``headers or {}``.
+
+    Only those two. ``timeout`` is NOT normalised: it is passed to the client
+    and changes what JARVIS does locally, so a 1 s and a 30 s request are
+    different requests even though neither value reaches the remote.
+    """
+    out = dict(call)
+    if isinstance(out.get("method"), str):
+        out["method"] = out["method"].upper()
+    if out.get("headers") is None:
+        out["headers"] = {}
+    return out
+
+
+def _normalise_project_note(call: dict) -> dict:
+    """`_tool_project_note`: ``kind = (kind or "").strip().lower()``."""
+    out = dict(call)
+    if isinstance(out.get("kind"), str):
+        out["kind"] = out["kind"].strip().lower()
+    return out
+
+
+def _normalise_save_note(call: dict) -> dict:
+    """`_tool_save_note`: ``if tags`` — ``None`` and ``[]`` produce no tag line."""
+    out = dict(call)
+    if out.get("tags") is None:
+        out["tags"] = []
+    return out
+
+
+#: Audited against the handlers named. Everything absent is NOT normalised and
+#: two value spellings stay two identities — the direction that costs a
+#: duplicate rather than a suppression, and for every HIGH_IMPACT tool a human
+#: approves each of them.
+_TOOL_IDENTITY_NORMALISER: dict = {
+    "http_request": _normalise_http_request,
+    "project_note": _normalise_project_note,
+    "save_note": _normalise_save_note,
+}
+
+#: Runtime registrations (tests, plugins), kept apart from the audited table.
+_REGISTERED_NORMALISERS: dict = {}
+
+
+def register_identity_normaliser(tool_id: str, fn) -> None:
+    """Declare how *tool_id* collapses value spellings for identity purposes.
+
+    A contract, not a heuristic: it is consulted for identity ONLY, the handler
+    still receives the caller's own arguments, and an exception inside it
+    leaves the identity untouched rather than guessing.
+    """
+    if not callable(fn):
+        raise TypeError(f"{fn!r} is not callable")
+    _REGISTERED_NORMALISERS[tool_id] = fn
+
+
+def unregister_identity_normaliser(tool_id: str) -> None:
+    _REGISTERED_NORMALISERS.pop(tool_id, None)
+
+
+def normalise_identity(tool_id: str, call: dict) -> dict:
+    """Apply *tool_id*'s declared equivalence to a bound call, if it has one."""
+    fn = _REGISTERED_NORMALISERS.get(tool_id) or _TOOL_IDENTITY_NORMALISER.get(tool_id)
+    if fn is None or not isinstance(call, dict):
+        return call
+    try:
+        out = fn(dict(call))
+    except Exception as exc:  # noqa: BLE001 — a broken contract normalises nothing
+        logger.warning(f"EFFECT_JOURNAL: identity normaliser for '{tool_id}' raised "
+                       f"{type(exc).__name__}; identity left as bound")
+        return call
+    return out if isinstance(out, dict) else call
 
 #: Reconciliation probes for RECONCILABLE tools, by tool id.
 _RECONCILERS: dict = {}
@@ -1557,36 +2239,45 @@ def reconcile(tool_id: str, effect_id: str, idempotency_key: str) -> Reconciliat
     return ReconciliationVerdict.UNKNOWN
 
 
-def may_auto_retry(state: EffectState, cls: EffectDurabilityClass) -> bool:
+def may_auto_retry(state: EffectState, cls: EffectDurabilityClass,
+                   recorded_outcome: "ExternalOutcome | str | None" = None) -> bool:
     """Whether an automatic retry is permitted for a *state*/*class* pair (§12).
+
+    A thin reading of :func:`retry_authority`, and deliberately not a second
+    copy of the table. Under M65C this function already answered ``False`` for
+    FAILED_OBSERVED while the reservation path handed the same row straight
+    back to the caller — the module carried two policies and the live one was
+    the unsound one. There is now one.
 
     INDETERMINATE is not a synonym for SAFE_TO_RETRY. A retry is allowed only
     where the effect is proven not to have started, or the class makes a repeat
     safe on its own terms. RECONCILABLE is deliberately excluded: its route out
     of ambiguity is a reconciliation answer, not a retry.
     """
-    if state in _PROVEN_COMMITTED:
-        return False
-    if state in (EffectState.FAILED_BEFORE_EFFECT,
-                 EffectState.RECONCILED_NOT_EXECUTED):
-        return True
-    if state is EffectState.INDETERMINATE:
-        return cls in _REPLAYABLE_AFTER_AMBIGUITY
-    return False
+    return retry_authority(state=state, durability_class=cls,
+                           recorded_outcome=recorded_outcome) in _MAY_EXECUTE_AGAIN
 
 
 __all__ = [
     "DEFAULT_BUSY_TIMEOUT_MS", "DEFAULT_JOURNAL_PATH", "DEFAULT_LEASE_GRACE_S",
     "DEFAULT_LEASE_S", "SCHEMA_VERSION",
-    "DurableEffectJournal", "EffectDurabilityClass", "EffectRecord",
-    "EffectState", "ExecutionDisposition", "InvalidTransition",
+    "DeclaredEffectOutcome",
+    "DurableEffectJournal", "EffectDurabilityClass", "EffectOutcomeEvidence",
+    "EffectRecord",
+    "EffectState", "ExecutionDisposition", "ExternalOutcome",
+    "InvalidTransition",
     "EffectJournalRefused", "JournalUnhealthy", "ReconciliationVerdict",
     "Reservation",
-    "ReservationOutcome",
+    "ReservationOutcome", "RetryAuthority",
     "action_digest", "args_digest", "canonical_json", "compute_effect_id",
     "configured_journal_path", "configured_lease_grace_s",
     "configured_lease_s", "derive_idempotency_key", "durability_class",
+    "external_outcome_of",
     "journal_enabled", "may_auto_retry", "opaque_digest", "receipt_digest",
-    "reconcile", "register_durability", "register_reconciler",
+    "normalise_identity",
+    "reconcile", "register_durability", "register_identity_normaliser",
+    "register_reconciler",
+    "retry_authority",
     "runtime_instance_id", "unregister_durability",
+    "unregister_identity_normaliser",
 ]
