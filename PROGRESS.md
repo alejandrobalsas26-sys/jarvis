@@ -7,12 +7,12 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **36** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **37** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0036-m65d-truthful-uncertain-effects.json` |
-| **Snapshot SHA256** | `9f7e301c9e4c848721af4a6ea69f40f35215590c5c28856394cfed50f6666cc1` |
-| **Subject state commit** | `5667747eb61dddaadb696f7ce1b7a0531e3a0230` (M65D; eval-v7 still spent once, 005 not eligible, 004 still held) |
-| **Integration authority** | base `72e2948bbc4f0b1da7b82eda8500c637a726903c` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a` is integrated |
+| **Latest snapshot** | `state/m62/snapshots/0037-m66a-epistemic-deliberation.json` |
+| **Snapshot SHA256** | `5927e3052bcfac9e7aee6ff424287296819283b418467145d47bcc2d660872bc` |
+| **Subject state commit** | `8a7b9594d44dd754ea3b7ac13f619b79efaa62b5` (M66A; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Integration authority** | base `cfa23bb548b98204e88b03ccb2a82c4eee4bf761` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a` and gen 36's `72e2948b…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
@@ -43,12 +43,12 @@ asks Git, not prose, about branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-m65d-truthful-uncertain-effects` — gen 36 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `5667747eb61dddaadb696f7ce1b7a0531e3a0230` — the commit gen 36 describes AND the commit its integration authority governs |
+| Branch | `jarvis-v69-m66a-epistemic-deliberation` — gen 37 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
+| Governed subject | `8a7b9594d44dd754ea3b7ac13f619b79efaa62b5` — the commit gen 37 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
-| `origin/master` | `72e2948bbc4f0b1da7b82eda8500c637a726903c` — **untouched by M62**, gen 35 integrated, and the **integration base** gen 36 authorises a fast-forward FROM |
+| `origin/master` | `cfa23bb548b98204e88b03ccb2a82c4eee4bf761` — **untouched by M62**, gen 36 integrated, and the **integration base** gen 37 authorises a fast-forward FROM |
 | Merge / tag / release / version bump | **none** — `core/version.py` still declares `MILESTONE = 61`, deliberately |
 
 **Every hash here is a current identity, not a restart target.** Start from current HEAD; do
@@ -69,9 +69,10 @@ name the commit that carries it (§2).
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, terminal `completed` |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends. `…S4H_INSTRUMENT_HARDENING.md` |
 | Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME or REPOSITORY, no science** (gens 29–33, GOVERNANCE-ONLY). **Universal exactly-once is NOT claimed**: 23 of 24 reachable effectful tools are `NON_REPLAYABLE`, still true at M65D. All five moved **0** spends. Rows verbatim: `jarvis/docs/m62/history/PROGRESS_MILESTONE_ROWS_THROUGH_S5F.md` |
-| Earlier milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3's `master_commit` had to equal a live ref — a **self-reference in the schema**. V4 declares only commits that **already exist** and **DERIVES** the observation. **0** spends. `…V69_S5G_…md` |
-| Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Six findings, each **reproduced before repair** (D49–D54, §7). Now **executable authority changes only inside a governed subject**; an unclaimed category reports **NOT_RUN**. **0** spends. `…V69_S5G1_PREINTEGRATION_HARDENING.md` |
-| Last milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36, RUNTIME + GOVERNANCE. An observed error after the boundary stopped meaning *nothing happened* — **2** external effects for one **NON_REPLAYABLE** identity, and two red teams then reached **2** again through the *identity* rather than the decision (D55–D63, §7). One retry decision; schema **v2**, old rows read `UNKNOWN`. **0** reclassified tools, **0** spends. `…V69_M65D_TRUTHFUL_UNCERTAIN_EFFECTS.md` |
+| Earlier milestone | **S5G — CONTROL PLANE V4, no science.** Gen 34 GOVERNANCE-ONLY. V3's `master_commit` had to equal a live ref — a self-reference in the schema; V4 declares only commits that already exist and **DERIVES** the observation. **0** spends. `…V69_S5G_…md` |
+| Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Six findings, each reproduced before repair (D49–D54, §7): executable authority changes only inside a governed subject. **0** spends. `…V69_S5G1_…md` |
+| Earlier milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36, RUNTIME + GOVERNANCE. An observed error after the effect boundary stopped meaning *nothing happened*; two red teams reached **2** effects through the *identity* rather than the decision (D55–D63, §7). **0** spends. `…V69_M65D_…md` |
+| Last milestone | **M66A — EPISTEMIC DELIBERATION, no science.** Gen 37, RUNTIME + GOVERNANCE. ONE decision plane on the existing `TaskDecision`: intent, ambiguity, freshness, premise state, evidence, verification, deliberation, tool need, delivery. Policy may only **STRENGTHEN** within a turn, and a `REQUIRED_FAIL_CLOSED` answer is withheld as established fact until the verdict is known. Round 1 found **3** MAJORs, each reproduced before repair. **51/51** mutations, **0** survivors. **0** spends. `…V69_M66A_…md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -274,8 +275,8 @@ the archive and the snapshot's `defects` record, which carries every defect in f
 | **D44** | **FIXED · GATE** | A held-out body reached a session through representation alone, `repr` of a **bound method** included. `body_free_repr` renders identity and digests only. |
 | **D43 · D45–D47** | FIXED (obs. only) | `EXTRA_DATA` vs an unclosed document; S4H's instrument findings. **PROSPECTIVE**, read by **no gate**; **005 not rescored**. |
 | **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. **A filename substring is not a scientific boundary.** `state/m62/scientific-suite.json`. |
-| **D49–D54** | **FIXED · S5G.1** | A pinned observation turned master CI red; the checker sat on its **own** trailing surface; a trailing `tests/conftest.py` deselected failures; **no CI job ran the checker** (D52); the digest pin was **resealable beside it** (D53). **Executable authority changes only inside a governed subject, and sealed artefacts are append-only.** `…S5G1_…md`. |
-| **D55–D63** | **FIXED · M65D** | `FAILED_OBSERVED` shared the generic *retry after a non-effect outcome* path, so an error seen **after** the boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: five tests pinned `integration_base`; **advance-only, never rewind**. **D58/D61 BLOCKERS** (two red teams): the decision was right and was asked about the wrong **identity** — a spelled-out **default**, then a value the handler itself normalises, each ran one effect **twice**. A tool now **declares** its equivalence with proof. D59/D60/D62/D63: 14 MAJOR + 5 MINOR. `…M65D_…md`. |
+| **D49–D54** | **FIXED · S5G.1** | The checker sat on its **own** trailing surface; a trailing `tests/conftest.py` deselected failures; **no CI job ran the checker** (D52); the digest pin was **resealable beside it** (D53). **Executable authority changes only inside a governed subject, and sealed artefacts are append-only.** `…S5G1_…md`. |
+| **D55–D63** | **FIXED · M65D** | An error seen **after** the effect boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: `integration_base` is **advance-only, never rewind**. **D58/D61 BLOCKERS** (two red teams): the decision was right and was asked about the wrong **identity**; a tool now **declares** its equivalence with proof. `…M65D_…md`. |
 
 ### Limitations that travel into any successor run
 
@@ -412,10 +413,10 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            10978 passed · 45 skipped · 0 failed      [M65D, measured]
+result            11120 passed · 45 skipped · 0 failed      [M66A, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
-result            3179 passed · 2 skipped · 0 failed        [M65D, re-measured]
+result            3179 passed · 2 skipped · 0 failed        [M66A, re-measured]
 ```
 
 **A FAST-FORWARDED-`master` run in a disposable clone is MANDATORY before any integration**

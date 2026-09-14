@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0036-m65d-truthful-uncertain-effects.json",
-  "latest_snapshot_sha256": "9f7e301c9e4c848721af4a6ea69f40f35215590c5c28856394cfed50f6666cc1",
+  "latest_snapshot_path": "state/m62/snapshots/0037-m66a-epistemic-deliberation.json",
+  "latest_snapshot_sha256": "5927e3052bcfac9e7aee6ff424287296819283b418467145d47bcc2d660872bc",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 36,
-  "subject_state_commit": "5667747eb61dddaadb696f7ce1b7a0531e3a0230",
+  "state_generation": 37,
+  "subject_state_commit": "8a7b9594d44dd754ea3b7ac13f619b79efaa62b5",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
