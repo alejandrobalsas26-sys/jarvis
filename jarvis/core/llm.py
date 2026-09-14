@@ -14,6 +14,7 @@ import re
 import time as _time
 import uuid
 import asyncio
+import dataclasses
 from contextlib import AsyncExitStack, nullcontext as _nullcontext
 from datetime import date
 from pathlib import Path
@@ -964,6 +965,48 @@ _PARTIAL_STREAM_EN = (
     "You can ask me to continue."
 )
 
+# V69 M66A — fail-closed delivery notices. A REQUIRED_FAIL_CLOSED turn whose
+# verification did not pass never presents its draft as established fact (§27);
+# the draft is shown below the notice, clearly labelled UNVERIFIED, so no
+# information is lost and nothing reads as confirmed.
+_M66A_FAILCLOSED_EN = (
+    "[VERIFICATION] This answer could not be verified and is withheld as an "
+    "established result. It is shown below only as an UNVERIFIED DRAFT for your "
+    "review — do not act on it without checking it yourself"
+)
+_M66A_FAILCLOSED_ES = (
+    "[VERIFICACIÓN] No se pudo verificar esta respuesta, así que no se presenta "
+    "como un resultado establecido. Se muestra abajo únicamente como BORRADOR NO "
+    "VERIFICADO para tu revisión — no actúes sobre él sin comprobarlo"
+)
+_M66A_UNVERIFIED_LABEL_EN = "[UNVERIFIED DRAFT]"
+_M66A_UNVERIFIED_LABEL_ES = "[BORRADOR NO VERIFICADO]"
+# The success-claim correction appended to a STREAMED turn whose draft asserted
+# success the evidence does not support (§29).
+_M66A_SUCCESS_BLOCK_EN = (
+    "[VERIFICATION] Correction: the claim of success above is not established. "
+    "The action or answer is UNVERIFIED and must be confirmed independently"
+)
+_M66A_SUCCESS_BLOCK_ES = (
+    "[VERIFICACIÓN] Corrección: la afirmación de éxito anterior no está "
+    "establecida. La acción o respuesta está SIN VERIFICAR y debe confirmarse "
+    "de forma independiente"
+)
+_M66A_UNCERTAIN_EFFECT_EN = (
+    "[VERIFICATION] The outcome of the action is UNKNOWN — it may or may not have "
+    "taken effect and was not retried; it needs reconciliation against the "
+    "target system before any success is claimed"
+)
+_M66A_UNCERTAIN_EFFECT_ES = (
+    "[VERIFICACIÓN] El resultado de la acción es DESCONOCIDO — puede haberse "
+    "aplicado o no, y no se reintentó; requiere reconciliación con el sistema "
+    "objetivo antes de afirmar cualquier éxito"
+)
+
+
+def _m66a_msg(en: str, es: str, language: str | None) -> str:
+    return en if (language or "es").lower().startswith("en") else es
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  V69 M60.1 — session-journal hooks
@@ -1751,6 +1794,112 @@ class LLM:
             out = json.dumps(wrapper, ensure_ascii=False)
         return out
 
+    def _m66a_finalize(self, *, decision, mesh, verification_result, full_text,
+                       final_answer, effect_outcomes, tool_names, buffered,
+                       language):
+        """V69 M66A delivery finalizer (§26/§27/§29/§30/§32). Pure of I/O.
+
+        Returns ``None`` when there is nothing for M66A to do (no decision, or a
+        streamed turn whose success claim is permitted). Otherwise returns
+        ``(text_to_yield, stored_answer)``:
+
+          * BUFFERED turn: ``text_to_yield`` is the ONE substantive emission —
+            the verified answer when verification passed, else a fail-closed
+            notice with the draft clearly labelled UNVERIFIED. Nothing was shown
+            before this point.
+          * STREAMED turn: ``text_to_yield`` is a short correction appended only
+            when the draft asserted a success the evidence does not permit; the
+            body already reached the operator.
+
+        Every fact it reads is typed and already resolved (ARGUS verdict or the
+        model verifier's ``VerificationResult``, the executor's external-effect
+        outcomes, and the composed freshness requirement). It never rewrites
+        M65D's effect truth and never infers verification from string equality.
+        """
+        if decision is None:
+            return None
+        from core.epistemic_deliberation import (
+            PASSING_STATUS, FreshnessStatus, SuccessClaimPermission,
+            VerificationStatus, aggregate_effect_truth, draft_makes_success_claim,
+            epistemic_marker, status_from_argus, status_from_result,
+            success_claim_permission,
+        )
+        from core.epistemic_deliberation import EffectTruth as _ET
+
+        # ── explicit verification status (§26), never string equality ────────
+        status = VerificationStatus.NOT_REQUIRED
+        argus = getattr(getattr(mesh, "answer", None), "verifier_status", None)
+        if argus is not None:
+            status = status_from_argus(argus)
+        elif verification_result is not None:
+            status = status_from_result(verification_result)
+
+        # ── effect truth (§30), aggregated from the executor's own outcomes ───
+        effect_truth = aggregate_effect_truth(effect_outcomes)
+
+        # ── freshness satisfaction (§14): did we actually observe current state? ─
+        outcomes = [o for o in (effect_outcomes or []) if o]
+        tool_ran = bool(outcomes) or bool(tool_names)
+        world_consulted = bool(getattr(mesh, "world_state_consulted", False))
+        satisfied = tool_ran or world_consulted
+        fresh = FreshnessStatus(
+            requirement=decision.freshness_requirement,
+            satisfied=satisfied,
+            source=("tool" if outcomes else "world_state" if world_consulted
+                    else "tool" if tool_names else ""))
+
+        any_tool_denied = False
+        if mesh is not None:
+            try:
+                from core.mesh_contracts import ToolCallStatus as _TCS
+                any_tool_denied = any(o.status is _TCS.DENIED
+                                      for o in getattr(mesh, "tool_outcomes", ()))
+            except Exception:  # noqa: BLE001
+                any_tool_denied = False
+
+        perm = success_claim_permission(
+            verification_status=status, effect_truth=effect_truth,
+            freshness=fresh, any_tool_denied=any_tool_denied)
+        marker = epistemic_marker(verification_status=status,
+                                  effect_truth=effect_truth, freshness=fresh)
+        # §26/§32 — publish the EXPLICIT status and the one warning a lossy
+        # surface must keep. A caveat appended to the END of an answer is
+        # precisely what HUD/notification truncation removes, so the marker
+        # travels as its own field rather than as trailing prose.
+        self._m66a_marker = marker
+        self._m66a_status = status
+
+        if buffered:
+            passed = status in PASSING_STATUS and perm is not SuccessClaimPermission.BLOCKED
+            if passed:
+                body = final_answer or full_text
+                emit = (marker + "\n\n" + body) if marker else body
+                return emit, emit
+            # Fail closed: withhold the draft AS FACT; show it labelled unverified.
+            notice = _m66a_msg(_M66A_FAILCLOSED_EN, _M66A_FAILCLOSED_ES, language)
+            if verification_result is not None and getattr(verification_result, "issues", None):
+                _iss = "; ".join(str(i) for i in verification_result.issues[:3])
+                if _iss:
+                    notice = notice + f": {_iss}"
+            label = _m66a_msg(_M66A_UNVERIFIED_LABEL_EN, _M66A_UNVERIFIED_LABEL_ES, language)
+            body = (full_text or "").strip()
+            emit = f"{notice}.\n\n{label}\n{body}" if body else f"{notice}."
+            return emit, emit
+
+        # ── streamed turn: the body already reached the operator. Append a
+        # correction ONLY when a success claim is present but not permitted. ──
+        if perm is SuccessClaimPermission.BLOCKED and draft_makes_success_claim(full_text):
+            if effect_truth is _ET.INDETERMINATE:
+                corr = _m66a_msg(_M66A_UNCERTAIN_EFFECT_EN, _M66A_UNCERTAIN_EFFECT_ES, language)
+            else:
+                corr = _m66a_msg(_M66A_SUCCESS_BLOCK_EN, _M66A_SUCCESS_BLOCK_ES, language)
+            # Do not duplicate a correction the staged verifier already appended.
+            if "[VERIFICATION]" in (final_answer or "") or "[VERIFICACIÓN]" in (final_answer or ""):
+                return None
+            corr = "\n\n" + corr + "."
+            return corr, (final_answer or full_text) + corr
+        return None
+
     async def _maybe_verify_final_answer(
         self,
         user_message: str,
@@ -1861,6 +2010,11 @@ class LLM:
                     cancel_event=_cancel_bus.llm_stream_cancel,
                 )
 
+        # V69 M66A — stash the model verifier's own verdict so the delivery
+        # finalizer can read an EXPLICIT status instead of inferring it from
+        # string equality of draft vs final (§26).
+        self._m66a_last_verification = result
+
         from datetime import datetime, timezone
         try:
             from tools.executor import _aura_broadcast
@@ -1957,8 +2111,12 @@ class LLM:
         Previously the HUD only ever received routing/verifier/memory
         *metadata* about a turn, never the conversational content itself.
         Fully best-effort and fail-open — a HUD/AURA outage never affects the
-        conversation. ``verified`` mirrors whether the post-stream verifier
-        left the draft unchanged (True when it passed or didn't run).
+        conversation.
+
+        V69 M66A §26/§32: ``verified`` comes from the turn's EXPLICIT
+        ``VerificationStatus``, never from ``final_answer == draft_answer``, and
+        the epistemic marker travels as its own field so a truncating surface
+        cannot drop the only warning the answer carries.
         """
         try:
             from core.aura_events import AssistantResponseEvent
@@ -1970,10 +2128,27 @@ class LLM:
                 except Exception:
                     pass
             role = getattr(model_decision, "role", None)
+            status = getattr(self, "_m66a_status", None)
+            if status is not None:
+                from core.epistemic_deliberation import PASSING_STATUS
+                verified = status in PASSING_STATUS
+                status_name = status.value
+            else:
+                # Degraded path only: the decision plane did not run for this
+                # turn (a direct call, or a composition fault). Fall back to the
+                # one signal available — the verifier appends a notice only when
+                # it flags something — and name the status accordingly. §26's
+                # real defect was CONFLATING "never ran" with "passed"; the
+                # explicit `verification_status` field is what separates them,
+                # and on the live path it always comes from the status above.
+                verified = (final_answer == draft_answer)
+                status_name = "not_required" if verified else "not_verified"
             await _aura_broadcast(AssistantResponseEvent(
                 text=resp_text,
-                verified=(final_answer == draft_answer),
+                verified=verified,
                 model_role=role.value if role is not None else "fast",
+                verification_status=status_name,
+                epistemic_marker=getattr(self, "_m66a_marker", "") or "",
             ).to_dict())
         except Exception as e:
             logger.debug(f"AURA: assistant_response broadcast skipped: {e}")
@@ -2598,6 +2773,13 @@ class LLM:
             # streaming default; the VOICE surface render is applied downstream
             # in main._run_turn's TTS consumer (M6).
             surface=ResponseSurface.TEXT,
+            # V69 M66A — hand over the TurnPolicy this turn ALREADY computed.
+            # Without it the composition would classify a second one of its own,
+            # which is both duplicated work on the hot path and a second policy
+            # object for one turn: this one is authority-aware (it was built with
+            # the executor's authority) and the internal one would not be. One
+            # turn, one policy.
+            turn_policy=_turn_policy,
         )
         decision = task_decision.model_decision
         _routed_model = resolve_inference_model(decision)
@@ -2858,6 +3040,51 @@ class LLM:
                     _mesh.mode, _mesh.route.primary.value,
                     "evidence" if _mesh.route.required_evidence else "tools"))
             _fast_route = None
+
+        # ── V69 M66A — the ONE epistemic decision, strengthened by the mesh ───
+        # `assemble_task_decision` already composed the epistemic dimensions from
+        # the turn policy (decision v1). Now that the deterministic mesh route
+        # exists, fold its facts in — this is the POLICY RATCHET on the live turn:
+        # a decision may only STRENGTHEN, and the transition is observable. The
+        # effect outcomes list is filled by the tool loop below; delivery reads it
+        # at finalize. All fully guarded — M66A never breaks a turn.
+        _m66a = getattr(task_decision, "epistemic", None)
+        _m66a_effect_outcomes: list = []
+        self._m66a_last_verification = None
+        self._m66a_marker = ""
+        self._m66a_status = None
+        try:
+            from core.epistemic_deliberation import COUNTERS as _M66A_COUNTERS
+            from core.epistemic_deliberation import deliberate as _m66a_deliberate
+            if _mesh is not None and _m66a is not None:
+                _m66a_v2 = _m66a_deliberate(
+                    user_message, task_decision=task_decision,
+                    turn_policy=_turn_policy, mesh_route=_mesh.route)
+                _m66a = _m66a.strengthened(
+                    verification_policy=_m66a_v2.verification_policy,
+                    evidence_policy=_m66a_v2.evidence_policy,
+                    freshness_requirement=_m66a_v2.freshness_requirement,
+                    reason="mesh_route")
+                task_decision = dataclasses.replace(task_decision, epistemic=_m66a)
+            if _m66a is not None:
+                _M66A_COUNTERS.observe(_m66a)
+        except Exception as _m66a_e:  # noqa: BLE001 — deliberation never breaks a turn
+            logger.warning(f"M66A: epistemic composition skipped ({_m66a_e})")
+        # BUFFER_UNTIL_VERIFIED is a fail-closed delivery: substantive output
+        # waits for the verdict. It can only NARROW the fast path — a buffered
+        # turn never takes the tool-free native transport.
+        _m66a_buffer = bool(_m66a is not None and _m66a.buffers_delivery)
+        if _m66a_buffer and _fast_route is not None and _fast_route.use_native:
+            logger.info("M66A: buffered fail-closed delivery — native fast path disabled")
+            _fast_route = None
+        if _m66a is not None:
+            logger.info(
+                "M66A: intent={} mode={} verify={} deliver={} fresh={} amb={} "
+                "strengthen={}".format(
+                    _m66a.intent.goal.value, _m66a.deliberation_mode.value,
+                    _m66a.verification_policy.value, _m66a.delivery_policy.value,
+                    _m66a.freshness_requirement.value,
+                    _m66a.ambiguity.disposition.value, _m66a.strengthen_events))
 
         if _fast_route is not None and _fast_route.use_native:
             # V69 M55.1 — pre-inference dispatch = the whole path from message-in to
@@ -3247,8 +3474,12 @@ class LLM:
                     delta = choice.delta
 
                     if delta.content:
-                        yield delta.content
                         text_chunks.append(delta.content)
+                        # V69 M66A — under BUFFER_UNTIL_VERIFIED the substantive
+                        # draft is accumulated, not shown, until the verdict is
+                        # known (§27). Every other delivery streams as before.
+                        if not _m66a_buffer:
+                            yield delta.content
 
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
@@ -3392,9 +3623,12 @@ class LLM:
                         _mesh_answer = _mesh_live.finish_turn(_mesh, full_text)
                         _mesh_suffix = _mesh_live.verdict_suffix(_mesh_answer, full_text)
                         if _mesh_suffix:
-                            yield _mesh_suffix
                             final_answer = full_text + _mesh_suffix
                             self.history[-1]["content"] = final_answer
+                            # M66A — a buffered turn holds even the verdict suffix
+                            # until the single delivery below.
+                            if not _m66a_buffer:
+                                yield _mesh_suffix
                         _t = _mesh.telemetry()
                         logger.info(
                             "MESH: task={} route={} primary={} argus={} tools={} "
@@ -3442,9 +3676,48 @@ class LLM:
                             if final_answer.startswith(full_text)
                             else "\n\n" + final_answer
                         )
-                        if suffix:
+                        if suffix and not _m66a_buffer:
                             yield suffix
                         self.history[-1]["content"] = final_answer
+
+                # ── V69 M66A — explicit verification status, effect truth, the
+                # success-claim gate, and fail-closed delivery (§26/§27/§29/§30).
+                # For a buffered turn this is the ONE point the operator sees any
+                # substantive text; for a streamed turn it appends only a
+                # correction when a success claim is not permitted. Fully guarded.
+                try:
+                    _m66a_emit = self._m66a_finalize(
+                        decision=_m66a, mesh=_mesh,
+                        verification_result=getattr(self, "_m66a_last_verification", None),
+                        full_text=full_text, final_answer=final_answer,
+                        effect_outcomes=_m66a_effect_outcomes,
+                        tool_names=_turn_tool_names,
+                        buffered=_m66a_buffer,
+                        language=self.language_context.active_language(),
+                    )
+                    if _m66a_emit is not None:
+                        _emit_text, final_answer = _m66a_emit
+                        if _emit_text:
+                            yield _emit_text
+                        self.history[-1]["content"] = final_answer
+                except Exception as _m66a_fe:  # noqa: BLE001 — never break a turn
+                    logger.warning(f"M66A: delivery finalize skipped ({_m66a_fe})")
+                    if _m66a_buffer:
+                        # Fail-closed on our OWN fault. The draft was withheld and
+                        # no verdict could be composed, so the operator must still
+                        # receive something — but never the bare draft: a finalizer
+                        # that crashed has verified nothing, and emitting the text
+                        # unlabelled would state it as fact on the one path that
+                        # skipped every check. Banner first, draft labelled.
+                        _lang_fc = self.language_context.active_language()
+                        _fc = _m66a_msg(_M66A_FAILCLOSED_EN, _M66A_FAILCLOSED_ES, _lang_fc)
+                        _lbl = _m66a_msg(_M66A_UNVERIFIED_LABEL_EN,
+                                         _M66A_UNVERIFIED_LABEL_ES, _lang_fc)
+                        _body = (full_text or "").strip()
+                        _safe = f"{_fc}.\n\n{_lbl}\n{_body}" if _body else f"{_fc}."
+                        yield _safe
+                        self.history[-1]["content"] = _safe
+                        final_answer = _safe
 
                 # V61 Phase 4 — secret-safe memory persistence policy (best-effort).
                 try:
@@ -3597,12 +3870,21 @@ class LLM:
                         mcp_result = await self._mcp_session.call_tool(name, args)
                         return mcp_result_envelope(mcp_result)
 
+                    # V69 M66A — capture the executor's own effect note so the
+                    # LIVE turn reads M65D's external-outcome truth (never derives
+                    # it from the model's prose). Fully guarded.
+                    _m66a_note: dict = {}
                     result = await self.tool_executor.aexecute_mcp(
-                        tool_name, tool_input, _call_mcp, thinking
+                        tool_name, tool_input, _call_mcp, thinking,
+                        effect_note=_m66a_note,
                     )
+                    _m66a_effect_outcomes.append(_m66a_note.get("external_outcome"))
                 else:
                     # aexecute() is fully async — NATO gate + run_in_executor inside
-                    result = await self.tool_executor.aexecute(tool_name, tool_input, thinking)
+                    _m66a_note = {}
+                    result = await self.tool_executor.aexecute(
+                        tool_name, tool_input, thinking, effect_note=_m66a_note)
+                    _m66a_effect_outcomes.append(_m66a_note.get("external_outcome"))
 
                 logger.debug(f"Result: {result}")
 

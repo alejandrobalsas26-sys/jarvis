@@ -97,28 +97,48 @@ def _truncate(text: str, limit: int) -> str:
     return cut + "…"
 
 
-def render(text: str, surface: ResponseSurface, *, max_chars: int | None = None) -> str:
+def render(text: str, surface: ResponseSurface, *, max_chars: int | None = None,
+           epistemic_marker: str = "") -> str:
     """Render one reasoning result for *surface*. Never calls the model.
 
     - TEXT / TECHNICAL / REPORT: verbatim (lossless).
     - VOICE: markup stripped, single spaces, natural for TTS.
     - HUD: markup stripped, collapsed to one block, bounded (~280 chars).
     - NOTIFICATION: markup stripped, first sentence, one line, bounded (~140).
+
+    V69 M66A (§32): *epistemic_marker* is a short, load-bearing warning — the one
+    that says the result is unverified / uncertain / current-state-unknown. It is
+    placed FIRST and its length is RESERVED from every bounded surface's budget,
+    so a lossy surface can shorten prose but can never truncate the warning away.
+    A lossy surface may drop everything else; it may not drop this.
     """
     text = text or ""
+    marker = (epistemic_marker or "").strip()
+
     if surface in LOSSLESS_SURFACES:
-        return text
+        return f"{marker}\n\n{text}" if marker else text
 
     if surface is ResponseSurface.VOICE:
-        return strip_markup(text)
+        spoken = strip_markup(text)
+        # Spoken markers read better without brackets.
+        spoken_marker = marker.strip("[]").strip()
+        return f"{spoken_marker}. {spoken}" if spoken_marker else spoken
 
     if surface is ResponseSurface.HUD:
         compact = " ".join(strip_markup(text).split())
-        return _truncate(compact, max_chars or _HUD_MAX_CHARS)
+        limit = max_chars or _HUD_MAX_CHARS
+        if marker:
+            body = _truncate(compact, max(0, limit - len(marker) - 1))
+            return f"{marker} {body}".strip()
+        return _truncate(compact, limit)
 
     if surface is ResponseSurface.NOTIFICATION:
         one_line = " ".join(strip_markup(text).split())
-        return _truncate(_first_sentence(one_line), max_chars or _NOTIFICATION_MAX_CHARS)
+        limit = max_chars or _NOTIFICATION_MAX_CHARS
+        if marker:
+            body = _truncate(_first_sentence(one_line), max(0, limit - len(marker) - 1))
+            return f"{marker} {body}".strip()
+        return _truncate(_first_sentence(one_line), limit)
 
     return text  # unreachable, defensive
 

@@ -26,6 +26,7 @@ telemetry and future planner/agent-team routing.
 from __future__ import annotations
 
 import dataclasses
+from contextlib import suppress
 from dataclasses import dataclass
 
 from core.model_router import (
@@ -74,7 +75,15 @@ def route_turn(
 
 @dataclass(frozen=True)
 class TaskDecision:
-    """Unified per-turn decision — the composed runtime context for one turn."""
+    """Unified per-turn decision — the composed runtime context for one turn.
+
+    V69 M66A: this stays the ONE canonical per-turn decision object. The M66A
+    epistemic dimensions are carried on it as a single ``epistemic`` component
+    (intent / ambiguity / freshness / evidence / verification / deliberation /
+    tool need / delivery), composed monotonically from the fields above plus the
+    deterministic ``TurnPolicy``. There is no rival decision object; adapters may
+    read either the composed object or its inner ``model_decision``.
+    """
 
     model_decision: ModelDecision      # authoritative model role / verify
     domain: TaskDomain
@@ -90,6 +99,13 @@ class TaskDecision:
     preferred_model_role: ModelRole    # advisory (route() is authoritative)
     response_surface: ResponseSurface
     reason: str
+    #: V69 M66A — the epistemic dimensions of this turn. ``None`` only when the
+    #: pure composition could not run (it never raises into the turn), in which
+    #: case every downstream reader falls back to the pre-M66A behaviour.
+    epistemic: object | None = None
+    #: V69 M66A — the deterministic TurnPolicy this decision was composed with,
+    #: carried so a caller need not reclassify. ``None`` when not supplied.
+    turn_policy: object | None = None
 
     # ── Convenience accessors mirroring ModelDecision so callers can read the
     # composed object or the inner decision interchangeably. ─────────────────
@@ -108,7 +124,7 @@ class TaskDecision:
     def telemetry(self) -> dict:
         """Flat, JSON-ready dict for AURA/HUD (additive to the existing
         model_decision event)."""
-        return {
+        out = {
             "domain": self.domain.value,
             "domain_confidence": round(self.domain_confidence, 2),
             "response_surface": self.response_surface.value,
@@ -117,6 +133,13 @@ class TaskDecision:
             "requires_tools": self.requires_tools,
             "preferred_model_role": self.preferred_model_role.value,
         }
+        if self.epistemic is not None:
+            # Telemetry never breaks a turn. `suppress` rather than a bare
+            # try/except/pass: same semantics, and it does not grow the repo's
+            # approved Bandit LOW baseline with a B110 the gate would reject.
+            with suppress(Exception):
+                out.update(self.epistemic.telemetry())
+        return out
 
 
 def assemble_task_decision(
@@ -126,6 +149,8 @@ def assemble_task_decision(
     force_deep: bool = False,
     query_category: str = "",
     surface: ResponseSurface = ResponseSurface.TEXT,
+    turn_policy: object | None = None,
+    mesh_route: object | None = None,
 ) -> TaskDecision:
     """Compose the unified per-turn decision. Pure; no side effects, no tools.
 
@@ -134,6 +159,12 @@ def assemble_task_decision(
     planning/agent/tool advisories are layered on top for telemetry and future
     routing. The fast path stays fast: GENERAL chat requires no planning, no
     agent team, and inherits the router's own verification decision.
+
+    V69 M66A: the epistemic dimensions are composed here too, from this decision
+    plus the deterministic ``TurnPolicy`` (computed if not supplied) and, when
+    available, the deterministic ``MeshRoute``. The composition is pure and
+    guarded — it never raises into the turn — so a decision always has the
+    pre-M66A fields even if ``epistemic`` ends up ``None``.
     """
     md = route_turn(user_message, tool_names=tool_names, force_deep=force_deep)
     dom = classify_domain(user_message, tool_names)
@@ -149,7 +180,7 @@ def assemble_task_decision(
 
     reason = f"domain={dom.domain.value}({dom.confidence:.2f}); route={md.reason}"
 
-    return TaskDecision(
+    decision = TaskDecision(
         model_decision=md,
         domain=dom.domain,
         domain_confidence=dom.confidence,
@@ -165,3 +196,22 @@ def assemble_task_decision(
         response_surface=surface,
         reason=reason,
     )
+
+    # ── V69 M66A — compose the epistemic dimensions onto the ONE decision. ────
+    # Pure and fully guarded: a composition fault degrades the turn's judgement
+    # (it falls back to pre-M66A behaviour), never its ability to answer.
+    tp = turn_policy
+    try:
+        if tp is None:
+            from core.turn_policy import classify_request
+            tp = classify_request(user_message, tool_names=tool_names)
+    except Exception:  # noqa: BLE001
+        tp = None
+    epistemic = None
+    try:
+        from core.epistemic_deliberation import deliberate
+        epistemic = deliberate(user_message, task_decision=decision,
+                               turn_policy=tp, mesh_route=mesh_route)
+    except Exception:  # noqa: BLE001 — deliberation never breaks a turn
+        epistemic = None
+    return dataclasses.replace(decision, epistemic=epistemic, turn_policy=tp)

@@ -649,11 +649,37 @@ class AgentTeamSelector:
         return self._registry
 
     def should_form_team(self, task_decision) -> bool:
-        return bool(
-            getattr(task_decision, "prefers_agent_team", False)
-            or getattr(task_decision, "requires_planning", False)
-            or getattr(task_decision, "complexity", 0.0) >= 0.75
-        )
+        """V69 M66A §21 — PLANNING DOES NOT IMPLY TEAM.
+
+        The old rule formed a team whenever ``requires_planning`` was set, which
+        made every substantial single-worker task (a code change, an
+        architecture, a roadmap) a multi-agent turn. That term is removed. A team
+        now forms only when:
+
+          * the canonical decision's deliberation mode is TEAM (genuinely
+            cross-domain work), or
+          * the turn explicitly prefers an agent team, or
+          * a verification obligation exists (which adds ONLY the verifier — an
+            additive fan-in, not a multi-agent explosion).
+
+        A PLAN_SINGLE turn — decomposition without cross-domain value — no longer
+        forms a team on the strength of the planning need alone.
+        """
+        epistemic = getattr(task_decision, "epistemic", None)
+        mode = getattr(getattr(epistemic, "deliberation_mode", None), "value", "")
+        if mode == "team":
+            return True
+        if getattr(task_decision, "prefers_agent_team", False):
+            return True
+        if (getattr(task_decision, "requires_verification", False)
+                or getattr(task_decision, "security_sensitive", False)):
+            return True
+        registry = self._skill_registry()
+        domain = getattr(task_decision, "domain", None)
+        if (registry is not None and domain is not None
+                and registry.requires_verification_for_domain(domain)):
+            return True
+        return False
 
     def select(self, task_decision) -> list[SpecialistRole]:
         if not self.should_form_team(task_decision):

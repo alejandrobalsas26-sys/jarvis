@@ -103,15 +103,26 @@ class ModeEvent(AuraEvent):
 @dataclass
 class AssistantResponseEvent(AuraEvent):
     """The assistant's final natural-language answer for the turn — the HUD's
-    conversational-content leg (V62.0 Phase 5). Previously the HUD only ever
-    received routing/verifier/memory *metadata* about a turn, never the
-    answer text itself. ``verified`` mirrors whether the post-stream verifier
-    (see VerifierStatusEvent) left the draft unchanged — True when
-    verification passed or didn't run (trivial/low-risk turn)."""
+    conversational-content leg (V62.0 Phase 5).
+
+    V69 M66A §26/§32. ``verified`` used to be computed as
+    ``final_answer == draft_answer``: a verifier that never ran and a verifier
+    that passed were indistinguishable, and a draft the verifier rewrote for an
+    unrelated reason read as unverified. It is now set from the turn's EXPLICIT
+    ``VerificationStatus``, and ``verification_status`` carries that status by
+    name so a consumer never has to re-infer it.
+
+    ``epistemic_marker`` is the one warning a LOSSY surface must keep. The HUD
+    and notification surfaces truncate; an appended caveat is exactly what
+    truncation removes, so the marker travels as its own field and is rendered
+    FIRST (``response_surface.render(..., epistemic_marker=...)`` reserves its
+    length from the budget). Empty means there is nothing to warn about."""
     type: ClassVar[str] = "assistant_response"
     text: str = ""
     verified: bool = True
     model_role: str = "fast"
+    verification_status: str = "not_required"
+    epistemic_marker: str = ""
 
 
 # ── V66 M26: operational intelligence event contract ─────────────────────────
