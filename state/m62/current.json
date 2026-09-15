@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0037-m66a-epistemic-deliberation.json",
-  "latest_snapshot_sha256": "5927e3052bcfac9e7aee6ff424287296819283b418467145d47bcc2d660872bc",
+  "latest_snapshot_path": "state/m62/snapshots/0038-m66a1-four-layer-defense-truth.json",
+  "latest_snapshot_sha256": "f01d2e472c224da4cf09afee3d486cc60c04bd255fac6154e6484341633afd3b",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 37,
-  "subject_state_commit": "8a7b9594d44dd754ea3b7ac13f619b79efaa62b5",
+  "state_generation": 38,
+  "subject_state_commit": "be6aa8addac0987a7d77f511ad6d1a8e62d5bf90",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
