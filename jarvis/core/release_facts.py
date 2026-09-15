@@ -167,7 +167,7 @@ The blocking gate was NOT touched. ``bandit -r core tools -ll -q`` reports 0 Med
 0 High and still exits 0; Medium/High remain blocking at zero.
 """
 
-BANDIT_LOW_OBSERVED = 489
+BANDIT_LOW_OBSERVED = 487
 """Low findings in the tree that is checked out, not in a historical one.
 
 ``tests/test_bandit_low_baseline_v69_m618.py`` compares this against a live scan, so it

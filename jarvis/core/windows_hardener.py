@@ -18,8 +18,12 @@ import json
 import os
 import subprocess
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from core.security_control_state import SecurityControlObservation
 
 
 def _env_true(name: str, default: bool) -> bool:
@@ -201,31 +205,89 @@ def _harden_ollama() -> bool:
 
 # ── Windows Defender hardening ────────────────────────────────────────────────
 
-def _harden_defender() -> None:
-    """Ensure Windows Defender real-time protection is enabled."""
+_DEFENDER_SOURCE = "powershell:Get-MpComputerStatus"
+
+
+def _query_defender_realtime() -> "SecurityControlObservation":
+    """Observe Windows Defender real-time protection — a typed, evidence-bearing
+    result. Every non-affirmative path is UNKNOWN or ERROR, never optimistic
+    (§F9/§29): no stdout, a missing key, a timeout, an unavailable command, a
+    malformed JSON body and an access-denied all map to a distinct reason code and
+    NEVER to ACTIVE."""
+    from core import security_control_state as scs
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled "
              "| ConvertTo-Json"],
-            capture_output=True, text=True, timeout=10,
-            shell=False,
+            capture_output=True, text=True, timeout=10, shell=False,
         )
-        if not result.stdout.strip():
-            return
+    except FileNotFoundError:
+        return scs.unknown("defender", _DEFENDER_SOURCE, "command_unavailable")
+    except subprocess.TimeoutExpired:
+        return scs.unknown("defender", _DEFENDER_SOURCE, "timeout")
+    except Exception:
+        return scs.error("defender", _DEFENDER_SOURCE, "query_exception")
+
+    if result.returncode != 0:
+        low = (result.stderr or "").lower()
+        if "denied" in low or "unauthorized" in low:
+            return scs.unknown("defender", _DEFENDER_SOURCE, "access_denied")
+        return scs.unknown("defender", _DEFENDER_SOURCE, "nonzero_exit")
+    if not (result.stdout or "").strip():
+        return scs.unknown("defender", _DEFENDER_SOURCE, "no_stdout")
+    try:
         status = json.loads(result.stdout)
-        if not status.get("RealTimeProtectionEnabled", True):
+    except (ValueError, TypeError):
+        return scs.unknown("defender", _DEFENDER_SOURCE, "malformed_json")
+    # Round-1 F7: ConvertTo-Json can emit a list (or scalar) for an unexpected
+    # shape; `.get` on a non-dict would raise and crash the hardener. A shape we
+    # cannot read is UNKNOWN, never ACTIVE — fail-closed on the truth side too.
+    if not isinstance(status, dict):
+        return scs.unknown("defender", _DEFENDER_SOURCE, "unexpected_shape")
+    enabled = status.get("RealTimeProtectionEnabled")
+    if enabled is True:
+        return scs.active("defender", _DEFENDER_SOURCE, "observed_on")
+    if enabled is False:
+        return scs.inactive("defender", _DEFENDER_SOURCE, "observed_off")
+    # Key absent / null: NOT observed → UNKNOWN (was `.get(..., True)` — an
+    # optimistic default that reported ACTIVE for an unobservable control).
+    return scs.unknown("defender", _DEFENDER_SOURCE, "field_absent")
+
+
+def _harden_defender() -> "SecurityControlObservation":
+    """Ensure Windows Defender real-time protection is enabled, and REPORT what
+    was actually observed. A change command that returns 0 does not make the
+    control ACTIVE — only a successful REQUERY that observes "on" does (§29)."""
+    from core import security_control_state as scs
+    obs = _query_defender_realtime()
+    if obs.state is scs.SecurityControlState.INACTIVE:
+        try:
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                  "Set-MpPreference -DisableRealtimeMonitoring $false"],
-                capture_output=True, timeout=10,
-                shell=False,
+                capture_output=True, timeout=10, shell=False,
             )
-            logger.warning("HARDENER: Windows Defender real-time was OFF — re-enabled")
+        except Exception:
+            return scs.error("defender", _DEFENDER_SOURCE, "enable_command_failed")
+        # REQUERY — the command returning is not proof the control is on.
+        requeried = _query_defender_realtime()
+        requeried.attempted_change = True
+        requeried.post_change_observation = requeried.state
+        if requeried.state is scs.SecurityControlState.ACTIVE:
+            logger.warning("HARDENER: Windows Defender real-time was OFF — re-enabled and verified")
         else:
-            logger.info("HARDENER: Windows Defender real-time protection: ACTIVE")
-    except Exception:
-        pass
+            logger.warning(
+                "HARDENER: Windows Defender enable attempted but post-check did NOT "
+                f"observe ACTIVE (state={requeried.state.value})")
+        return requeried
+    if obs.is_active:
+        logger.info("HARDENER: Windows Defender real-time protection: ACTIVE (observed)")
+    else:
+        logger.warning(
+            f"HARDENER: Windows Defender real-time protection: {obs.state.value.upper()} "
+            f"({obs.reason_code}) — NOT asserting ACTIVE without observation")
+    return obs
 
 
 # ── Main hardening function ───────────────────────────────────────────────────
@@ -264,6 +326,7 @@ async def apply_host_hardening(broadcast_fn) -> dict:
         "services_already_disabled": 0,
         "ollama_isolated":           False,
         "defender_active":           False,
+        "defender_state":            "unknown",
         "planned_changes":           [],
         "timestamp":                 "",
     }
@@ -310,9 +373,22 @@ async def apply_host_hardening(broadcast_fn) -> dict:
         if disabled:
             report["services_disabled"] += 1
 
-    # 4. Defender check
-    await loop.run_in_executor(None, _harden_defender)
-    report["defender_active"] = True
+    # 4. Defender check — V69 M66A.1 (§F9): record the OBSERVED state, not True.
+    # `command(); status = True` is gone: `defender_active` is now true iff an
+    # affirmative observation says so, and the typed observation is attached.
+    from core import security_control_state as scs
+    defender_obs: scs.SecurityControlObservation = await loop.run_in_executor(
+        None, _harden_defender)
+    report["defender_active"] = defender_obs.is_active
+    report["defender_state"] = defender_obs.state.value
+    report["defender_observation"] = defender_obs.to_dict()
+    from core import security_metrics
+    security_metrics.incr({
+        scs.SecurityControlState.ACTIVE: "status_active",
+        scs.SecurityControlState.INACTIVE: "status_inactive",
+        scs.SecurityControlState.UNKNOWN: "status_unknown",
+        scs.SecurityControlState.ERROR: "status_error",
+    }[defender_obs.state])
 
     report["timestamp"] = datetime.now(timezone.utc).isoformat()
 

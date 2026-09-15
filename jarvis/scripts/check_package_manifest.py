@@ -69,8 +69,14 @@ FORBIDDEN_DIRS = (
     "/evaluation_quarantine/", "/model_candidate_proposals/",
 )
 
-#: Members that MUST be present for the distribution to be usable.
-REQUIRED_FRAGMENTS = ("core/", "tools/", "main.py")
+#: Members that MUST be present for the distribution to be usable. V69 M66A.1
+#: (§F8/§28): `aura/index.html` is the file AURA's FileResponse serves at `/`,`/ui`
+#: (aura/server.py `_INDEX_PATH`). It was runtime-required but declared in NEITHER
+#: pyproject package-data nor MANIFEST.in, so an installed wheel could not serve
+#: the HUD. Requiring it here makes the checker prove — not assume — the asset
+#: ships, and makes this required set non-vacuous (a second concrete asset,
+#: `main.py`, guards against a scanner that trivially passes).
+REQUIRED_FRAGMENTS = ("core/", "tools/", "main.py", "aura/index.html")
 
 _VERSION_RE = re.compile(r"^jarvis-(?P<version>[^-]+)(?:-|\.tar\.gz)")
 

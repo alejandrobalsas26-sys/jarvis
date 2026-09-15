@@ -1,0 +1,77 @@
+# .dockerignore — V69 M66A.1 (§F4/§24). The Dockerfile's `COPY . .` copies the
+# ENTIRE build context into the image. Without this file that context is the whole
+# working tree — .git history, the operator's .env, SQLite conversation stores,
+# logs, HMAC signing keys, telemetry keys, trust/integrity state, and every
+# generated training/evaluation/candidate artifact. None of that belongs in a
+# runtime image; several items are outright secrets. EXCLUDE-first and explicit,
+# mirroring MANIFEST.in. `tests/test_docker_context_v69_m66a1.py` proves synthetic
+# canaries never reach the build context.
+
+# ── Version control / CI / IDE / agent state ────────────────────────────────
+.git
+.gitignore
+.github
+.idea
+.vscode
+.claude
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# ── Secrets and signing material (never into an image) ───────────────────────
+.env
+.env.*
+*.env
+core/telemetry_keys.json
+core/trust_profile.json
+core/feed_hashes.json
+core/integrity_baseline.json
+jarvis_config.yaml
+*.key
+*.pem
+secret.key
+
+# ── Runtime state, logs, databases ──────────────────────────────────────────
+logs
+*.log
+data
+state
+brain
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite*
+.chroma_db
+
+# ── Generated ML / science artifacts (candidates, datasets, evaluations) ─────
+training
+training_gym_datasets
+training_gym_exports
+training_gym_artifacts
+training_runs
+teacher_packets
+dataset_candidates
+evaluation
+evaluation_runs
+evaluation_artifacts
+evaluation_reports
+evaluation_quarantine
+model_candidate_proposals
+*.jsonl
+
+# ── Python caches / venvs / build output ────────────────────────────────────
+__pycache__
+*.py[cod]
+.venv
+.venv-*
+venv
+build
+dist
+*.egg-info
+
+# ── Dev-only ─────────────────────────────────────────────────────────────────
+tests
+evals
+docker-compose.yml
+.DS_Store

@@ -70,8 +70,15 @@ def _install_hardener_spies(monkeypatch):
                         lambda *a, **k: calls.__setitem__("firewall", calls["firewall"] + 1) or True)
     monkeypatch.setattr(wh, "_harden_ollama",
                         lambda *a, **k: calls.__setitem__("ollama", calls["ollama"] + 1) or True)
-    monkeypatch.setattr(wh, "_harden_defender",
-                        lambda *a, **k: calls.__setitem__("defender", calls["defender"] + 1))
+    # V69 M66A.1 (§F9): _harden_defender now returns a typed SecurityControlObservation
+    # (never None); apply_host_hardening records its observed state instead of an
+    # unconditional True. The spy honours that contract.
+    from core import security_control_state as _scs
+
+    def _spy_defender(*a, **k):
+        calls["defender"] += 1
+        return _scs.active("defender", "test:spy")
+    monkeypatch.setattr(wh, "_harden_defender", _spy_defender)
     return wh, calls
 
 

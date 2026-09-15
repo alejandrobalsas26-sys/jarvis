@@ -471,7 +471,7 @@ Two things moved in the *safer* direction:
 
 The blocking gate `bandit -r core tools -ll -q` reported **29 findings: 21 Medium and
 8 High** over 72,984 lines. It now reports **0 Medium and 0 High** over 73,834 lines,
-exit code 0, with the **command and threshold unchanged**. 489 Low findings remain and
+exit code 0, with the **command and threshold unchanged**. 487 Low findings remain and
 are outside this release gate, recorded honestly rather than suppressed. (The count was
 488 at this milestone and the ceiling was set there; V69 S5E re-approved it at 489 after
 triaging two accepted false positives, and refreshed every document that quotes it —

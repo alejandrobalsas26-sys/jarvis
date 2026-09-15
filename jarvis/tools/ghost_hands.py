@@ -16,9 +16,19 @@ from loguru import logger
 
 _PROFILES_PATH = Path(__file__).parent / "lab_profiles.yaml"
 
-import pyautogui
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE    = 0.3
+
+# V69 M66A.1 (§F7/§25): pyautogui is a WORKSTATION-only dependency (GUI automation)
+# and is NOT in the base profile. It used to be imported at module load, so any base
+# consumer that touched tools.ghost_hands crashed the whole boot before TEXT_READY.
+# It is now imported LAZILY, only when a GUI action actually runs; FAILSAFE/PAUSE are
+# configured on first acquisition, exactly once.
+def _get_pyautogui():
+    import pyautogui
+    if not getattr(pyautogui, "_jarvis_configured", False):
+        pyautogui.FAILSAFE = True
+        pyautogui.PAUSE = 0.3
+        pyautogui._jarvis_configured = True
+    return pyautogui
 
 
 def _load_profiles() -> dict:
@@ -129,12 +139,12 @@ def _execute_step(step: dict) -> None:
 
     elif action == "type_text":
         time.sleep(step.get("delay_before", 0.5))
-        pyautogui.write(step.get("text", ""), interval=0.05)
+        _get_pyautogui().write(step.get("text", ""), interval=0.05)
 
     elif action == "hotkey":
         keys = step.get("keys", [])
         if keys:
-            pyautogui.hotkey(*keys)
+            _get_pyautogui().hotkey(*keys)
         time.sleep(step.get("delay_after", 0.5))
 
     elif action == "wait":
@@ -148,8 +158,7 @@ def _arrange_windows(layout: str) -> None:
     """Arrange open windows in a predefined layout."""
     try:
         import pygetwindow as gw
-        import pyautogui
-        screen_w, screen_h = pyautogui.size()
+        screen_w, screen_h = _get_pyautogui().size()
         windows = [w for w in gw.getAllWindows()
                    if w.title and w.isActive or True][:4]
 

@@ -149,8 +149,15 @@ def test_scanner_requires_the_runtime_modules():
     spec.loader.exec_module(module)
 
     assert module._missing(["jarvis-1.0/README.md"]), "an empty build would pass"
+    # V69 M66A.1 (§F8/§28): aura/index.html is now a REQUIRED runtime asset — the
+    # AURA HUD FileResponse target — so a build without it must be flagged, and a
+    # complete build must include it.
     assert module._missing(
-        ["jarvis-1.0/core/a.py", "jarvis-1.0/tools/b.py", "jarvis-1.0/main.py"]) == []
+        ["jarvis-1.0/core/a.py", "jarvis-1.0/tools/b.py", "jarvis-1.0/main.py"]), (
+        "a build missing aura/index.html must be flagged")
+    assert module._missing(
+        ["jarvis-1.0/core/a.py", "jarvis-1.0/tools/b.py", "jarvis-1.0/main.py",
+         "jarvis-1.0/aura/index.html"]) == []
 
 
 def test_scanner_detects_a_version_mismatch():

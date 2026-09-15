@@ -90,7 +90,7 @@ version = { attr = "core.version.VERSION" }
 # Declarative rule/config assets the modules load at runtime. Explicit allowlist:
 # anything not named here does not ship.
 core = ["*.yaml", "playbooks/*.yaml", "playbooks/*.yml", "sigma_rules/*.yml", "signatures/*.yar"]
-aura = ["templates/*.html", "static/*"]
+aura = ["index.html", "*.html", "templates/*.html", "static/*"]
 
 [tool.setuptools.exclude-package-data]
 # Belt and braces: these are gitignored security/state files that exist in a

@@ -42,13 +42,26 @@ def test_save_note_preserves_non_secret_content(tmp_path, monkeypatch):
 
 def _mock_requests_get(monkeypatch, text: str):
     class _Resp:
+        status_code = 200
+        headers: dict = {}
+        encoding = "utf-8"
+        url = "http://example.com/article"
+
         def raise_for_status(self):
             pass
+
         @property
         def text(self):
             return f"<html><body>{text}</body></html>"
 
+    # V69 M66A.1: estudiar_tema/fetch_webpage now route through the canonical
+    # validated egress path `_safe_http_fetch` (§F2), which uses `requests.request`
+    # and re-validates the target with `_http_target_blocked`. Patch the request
+    # primitive it actually calls and allow the synthetic target so the test
+    # exercises INGESTION, not DNS/SSRF (covered by the four-layer suite).
     monkeypatch.setattr("requests.get", lambda *a, **k: _Resp())
+    monkeypatch.setattr("requests.request", lambda *a, **k: _Resp())
+    monkeypatch.setattr("tools.executor._http_target_blocked", lambda url: None)
 
 
 def test_estudiar_tema_rejects_prompt_injection(monkeypatch):

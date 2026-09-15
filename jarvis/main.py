@@ -1440,6 +1440,11 @@ async def _main_async() -> None:
     parser.add_argument("--voice", action="store_true", help="Activa modo voz (STT + TTS)")
     parser.add_argument("--no-greeting", action="store_true", help="Omite el saludo inicial")
     parser.add_argument("--no-aura", action="store_true", help="Disable AURA WebSocket server")
+    parser.add_argument(
+        "--smoke-text", action="store_true",
+        help=("V69 M66A.1: run the real base startup up to the TEXT_READY lifecycle "
+              "milestone, print JARVIS_TEXT_READY_SMOKE_OK and exit 0. Bounded, "
+              "network-free — proves the base profile boots text mode (§F7/§26)."))
     args = parser.parse_args()
 
     # V69 M54.1/M54.2 — PHASE 1 (PROCESS STARTED): install the single console
@@ -1466,7 +1471,11 @@ async def _main_async() -> None:
     from core.llm import LLM
     from core.tts import TTS
     from core.config import settings
-    from core.audio import HighPrioritySTTListener
+    # V69 M66A.1 (§F7/§25): core.audio pulls numpy (a voice/ML dep NOT in the base
+    # profile). Importing it eagerly here crashed `python main.py` under a base-only
+    # install BEFORE TEXT_READY — the documented base startup could not boot. It is
+    # now imported LAZILY, only on the --voice path, and a missing dependency is a
+    # typed OPTIONAL_MISSING fallback to text, never a crash.
     from core.events import make_event
     from core.healthcheck import run_startup_diagnostic
     from core.task_watchdog import TaskWatchdog, RestartPolicy
@@ -1527,6 +1536,23 @@ async def _main_async() -> None:
     # FIRST: detect hardware before any model loading or task registration
     hw_profile = detect_hardware()
     set_cached_profile(hw_profile)
+
+    # V69 M66A.1 (§F7/§26): bounded base-startup smoke. By this point the entire
+    # import graph the boot needs has been imported and hardware has been detected —
+    # all under base-profile dependencies — and the next steps (ensure_all,
+    # resolve_models) probe Ollama over the network. TEXT_READY ("user MAY type;
+    # warmup ongoing") is defined to precede that warmup, so a reader is bound, the
+    # milestone is reached through the real lifecycle FSM, and the process exits 0
+    # with a machine-readable marker. This is the real entrypoint reaching a real
+    # milestone — not a substitute import test — and it needs no network.
+    if getattr(args, "smoke_text", False):
+        _lifecycle.bind_input_reader(lambda: True)
+        advanced = _lifecycle.mark_text_ready()
+        _lifecycle.note_reader_ready()
+        state_ok = advanced and _lifecycle.accepts_input()
+        print("JARVIS_TEXT_READY_SMOKE_OK" if state_ok
+              else "JARVIS_TEXT_READY_SMOKE_FAIL", flush=True)
+        return
 
     # v61.1: surface the GPU/VRAM-tier model recommendation (LOW/MID/HIGH/
     # EXTREME) alongside the TDP-tier profile above. Advisory only — it does
@@ -1619,12 +1645,27 @@ async def _main_async() -> None:
     # loop.call_soon_threadsafe; the executor's _challenge() awaits from it.
     stt_queue: asyncio.Queue = asyncio.Queue()
 
-    # Pre-load Whisper in a high-priority background thread.
-    # The model is ready before the LLM starts, preventing CPU contention.
-    audio_listener = HighPrioritySTTListener()
-    # v32.0: wire VAD events into AURA HUD broadcast
-    audio_listener._loop_ref      = asyncio.get_event_loop()
-    audio_listener._broadcast_ref = _aura_broadcast
+    # Pre-load Whisper in a high-priority background thread — VOICE MODE ONLY.
+    # V69 M66A.1 (§F7/§25): lazy. In text mode we never touch core.audio (numpy),
+    # so the base profile boots. In voice mode, a missing audio dependency degrades
+    # to text with a typed OPTIONAL_MISSING notice rather than crashing.
+    audio_listener = None
+    _audio_capability = "AVAILABLE"
+    if args.voice:
+        try:
+            from core.audio import HighPrioritySTTListener
+            audio_listener = HighPrioritySTTListener()
+            # v32.0: wire VAD events into AURA HUD broadcast
+            audio_listener._loop_ref      = asyncio.get_event_loop()
+            audio_listener._broadcast_ref = _aura_broadcast
+        except Exception as exc:      # missing numpy/whisper/etc. → OPTIONAL_MISSING
+            _audio_capability = "OPTIONAL_MISSING"
+            audio_listener = None
+            args.voice = False
+            logger.warning(
+                f"VOICE: audio stack unavailable ({type(exc).__name__}: "
+                f"OPTIONAL_MISSING) — falling back to TEXT mode. Install the "
+                f"'voice' profile to enable speech.")
 
     # V62.0 Phase 6 — session-scoped consent, shared by ToolExecutor (gates
     # screenshot/OCR/clipboard tools) and the voice/text loops (gates the

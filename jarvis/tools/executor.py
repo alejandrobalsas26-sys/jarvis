@@ -15,6 +15,7 @@ Security layers:
 """
 
 import asyncio
+import contextlib
 import inspect
 import ipaddress
 import json
@@ -34,6 +35,7 @@ import time
 import webbrowser
 import tempfile
 import unicodedata
+from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
@@ -496,6 +498,67 @@ ERR_INVALID_MODE = "INVALID_MODE"
 ERR_WRITE_FAILED = "WRITE_FAILED"
 
 
+# ── V69 M66A.1 (L2): typed, CENTRALIZED file-access decision ──────────────────
+# Every file-capable handler resolves its user/model-supplied path through ONE
+# gate — `_resolve_within_allowed` — via `_gate_path`. Before M66A.1, read_file /
+# write_file / take_screenshot used the gate but list_directory,
+# leer_archivo_universal, analizar_codigo_sast, hash_file and ingest_docs opened
+# `Path(...).expanduser().resolve()` directly, so a single semantic capability
+# (read a path) had covered and UNCOVERED implementations (§F1). These handlers
+# are also READ_ONLY / LOW_IMPACT — L1 grants them no HITL — so L2 is the ONLY
+# control between a supplied path and the file. There must be no second door.
+class FileIntent(str, Enum):
+    READ = "read"
+    WRITE = "write"
+    LIST = "list"
+    ANALYZE = "analyze"
+    HASH = "hash"
+    INGEST = "ingest"
+    DESTINATION = "destination"
+
+
+#: The tools that consume a caller-supplied filesystem path, and which argument
+#: names it. `test_file_capability_coverage` (non-vacuity, §13) asserts EVERY
+#: entry here is gated through `_resolve_within_allowed` in the handler body, and
+#: that no new file-capable handler appears without a policy entry. A convention
+#: is not relied upon — the coverage is machine-checked.
+FILE_CAPABLE_TOOLS: dict[str, tuple[str, FileIntent]] = {
+    "read_file": ("path", FileIntent.READ),
+    "write_file": ("path", FileIntent.WRITE),
+    "take_screenshot": ("save_path", FileIntent.DESTINATION),
+    "list_directory": ("path", FileIntent.LIST),
+    "leer_archivo_universal": ("filepath", FileIntent.READ),
+    "analizar_codigo_sast": ("filepath", FileIntent.ANALYZE),
+    "hash_file": ("path", FileIntent.HASH),
+    "ingest_docs": ("folder_path", FileIntent.INGEST),
+}
+
+
+def _gate_path(path: str, intent: "FileIntent") -> "tuple[Path | None, dict | None]":
+    """Resolve *path* through the ONE canonical gate, separating the RESOURCE
+    decision from the file parsing that follows.
+
+    Returns ``(resolved_path, None)`` when the path is contained within an allowed
+    root, or ``(None, error_dict)`` — fail-closed, with the typed
+    ``ERR_PATH_NOT_ALLOWED`` code — when it is not. The intent is recorded for
+    the counter/receipt; it never widens the decision (there is exactly one
+    allowed-root policy, whatever the intent).
+    """
+    from core import security_metrics
+    resolved = _resolve_within_allowed(path)
+    if resolved is None:
+        security_metrics.incr("file_policy_denials")
+        _shown = path[:120] if isinstance(path, str) else repr(path)
+        logger.warning(
+            f"Sandbox: {intent.value} access denied (outside allowed roots): {_shown!r}")
+        return None, {
+            "error": "Seguridad: la ruta está fuera de Downloads, Documents o el proyecto.",
+            "error_code": ERR_PATH_NOT_ALLOWED,
+        }
+    security_metrics.incr("file_policy_allows")
+    return resolved, None
+
+
 def _strip_override(tool_name: str, tool_input: dict) -> dict:
     """Return a copy of *tool_input* with any model-supplied FORCE_OVERRIDE removed.
 
@@ -641,6 +704,272 @@ def _http_target_blocked(url: str) -> str | None:
                 "Habilita JARVIS_TRUSTED_LAB=true para permitir rangos internos en lab aislado."
             )
     return None
+
+
+# ── V69 M66A.1 (L2): ONE validated HTTP egress path for arbitrary destinations ─
+# Before M66A.1, `http_request` re-validated every redirect hop but `fetch_webpage`
+# and `estudiar_tema` called `requests.get(url)` directly — a semantically
+# identical capability (fetch an arbitrary model-supplied URL) with a covered and
+# an UNCOVERED implementation (§F2). And `http_request` forwarded the caller's
+# headers UNCHANGED across origins on redirect, leaking credentials (§F3). Both
+# controls now live here, in one place every arbitrary-destination fetch shares.
+
+#: Credential-bearing headers stripped on a CROSS-ORIGIN redirect. Destination
+#: safety (the SSRF guard) and credential safety are SEPARATE controls (§F3): a
+#: same-origin redirect keeps them (standards-compatible); an origin change drops
+#: them unless a deterministic trusted policy says otherwise (there is none today,
+#: so cross-origin ALWAYS strips — conservative wins over convenience, §16).
+_SENSITIVE_HTTP_HEADERS: frozenset[str] = frozenset({
+    "authorization", "proxy-authorization", "cookie", "cookie2", "x-api-key",
+    "www-authenticate", "set-cookie",
+    # Round-1 F3: common NON-standard credential headers, so a caller-set custom
+    # auth header is not forwarded verbatim across origins. Conservative wins over
+    # convenience (§16); anything credential-shaped is dropped cross-origin.
+    "authentication", "x-auth-token", "x-auth", "auth-token", "api-token",
+    "x-api-token", "x-access-token", "access-token", "x-amz-security-token",
+    "x-csrf-token", "x-session-token", "bearer",
+})
+
+
+def _http_origin(url: str) -> "tuple[str, str, int]":
+    """(scheme, normalized-host, effective-port) — the origin, for comparison."""
+    import urllib.parse
+    p = urllib.parse.urlparse(url)
+    scheme = (p.scheme or "").lower()
+    host = (p.hostname or "").lower()
+    port = p.port if p.port is not None else (443 if scheme == "https" else 80)
+    return scheme, host, port
+
+
+def _same_origin(a: str, b: str) -> bool:
+    return _http_origin(a) == _http_origin(b)
+
+
+def _headers_for_hop(headers: dict, from_url: str, to_url: str) -> "tuple[dict, int]":
+    """The headers to send on a redirect to *to_url*. On a cross-origin hop,
+    strip every sensitive header. Returns (headers, stripped_count)."""
+    if _same_origin(from_url, to_url):
+        return dict(headers), 0
+    kept: dict = {}
+    stripped = 0
+    for k, v in headers.items():
+        if k.lower() in _SENSITIVE_HTTP_HEADERS:
+            stripped += 1
+            continue
+        kept[k] = v
+    return kept, stripped
+
+
+def _safe_http_fetch(method: str, url: str, *, headers: "dict | None" = None,
+                     body: str = "", timeout: int = 10, max_redirects: int = 5):
+    """Perform a validated HTTP request, following redirects MANUALLY so that
+
+      * every hop's target is SSRF-checked BEFORE it is fetched (F2), and
+      * sensitive headers are dropped on every cross-origin hop (F3).
+
+    Returns ``(response, meta)`` on success or ``(None, meta)`` on a policy block,
+    where ``meta`` carries ``error`` (block reason or None), ``final_url`` and
+    ``sensitive_headers_stripped``. The caller formats the response.
+    """
+    import urllib.parse
+    from core import security_metrics
+
+    _REDIRECT_CODES = (301, 302, 303, 307, 308)
+    current_url = url
+    cur_method = method.upper()
+    cur_body = body
+    cur_headers = dict(headers or {})
+    total_stripped = 0
+    meta = {"error": None, "final_url": current_url, "sensitive_headers_stripped": 0}
+
+    for _hop in range(max_redirects + 1):
+        block = _http_target_blocked(current_url)
+        if block:
+            security_metrics.incr("http_target_denials")
+            if _hop > 0:
+                security_metrics.incr("redirect_blocks")
+            logger.warning(f"HTTP egress blocked: {current_url!r} — {block}")
+            meta["error"] = block
+            meta["final_url"] = current_url
+            return None, meta
+        security_metrics.incr("http_target_allows")
+
+        resp = requests.request(
+            cur_method, current_url,
+            headers=cur_headers,
+            data=cur_body.encode("utf-8") if cur_body else None,
+            timeout=timeout, allow_redirects=False,
+        )
+        if resp.status_code not in _REDIRECT_CODES:
+            meta["final_url"] = str(resp.url)
+            meta["sensitive_headers_stripped"] = total_stripped
+            return resp, meta
+
+        location = resp.headers.get("Location") or resp.headers.get("location")
+        if not location or not str(location).strip():
+            meta["error"] = "Redirección sin cabecera Location válida (bloqueado)."
+            return None, meta
+        next_url = urllib.parse.urljoin(current_url, str(location).strip())
+        cur_headers, stripped = _headers_for_hop(cur_headers, current_url, next_url)
+        if stripped:
+            total_stripped += stripped
+            security_metrics.incr("sensitive_headers_stripped", stripped)
+        # Browser/requests semantics: 301/302/303 downgrade to a bodyless GET;
+        # 307/308 preserve method and body.
+        if resp.status_code in (301, 302, 303) and cur_method not in ("GET", "HEAD"):
+            cur_method = "GET"
+            cur_body = ""
+        current_url = next_url
+
+    security_metrics.incr("redirect_blocks")
+    meta["error"] = f"Demasiadas redirecciones (>{max_redirects}) — bloqueado."
+    return None, meta
+
+
+# ── V69 M66A.1 (L3): contained Python execution ───────────────────────────────
+# `code_execute` used to be `subprocess.run([sys.executable, tmp])` with the
+# parent's full environment, the parent's cwd, an open network, no resource limits
+# and no way to kill a child that outlived the timeout — yet its docstring called
+# the subprocess "isolated" (§F6). It is now a truthful RESTRICTED_PROCESS: a
+# dedicated cwd, a minimal environment allowlist, a hard wall-clock timeout that
+# terminates the whole PROCESS TREE, output caps, and (on POSIX) CPU / address-
+# space / file-size rlimits. Network isolation is NOT attempted — that needs
+# privileged host changes this milestone will not make (§22) — so it is reported
+# NOT_ENFORCED rather than claimed. `subprocess != sandbox`; the profile names
+# only what is enforced.
+
+#: RESTRICTED_PROCESS rlimits (POSIX). Deliberately load-bearing and testable:
+#: each is low enough that a probe exceeding it is killed BEFORE the wall timeout,
+#: so removing the limit changes the observable outcome (mutation-detectable).
+_CE_CPU_SECONDS = 5                    # RLIMIT_CPU soft (SIGXCPU)
+_CE_MEM_BYTES = 512 * 1024 * 1024      # RLIMIT_AS address-space cap
+_CE_FSIZE_BYTES = 16 * 1024 * 1024     # RLIMIT_FSIZE max single-file write
+_CE_STDOUT_CAP = 3000
+_CE_STDERR_CAP = 1000
+
+#: The only environment variables a contained execution inherits. Everything else
+#: — API keys, tokens, the operator's shell env, the JARVIS_* settings — is
+#: withheld, so a snippet cannot read the parent's secrets (§F6).
+_CE_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+
+
+def _run_contained_python(code: str, timeout: int):
+    """Run *code* as a contained Python subprocess. Returns
+    ``(stdout, stderr, returncode, ContainmentReport, error_or_None)``.
+
+    The ContainmentReport records what was ACTUALLY enforced; the profile it
+    names is derived from those controls, never asserted."""
+    import tempfile
+    from core.execution_profile import (
+        ContainmentReport, ControlStatus, ExecutionProfile)
+    from core import security_metrics
+
+    report = ContainmentReport(profile=ExecutionProfile.RESTRICTED_PROCESS)
+    report.network_isolation = ControlStatus.NOT_ENFORCED
+    report.measured_limitations.append(
+        "network is NOT isolated: a snippet can still open outbound sockets "
+        "(no privileged host firewall change is made — §22)")
+    report.measured_limitations.append(
+        "process-count (RLIMIT_NPROC) is not lowered: it is per-UID and lowering "
+        "it risks the host's other processes; the process-tree kill bounds fan-out")
+
+    posix = (os.name == "posix")
+    workdir = tempfile.mkdtemp(prefix="jarvis_codeexec_")
+    report.controls["dedicated_cwd"] = ControlStatus.ENFORCED
+
+    # Minimal environment allowlist.
+    child_env = {k: os.environ[k] for k in _CE_ENV_ALLOWLIST if k in os.environ}
+    child_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    report.controls["minimal_env"] = ControlStatus.ENFORCED
+
+    def _preexec():                       # pragma: no cover - runs in child
+        os.setsid()                       # own session/process group for tree kill
+        with contextlib.suppress(Exception):
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (_CE_CPU_SECONDS, _CE_CPU_SECONDS + 1))
+            resource.setrlimit(resource.RLIMIT_AS, (_CE_MEM_BYTES, _CE_MEM_BYTES))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (_CE_FSIZE_BYTES, _CE_FSIZE_BYTES))
+
+    if posix:
+        report.controls["cpu_limit"] = ControlStatus.ENFORCED
+        report.controls["memory_limit"] = ControlStatus.ENFORCED
+        report.controls["fsize_limit"] = ControlStatus.ENFORCED
+        report.controls["process_tree_kill"] = ControlStatus.ENFORCED
+    else:
+        report.controls["cpu_limit"] = ControlStatus.NOT_SUPPORTED
+        report.controls["memory_limit"] = ControlStatus.NOT_SUPPORTED
+        report.controls["fsize_limit"] = ControlStatus.NOT_SUPPORTED
+        # A best-effort tree kill still exists via CREATE_NEW_PROCESS_GROUP.
+        report.controls["process_tree_kill"] = ControlStatus.ENFORCED
+
+    script = os.path.join(workdir, "snippet.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write(code)
+
+    popen_kwargs = dict(
+        cwd=workdir, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, shell=False,
+    )
+    if posix:
+        popen_kwargs["preexec_fn"] = _preexec
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    stdout = stderr = ""
+    returncode = None
+    err = None
+    proc = None
+    try:
+        proc = subprocess.Popen([sys.executable, "-I", script], **popen_kwargs)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            returncode = proc.returncode
+            report.controls["wall_timeout"] = ControlStatus.ENFORCED
+        except subprocess.TimeoutExpired:
+            report.controls["wall_timeout"] = ControlStatus.ENFORCED
+            # Kill the whole tree, not just the direct child (§23).
+            _kill_process_tree(proc, posix)
+            with contextlib.suppress(Exception):
+                stdout, stderr = proc.communicate(timeout=5)
+            err = f"Timeout tras {timeout}s de ejecución."
+        stdout = (stdout or "")[:_CE_STDOUT_CAP]
+        stderr = (stderr or "")[:_CE_STDERR_CAP]
+        report.controls["stdout_cap"] = ControlStatus.ENFORCED
+        report.controls["stderr_cap"] = ControlStatus.ENFORCED
+    except Exception as e:                # pragma: no cover - launch failure
+        err = str(e)
+    finally:
+        if proc is not None and proc.poll() is None:
+            _kill_process_tree(proc, posix)
+        with contextlib.suppress(Exception):
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    profile = report.classify()
+    if profile is ExecutionProfile.RESTRICTED_PROCESS:
+        security_metrics.incr("execution_profile_restricted")
+    elif profile is ExecutionProfile.SANDBOXED:
+        security_metrics.incr("execution_profile_sandboxed")
+    else:
+        security_metrics.incr("execution_profile_direct")
+    if report.network_isolation is not ControlStatus.ENFORCED:
+        security_metrics.incr("containment_control_unavailable")
+    return stdout, stderr, returncode, report, err
+
+
+def _kill_process_tree(proc, posix: bool) -> None:
+    """Terminate *proc* and every descendant. On POSIX the child leads its own
+    session (os.setsid), so one killpg reaps the whole tree (§23)."""
+    import signal
+    with contextlib.suppress(Exception):
+        if posix:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            except Exception:
+                proc.kill()
+        else:
+            proc.kill()
 
 
 def _validate_network_target(target: str) -> str:
@@ -2050,10 +2379,28 @@ class ToolExecutor:
 
         auth_audit = "hitl_exempt"
         must_challenge = requires_hitl(risk_class)
+        # V69 M66A.1 (L1): the descriptor the operator reviews and the identity
+        # the approval binds to. Computed over the EFFECTIVE call (defaults
+        # applied, override stripped) so a divergence anywhere — including after
+        # char 200, which the old str(tool_input)[:200] preview hid — changes the
+        # digest and a rendered target (§F5). Reused for the binding check
+        # before execution (§F19).
+        approval_descriptor = None
         if must_challenge:
-            preview = str(tool_input)
-            if len(preview) > 200:
-                preview = preview[:200] + "…"
+            from core import security_metrics, tool_approval
+            security_metrics.incr("hitl_challenges")
+            # The reserved idempotency_key is protocol plumbing, never part of the
+            # caller's action, so it must not enter the approval identity — else a
+            # handler that cannot bind it would leave it in `tool_input` here yet
+            # stripped at execution, and the binding would falsely mismatch.
+            _approval_input = {k: v for k, v in tool_input.items()
+                               if k != _IDEMPOTENCY_ARG}
+            effective_for_approval = _effective_call(handler, _approval_input)
+            approval_descriptor = tool_approval.describe(
+                tool_name, risk_class.value, tool_input, effective_for_approval,
+                rollback_hint=rollback_hint(risk_class, tool_name),
+            )
+            preview = approval_descriptor.render_preview()
             from core.aura_events import ToolAuthPendingEvent
             await _aura_broadcast(ToolAuthPendingEvent(
                 tool=tool_name,
@@ -2136,6 +2483,29 @@ class ToolExecutor:
         # journal import in this file is: a broken journal must not be able to
         # break importing the executor. Naming the class is all this costs.
         from core.effect_journal import DeclaredEffectOutcome
+
+        # V69 M66A.1 (L1 §F19): REVIEWED ACTION == EXECUTED ACTION. If the input
+        # was mutated between the operator's approval and this boundary — a
+        # default inserted, an override stripped, a value rewritten — the
+        # effective call no longer matches the reviewed descriptor and the
+        # approval does not carry to it. Fail-closed. `_effective_call` drops the
+        # reserved idempotency_key, so its legitimate injection above does not
+        # trip this.
+        if approval_descriptor is not None:
+            from core import security_metrics, tool_approval
+            _exec_input = {k: v for k, v in tool_input.items()
+                           if k != _IDEMPOTENCY_ARG}
+            if not tool_approval.bind_matches(
+                    approval_descriptor, tool_name, _effective_call(handler, _exec_input)):
+                security_metrics.incr("hitl_identity_mismatch_blocks")
+                logger.warning(
+                    f"SECURITY: approval/execution identity mismatch for '{tool_name}' "
+                    "— the call about to run is not the one that was approved; refused.")
+                self._audit.log_action(tool_name, reasoning, auth_audit, "blocked",
+                                       "approval_identity_mismatch")
+                return {"error": ("Seguridad: la acción a ejecutar no coincide con la "
+                                  "aprobada (identidad de llamada distinta)."),
+                        "error_class": "approval_identity_mismatch"}
 
         try:
             # Layer 4: run synchronous tool handler in thread pool
@@ -2733,18 +3103,33 @@ class ToolExecutor:
             return f"OCR no disponible: {e}"
 
     def _tool_list_directory(self, path: str = ".", pattern: str = "*") -> dict:
-        p = Path(path).expanduser()
+        # V69 M66A.1 (L2): route through the ONE canonical gate. Previously used
+        # `Path(path).expanduser()` directly, so a listing of any directory on the
+        # host was possible with no HITL (this tool is READ_ONLY). Fail-closed.
+        p, denied = _gate_path(path, FileIntent.LIST)
+        if denied is not None:
+            return denied
         if not p.exists():
-            return {"error": f"Directorio no encontrado: {path}"}
-        files = [
-            {
+            return {"error": f"Directorio no encontrado: {path}",
+                    "error_code": ERR_FILE_NOT_FOUND}
+        # V69 M66A.1 (L2, Round-1 F1): the GLOB PATTERN is a second, caller-controlled
+        # door — `p.glob("../../../etc/*")` walks out of the gated base, so gating only
+        # `path` left `list_directory` (READ_ONLY, no HITL) able to enumerate any
+        # readable directory while truthfully reporting the allowed base. Every match
+        # is now re-contained through the ONE gate; a match that resolves outside the
+        # allowed roots is dropped, so a legitimate sub-glob (`*/*.txt`) still works but
+        # a traversal pattern yields nothing. Fail-closed, and the receipt cannot lie
+        # about what was enumerated.
+        files = []
+        for item in sorted(p.glob(pattern)):
+            if _resolve_within_allowed(str(item)) is None:
+                continue
+            files.append({
                 "name": item.name,
                 "type": "dir" if item.is_dir() else "file",
                 "ext": item.suffix.lower(),
                 "size_kb": round(item.stat().st_size / 1024, 2) if item.is_file() else 0,
-            }
-            for item in sorted(p.glob(pattern))
-        ]
+            })
         return {"path": str(p.resolve()), "items": files, "count": len(files)}
 
     # ── Lectura Universal y SAST ──────────────────────────────────────────────
@@ -2752,9 +3137,15 @@ class ToolExecutor:
     def _tool_leer_archivo_universal(self, filepath: str) -> dict:
         """Lee archivos multiformato con truncamiento estricto de 4000 chars (Single Channel VRAM)."""
         _MAX_CHARS = 4000
-        p = Path(filepath).expanduser().resolve()
+        # V69 M66A.1 (L2): same canonical containment as read_file. Previously
+        # opened `Path(filepath).expanduser().resolve()` directly — a second file
+        # reader that skipped the gate read_file enforced (§F1).
+        p, denied = _gate_path(filepath, FileIntent.READ)
+        if denied is not None:
+            return denied
         if not p.exists():
-            return {"error": f"Archivo no encontrado: {filepath}"}
+            return {"error": f"Archivo no encontrado: {filepath}",
+                    "error_code": ERR_FILE_NOT_FOUND}
 
         ext = p.suffix.lower()
         try:
@@ -2798,9 +3189,14 @@ class ToolExecutor:
     def _tool_analizar_codigo_sast(self, filepath: str) -> dict:
         """Análisis estático ligero (regex-based SAST) sin dependencias externas."""
         _MAX_FINDINGS = 15
-        p = Path(filepath).expanduser().resolve()
+        # V69 M66A.1 (L2): the analyzer reads a caller-supplied file, so it is a
+        # file-capable surface and goes through the ONE gate (§F1).
+        p, denied = _gate_path(filepath, FileIntent.ANALYZE)
+        if denied is not None:
+            return denied
         if not p.exists():
-            return {"error": f"Archivo no encontrado: {filepath}"}
+            return {"error": f"Archivo no encontrado: {filepath}",
+                    "error_code": ERR_FILE_NOT_FOUND}
 
         findings: list[dict] = []
         possibly_more = False
@@ -2849,7 +3245,13 @@ class ToolExecutor:
     def _tool_fetch_webpage(self, url: str, max_chars: int = 5000) -> dict:
         try:
             from bs4 import BeautifulSoup
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            # V69 M66A.1 (L2): the SAME validated egress path as http_request.
+            # Was `requests.get(url)` direct — an SSRF bypass of the guard
+            # http_request already enforced (§F2).
+            resp, meta = _safe_http_fetch(
+                "GET", url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if resp is None:
+                return {"error": meta["error"]}
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "lxml")
             for tag in soup(["script", "style", "nav", "footer"]):
@@ -3537,7 +3939,12 @@ class ToolExecutor:
             return {"error": "beautifulsoup4 no instalado. Ejecuta: pip install beautifulsoup4 lxml"}
 
         try:
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            # V69 M66A.1 (L2): SSRF-validated egress path (§F2), was direct
+            # `requests.get(url)`.
+            resp, meta = _safe_http_fetch(
+                "GET", url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if resp is None:
+                return {"error": f"No se pudo descargar {url}: {meta['error']}"}
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "lxml")
             for tag in soup(["script", "style", "nav", "footer", "aside"]):
@@ -3629,6 +4036,19 @@ class ToolExecutor:
 
     def _tool_ingest_docs(self, folder_path: str = "") -> dict:
         """Index PDFs and TXTs from a local folder into the Knowledge Vault."""
+        # V69 M66A.1 (L2): a caller-supplied folder is a file-capable surface —
+        # the vault rglob's it and reads every PDF/TXT into the vector store with
+        # no HITL (LOW_IMPACT). An empty folder_path is the FIXED safe default
+        # (the vault's own docs dir), so it is not a caller-supplied path and is
+        # left to the vault; a NON-empty one must be contained (§F1).
+        if folder_path:
+            _p, denied = _gate_path(folder_path, FileIntent.INGEST)
+            if denied is not None:
+                return denied
+            # Round-1 F4: hand the vault the ALREADY-RESOLVED path, not the raw
+            # string it would independently re-resolve — one resolve, no TOCTOU
+            # window between the gate's check and the vault's use.
+            return self._get_vault().ingest_docs(str(_p))
         return self._get_vault().ingest_docs(folder_path)
 
     def _tool_query_knowledge(self, query: str) -> dict:
@@ -3784,36 +4204,29 @@ class ToolExecutor:
             return {"error": str(e), "error_code": ERR_WRITE_FAILED}
 
     def _tool_code_execute(self, code: str, timeout: int = 15) -> dict:
-        """[HITL] Execute a Python snippet in an isolated subprocess. Returns stdout/stderr."""
+        """[HITL] Execute a Python snippet in a RESTRICTED_PROCESS. Returns stdout/stderr.
+
+        V69 M66A.1 (L3): a dedicated cwd, a minimal environment allowlist, a hard
+        timeout that kills the whole process tree, output caps and (POSIX) CPU /
+        memory / file-size rlimits. Network is NOT isolated (§22); the returned
+        `containment` report states exactly what was enforced — no word like
+        "sandboxed" is used without proof (§20).
+        """
         if len(code) > 8000:
             return {"error": "Code too long (max 8000 chars)."}
-        import tempfile, os as _os
-        tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", delete=False, encoding="utf-8"
-            ) as tmp:
-                tmp.write(code)
-                tmp_path = tmp.name
-            proc = subprocess.run(
-                [sys.executable, tmp_path],
-                capture_output=True, text=True, timeout=timeout, shell=False,
-            )
-            return {
-                "stdout": proc.stdout[:3000],
-                "stderr": proc.stderr[:1000],
-                "returncode": proc.returncode,
-            }
-        except subprocess.TimeoutExpired:
-            return {"error": f"Timeout tras {timeout}s de ejecución."}
-        except Exception as e:
-            return {"error": str(e)}
-        finally:
-            if tmp_path:
-                try:
-                    _os.unlink(tmp_path)
-                except Exception:
-                    pass
+            timeout = max(1, min(int(timeout), 120))
+        except (TypeError, ValueError):
+            timeout = 15
+        stdout, stderr, returncode, report, err = _run_contained_python(code, timeout)
+        if err is not None and returncode is None:
+            return {"error": err, "containment": report.to_dict()}
+        return {
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": returncode,
+            "containment": report.to_dict(),
+        }
 
     def _tool_http_request(
         self,
@@ -3829,62 +4242,28 @@ class ToolExecutor:
         metadata 169.254.169.254), multicast and reserved targets — including
         hostnames that resolve to them — unless trusted-lab mode is enabled.
 
-        Redirects are followed MANUALLY with a small hop cap so that EVERY hop is
-        re-validated by the SSRF guard: a public URL cannot 30x-bounce into an
-        internal/metadata address, and a malformed/relative Location fails closed.
+        V69 M66A.1: routes through the ONE canonical egress path (`_safe_http_fetch`)
+        shared with fetch_webpage/estudiar_tema. Redirects are followed MANUALLY so
+        every hop is SSRF-checked, and sensitive headers (Authorization, Cookie,
+        Proxy-Authorization, X-API-Key …) are STRIPPED on any cross-origin hop —
+        destination safety and credential safety are separate controls (§F3).
         """
-        import urllib.parse
-
         method = method.upper()
         if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
             return {"error": f"Método HTTP inválido: {method}"}
-
-        _MAX_REDIRECTS = 5
-        _REDIRECT_CODES = (301, 302, 303, 307, 308)
-
-        current_url = url
-        cur_method = method
-        cur_body = body
         try:
-            for _hop in range(_MAX_REDIRECTS + 1):
-                # Re-validate the *current* target BEFORE fetching it, so every
-                # redirect hop is SSRF-checked, not just the initial URL.
-                block_reason = _http_target_blocked(current_url)
-                if block_reason:
-                    logger.warning(f"http_request bloqueado: {current_url!r} — {block_reason}")
-                    return {"error": block_reason}
-
-                resp = requests.request(
-                    cur_method, current_url,
-                    headers=headers or {},
-                    data=cur_body.encode("utf-8") if cur_body else None,
-                    timeout=timeout,
-                    allow_redirects=False,
-                )
-
-                if resp.status_code not in _REDIRECT_CODES:
-                    return {
-                        "status_code": resp.status_code,
-                        "url": str(resp.url),
-                        "headers": dict(resp.headers),
-                        "body": resp.text[:4000],
-                        "encoding": resp.encoding,
-                    }
-
-                location = resp.headers.get("Location") or resp.headers.get("location")
-                if not location or not str(location).strip():
-                    return {"error": "Redirección sin cabecera Location válida (bloqueado)."}
-
-                # Resolve relative redirects against the current URL, then loop so
-                # the new target is SSRF-checked before it is ever fetched.
-                current_url = urllib.parse.urljoin(current_url, str(location).strip())
-                # Browser/requests semantics: 301/302/303 downgrade to a bodyless
-                # GET; 307/308 preserve method and body.
-                if resp.status_code in (301, 302, 303) and cur_method not in ("GET", "HEAD"):
-                    cur_method = "GET"
-                    cur_body = ""
-
-            return {"error": f"Demasiadas redirecciones (>{_MAX_REDIRECTS}) — bloqueado."}
+            resp, meta = _safe_http_fetch(
+                method, url, headers=headers or {}, body=body, timeout=timeout)
+            if resp is None:
+                return {"error": meta["error"]}
+            return {
+                "status_code": resp.status_code,
+                "url": meta["final_url"],
+                "headers": dict(resp.headers),
+                "body": resp.text[:4000],
+                "encoding": resp.encoding,
+                "sensitive_headers_stripped": meta["sensitive_headers_stripped"],
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -3965,9 +4344,14 @@ class ToolExecutor:
     def _tool_hash_file(self, path: str, algorithms: list | None = None) -> dict:
         """[EXEMPT] Compute MD5/SHA1/SHA256/SHA512 hashes of a file."""
         import hashlib
-        p = Path(path).expanduser().resolve()
+        # V69 M66A.1 (L2): hashing reads the whole file, so an ungated path here
+        # is a read-oracle on any host file (§F1). One gate, fail-closed.
+        p, denied = _gate_path(path, FileIntent.HASH)
+        if denied is not None:
+            return denied
         if not p.exists():
-            return {"error": f"Archivo no encontrado: {path}"}
+            return {"error": f"Archivo no encontrado: {path}",
+                    "error_code": ERR_FILE_NOT_FOUND}
         algos = [a.lower() for a in (algorithms or ["md5", "sha1", "sha256"])
                  if a.lower() in {"md5", "sha1", "sha256", "sha512"}]
         if not algos:
