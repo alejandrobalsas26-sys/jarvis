@@ -25,6 +25,24 @@ _CHUNK_SIZE = 1000   # chars
 _CHUNK_OVERLAP = 200  # chars
 
 
+def contained_matches(folder: Path, pattern: str) -> "list[Path]":
+    """V69 M66A.1 (L2, Round-2): rglob *pattern* under *folder*, keeping ONLY the
+    matches whose REAL path stays within *folder*. `rglob` follows file symlinks,
+    so a symlink planted inside a contained folder could point a reader at a file
+    outside it (the same per-match containment class the list_directory glob fix
+    closed). A match that resolves out of the folder — or cannot be resolved — is
+    dropped, fail-closed."""
+    folder_real = folder.resolve()
+    kept: list[Path] = []
+    for match in folder.rglob(pattern):
+        try:
+            if match.resolve().is_relative_to(folder_real):
+                kept.append(match)
+        except (OSError, ValueError):
+            continue
+    return kept
+
+
 class KnowledgeVaultUnavailable(RuntimeError):
     """The vector backend (chromadb / sentence-transformers / torch) could not
     initialize. Carries a *classified* error and a *safe* message that never
@@ -325,8 +343,14 @@ class KnowledgeVault:
                 ),
             }
 
-        pdf_files = list(folder.rglob("*.pdf"))
-        txt_files = list(folder.rglob("*.txt"))
+        # V69 M66A.1 (L2, Round-2): rglob follows FILE symlinks, so a symlink
+        # planted inside the contained folder (e.g. via an extracted archive) could
+        # point read_text/_read_pdf at a file OUTSIDE the folder — the same
+        # per-match containment class the list_directory glob fix closed. Every
+        # match is re-contained to the (already-gated) folder by
+        # `contained_matches`; a match whose real path leaves the folder is dropped.
+        pdf_files = contained_matches(folder, "*.pdf")
+        txt_files = contained_matches(folder, "*.txt")
         all_files = pdf_files + txt_files
 
         if not all_files:

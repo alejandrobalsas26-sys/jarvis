@@ -714,21 +714,11 @@ def _http_target_blocked(url: str) -> str | None:
 # headers UNCHANGED across origins on redirect, leaking credentials (§F3). Both
 # controls now live here, in one place every arbitrary-destination fetch shares.
 
-#: Credential-bearing headers stripped on a CROSS-ORIGIN redirect. Destination
-#: safety (the SSRF guard) and credential safety are SEPARATE controls (§F3): a
-#: same-origin redirect keeps them (standards-compatible); an origin change drops
-#: them unless a deterministic trusted policy says otherwise (there is none today,
-#: so cross-origin ALWAYS strips — conservative wins over convenience, §16).
-_SENSITIVE_HTTP_HEADERS: frozenset[str] = frozenset({
-    "authorization", "proxy-authorization", "cookie", "cookie2", "x-api-key",
-    "www-authenticate", "set-cookie",
-    # Round-1 F3: common NON-standard credential headers, so a caller-set custom
-    # auth header is not forwarded verbatim across origins. Conservative wins over
-    # convenience (§16); anything credential-shaped is dropped cross-origin.
-    "authentication", "x-auth-token", "x-auth", "auth-token", "api-token",
-    "x-api-token", "x-access-token", "access-token", "x-amz-security-token",
-    "x-csrf-token", "x-session-token", "bearer",
-})
+# Destination safety (the SSRF guard) and credential safety are SEPARATE controls
+# (§F3). Cross-origin credential handling is an ALLOWLIST — see
+# `_CROSS_ORIGIN_SAFE_HEADERS` / `_headers_for_hop` below: a denylist of known
+# credential names (Round-2 F3) missed PRIVATE-TOKEN, X-Vault-Token, bare apikey…,
+# so on an origin change we keep only content-negotiation headers and drop the rest.
 
 
 def _http_origin(url: str) -> "tuple[str, str, int]":
@@ -745,18 +735,31 @@ def _same_origin(a: str, b: str) -> bool:
     return _http_origin(a) == _http_origin(b)
 
 
+#: Headers safe to carry across an origin boundary. Round-2 F3 + CLAUDE.md §4
+#: ("Default to ALLOWLISTS, not denylists"): a denylist of known credential names
+#: missed PRIVATE-TOKEN, X-Vault-Token, bare apikey, etc. On a cross-origin hop we
+#: now keep ONLY these content-negotiation headers and drop everything else —
+#: conservative cross-origin behaviour wins over convenience (§16).
+_CROSS_ORIGIN_SAFE_HEADERS: frozenset[str] = frozenset({
+    "user-agent", "accept", "accept-language", "accept-encoding",
+    "content-type", "content-length", "cache-control", "referer",
+})
+
+
 def _headers_for_hop(headers: dict, from_url: str, to_url: str) -> "tuple[dict, int]":
-    """The headers to send on a redirect to *to_url*. On a cross-origin hop,
-    strip every sensitive header. Returns (headers, stripped_count)."""
+    """The headers to send on a redirect to *to_url*. Same-origin: unchanged
+    (standards-compatible). Cross-origin: keep ONLY the content-negotiation
+    allowlist and drop everything else, so no credential-shaped header — known or
+    not — is forwarded to a new origin. Returns (headers, dropped_count)."""
     if _same_origin(from_url, to_url):
         return dict(headers), 0
     kept: dict = {}
     stripped = 0
     for k, v in headers.items():
-        if k.lower() in _SENSITIVE_HTTP_HEADERS:
+        if k.lower() in _CROSS_ORIGIN_SAFE_HEADERS:
+            kept[k] = v
+        else:
             stripped += 1
-            continue
-        kept[k] = v
     return kept, stripped
 
 
@@ -2623,9 +2626,13 @@ class ToolExecutor:
                                    "blocked", "LAB_ONLY capability — trusted lab disabled")
             return {"error": f"capability '{name}' is LAB_ONLY — requires JARVIS_TRUSTED_LAB=true"}
         if requires_hitl(risk_class):
-            preview = f"{name} {params}"
-            if len(preview) > 200:
-                preview = preview[:200] + "…"
+            # V69 M66A.1 (L1, Round-2 F4): the same structured, redacted, non-
+            # truncated descriptor the native path uses — no `f"{name} {params}"[:200]`
+            # collision and no value-embedded secret leaking into the challenge.
+            from core import tool_approval as _ta
+            _cap_input = params if isinstance(params, dict) else {"params": params}
+            preview = _ta.describe(f"capability:{name}", risk_class.value,
+                                   _cap_input, _cap_input).render_preview()
             granted, _audit = await self._challenge(f"capability:{name}", preview)
             if not granted:
                 self._audit.log_action(f"capability:{name}", reasoning, _audit,
@@ -2758,9 +2765,14 @@ class ToolExecutor:
                 )
             }
 
-        preview = str(tool_input)
-        if len(preview) > 200:
-            preview = preview[:200] + "…"
+        # V69 M66A.1 (L1, Round-2 F4): MCP gates foreign code — the surface most
+        # needing strong review — so it uses the SAME structured, redacted,
+        # collision-resistant descriptor as the native path, not `str(tool_input)[:200]`.
+        from core import tool_approval as _ta_mcp
+        _mcp_effective = _effective_call(getattr(self, f"_tool_{tool_name}", None), tool_input)
+        _mcp_descriptor = _ta_mcp.describe(f"mcp:{tool_name}", risk_class.value,
+                                           tool_input, _mcp_effective)
+        preview = _mcp_descriptor.render_preview()
         auth_audit = "hitl_exempt"
         if requires_hitl(risk_class):
             from core.aura_events import ToolAuthPendingEvent
@@ -2796,6 +2808,22 @@ class ToolExecutor:
             effect_hooks.before_invoke()
 
         from core.effect_journal import DeclaredEffectOutcome
+
+        # V69 M66A.1 (L1 §F19, Round-2 F4): REVIEWED == EXECUTED on the MCP surface
+        # too. If a challenge occurred, the effective call about to run must match
+        # the reviewed descriptor, else the approval does not carry to it.
+        if requires_hitl(risk_class):
+            from core import security_metrics as _sm_mcp
+            _mcp_exec = _effective_call(getattr(self, f"_tool_{tool_name}", None), tool_input)
+            if not _ta_mcp.bind_matches(_mcp_descriptor, f"mcp:{tool_name}", _mcp_exec):
+                _sm_mcp.incr("hitl_identity_mismatch_blocks")
+                logger.warning(
+                    f"SECURITY: approval/execution identity mismatch for MCP "
+                    f"'{tool_name}' — refused.")
+                self._audit.log_action(tool_name, reasoning, auth_audit, "blocked",
+                                       "approval_identity_mismatch")
+                return {"error": "Seguridad: la acción MCP a ejecutar no coincide con "
+                                 "la aprobada.", "error_class": "approval_identity_mismatch"}
 
         try:
             result = await call_fn(tool_name, tool_input)
@@ -4650,9 +4678,14 @@ class RedTeamShellExecutor:
                 if response not in ("yes", "y"):
                     raise ValueError("[DENIED] Operator declined confirmation")
             elif level == ChallengeLevel.FULL_NATO:
+                # V69 M66A.1 (L1, Round-2 F4): scrub value-embedded secrets from the
+                # command before it reaches the operator preview (a curl with an auth
+                # header, an inline token). Secondary exposure on top of the aexecute
+                # descriptor; kept redacted here too.
+                from core.tool_approval import _scrub_embedded_secrets
                 auth_ok, auth_word = await self._te._challenge(
                     tool_name="run_shell_command",
-                    preview=command[:120],
+                    preview=_scrub_embedded_secrets(command)[:200],
                 )
                 if not auth_ok:
                     raise ValueError(f"[DENIED] NATO challenge failed: {auth_word}")

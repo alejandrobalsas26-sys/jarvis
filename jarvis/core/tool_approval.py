@@ -93,20 +93,57 @@ _EMBEDDED_SECRET_PARAMS: tuple[str, ...] = (
 _URL_USERINFO_RE = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]*@")
 _QUERY_SECRET_RE = re.compile(
     r"(?i)([?&#;]|\b)((?:" + "|".join(re.escape(p) for p in _EMBEDDED_SECRET_PARAMS)
-    + r")\s*[=:]\s*)([^&\s#;\"']+)")
+    + r")\s*[=:]\s*)(\"?)([^&\s#;\"']+)")
+#: Round-2 F1: the HTTP auth-header form is `scheme<SPACE>token`, NOT `key=value`,
+#: so the query/kv matcher never fired on `Authorization: Bearer <tok>` — the most
+#: common value-embedded credential. Match the header value (quoted or not) and any
+#: bare `Bearer <tok>`, and any `<...token/secret/key/password...>: <value>` header.
+_AUTH_HEADER_RE = re.compile(
+    r"(?i)\b((?:proxy-)?authorization)(\s*[:=]\s*\"?)(bearer|basic|digest|negotiate|token)(\s+)(\S+)")
+_BEARER_RE = re.compile(r"(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]{8,})")
+_CRED_HEADER_RE = re.compile(
+    r"(?i)\b([\w-]*(?:token|secret|password|passwd|apikey|api[-_]?key)[\w-]*)"
+    r"(\s*[:=]\s*\"?)([^&\s#;\"']+)")
 
 
 def _scrub_embedded_secrets(value: str) -> str:
     """Remove credentials embedded INSIDE a renderable value: URL userinfo
-    (`scheme://user:pass@` → `scheme://`) and secret-shaped `key=value` pairs
-    (query params, `--flag=secret`, env-style assignments). The operator still
-    sees the destination and the fact that a secret is present, never the secret."""
+    (`scheme://user:pass@` → `scheme://`), secret-shaped `key=value`/`key:value`
+    pairs, HTTP auth headers (`Authorization: Bearer <tok>`, `Basic <b64>`), bare
+    bearer tokens, and any `*token*/*secret*/*key*: value` header. The operator
+    still sees the destination and THAT a secret is present, never the secret."""
     if not isinstance(value, str) or not value:
         return value
     scrubbed = _URL_USERINFO_RE.sub(lambda m: m.group("scheme") + "<redacted>@", value)
-    scrubbed = _QUERY_SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>",
-                                    scrubbed)
+    scrubbed = _AUTH_HEADER_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}<redacted>", scrubbed)
+    scrubbed = _BEARER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", scrubbed)
+    scrubbed = _CRED_HEADER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>",
+                                   scrubbed)
+    scrubbed = _QUERY_SECRET_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>", scrubbed)
     return scrubbed
+
+
+def _redact_structure(obj):
+    """Recursively make a value render-safe: a nested dict key that is sensitive
+    (Round-2 F1: `headers={'Authorization': ...}`) has its value replaced with a
+    size marker, and every string leaf is run through `_scrub_embedded_secrets`.
+    Lists/tuples are walked. Non-container leaves are returned scrubbed."""
+    if isinstance(obj, dict):
+        red: dict = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and _is_sensitive(k):
+                raw = v if isinstance(v, str) else _canonical_json(v)
+                red[k] = f"<redacted:{len(raw.encode('utf-8'))} bytes>"
+            else:
+                red[k] = _redact_structure(v)
+        return red
+    if isinstance(obj, (list, tuple)):
+        return [_redact_structure(x) for x in obj]
+    if isinstance(obj, str):
+        return _scrub_embedded_secrets(obj)
+    return obj
 
 
 def _redacted_summary(tool_input: dict) -> dict:
@@ -118,7 +155,11 @@ def _redacted_summary(tool_input: dict) -> dict:
             raw = v if isinstance(v, str) else _canonical_json(v)
             out[k] = f"<redacted:{len(raw.encode('utf-8'))} bytes>"
             continue
-        sval = _scrub_embedded_secrets(v if isinstance(v, str) else _canonical_json(v))
+        # Round-2 F1: a non-sensitive key (e.g. "headers") may nest a sensitive
+        # one; redact the structure recursively BEFORE serialising so a nested
+        # Authorization/Cookie value never renders.
+        sval = (_scrub_embedded_secrets(v) if isinstance(v, str)
+                else _canonical_json(_redact_structure(v)))
         kl = k.lower()
         if any(m in kl for m in _RESOURCE_KEY_MARKERS):
             out[k] = sval[:_MAX_RESOURCE_RENDER] + (

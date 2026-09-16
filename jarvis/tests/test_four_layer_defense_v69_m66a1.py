@@ -303,12 +303,15 @@ class TestF5F19Approval:
         assert d1.payload_digest != d2.payload_digest
 
     def test_secret_redacted_in_descriptor(self):
+        # A sensitive KEY carrying a PLAIN value (no auth/bearer/kv shape) — so
+        # this exercises the key-NAME redaction specifically, independent of the
+        # embedded-string scrubber (which would also catch an auth-shaped value).
         d = tool_approval.describe("http_request", "high_impact",
                                    {"url": "http://a/", "headers": {},
-                                    "authorization": "Bearer TOPSECRET"},
+                                    "password": "PLAINSECRET99VAL"},
                                    {"url": "http://a/"})
         rendered = d.render_preview()
-        assert "TOPSECRET" not in rendered
+        assert "PLAINSECRET99VAL" not in rendered
         assert "redacted" in rendered.lower()
 
     def test_binding_rejects_mutation(self):
@@ -767,3 +770,85 @@ class TestRound1Fixes:
             obs = wh._query_defender_realtime()
         assert obs.state is scs.SecurityControlState.UNKNOWN
         assert not obs.is_active and obs.reason_code == "unexpected_shape"
+
+
+# ══════════════ ROUND-2 REMEDIATION REGRESSIONS ═════════════════════════════
+
+_CUSTOM_CRED_HEADERS = ["PRIVATE-TOKEN", "X-Vault-Token", "X-Figma-Token",
+                        "apikey", "api-key", "X-Auth-Token", "Authentication"]
+
+
+class TestRound2Fixes:
+    def test_f2_authorization_bearer_form_redacted(self):
+        """Round-2 F1: the scheme-space auth header form (`Authorization: Bearer X`,
+        `Basic <b64>`) is not key=value, so the Round-1 matcher missed it."""
+        d = tool_approval.describe(
+            "run_shell_command", "high_impact",
+            {"command": 'curl -H "Authorization: Bearer sk-live-SECRET123456789" https://api.example.com'},
+            {"command": "x"})
+        blob = d.render_preview() + json.dumps(d.to_dict())
+        assert "sk-live-SECRET123456789" not in blob
+        assert "api.example.com" in blob  # destination still reviewable
+
+    def test_f2_authorization_basic_in_command_redacted(self):
+        # The `Basic <b64>` scheme (unlike `Bearer`) is caught ONLY by the
+        # auth-header matcher, so this pins that matcher as load-bearing.
+        d = tool_approval.describe(
+            "run_shell_command", "high_impact",
+            {"command": 'curl -H "Authorization: Basic dXNlcjpwYXNzV09SRA==" https://api.example.com'},
+            {"command": "x"})
+        blob = d.render_preview() + json.dumps(d.to_dict())
+        assert "dXNlcjpwYXNzV09SRA==" not in blob
+
+    def test_f2_headers_dict_authorization_redacted(self):
+        d = tool_approval.describe(
+            "http_request", "high_impact",
+            {"headers": {"Authorization": "Basic dXNlcjpwYXNzREVEQ", "X-Api-Key": "k1valuelong"}},
+            {"x": 1})
+        blob = d.render_preview() + json.dumps(d.to_dict())
+        assert "dXNlcjpwYXNzREVEQ" not in blob and "k1valuelong" not in blob
+
+    def test_f2_private_token_form_redacted(self):
+        d = tool_approval.describe(
+            "run_shell_command", "high_impact",
+            {"command": 'git -c http.extraHeader="PRIVATE-TOKEN: glpat-SECRETVALUE" clone x'},
+            {"command": "x"})
+        blob = d.render_preview() + json.dumps(d.to_dict())
+        assert "glpat-SECRETVALUE" not in blob
+
+    @pytest.mark.parametrize("hdr", _CUSTOM_CRED_HEADERS)
+    def test_f3_custom_credential_header_stripped_crossorigin(self, hdr):
+        kept, stripped = _headers_for_hop({hdr: "secret-val", "Accept": "x"},
+                                          "http://a/", "http://b/")
+        assert hdr not in kept, f"{hdr} forwarded cross-origin (denylist gap)"
+        assert "Accept" in kept and stripped == 1
+
+    def test_f3_cross_origin_allowlist_only_keeps_safe(self):
+        hdrs = {"User-Agent": "ua", "Accept": "x", "X-Weird-Custom": "v",
+                "Authorization": "Bearer t"}
+        kept, stripped = _headers_for_hop(hdrs, "http://a/", "http://b/")
+        assert set(kept) == {"User-Agent", "Accept"}  # only allowlist survives
+        assert stripped == 2
+
+    def test_ingest_contained_matches_drops_symlink_out(self, tmp_path):
+        from core.knowledge import contained_matches
+        base = tmp_path / "vault"
+        base.mkdir()
+        (base / "in.txt").write_text("inside")
+        outside = tmp_path / "outside.txt"
+        outside.write_text("OUTSIDE-SECRET")
+        try:
+            (base / "link.txt").symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        names = {p.name for p in contained_matches(base, "*.txt")}
+        assert "in.txt" in names and "link.txt" not in names
+
+    def test_f4_capability_preview_redacts_embedded_secret(self):
+        # The capability/MCP challenge previews now go through the structured,
+        # redacting descriptor (no str(...)[:200] with secrets).
+        d = tool_approval.describe(
+            "capability:x", "high_impact",
+            {"url": "https://h/?token=sk-CAP-SECRET-9999"},
+            {"url": "x"})
+        assert "sk-CAP-SECRET-9999" not in d.render_preview()
