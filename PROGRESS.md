@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **38** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **39** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0038-m66a1-four-layer-defense-truth.json` |
-| **Snapshot SHA256** | `f01d2e472c224da4cf09afee3d486cc60c04bd255fac6154e6484341633afd3b` |
-| **Subject state commit** | `be6aa8addac0987a7d77f511ad6d1a8e62d5bf90` (M66A.1; eval-v7 still spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0039-m66a1-r2-remediation.json` |
+| **Snapshot SHA256** | `0d28f9a2499d8e1bc382ecef5cce0e0ce8003a5c8e938e2fcb0778f223ab08d4` |
+| **Subject state commit** | `5f69cd6e7841da16bb91309dea1ef0d838cf53ca` (M66A.1 R2; eval-v7 still spent once, 005 not eligible, 004 still held) |
 | **Integration authority** | base `98f18a889b721a6069ef2d76a2aff2a503b9f70d` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 36's `72e2948b…` and gen 37's `cfa23bb…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -44,7 +44,7 @@ asks Git, not prose, about branch, ancestry and `master`.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m66a1-four-layer-defense-truth` — gen 38 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `be6aa8addac0987a7d77f511ad6d1a8e62d5bf90` — the commit gen 38 describes AND the commit its integration authority governs |
+| Governed subject | `5f69cd6e7841da16bb91309dea1ef0d838cf53ca` — the commit gen 39 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -73,7 +73,7 @@ name the commit that carries it (§2).
 | Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Six findings (D49–D54, §7): executable authority changes only inside a governed subject. **0** spends. `…V69_S5G1_…md` |
 | Earlier milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36, RUNTIME + GOVERNANCE. An observed error after the boundary no longer means *nothing happened* (D55–D63, §7). **0** spends. `…V69_M65D_…md` |
 | Earlier milestone | **M66A — EPISTEMIC DELIBERATION, no science.** Gen 37, RUNTIME + GOVERNANCE. One epistemic plane on `TaskDecision`; policy only **STRENGTHEN**s; `REQUIRED_FAIL_CLOSED` withheld until verified. 3 MAJORs, **51/51** mutations, **0** survivors, **0** spends. `…V69_M66A_…md` |
-| Last milestone | **M66A.1 — FOUR-LAYER DEFENSE & DISTRIBUTION TRUTH, no science.** Gen 38, RUNTIME + GOVERNANCE. One file gate; one HTTP egress gate + cross-origin credential stripping; `code_execute`→RESTRICTED_PROCESS; typed status; packaged `aura/index.html`; base boot proven. F1–F9 reproduced; **70/70** mutations, **0** survivors. **0** spends. `docs/v69_M66A1_SECURITY_SURFACE_MAP.md` |
+| Last milestone | **M66A.1 — FOUR-LAYER DEFENSE & DISTRIBUTION TRUTH, no science.** Gen **39** (R2), RUNTIME + GOVERNANCE. One file gate; one HTTP egress gate + cross-origin ALLOWLIST; `code_execute`→RESTRICTED_PROCESS; typed status; packaged `aura/index.html`; base boot proven. F1–F9 + 2 red-team rounds; **75/75** mutations, **0** survivors, **0** spends. `docs/v69_M66A1_SECURITY_SURFACE_MAP.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -414,7 +414,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            11256 passed · 45 skipped · 0 failed      [M66A.1, measured]
+result            11270 passed · 45 skipped · 0 failed      [M66A.1, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [M66A.1, re-measured]
