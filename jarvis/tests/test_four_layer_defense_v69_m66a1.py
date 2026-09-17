@@ -325,8 +325,19 @@ class TestF5F19Approval:
 
 class TestF6Execution:
     def test_profile_is_restricted_not_direct(self, executor):
+        # V69 M66B: code_execute now routes through the ContainmentBroker and
+        # defaults to SANDBOX_REQUIRED. The M66A.1 intent is preserved and
+        # strengthened: the derived profile is NEVER a bare DIRECT_PROCESS. On a
+        # host that can prove a sandbox it is SANDBOXED; on a host that cannot it
+        # either runs RESTRICTED_PROCESS under explicit operator compat or fails
+        # closed. It is never silently downgraded to direct.
         r = executor.execute("code_execute", {"code": "print('hi')"})
-        assert r["containment"]["profile"] == "restricted_process"
+        if "error" in r and r.get("error_class") == "containment_unavailable":
+            # fail-closed (no sandbox, strict policy) — zero code ran, still not direct
+            assert r["containment"]["profile"] != "direct_process"
+            return
+        assert r["containment"]["profile"] in ("sandboxed", "restricted_process")
+        assert r["containment"]["profile"] != "direct_process"
 
     def test_env_not_inherited(self, executor, monkeypatch):
         monkeypatch.setenv("JARVIS_SECRET_CANARY", "LEAK-4471")
@@ -365,9 +376,24 @@ class TestF6Execution:
         finally:
             sp.run(["pkill", "-f", marker], capture_output=True)
 
-    def test_network_isolation_reported_not_enforced(self, executor):
+    def test_network_isolation_reported_truthfully(self, executor):
+        # V69 M66B: the receipt tells the network truth — the M66A.1 invariant
+        # (no overclaim) is preserved. Under the sandbox backend network is now
+        # genuinely ENFORCED; under the restricted backend it remains NOT_ENFORCED.
+        # What is forbidden is claiming ENFORCED without a real isolation control,
+        # which the profile derivation makes impossible (a SANDBOXED profile
+        # requires network_isolation ENFORCED; see TestM66BProfileDerivation).
         r = executor.execute("code_execute", {"code": "print(1)"})
-        assert r["containment"]["network_isolation"] == "not_enforced"
+        if "error" in r and r.get("error_class") == "containment_unavailable":
+            return
+        c = r["containment"]
+        net = c["network_isolation"]
+        assert net in ("enforced", "not_enforced")
+        # The claim must match the profile: SANDBOXED ⇒ network enforced.
+        if c["profile"] == "sandboxed":
+            assert net == "enforced"
+        else:
+            assert net == "not_enforced"
 
 
 # ══════════════════════════ F9 — STATUS TRUTH ═══════════════════════════════

@@ -15,7 +15,6 @@ Security layers:
 """
 
 import asyncio
-import contextlib
 import inspect
 import ipaddress
 import json
@@ -829,150 +828,14 @@ def _safe_http_fetch(method: str, url: str, *, headers: "dict | None" = None,
     return None, meta
 
 
-# ── V69 M66A.1 (L3): contained Python execution ───────────────────────────────
-# `code_execute` used to be `subprocess.run([sys.executable, tmp])` with the
-# parent's full environment, the parent's cwd, an open network, no resource limits
-# and no way to kill a child that outlived the timeout — yet its docstring called
-# the subprocess "isolated" (§F6). It is now a truthful RESTRICTED_PROCESS: a
-# dedicated cwd, a minimal environment allowlist, a hard wall-clock timeout that
-# terminates the whole PROCESS TREE, output caps, and (on POSIX) CPU / address-
-# space / file-size rlimits. Network isolation is NOT attempted — that needs
-# privileged host changes this milestone will not make (§22) — so it is reported
-# NOT_ENFORCED rather than claimed. `subprocess != sandbox`; the profile names
-# only what is enforced.
-
-#: RESTRICTED_PROCESS rlimits (POSIX). Deliberately load-bearing and testable:
-#: each is low enough that a probe exceeding it is killed BEFORE the wall timeout,
-#: so removing the limit changes the observable outcome (mutation-detectable).
-_CE_CPU_SECONDS = 5                    # RLIMIT_CPU soft (SIGXCPU)
-_CE_MEM_BYTES = 512 * 1024 * 1024      # RLIMIT_AS address-space cap
-_CE_FSIZE_BYTES = 16 * 1024 * 1024     # RLIMIT_FSIZE max single-file write
-_CE_STDOUT_CAP = 3000
-_CE_STDERR_CAP = 1000
-
-#: The only environment variables a contained execution inherits. Everything else
-#: — API keys, tokens, the operator's shell env, the JARVIS_* settings — is
-#: withheld, so a snippet cannot read the parent's secrets (§F6).
-_CE_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
-
-
-def _run_contained_python(code: str, timeout: int):
-    """Run *code* as a contained Python subprocess. Returns
-    ``(stdout, stderr, returncode, ContainmentReport, error_or_None)``.
-
-    The ContainmentReport records what was ACTUALLY enforced; the profile it
-    names is derived from those controls, never asserted."""
-    import tempfile
-    from core.execution_profile import (
-        ContainmentReport, ControlStatus, ExecutionProfile)
-    from core import security_metrics
-
-    report = ContainmentReport(profile=ExecutionProfile.RESTRICTED_PROCESS)
-    report.network_isolation = ControlStatus.NOT_ENFORCED
-    report.measured_limitations.append(
-        "network is NOT isolated: a snippet can still open outbound sockets "
-        "(no privileged host firewall change is made — §22)")
-    report.measured_limitations.append(
-        "process-count (RLIMIT_NPROC) is not lowered: it is per-UID and lowering "
-        "it risks the host's other processes; the process-tree kill bounds fan-out")
-
-    posix = (os.name == "posix")
-    workdir = tempfile.mkdtemp(prefix="jarvis_codeexec_")
-    report.controls["dedicated_cwd"] = ControlStatus.ENFORCED
-
-    # Minimal environment allowlist.
-    child_env = {k: os.environ[k] for k in _CE_ENV_ALLOWLIST if k in os.environ}
-    child_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-    report.controls["minimal_env"] = ControlStatus.ENFORCED
-
-    def _preexec():                       # pragma: no cover - runs in child
-        os.setsid()                       # own session/process group for tree kill
-        with contextlib.suppress(Exception):
-            import resource
-            resource.setrlimit(resource.RLIMIT_CPU, (_CE_CPU_SECONDS, _CE_CPU_SECONDS + 1))
-            resource.setrlimit(resource.RLIMIT_AS, (_CE_MEM_BYTES, _CE_MEM_BYTES))
-            resource.setrlimit(resource.RLIMIT_FSIZE, (_CE_FSIZE_BYTES, _CE_FSIZE_BYTES))
-
-    if posix:
-        report.controls["cpu_limit"] = ControlStatus.ENFORCED
-        report.controls["memory_limit"] = ControlStatus.ENFORCED
-        report.controls["fsize_limit"] = ControlStatus.ENFORCED
-        report.controls["process_tree_kill"] = ControlStatus.ENFORCED
-    else:
-        report.controls["cpu_limit"] = ControlStatus.NOT_SUPPORTED
-        report.controls["memory_limit"] = ControlStatus.NOT_SUPPORTED
-        report.controls["fsize_limit"] = ControlStatus.NOT_SUPPORTED
-        # A best-effort tree kill still exists via CREATE_NEW_PROCESS_GROUP.
-        report.controls["process_tree_kill"] = ControlStatus.ENFORCED
-
-    script = os.path.join(workdir, "snippet.py")
-    with open(script, "w", encoding="utf-8") as fh:
-        fh.write(code)
-
-    popen_kwargs = dict(
-        cwd=workdir, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, shell=False,
-    )
-    if posix:
-        popen_kwargs["preexec_fn"] = _preexec
-    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-
-    stdout = stderr = ""
-    returncode = None
-    err = None
-    proc = None
-    try:
-        proc = subprocess.Popen([sys.executable, "-I", script], **popen_kwargs)
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            returncode = proc.returncode
-            report.controls["wall_timeout"] = ControlStatus.ENFORCED
-        except subprocess.TimeoutExpired:
-            report.controls["wall_timeout"] = ControlStatus.ENFORCED
-            # Kill the whole tree, not just the direct child (§23).
-            _kill_process_tree(proc, posix)
-            with contextlib.suppress(Exception):
-                stdout, stderr = proc.communicate(timeout=5)
-            err = f"Timeout tras {timeout}s de ejecución."
-        stdout = (stdout or "")[:_CE_STDOUT_CAP]
-        stderr = (stderr or "")[:_CE_STDERR_CAP]
-        report.controls["stdout_cap"] = ControlStatus.ENFORCED
-        report.controls["stderr_cap"] = ControlStatus.ENFORCED
-    except Exception as e:                # pragma: no cover - launch failure
-        err = str(e)
-    finally:
-        if proc is not None and proc.poll() is None:
-            _kill_process_tree(proc, posix)
-        with contextlib.suppress(Exception):
-            shutil.rmtree(workdir, ignore_errors=True)
-
-    profile = report.classify()
-    if profile is ExecutionProfile.RESTRICTED_PROCESS:
-        security_metrics.incr("execution_profile_restricted")
-    elif profile is ExecutionProfile.SANDBOXED:
-        security_metrics.incr("execution_profile_sandboxed")
-    else:
-        security_metrics.incr("execution_profile_direct")
-    if report.network_isolation is not ControlStatus.ENFORCED:
-        security_metrics.incr("containment_control_unavailable")
-    return stdout, stderr, returncode, report, err
-
-
-def _kill_process_tree(proc, posix: bool) -> None:
-    """Terminate *proc* and every descendant. On POSIX the child leads its own
-    session (os.setsid), so one killpg reaps the whole tree (§23)."""
-    import signal
-    with contextlib.suppress(Exception):
-        if posix:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                return
-            except Exception:
-                proc.kill()
-        else:
-            proc.kill()
+# ── V69 M66B (L3): contained Python execution routes through the broker ───────
+# `code_execute`'s containment lived here as `_run_contained_python` (M66A.1's
+# RESTRICTED_PROCESS). V69 M66B moves ALL execution containment to the ONE
+# canonical `core.containment.ContainmentBroker`, which selects the strongest
+# backend the host can prove (bubblewrap SANDBOXED > RESTRICTED_PROCESS) and
+# fails closed when a required containment cannot be established. There is no
+# second containment implementation in this file any more (§9); `_tool_code_execute`
+# calls the broker and returns its truthful receipt. `subprocess != sandbox`.
 
 
 def _validate_network_target(target: str) -> str:
@@ -4232,28 +4095,51 @@ class ToolExecutor:
             return {"error": str(e), "error_code": ERR_WRITE_FAILED}
 
     def _tool_code_execute(self, code: str, timeout: int = 15) -> dict:
-        """[HITL] Execute a Python snippet in a RESTRICTED_PROCESS. Returns stdout/stderr.
+        """[HITL] Execute a Python snippet through the containment broker.
 
-        V69 M66A.1 (L3): a dedicated cwd, a minimal environment allowlist, a hard
-        timeout that kills the whole process tree, output caps and (POSIX) CPU /
-        memory / file-size rlimits. Network is NOT isolated (§22); the returned
-        `containment` report states exactly what was enforced — no word like
-        "sandboxed" is used without proof (§20).
+        V69 M66B (L3): routed through the ONE canonical
+        `core.containment.ContainmentBroker`. The default requirement for
+        arbitrary code is SANDBOX_REQUIRED. The broker selects the strongest
+        backend the host can PROVE — bubblewrap gives an evidence-derived
+        SANDBOXED profile (mount/network/PID/user namespaces: host FS & network
+        unreachable, secrets withheld, descendants and PIDs bounded, non-root) —
+        and FAILS CLOSED if the required containment cannot be established (no
+        silent fallback, no model-controlled downgrade). The returned
+        `containment` receipt states exactly what was enforced; the word
+        "sandboxed" appears only when it is derived from observed controls (§13).
         """
+        from core.containment import (
+            ContainmentBroker, ExecutionRequest)
+
         if len(code) > 8000:
             return {"error": "Code too long (max 8000 chars)."}
         try:
             timeout = max(1, min(int(timeout), 120))
         except (TypeError, ValueError):
             timeout = 15
-        stdout, stderr, returncode, report, err = _run_contained_python(code, timeout)
-        if err is not None and returncode is None:
-            return {"error": err, "containment": report.to_dict()}
+
+        broker = ContainmentBroker()
+        # The requirement is TRUSTED policy, derived from the tool name only.
+        # tool_input is never consulted for a downgrade — content is not authority.
+        requirement = broker.evaluate_requirement("code_execute", {"code": code})
+        outcome = broker.execute(ExecutionRequest(code, timeout, requirement))
+        receipt = outcome.receipt.to_dict() if outcome.receipt is not None else {}
+
+        # Fail closed: required containment could not be established and no
+        # operator compatibility policy permits a downgrade. Zero code ran.
+        if not outcome.executed:
+            return {"error": outcome.error or "containment unavailable",
+                    "error_class": "containment_unavailable",
+                    "containment": receipt}
+        # A timeout (or launch error) after execution began: surface it, still
+        # returning the truthful receipt.
+        if outcome.error is not None and outcome.returncode is None:
+            return {"error": outcome.error, "containment": receipt}
         return {
-            "stdout": stdout,
-            "stderr": stderr,
-            "returncode": returncode,
-            "containment": report.to_dict(),
+            "stdout": outcome.stdout,
+            "stderr": outcome.stderr,
+            "returncode": outcome.returncode,
+            "containment": receipt,
         }
 
     def _tool_http_request(
