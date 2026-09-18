@@ -31,13 +31,37 @@ The machine-readable version — the source of the §26 coverage gate — is
 |---|---|---|---|---|---|
 | `_tool_code_execute` | tools/executor.py:4234 | **YES** (Python snippet) | YES | HIGH_IMPACT / HITL | **BROKER_REQUIRED** — default `SANDBOX_REQUIRED` |
 | `_run_contained_python` | tools/executor.py:859 | YES (impl of above) | via code_execute | — | folds into RestrictedProcessBackend |
-| `_tool_run_shell_command` | tools/executor.py:3393 | YES via `python f.py`/`node f.js` | YES (allowlist) | HIGH_IMPACT / HITL+NATO | **RESTRICTED_ONLY** (allowlist, `shell=False`, `python -c` blocked) |
-| `RedTeamShellExecutor.execute` | tools/executor.py:4569 | YES via interpreters | YES (allowlist + lab) | HIGH_IMPACT / FULL_NATO | **RESTRICTED_ONLY** (trusted-lab gated) |
+| `_tool_run_shell_command` | tools/executor.py | **NO** (closed §4) — was YES via `python f.py`/`-m`/`node`/`npm run`/`make` | YES (allowlist) | HIGH_IMPACT / HITL+NATO | **RESTRICTED_ONLY**, explicitly incapable |
+| `RedTeamShellExecutor.execute_shell` | tools/executor.py | **NO** (closed §4) — routes through the same `_validate_command` | YES (allowlist + lab) | HIGH_IMPACT / FULL_NATO | **RESTRICTED_ONLY**, explicitly incapable |
 
 `code_execute`'s L1/HITL path is unchanged: authority preflight → `classify_tool`
 (HIGH_IMPACT) → `_ALWAYS_HITL_TOOLS` challenge → approval-identity binding → effect
 journal. M66B inserts the ContainmentBroker between the identity binding and the
 subprocess, and nowhere else.
+
+### A.1 — The SECOND arbitrary-code door (recovery audit, §3/§4)
+
+The recovery audit found that `run_shell_command` and
+`RedTeamShellExecutor.execute_shell` — both RESTRICTED_ONLY — could execute
+**caller-controlled arbitrary code** through allowlisted interpreters:
+`python attacker.py`, `python -m evil`, `node a.js`, `npm run evil`, bare `make`
+(runs the default Makefile target). HITL/NATO are AUTHORITY, not L3 containment,
+so this was a way around the SANDBOX_REQUIRED broker.
+
+**Closed executably (not by a label):** `_forbidden_interpreter_exec` in
+`_validate_command` (the single validator both gateways use) now refuses any
+interpreter/script-runner invocation carrying a script, a module or inline code;
+only informational flags (`--version`, `--help`) pass. Fixed diagnostic commands
+(nmap, git, ping, curl, ls, whois) are unaffected. Both surfaces are therefore
+`arbitrary_code=False` in the registry. Arbitrary code has exactly one door:
+`code_execute` → the SANDBOX_REQUIRED broker.
+
+`ALTERNATE_ARBITRARY_EXECUTION_AUDIT`:
+* `code_execute` — arbitrary YES, brokered YES (SANDBOX_REQUIRED).
+* `run_shell_command` — arbitrary **NO** after §4 (was: `python file.py`,
+  `python -m mod`, `node file.js`, `npm run x`, bare `make`); now blocked.
+* `red_team_shell` — arbitrary **NO** after §4 (same forms, same validator);
+  lab allowlist adds offensive binaries, never interpreters running caller code.
 
 ## B. Fixed internal process launches (reviewed registry, FIXED_INTERNAL_EXEMPT)
 
@@ -101,8 +125,11 @@ No `builtins.eval`/`builtins.exec` on caller data exists in a tool handler.
 ARBITRARY_CODE_EXECUTION_SURFACES  ==  CONTAINMENT_POLICY_COVERED_SURFACES
 ```
 
-The registry enumerates §A as arbitrary-execution surfaces, each with a
-containment declaration (BROKER_REQUIRED or RESTRICTED_ONLY). §B is the reviewed
-fixed-internal set. A newly added arbitrary-execution path in a tool handler
+Hardened by the recovery audit (§4): the invariant is now stronger than "each
+surface has *a* declaration" — **every arbitrary-code surface must be
+BROKER_REQUIRED**. A RESTRICTED_ONLY surface is acceptable only when it is
+`arbitrary_code=False` (explicitly incapable). So both sets equal exactly
+`{code_execute}`. §B is the reviewed fixed-internal set. A newly added
+arbitrary-execution path in a tool handler
 without a registry declaration fails CI (the coverage test + the static bypass
 detector, §27). No implementation precedes this document.
