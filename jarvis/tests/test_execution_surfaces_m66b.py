@@ -30,6 +30,15 @@ def test_bypass_detector_clean_on_the_real_tree():
     assert check_bypass(["tools/executor.py"]) == []
 
 
+def test_coverage_check_flags_a_mismatch(monkeypatch):
+    # Non-vacuity: if the two sets diverge, check_coverage MUST report it.
+    import scripts.check_execution_surfaces as m
+    monkeypatch.setattr(m, "coverage",
+                        lambda: (frozenset({"a", "b"}), frozenset({"a"})))
+    problems = m.check_coverage()
+    assert problems, "check_coverage did not flag a real mismatch"
+
+
 # ── Detector non-vacuity — POSITIVE (§27) ─────────────────────────────────────
 _HOSTILE_HANDLER = '''
 class ToolExecutor:

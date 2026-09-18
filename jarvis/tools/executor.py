@@ -126,6 +126,57 @@ _BLOCKED_FLAGS: frozenset[str] = frozenset({
 })
 _PYTHON_EXECUTABLES: frozenset[str] = frozenset({"python", "python3"})
 
+# ── V69 M66B (§4): close the alternate arbitrary-code door ────────────────────
+# `run_shell_command` and `RedTeamShellExecutor.execute_shell` share this
+# allowlist. Some allowlisted binaries are language INTERPRETERS/script runners:
+# `python attacker.py`, `python -m evil`, `node a.js`, `npm run evil` all execute
+# caller-controlled arbitrary code ON THE HOST — the exact thing code_execute now
+# routes through the SANDBOX_REQUIRED ContainmentBroker. HITL/NATO are AUTHORITY,
+# not L3 containment, so this gateway must be EXPLICITLY INCAPABLE of arbitrary
+# code: an interpreter here may only run a benign informational flag. Anything
+# that would execute a script, a module or inline code is refused and pointed at
+# code_execute. Fixed diagnostic commands (nmap, git, ping, curl, ls, …) are
+# unaffected. Compilers (gcc) and remote/network tools (ssh) are out of scope —
+# gcc builds but does not execute, and ssh is a network-authority (L1/L2) concern.
+_ARBITRARY_CODE_INTERPRETERS: frozenset[str] = frozenset({
+    "python", "python2", "python3", "pypy", "pypy3",
+    "node", "nodejs", "npm", "npx", "deno", "bun",
+    "ruby", "perl", "php", "lua", "luajit", "rscript",
+    "bash", "sh", "zsh", "ksh", "dash", "fish", "ash",
+    "pwsh", "powershell", "make", "gmake",
+})
+#: The ONLY arguments an interpreter may carry through the host command gateway —
+#: purely informational, no code execution. Everything else is arbitrary code.
+_INTERPRETER_SAFE_FLAGS: frozenset[str] = frozenset({
+    "--version", "-v", "-V", "--help", "-h", "version", "--info",
+})
+
+
+def _forbidden_interpreter_exec(argv: list[str]) -> str | None:
+    """Return a refusal reason if *argv* is an interpreter/script-runner
+    invocation that would execute caller-controlled code, else ``None``.
+
+    This is what makes ``run_shell_command`` / ``execute_shell`` *explicitly
+    incapable* of arbitrary-code execution (§4). Arbitrary code must go through
+    ``code_execute`` → the ContainmentBroker (SANDBOX_REQUIRED)."""
+    if not argv:
+        return None
+    exe = Path(argv[0]).name.lower().removesuffix(".exe")
+    if exe not in _ARBITRARY_CODE_INTERPRETERS:
+        return None
+    rest = argv[1:]
+    # Only a NON-EMPTY, purely-informational argument list is safe. A bare
+    # interpreter (`make` runs the default Makefile target; `python`/`node` open
+    # an interactive interpreter) is refused too.
+    if rest and all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):
+        return None       # `python --version` and friends: no code executes
+    return (
+        f"'{exe}' with code/script/module arguments is arbitrary code execution "
+        "and is not permitted from the host command gateway (HITL is authority, "
+        "not containment). Use code_execute, which runs under the "
+        "SANDBOX_REQUIRED ContainmentBroker.")
+
+
 # ── Layer 2: Directorios del sistema bloqueados ───────────────────────────────
 def _build_system_dirs() -> frozenset[Path]:
     dirs: set[Path] = {Path("/").resolve()}
@@ -951,6 +1002,14 @@ def _validate_command(
                     )
         except Exception:
             pass
+
+    # V69 M66B (§4): the host command gateway must be EXPLICITLY INCAPABLE of
+    # arbitrary-code execution. An allowlisted interpreter (python/node/npm/…)
+    # invoked with a script, a module or inline code is refused; such work goes
+    # to code_execute (SANDBOX_REQUIRED). Benign informational flags still pass.
+    interp_reason = _forbidden_interpreter_exec(argv)
+    if interp_reason is not None:
+        return False, interp_reason, []
 
     return True, "", argv
 

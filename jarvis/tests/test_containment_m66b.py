@@ -212,3 +212,84 @@ class TestReceipt:
         assert (_REQUIREMENT_RANK[ContainmentRequirement.RESTRICTED_OK]
                 < _REQUIREMENT_RANK[ContainmentRequirement.NETWORK_DENY_REQUIRED]
                 < _REQUIREMENT_RANK[ContainmentRequirement.SANDBOX_REQUIRED])
+
+
+# ── Extra targeted properties (mutation detectors) ────────────────────────────
+class TestDerivationExtra:
+    def test_partial_baseline_is_direct(self):
+        # A strict subset of the baseline controls must NOT be RESTRICTED — it is
+        # DIRECT. (Catches an `all`→`any` weakening of the baseline check.)
+        one = {BASELINE_RESTRICTED_CONTROLS[0]: ControlStatus.ENFORCED}
+        assert derive_profile(one) is ExecutionProfile.DIRECT_PROCESS
+
+    def test_network_isolation_is_mandatory(self):
+        assert "network_isolation" in MANDATORY_SANDBOX_CONTROLS
+        # A receipt with every mandatory control EXCEPT network must not be sandboxed.
+        r = ContainmentReceipt(
+            requirement=ContainmentRequirement.SANDBOX_REQUIRED, backend="x")
+        for c in MANDATORY_SANDBOX_CONTROLS:
+            r.controls[c] = ControlStatus.ENFORCED
+        r.controls["network_isolation"] = ControlStatus.NOT_ENFORCED
+        r.cleanup_status = ControlStatus.ENFORCED
+        assert r.to_dict()["profile"] != "sandboxed"
+
+    def test_promoted_named_field_reflects_reality(self):
+        # to_dict promotes each mandatory control to a named field; a NOT_ENFORCED
+        # control must render as such, never hard-coded enforced.
+        r = ContainmentReceipt(
+            requirement=ContainmentRequirement.SANDBOX_REQUIRED, backend="x")
+        r.controls["filesystem_isolation"] = ControlStatus.NOT_ENFORCED
+        assert r.to_dict()["filesystem_isolation"] == "not_enforced"
+
+
+class TestRestrictedBackendProperties:
+    def test_restricted_network_is_not_enforced(self):
+        out = RestrictedProcessBackend().execute(
+            ExecutionRequest("print(1)", 10, ContainmentRequirement.RESTRICTED_OK))
+        assert out.receipt.to_dict()["network_isolation"] == "not_enforced"
+
+    @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX rlimits")
+    def test_restricted_cpu_limit_kills_busy_loop(self):
+        import time
+        start = time.monotonic()
+        out = RestrictedProcessBackend().execute(
+            ExecutionRequest("\nwhile True:\n    pass\n", 25,
+                             ContainmentRequirement.RESTRICTED_OK))
+        elapsed = time.monotonic() - start
+        assert out.returncode not in (0, None) or out.error
+        assert elapsed < 15, f"restricted CPU limit did not bite ({elapsed:.1f}s)"
+
+    def test_restricted_env_allowlist_withholds_secret(self, monkeypatch):
+        monkeypatch.setenv("JARVIS_M66B_SECRET_CANARY", "LEAK-RS")
+        out = RestrictedProcessBackend().execute(
+            ExecutionRequest(
+                "import os;print(os.environ.get('JARVIS_M66B_SECRET_CANARY'))", 10,
+                ContainmentRequirement.RESTRICTED_OK))
+        assert "LEAK-RS" not in (out.stdout or "")
+
+
+class TestExecutorRouting:
+    def test_code_execute_is_sandboxed_when_available(self):
+        from tools.executor import ToolExecutor
+        from core.containment import BubblewrapBackend
+        if not BubblewrapBackend().available():
+            pytest.skip("no sandbox on this host")
+        r = ToolExecutor().execute("code_execute", {"code": "print('ok')"})
+        assert r["containment"]["profile"] == "sandboxed"
+        assert r["containment"]["backend"] == "bubblewrap"
+
+    def test_code_execute_fails_closed_when_broker_cannot(self, monkeypatch):
+        from tools.executor import ToolExecutor
+        import core.containment as containment
+
+        def _fail(self, request):
+            r = containment.ContainmentReceipt(
+                requirement=request.requirement, backend="none")
+            r.failure_reason = "CONTAINMENT_UNAVAILABLE: forced"
+            return containment.ExecutionOutcome(
+                executed=False, error=r.failure_reason, receipt=r)
+
+        monkeypatch.setattr(containment.ContainmentBroker, "execute", _fail)
+        r = ToolExecutor().execute("code_execute", {"code": "print('should not run')"})
+        assert r.get("error_class") == "containment_unavailable"
+        assert "stdout" not in r

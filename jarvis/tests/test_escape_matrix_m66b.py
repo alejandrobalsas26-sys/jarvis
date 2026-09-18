@@ -95,6 +95,8 @@ class TestNetworkEscapes:
                 f"except Exception as e:\n print('BLOCKED',type(e).__name__)")
             time.sleep(0.3)
             assert "CONNECTED" not in out.stdout
+            # Causal: the snippet DID run and was blocked (not merely absent output).
+            assert "BLOCKED" in out.stdout
             assert listener.hits == before  # the host listener saw NO new connection
         finally:
             listener.close()
@@ -254,6 +256,18 @@ class TestResourceEscapes:
         # RLIMIT_CPU (5s) kills before the 20s wall timeout.
         assert out.returncode not in (0, None) or out.error
 
+    def test_res01b_cpu_limit_kills_before_wall_timeout(self):
+        # Causal: with a generous 25s wall timeout, a busy loop must still be
+        # killed by the ~5s CPU limit. If the CPU limit is removed, it runs to the
+        # wall timeout instead — so the elapsed time distinguishes the two.
+        start = time.monotonic()
+        out = run_sandboxed("\nwhile True:\n    pass\n", timeout=25)
+        elapsed = time.monotonic() - start
+        assert out.returncode not in (0, None) or out.error
+        assert elapsed < 15, (
+            f"CPU-bound run took {elapsed:.1f}s — the CPU limit did not kill it "
+            "before the wall timeout")
+
     def test_res02_memory_bounded(self):
         out = run_sandboxed("x=bytearray(1024*1024*1024);print('ALLOC')", timeout=20)
         assert "ALLOC" not in out.stdout
@@ -269,13 +283,16 @@ class TestResourceEscapes:
         assert "errors 0" not in out.stdout
 
     def test_res04_storage_bounded(self):
+        # Many small files (each < RLIMIT_FSIZE) so the bounded tmpfs — not the
+        # per-file fsize limit — is what stops the writes.
         out = run_sandboxed(
             "try:\n"
-            "  f=open('/work/big','wb')\n"
-            "  [f.write(b'x'*(1024*1024)) or f.flush() for _ in range(200)]\n"
-            "  print('WROTE_200MB')\n"
+            "  for i in range(30):\n"
+            "    f=open('/work/f%d'%i,'wb');f.write(b'x'*(10*1024*1024));f.flush();f.close()\n"
+            "  print('WROTE_300MB')\n"
             "except Exception as e:\n  print('BOUNDED',type(e).__name__)", timeout=20)
-        assert "WROTE_200MB" not in out.stdout
+        assert "WROTE_300MB" not in out.stdout
+        assert "BOUNDED" in out.stdout
 
     def test_res05_output_bounded(self):
         out = run_sandboxed("print('A'*100000)", timeout=15)

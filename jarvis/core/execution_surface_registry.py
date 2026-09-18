@@ -37,32 +37,46 @@ ARBITRARY_CODE_SURFACES: dict[str, dict] = {
     "run_shell_command": {
         "handler": "_tool_run_shell_command",
         "file": "tools/executor.py",
-        "arbitrary_code": True,          # via allowlisted interpreters (python file.py)
+        # V69 M66B (§4): was arbitrary-code-capable via allowlisted interpreters
+        # (`python attacker.py`, `python -m evil`, `node a.js`, `npm run evil`).
+        # `_forbidden_interpreter_exec` now makes this gateway EXPLICITLY INCAPABLE
+        # of arbitrary code — interpreters may run only informational flags; all
+        # code/script/module execution is refused and routed to code_execute.
+        "arbitrary_code": False,
         "caller_controlled_command": True,
         "risk_class": "HIGH_IMPACT",
         "hitl": True,
         "disposition": RESTRICTED_ONLY,
-        "controls": "allowlist + shell=False + `python -c` blocked + NATO HITL",
+        "controls": ("allowlist + shell=False + NATO HITL + M66B interpreter-exec "
+                     "block (no python/node/npm/make script/module/inline code)"),
         "gateway": "_validate_command",
     },
     "red_team_shell": {
         "handler": "RedTeamShellExecutor.execute_shell",
         "file": "tools/executor.py",
-        "arbitrary_code": True,
+        # V69 M66B (§4): routes through the same `_validate_command`, so the
+        # interpreter-exec block applies here too — explicitly incapable of
+        # arbitrary code. Its allowlist adds offensive LAB binaries (trusted-lab
+        # only), never interpreters running caller code.
+        "arbitrary_code": False,
         "caller_controlled_command": True,
         "risk_class": "HIGH_IMPACT",
         "hitl": True,
         "disposition": RESTRICTED_ONLY,
-        "controls": "YARA + hard-block + trust challenge + FULL_NATO + shell=False",
+        "controls": ("YARA + hard-block + trust challenge + FULL_NATO + shell=False "
+                     "+ M66B interpreter-exec block"),
         "gateway": "RedTeamShellExecutor._classify",
     },
 }
 
-#: The subset the coverage gate treats as "must be contained by policy": the
-#: names whose disposition is a real containment declaration.
+#: V69 M66B (§4) hardened invariant: EVERY caller-controlled arbitrary-code
+#: surface must be BROKER_REQUIRED. A RESTRICTED_ONLY surface is only acceptable
+#: when it is EXPLICITLY INCAPABLE of arbitrary code (arbitrary_code=False). So
+#: the covered set is the arbitrary-code surfaces routed through the broker, and
+#: it must equal the set of arbitrary-code surfaces.
 CONTAINMENT_COVERED_SURFACES: frozenset[str] = frozenset(
     name for name, d in ARBITRARY_CODE_SURFACES.items()
-    if d["disposition"] in (BROKER_REQUIRED, RESTRICTED_ONLY)
+    if d["arbitrary_code"] and d["disposition"] == BROKER_REQUIRED
 )
 
 
@@ -110,7 +124,18 @@ FIXED_INTERNAL_SURFACES: dict[str, str] = {
 
 def coverage() -> tuple[frozenset[str], frozenset[str]]:
     """``(arbitrary_execution_surfaces, containment_covered_surfaces)`` — the two
-    sets §26 requires to be equal for the tool-handler execution surface."""
+    sets §26/§4 require to be equal: every arbitrary-code surface is
+    BROKER_REQUIRED. Surfaces that are only RESTRICTED_ONLY must be explicitly
+    incapable of arbitrary code (``arbitrary_code=False``) or they show up in
+    ``arbitrary`` but not ``covered`` and the gate fails."""
     arbitrary = frozenset(
         name for name, d in ARBITRARY_CODE_SURFACES.items() if d["arbitrary_code"])
     return arbitrary, CONTAINMENT_COVERED_SURFACES
+
+
+def restricted_only_surfaces() -> frozenset[str]:
+    """Constrained execution surfaces that are RESTRICTED_ONLY and explicitly
+    incapable of arbitrary code (the §4 alternative to BROKER_REQUIRED)."""
+    return frozenset(
+        name for name, d in ARBITRARY_CODE_SURFACES.items()
+        if d["disposition"] == RESTRICTED_ONLY and not d["arbitrary_code"])

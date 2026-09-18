@@ -109,14 +109,48 @@ class TestLayer4:
         # the receipt still tells the truth about what was enforced
         assert "containment" in r
 
-    def test_declared_uncertain_effect_not_success(self):
-        # The M65D contract, reasserted: a declared uncertain outcome is a
-        # failure envelope, not a success. (Covered deeply in m65d; this is the
-        # L4 anchor for the four-layer proof.)
-        from core.effect_journal import ExternalOutcome
-        # UNKNOWN is a first-class answer: an unobserved effect is never silently
-        # rendered as success (M65D). Its existence is the L4 truth anchor.
-        assert ExternalOutcome.UNKNOWN.value == "UNKNOWN"
+    def test_unknown_effect_is_never_reported_as_success(self, tmp_path):
+        # BEHAVIORAL L4 proof (not symbolic): an execution crosses the effect
+        # boundary, then the response is lost so the outcome CANNOT be observed.
+        # JARVIS must answer UNKNOWN — never fabricate SUCCESS — and must not
+        # authorise a blind replay of a possibly-completed effect. This test
+        # fails if UNKNOWN is ever mutated into a success/PROVEN outcome.
+        from core.effect_journal import (
+            DurableEffectJournal, EffectState, ExecutionDisposition,
+            ExternalOutcome, compute_effect_id)
+        from tools.executor import ToolExecutor
+
+        journal = DurableEffectJournal(tmp_path / "l4.db", instance_id="inst-l4")
+        ex = ToolExecutor(journal=journal)
+        ex.begin_effect_epoch("turn:l4")
+
+        async def _granted(tool_name, preview):
+            return True, "test:granted"
+
+        ex._challenge = _granted
+
+        # The effect ran; the result is unrecoverable (a lost response is
+        # indistinguishable from a local error AFTER the boundary).
+        def _raising(**kwargs):
+            raise TimeoutError("response lost after the effect boundary")
+
+        ex._tool_code_execute = _raising
+        note: dict = {}
+        result = asyncio.run(ex.aexecute(
+            "code_execute", {"code": "print(1)"}, "r", effect_note=note))
+
+        # 1. No invented SUCCESS.
+        assert isinstance(result, dict) and "error" in result
+        assert not result.get("stdout")
+        # 2. Correct uncertainty state — the mutation-sensitive assertions.
+        assert note["external_outcome"] == ExternalOutcome.UNKNOWN.value
+        assert note["disposition"] == ExecutionDisposition.FAILED_OBSERVED_UNKNOWN.value
+        # 3. The journal recorded UNKNOWN, not a success/proven-not-executed.
+        record = journal.get(compute_effect_id(
+            surface="native", tool_id="code_execute", identity_scope="turn:l4",
+            tool_input={"code": "print(1)"}))
+        assert record.state is EffectState.FAILED_OBSERVED
+        assert record.external_effect is ExternalOutcome.UNKNOWN
 
 
 # ── POLICY: model-requested downgrade changes nothing ─────────────────────────
@@ -130,6 +164,69 @@ class TestPolicyImmovable:
         broker = ContainmentBroker()
         assert broker.evaluate_requirement("code_execute", hostile) \
             is ContainmentRequirement.SANDBOX_REQUIRED
+
+
+# ── End-to-end containment behaviour (real ToolExecutor → Broker → backend) ───
+class TestEndToEndContainment:
+    def test_strict_fail_closed_end_to_end(self, tmp_path, monkeypatch):
+        # §7/§9: DEFAULT STRICT + strong backend genuinely unavailable ⇒ code_execute
+        # FAILS CLOSED. Real backend selection is exercised — the broker is NOT
+        # mocked; only BubblewrapBackend.available() is forced False, leaving just
+        # the RESTRICTED backend, which cannot satisfy SANDBOX_REQUIRED. A
+        # side-effect canary proves ZERO child execution and no silent restricted
+        # fallback.
+        import core.containment as containment
+        from tools.executor import ToolExecutor
+
+        monkeypatch.delenv("JARVIS_EXEC_CONTAINMENT", raising=False)
+        monkeypatch.setattr(containment.BubblewrapBackend, "available",
+                            lambda self: False)
+        canary = tmp_path / "L3_STRICT_CANARY"
+        ex = ToolExecutor()
+        code = f"open({str(canary)!r}, 'w').write('EFFECT')"
+        r = ex.execute("code_execute", {"code": code})
+
+        assert r.get("error_class") == "containment_unavailable"
+        assert "stdout" not in r
+        assert r["containment"]["profile"] != "sandboxed"
+        assert not canary.exists(), "code ran despite strict fail-closed (real effect)"
+
+    def test_compat_downgrade_end_to_end(self, tmp_path, monkeypatch):
+        # §8: strong backend unavailable AND operator explicitly selects COMPAT ⇒
+        # RESTRICTED_PROCESS may run, visibly downgraded, NEVER SANDBOXED.
+        import core.containment as containment
+        from tools.executor import ToolExecutor
+
+        monkeypatch.setattr(containment.BubblewrapBackend, "available",
+                            lambda self: False)
+        monkeypatch.setenv("JARVIS_EXEC_CONTAINMENT", "compat")
+        ex = ToolExecutor()
+        r = ex.execute("code_execute", {"code": "print('COMPAT_RAN')"})
+        c = r["containment"]
+        assert "COMPAT_RAN" in r.get("stdout", "")
+        assert c["downgraded"] is True
+        assert c["profile"] == "restricted_process"
+        assert c["profile"] != "sandboxed"
+        assert c["network_isolation"] == "not_enforced"
+        assert any("COMPAT DOWNGRADE" in m for m in c["measured_limitations"])
+
+    def test_content_cannot_activate_compat(self, monkeypatch):
+        # §8: model/tool/user content can never turn on compat — only the host env.
+        import core.containment as containment
+        from tools.executor import ToolExecutor
+
+        monkeypatch.delenv("JARVIS_EXEC_CONTAINMENT", raising=False)
+        monkeypatch.setattr(containment.BubblewrapBackend, "available",
+                            lambda self: False)
+        ex = ToolExecutor()
+        # A tool_input that "asks" for compat/restricted must NOT enable it.
+        r = ex.execute("code_execute",
+                       {"code": "print('x')", "containment": "compat",
+                        "compat": True, "use_direct_process": True})
+        # Either fails closed (unknown kwargs refused / containment unavailable) —
+        # never a silent restricted execution triggered by content.
+        assert "stdout" not in r or not r.get("stdout")
+        assert r.get("containment", {}).get("profile") != "sandboxed"
 
 
 def test_four_layers_all_proven():

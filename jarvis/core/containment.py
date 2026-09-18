@@ -134,8 +134,10 @@ class ContainmentReceipt:
     backend: str
     platform: str = field(default_factory=lambda: sys.platform)
     controls: dict[str, ControlStatus] = field(default_factory=dict)
-    #: network_isolation is surfaced both as a top-level field (M66A.1 shape,
-    #: consumers read ``receipt["network_isolation"]``) and inside ``controls``.
+    #: LEGACY FALLBACK ONLY. The canonical network state lives in
+    #: ``controls["network_isolation"]``; backends set it there. to_dict reads
+    #: this field only when a receipt never populated controls. Kept so the
+    #: top-level ``receipt["network_isolation"]`` shape (M66A.1) still exists.
     network_isolation: ControlStatus = ControlStatus.NOT_ENFORCED
     cleanup_status: ControlStatus = ControlStatus.NOT_ENFORCED
     measured_limitations: list[str] = field(default_factory=list)
@@ -157,14 +159,21 @@ class ContainmentReceipt:
             "requirement": self.requirement.value,
             "backend": self.backend,
             "platform": self.platform,
-            "network_isolation": self.network_isolation.value,
+            # Single source of truth: the controls map. The dataclass field is
+            # only a legacy fallback for a receipt that never populated controls.
+            "network_isolation": self.controls.get(
+                "network_isolation", self.network_isolation).value,
             "controls": {k: v.value for k, v in self.controls.items()},
             "cleanup_status": self.cleanup_status.value,
             "measured_limitations": list(self.measured_limitations),
             "downgraded": self.downgraded,
         }
         # The named §12 controls, promoted for direct reading (value or "absent").
+        # network_isolation is set once above (controls-first) and deliberately
+        # NOT re-set here, so nothing overwrites the canonical enforcement truth.
         for name in MANDATORY_SANDBOX_CONTROLS:
+            if name == "network_isolation":
+                continue
             out[name] = self.controls.get(name, ControlStatus.NOT_ENFORCED).value
         if self.failure_reason is not None:
             out["failure_reason"] = self.failure_reason
@@ -286,7 +295,9 @@ class RestrictedProcessBackend(ContainmentBackend):
         posix = os.name == "posix"
         receipt = ContainmentReceipt(
             requirement=request.requirement, backend=self.name, started_at=started)
-        receipt.network_isolation = ControlStatus.NOT_ENFORCED
+        # Canonical: the controls map. RESTRICTED_PROCESS does not isolate the
+        # network, and this is the single place that says so.
+        receipt.controls["network_isolation"] = ControlStatus.NOT_ENFORCED
         receipt.measured_limitations.append(
             "network is NOT isolated: a snippet can still open outbound sockets "
             "(RestrictedProcessBackend makes no privileged host change)")
@@ -484,8 +495,7 @@ class BubblewrapBackend(ContainmentBackend):
         # is proven non-vacuous by a causal test in the escape matrix.
         c = receipt.controls
         c["filesystem_isolation"] = ControlStatus.ENFORCED   # mount ns
-        c["network_isolation"] = ControlStatus.ENFORCED      # network ns
-        receipt.network_isolation = ControlStatus.ENFORCED
+        c["network_isolation"] = ControlStatus.ENFORCED      # network ns (canonical)
         c["host_loopback_isolation"] = ControlStatus.ENFORCED
         c["descendant_containment"] = ControlStatus.ENFORCED  # PID ns
         c["pid_limit"] = ControlStatus.ENFORCED               # RLIMIT_NPROC in ns
@@ -541,7 +551,6 @@ class BubblewrapBackend(ContainmentBackend):
             receipt.failure_reason = "namespace creation failed at launch"
             for k in list(c):
                 c[k] = ControlStatus.NOT_AVAILABLE
-            receipt.network_isolation = ControlStatus.NOT_AVAILABLE
             receipt.finished_at = _now()
             return ExecutionOutcome(executed=False, error=receipt.failure_reason,
                                     receipt=receipt)
