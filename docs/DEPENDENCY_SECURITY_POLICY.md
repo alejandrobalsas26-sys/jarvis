@@ -170,14 +170,14 @@ that case:
 
 ---
 
-## 5. The 489 Low Bandit findings
+## 5. The 490 Low Bandit findings
 
 **These are not claimed to be harmless.** They are recorded, bounded and enforced.
 
 | | |
 |---|---|
-| Approved baseline | **489** (`core.release_facts.BANDIT_LOW_BASELINE`) |
-| Currently observed | **489**, same command, no exclusions |
+| Approved baseline | **490** (`core.release_facts.BANDIT_LOW_BASELINE`) |
+| Currently observed | **490**, same command, no exclusions |
 
 > **Baseline history.** Set at **488** at the M61.8 closure commit, where it was
 > measured and correct. Breached by `436119b` ("feat(runtime): add situational
@@ -303,7 +303,7 @@ A release is **not** blocked by:
 
 Carried into `69.61.0`, deliberately and with the reasoning stated:
 
-1. **489 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
+1. **490 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
 2. **The advisory `pip-audit` result is not triaged.** M61 made the result visible;
    acting on it is separate work. This is the highest-value item for the next
    maintenance pass.

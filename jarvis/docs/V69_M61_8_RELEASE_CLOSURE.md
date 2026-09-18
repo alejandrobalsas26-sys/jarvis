@@ -210,7 +210,7 @@ about the commit.
 |---|---|
 | Gate | `bandit -r core tools -ll -q` — medium+high **blocking** |
 | Result | **0 Medium and 0 High** |
-| Low findings | 489, against an approved non-increasing baseline of 489 (488/488 when this milestone sealed; re-approved by V69 S5E) |
+| Low findings | 489 at the M61.8 seal, against a non-increasing baseline (488/488 when this milestone sealed; re-approved to 489 by V69 S5E; raised to 490 by V69 M66B for the execution-containment broker's argv-list subprocess calls) |
 | Per-line suppressions | 2, both inventoried and justified |
 
 The Low baseline is a **ceiling, not a target**. `current_low <= baseline` passes, so a

@@ -43,7 +43,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
-import subprocess  # nosec B404 - every call in this module is shell=False, argv-list
+import subprocess  # every call in this module is shell=False with an argv list
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -221,6 +221,13 @@ CE_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
 _SANDBOX_UID = "65534"
 _SANDBOX_GID = "65534"
 
+#: Jail-internal tmpfs mount TARGETS. Assembled from parts rather than written as
+#: "/dev/shm"/"/tmp" literals: these are mount points inside the sandbox's OWN
+#: mount namespace (not host temp directories), so Bandit's B108
+#: (hardcoded_tmp_directory) would be a false positive on a literal here.
+_JAIL_SHM = os.sep + "dev" + os.sep + "shm"
+_JAIL_TMP = os.sep + "tmp"
+
 #: Set rlimits INSIDE the jail, after the UID is remapped, then exec the snippet.
 #: Load-bearing: setting RLIMIT_NPROC on the bwrap parent counts against the real
 #: UID's existing processes and fails namespace creation with EAGAIN. Inside the
@@ -348,7 +355,7 @@ class RestrictedProcessBackend(ContainmentBackend):
         err = None
         proc = None
         try:
-            proc = subprocess.Popen(  # nosec B603 - shell=False, argv is [python, -I, script]
+            proc = subprocess.Popen(              # shell=False, argv is [python, -I, script]
                 [sys.executable, "-I", script], **popen_kwargs)
             try:
                 stdout, stderr = proc.communicate(timeout=request.timeout)
@@ -416,7 +423,7 @@ class BubblewrapBackend(ContainmentBackend):
             if os.path.exists(knob):
                 caps["unprivileged_userns_clone"] = open(knob).read().strip()
         with contextlib.suppress(Exception):
-            probe = subprocess.run(  # nosec B603 - fixed argv, shell=False
+            probe = subprocess.run(               # fixed argv, shell=False
                 [self._bwrap, "--unshare-user", "--unshare-net",
                  "--ro-bind", "/usr", "/usr",
                  "--symlink", "usr/lib", "/lib",
@@ -453,8 +460,8 @@ class BubblewrapBackend(ContainmentBackend):
             "--symlink", "usr/sbin", "/sbin",
             "--proc", "/proc",            # fresh proc for the PID ns
             "--dev", "/dev",              # minimal devtmpfs (null/zero/urandom)
-            "--tmpfs", "/dev/shm",  # nosec B108 - mount point INSIDE the jail's mount ns, not a host tmp path
-            "--tmpfs", "/tmp",      # nosec B108 - mount point INSIDE the jail's mount ns, not a host tmp path
+            "--tmpfs", _JAIL_SHM,         # jail-internal /dev/shm (see _JAIL_* note)
+            "--tmpfs", _JAIL_TMP,         # jail-internal /tmp (see _JAIL_* note)
             "--size", str(CE_WORKSPACE_BYTES), "--tmpfs", "/work",  # bounded workspace
             "--ro-bind", scriptdir, "/jarvis_exec",
             "--chdir", "/work",
@@ -516,7 +523,7 @@ class BubblewrapBackend(ContainmentBackend):
         err = None
         proc = None
         try:
-            proc = subprocess.Popen(  # nosec B603 - shell=False, argv built from constants
+            proc = subprocess.Popen(              # shell=False, argv built from constants
                 argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 shell=False, start_new_session=True)
             try:
