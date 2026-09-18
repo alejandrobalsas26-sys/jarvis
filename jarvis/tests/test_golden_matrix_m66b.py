@@ -86,7 +86,9 @@ _SANDBOX_SCENARIOS = [
      "import subprocess,sys;c='import subprocess,sys;print(subprocess.run([sys.executable,\"-c\",\"print(8)\"],capture_output=True,text=True).stdout.strip())';print(subprocess.run([sys.executable,'-c',c],capture_output=True,text=True).stdout.strip())",
      15, _ok("8")),
     ("A32_pidcount",
-     "import subprocess,sys\nk=[];e=0\nfor i in range(200):\n try:k.append(subprocess.Popen([sys.executable,'-c','import time;time.sleep(4)']))\n except Exception:e+=1\nprint('ERR',e)\nfor x in k:x.kill()",
+     # Lightweight `sleep` (no interpreter startup) so the PID limit — not the CPU
+     # limit — is what bites; the burst (90) is just above RLIMIT_NPROC (64).
+     "import subprocess\nk=[];e=0\nfor i in range(90):\n try:k.append(subprocess.Popen(['/usr/bin/sleep','8']))\n except Exception:e+=1\nprint('ERR',e)\nfor x in k:x.kill()",
      20, lambda o: "ERR 0" not in (o.stdout or "")),
     ("A33_fork_burst_bounded",
      "import os,sys\nn=0\nfor i in range(300):\n try:\n  pid=os.fork()\n  if pid==0: os._exit(0)\n  n+=1\n except Exception:\n  break\nprint('FORKED',n)",

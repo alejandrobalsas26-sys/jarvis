@@ -91,11 +91,11 @@ MUTATIONS.append(_mut("BWLABEL_output_limit", "TRUTH", CONT,
 MUTATIONS += [
     _mut("BW_net_shared", "NETWORK", CONT,
          '"--unshare-all",              # user+mount+pid+net+ipc+uts+cgroup ns',
-         '"--unshare-user", "--unshare-mount", "--unshare-pid", "--unshare-ipc",',
+         '"--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",',
          NET),
     _mut("BW_pid_shared", "PROCESS", CONT,
          '"--unshare-all",              # user+mount+pid+net+ipc+uts+cgroup ns\n            "--die-with-parent",          # broker death tears the jail down',
-         '"--unshare-user", "--unshare-mount", "--unshare-net", "--unshare-ipc", "--unshare-uts",\n            "--die-with-parent",          # broker death tears the jail down',
+         '"--unshare-user", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",\n            "--die-with-parent",          # broker death tears the jail down',
          PROC3),
     _mut("BW_no_clearenv", "ENV", CONT,
          '"--clearenv",                 # withhold every host env var/secret',
@@ -167,7 +167,7 @@ MUTATIONS += [
 # ── Group 5: receipt mutations (3) ────────────────────────────────────────────
 MUTATIONS += [
     _mut("RCPT_net_hardcoded", "NETWORK", CONT,
-         '"network_isolation": self.network_isolation.value,',
+         '"network_isolation": self.controls.get(\n                "network_isolation", self.network_isolation).value,',
          '"network_isolation": "enforced",',
          f"{C}::TestRestrictedBackendProperties::test_restricted_network_is_not_enforced"),
     _mut("RCPT_hide_downgrade", "TRUTH", CONT,
@@ -224,8 +224,8 @@ MUTATIONS += [
 # ── Group 7: RestrictedProcessBackend mutations (4) ───────────────────────────
 MUTATIONS += [
     _mut("RS_net_enforced", "NETWORK", CONT,
-         'receipt.network_isolation = ControlStatus.NOT_ENFORCED\n        receipt.measured_limitations.append(\n            "network is NOT isolated: a snippet can still open outbound sockets "',
-         'receipt.network_isolation = ControlStatus.ENFORCED\n        receipt.measured_limitations.append(\n            "network is NOT isolated: a snippet can still open outbound sockets "',
+         'receipt.controls["network_isolation"] = ControlStatus.NOT_ENFORCED\n        receipt.measured_limitations.append(',
+         'receipt.controls["network_isolation"] = ControlStatus.ENFORCED\n        receipt.measured_limitations.append(',
          f"{C}::TestRestrictedBackendProperties::test_restricted_network_is_not_enforced"),
     _mut("RS_maxprofile_sandbox", "BROKER", CONT,
          'def max_profile(self) -> ExecutionProfile:\n        return ExecutionProfile.RESTRICTED_PROCESS',
@@ -263,29 +263,29 @@ MUTATIONS += [
 
 # ── Group 9: LEGACY invariants (6) ────────────────────────────────────────────
 MUTATIONS += [
-    _mut("LEG_m65d_effect_key", "LEGACY", EXEC,
-         'return f"{epoch}|{tool_name}|{args}"',
-         'return f"{epoch}|{tool_name}"',
-         "tests/test_effect_semantics_v69_m65d.py::test_a_normaliser_never_merges_genuinely_different_calls"),
+    _mut("LEG_m65d_effect_id", "LEGACY", "core/effect_journal.py",
+         'return _digest(_D_EFFECT, surface, tool_id, identity_scope,\n                   canonical_json(tool_input))',
+         'return _digest(_D_EFFECT, surface, tool_id, identity_scope,\n                   "")',
+         "tests/test_effect_semantics_v69_m65d.py"),
     _mut("LEG_windows_backend_status", "LEGACY", CONT,
          '"status": ("WINDOWS_RESTRICTED_PROCESS_ONLY" if os.name == "nt"\n                       else "NOT_ON_THIS_HOST"),',
          '"status": "WINDOWS_SANDBOXED",',
          f"{G}::test_golden_B07_windows_backend_truthful"),
     _mut("LEG_coverage_equal", "LEGACY", REG,
-         'if d["disposition"] in (BROKER_REQUIRED, RESTRICTED_ONLY)',
-         'if d["disposition"] in (BROKER_REQUIRED,)',
+         'if d["arbitrary_code"] and d["disposition"] == BROKER_REQUIRED',
+         'if d["arbitrary_code"] and d["disposition"] != BROKER_REQUIRED',
          f"{S}::test_coverage_invariant_holds"),
     _mut("LEG_registry_drop_surface", "LEGACY", REG,
-         '"disposition": RESTRICTED_ONLY,\n        "controls": "allowlist + shell=False + `python -c` blocked + NATO HITL",',
-         '"disposition": DOCUMENT_ONLY,\n        "controls": "allowlist + shell=False + `python -c` blocked + NATO HITL",',
+         '"disposition": BROKER_REQUIRED,\n        "default_requirement": "SANDBOX_REQUIRED",',
+         '"disposition": RESTRICTED_ONLY,\n        "default_requirement": "SANDBOX_REQUIRED",',
          f"{S}::test_coverage_invariant_holds"),
     _mut("LEG_mandatory_shrink", "LEGACY", CONT,
          '    "network_isolation",\n    "host_loopback_isolation",',
          '    "host_loopback_isolation",',
          f"{C}::TestDerivationExtra::test_network_isolation_is_mandatory"),
     _mut("LEG_env_allowlist_widen", "LEGACY", CONT,
-         'CE_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")',
-         'CE_ENV_ALLOWLIST: tuple[str, ...] = tuple(__import__("os").environ)',
+         'child_env = {k: os.environ[k] for k in CE_ENV_ALLOWLIST if k in os.environ}',
+         'child_env = dict(os.environ)',
          f"{C}::TestRestrictedBackendProperties::test_restricted_env_allowlist_withholds_secret"),
 ]
 
@@ -325,9 +325,9 @@ MUTATIONS += [
          'CE_FSIZE_BYTES = 16 * 1024 * 1024       # RLIMIT_FSIZE max single-file write',
          'CE_FSIZE_BYTES = 512 * 1024 * 1024      # RLIMIT_FSIZE max single-file write',
          FSIZE),
-    _mut("BW_nproc_value_huge", "PROCESS", CONT,
+    _mut("BW_nproc_value_weak", "PROCESS", CONT,
          'CE_NPROC = 64                           # RLIMIT_NPROC inside the remapped UID',
-         'CE_NPROC = 100000                       # RLIMIT_NPROC inside the remapped UID',
+         'CE_NPROC = 4096                         # RLIMIT_NPROC inside the remapped UID',
          PID),
     _mut("BW_no_proc_mount", "PRIVILEGE", CONT,
          '"--proc", "/proc",            # fresh proc for the PID ns',
@@ -359,8 +359,8 @@ MUTATIONS += [
          'return OperatorPolicy.COMPAT if raw != "compat" else OperatorPolicy.STRICT',
          f"{C}::TestNoUntrustedDowngrade::test_operator_policy_reads_only_env"),
     _mut("LEG_always_hitl_code", "LEGACY", EXEC,
-         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({',
-         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "___removed_placeholder___",',
+         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "code_execute",\n    "run_shell_command",',
+         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "run_shell_command",',
          "tests/test_code_execute_gate.py::test_code_execute_in_always_hitl"),
     _mut("DERIVE_cleanup_or", "TRUTH", CONT,
          'if sandbox_all and cleanup_ok:',
@@ -378,6 +378,33 @@ MUTATIONS += [
          '        if tool_name == "code_execute":\n            return ContainmentRequirement.SANDBOX_REQUIRED\n        return ContainmentRequirement.RESTRICTED_OK',
          '        return ContainmentRequirement.SANDBOX_REQUIRED',
          f"{G}::test_golden_B10_production_L3_negative_guard"),
+]
+
+
+
+# ── Group 13: alternate-execution-door closure mutations (§4) ─────────────────
+DOOR = "tests/test_alternate_execution_doors_m66b.py"
+MUTATIONS += [
+    _mut("DOOR_interp_check_disabled", "BROKER", EXEC,
+         'if exe not in _ARBITRARY_CODE_INTERPRETERS:\n        return None',
+         'if True:\n        return None',
+         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
+    _mut("DOOR_remove_python", "BROKER", EXEC,
+         '"python", "python2", "python3", "pypy", "pypy3",',
+         '"python2", "pypy", "pypy3",',
+         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
+    _mut("DOOR_bare_interpreter_hole", "BROKER", EXEC,
+         'if rest and all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):',
+         'if all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):',
+         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
+    _mut("DOOR_not_wired_into_validate", "BROKER", EXEC,
+         'interp_reason = _forbidden_interpreter_exec(argv)\n    if interp_reason is not None:',
+         'interp_reason = None\n    if interp_reason is not None:',
+         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
+    _mut("DOOR_coverage_counts_all_arbitrary", "LEGACY", REG,
+         'if d["arbitrary_code"])',
+         'if d["arbitrary_code"] or True)',
+         f"{DOOR}::test_coverage_invariant_after_closure"),
 ]
 
 
