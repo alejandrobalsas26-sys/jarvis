@@ -47,9 +47,16 @@ ARBITRARY_CODE_SURFACES: dict[str, dict] = {
         "risk_class": "HIGH_IMPACT",
         "hitl": True,
         "disposition": RESTRICTED_ONLY,
-        "controls": ("allowlist + shell=False + NATO HITL + M66B interpreter-exec "
-                     "block (no python/node/npm/make script/module/inline code)"),
-        "gateway": "_validate_command",
+        # Round-1: an executable-name allowlist is NOT an execution policy. The
+        # command-SEMANTIC policy (core/command_policy.py) is what proves this
+        # gateway cannot become arbitrary host code — LOLBins (git -c, nmap
+        # --script, find -exec, ssh/scp ProxyCommand, pip install, interpreters)
+        # are refused. arbitrary_code=False is JUSTIFIED by that policy, checked
+        # by tests/test_command_policy_m66b.py, not asserted by hand.
+        "controls": ("name allowlist + shell=False + NATO HITL + M66B "
+                     "command-semantic policy (core.command_policy)"),
+        "gateway": "_validate_command -> core.command_policy.command_refusal",
+        "command_policy": "core.command_policy",
     },
     "red_team_shell": {
         "handler": "RedTeamShellExecutor.execute_shell",
@@ -63,9 +70,17 @@ ARBITRARY_CODE_SURFACES: dict[str, dict] = {
         "risk_class": "HIGH_IMPACT",
         "hitl": True,
         "disposition": RESTRICTED_ONLY,
+        # Routes through the same _validate_command → command_policy, so base
+        # binaries are governed identically. Trusted-lab offensive tools
+        # (masscan/sqlmap/msfconsole…) are an operator-enabled posture gated by
+        # JARVIS_TRUSTED_LAB + FULL_NATO: they execute BY DESIGN and are out of
+        # the base-gateway containment scope (documented, not a silent door).
         "controls": ("YARA + hard-block + trust challenge + FULL_NATO + shell=False "
-                     "+ M66B interpreter-exec block"),
-        "gateway": "RedTeamShellExecutor._classify",
+                     "+ M66B command-semantic policy (base binaries)"),
+        "gateway": "RedTeamShellExecutor._classify -> core.command_policy",
+        "command_policy": "core.command_policy",
+        "lab_note": ("trusted-lab offensive tools execute by design; operator-gated "
+                     "(JARVIS_TRUSTED_LAB + FULL_NATO), out of base-gateway scope"),
     },
 }
 

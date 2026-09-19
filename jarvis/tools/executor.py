@@ -79,16 +79,21 @@ COMMAND_ALLOWLIST: frozenset[str] = frozenset({
     "ps", "top", "htop", "tasklist",
     "df", "du", "free",
     "uname", "hostname", "whoami", "id",
-    # Dev tools
-    "python", "python3", "pip", "pip3",
-    "git", "node", "npm",
-    "gcc", "make",
+    # Dev tools. V69 M66B: pip/pip3/gcc/ssh/scp/openssl REMOVED from the generic
+    # host gateway (code/command-execution primitives — install hooks, compiler
+    # -wrapper, ProxyCommand, engine loading). python/python3/node/npm/make stay
+    # but are EXECUTION_CAPABLE: `core.command_policy` permits only informational
+    # flags there and refuses any script/module/recipe. git/nmap/wget/find/curl
+    # are SAFE_WITH_ARGUMENT_POLICY (structural argument grammar). See
+    # core/command_policy.py — the single command-SEMANTIC authority.
+    "python", "python3", "node", "npm", "make",
+    "git",
     # Navegación de archivos (lectura)
     "ls", "dir", "cat", "type", "more",
     "grep", "find", "findstr",
     "head", "tail", "wc",
     # Miscelánea segura
-    "echo", "ssh", "scp", "openssl",
+    "echo",
 })
 
 # Lab-only binaries: offensive / heavier tooling permitted through
@@ -126,55 +131,23 @@ _BLOCKED_FLAGS: frozenset[str] = frozenset({
 })
 _PYTHON_EXECUTABLES: frozenset[str] = frozenset({"python", "python3"})
 
-# ── V69 M66B (§4): close the alternate arbitrary-code door ────────────────────
-# `run_shell_command` and `RedTeamShellExecutor.execute_shell` share this
-# allowlist. Some allowlisted binaries are language INTERPRETERS/script runners:
-# `python attacker.py`, `python -m evil`, `node a.js`, `npm run evil` all execute
-# caller-controlled arbitrary code ON THE HOST — the exact thing code_execute now
-# routes through the SANDBOX_REQUIRED ContainmentBroker. HITL/NATO are AUTHORITY,
-# not L3 containment, so this gateway must be EXPLICITLY INCAPABLE of arbitrary
-# code: an interpreter here may only run a benign informational flag. Anything
-# that would execute a script, a module or inline code is refused and pointed at
-# code_execute. Fixed diagnostic commands (nmap, git, ping, curl, ls, …) are
-# unaffected. Compilers (gcc) and remote/network tools (ssh) are out of scope —
-# gcc builds but does not execute, and ssh is a network-authority (L1/L2) concern.
-_ARBITRARY_CODE_INTERPRETERS: frozenset[str] = frozenset({
-    "python", "python2", "python3", "pypy", "pypy3",
-    "node", "nodejs", "npm", "npx", "deno", "bun",
-    "ruby", "perl", "php", "lua", "luajit", "rscript",
-    "bash", "sh", "zsh", "ksh", "dash", "fish", "ash",
-    "pwsh", "powershell", "make", "gmake",
-})
-#: The ONLY arguments an interpreter may carry through the host command gateway —
-#: purely informational, no code execution. Everything else is arbitrary code.
-_INTERPRETER_SAFE_FLAGS: frozenset[str] = frozenset({
-    "--version", "-v", "-V", "--help", "-h", "version", "--info",
-})
+# ── V69 M66B (§4/Round-1): the alternate arbitrary-code door is closed by a
+# command-SEMANTIC policy, not a name allowlist. `run_shell_command` and
+# `RedTeamShellExecutor.execute_shell` share `_validate_command`, which after the
+# name allowlist consults `core.command_policy.command_refusal`. That policy
+# proves a permitted command cannot become caller-controlled arbitrary host code
+# through its arguments, config, plugins, helpers, hooks or subcommands: LOLBins
+# (git -c, nmap --script, wget --use-askpass, find -exec, ssh/scp ProxyCommand,
+# pip install, tar --to-command, awk/sed/env/xargs, interpreters) are refused and
+# routed to code_execute → the SANDBOX_REQUIRED ContainmentBroker. See
+# core/command_policy.py. `_forbidden_interpreter_exec` is kept as a thin shim.
+from core import command_policy as _command_policy
 
 
 def _forbidden_interpreter_exec(argv: list[str]) -> str | None:
-    """Return a refusal reason if *argv* is an interpreter/script-runner
-    invocation that would execute caller-controlled code, else ``None``.
-
-    This is what makes ``run_shell_command`` / ``execute_shell`` *explicitly
-    incapable* of arbitrary-code execution (§4). Arbitrary code must go through
-    ``code_execute`` → the ContainmentBroker (SANDBOX_REQUIRED)."""
-    if not argv:
-        return None
-    exe = Path(argv[0]).name.lower().removesuffix(".exe")
-    if exe not in _ARBITRARY_CODE_INTERPRETERS:
-        return None
-    rest = argv[1:]
-    # Only a NON-EMPTY, purely-informational argument list is safe. A bare
-    # interpreter (`make` runs the default Makefile target; `python`/`node` open
-    # an interactive interpreter) is refused too.
-    if rest and all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):
-        return None       # `python --version` and friends: no code executes
-    return (
-        f"'{exe}' with code/script/module arguments is arbitrary code execution "
-        "and is not permitted from the host command gateway (HITL is authority, "
-        "not containment). Use code_execute, which runs under the "
-        "SANDBOX_REQUIRED ContainmentBroker.")
+    """Back-compat shim → the unified command-semantic policy (EXECUTION_CAPABLE
+    interpreters/build tools may carry only informational flags)."""
+    return _command_policy.forbidden_interpreter_exec(argv)
 
 
 # ── Layer 2: Directorios del sistema bloqueados ───────────────────────────────
@@ -1003,13 +976,23 @@ def _validate_command(
         except Exception:
             pass
 
-    # V69 M66B (§4): the host command gateway must be EXPLICITLY INCAPABLE of
-    # arbitrary-code execution. An allowlisted interpreter (python/node/npm/…)
-    # invoked with a script, a module or inline code is refused; such work goes
-    # to code_execute (SANDBOX_REQUIRED). Benign informational flags still pass.
-    interp_reason = _forbidden_interpreter_exec(argv)
-    if interp_reason is not None:
-        return False, interp_reason, []
+    # V69 M66B (§4/Round-1): command-SEMANTIC policy. The name allowlist above says
+    # WHICH binaries; this proves the specific invocation cannot become arbitrary
+    # host code through arguments/config/helpers/subcommands. A permitted binary
+    # carrying a command-execution option (git -c, nmap --script, find -exec, …)
+    # or an interpreter running a script is refused and routed to code_execute.
+    #
+    # The policy governs the BASE host gateway. A LAB-ONLY binary (present only via
+    # the trusted-lab extra allowlist — masscan, sqlmap, msfconsole, …) is an
+    # operator-enabled offensive primitive gated by JARVIS_TRUSTED_LAB + FULL_NATO;
+    # such tools execute by design and are documented as out of the base-gateway
+    # containment scope. A BASE binary stays governed even under trusted-lab, so
+    # `git -c`/`python file.py` are refused whether or not lab mode is on.
+    is_lab_only = executable in extra_allowlist and executable not in COMMAND_ALLOWLIST
+    if not is_lab_only:
+        policy_reason = _command_policy.command_refusal(argv)
+        if policy_reason is not None:
+            return False, policy_reason, []
 
     return True, "", argv
 
