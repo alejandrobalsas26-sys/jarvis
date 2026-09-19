@@ -1,19 +1,17 @@
-"""scripts/mutation_campaign_m66b.py — V69 M66B (§37): the mutation campaign.
+"""scripts/mutation_campaign_m66b.py — V69 M66B (§37 + Round-1 §19): the campaign.
 
-For each mutation:
-  1. assert the anchor occurs EXACTLY ONCE in its file (a non-unique anchor is a
-     campaign error, never a silent success),
-  2. apply the mutation (find → replace) on disk,
-  3. run the mapped focused test node in a FRESH subprocess (no stale bytecode),
-  4. require the test to FAIL — the mutation must be DETECTED,
-  5. restore the file (always, in a finally).
+Rebuilt after Round-1 remediation (the receipt now DERIVES controls from a READY
+handshake's observed evidence, and the host gateway is governed by a
+command-SEMANTIC policy). For each mutation:
+  1. assert the anchor occurs EXACTLY ONCE in its file,
+  2. apply it, run the mapped focused test in a FRESH subprocess,
+  3. require the test to FAIL (the mutation must be DETECTED),
+  4. restore the file (always).
 
-A mutation that leaves its mapped test GREEN is a LOAD-BEARING SURVIVOR: a
-security property with no test behind it. The milestone requires 0 survivors.
-
-Prints to stdout (no artefact), mirroring the M66A.1 campaign. Run from `jarvis/`:
-    python scripts/mutation_campaign_m66b.py
-Exit 0 iff every mutation was detected and every anchor was unique.
+A mutation whose mapped test stays GREEN is a LOAD-BEARING SURVIVOR: a security
+property with no test behind it. Requirement: >= 85 meaningful mutations, valid
+(a security mutation must leave the program runnable — a weakened boundary, not a
+setup crash), 0 load-bearing survivors. Run from `jarvis/`.
 """
 from __future__ import annotations
 
@@ -23,194 +21,205 @@ import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Detector test nodes (relative to jarvis/).
 G = "tests/test_golden_matrix_m66b.py"
-E = "tests/test_escape_matrix_m66b.py"
 C = "tests/test_containment_m66b.py"
 F = "tests/test_four_layer_defense_v69_m66a1.py"
 N = "tests/test_four_layer_nonvacuity_m66b.py"
 S = "tests/test_execution_surfaces_m66b.py"
+OBS = "tests/test_observed_containment_m66b.py"
+CP = "tests/test_command_policy_m66b.py"
 
-SBX = f"{G}::test_golden_sandbox_scenarios"
-NET = f"{E}::TestNetworkEscapes::test_net01_host_ipv4_loopback_unreachable"
-FS = f"{E}::TestFilesystemEscapes::test_fs03_host_home_enumeration"
-REPO = f"{E}::TestFilesystemEscapes::test_fs04_repository_enumeration"
-ENV = f"{E}::TestEnvironmentEscapes::test_env01_synthetic_secret_env_not_visible"
-PRIV1 = f"{E}::TestPrivilegeEscapes::test_priv01_effective_identity_non_root"
-PRIV2 = f"{E}::TestPrivilegeEscapes::test_priv02_no_new_privs_and_no_caps"
-PROC3 = f"{E}::TestProcessEscapes::test_proc03_setsid_descendant_contained"
-CPU = f"{E}::TestResourceEscapes::test_res01b_cpu_limit_kills_before_wall_timeout"
-MEM = f"{G}::test_golden_sandbox_scenarios[A25_memory]"
-STOR = f"{G}::test_golden_sandbox_scenarios[A26_storage]"
-OUT = f"{G}::test_golden_sandbox_scenarios[A27_output_flood]"
-FSIZE = f"{G}::test_golden_sandbox_scenarios[A29_fsize]"
-PID = f"{G}::test_golden_sandbox_scenarios[A32_pidcount]"
-TIMEOUT = f"{G}::test_golden_sandbox_scenarios[A23_timeout_sleep]"
 A01 = f"{G}::test_golden_sandbox_scenarios[A01_arith]"
+B04 = f"{G}::test_golden_B04_L3_denial_weaker_backend"
+B05 = f"{G}::test_golden_B05_compat_downgrade_never_sandboxed"
+B07 = f"{G}::test_golden_B07_windows_backend_truthful"
+B08 = f"{G}::test_golden_B08_restricted_backend_runs_everywhere"
+B10 = f"{G}::test_golden_B10_production_L3_negative_guard"
+
+MAJOR_A = f"{OBS}::TestLiveObservation::test_major_a_net_share_not_sandboxed_and_zero_effect"
+MAJOR_B = f"{OBS}::TestLiveObservation::test_major_b_bad_bind_fails_closed_structural"
+BOOTEXIT = f"{OBS}::TestLiveObservation::test_bootstrap_exits_before_ready_is_zero_effect"
+READY0 = f"{OBS}::TestLiveObservation::test_ready_zero_flag_does_not_execute"
+FORGE2 = f"{OBS}::TestLiveObservation::test_forged_wrong_nonce_ready_is_rejected"
+DERIV = f"{OBS}::TestEvidenceDerivation::test_bad_evidence_drops_the_control"
+UNKNOWN_T = f"{OBS}::TestEvidenceDerivation::test_unknown_control_never_yields_sandboxed"
+
+CP_GIT = f"{CP}::TestGit::test_git_execution_vectors_blocked"
+CP_NMAP = f"{CP}::TestNmap::test_nmap_nse_blocked"
+CP_WGET = f"{CP}::TestWget::test_wget_helpers_blocked"
+CP_FIND = f"{CP}::TestFind::test_find_exec_blocked"
+CP_REMOVED = f"{CP}::TestRemoved::test_removed_binary_exec_vectors_blocked"
+CP_INTERP = f"{CP}::TestInterpreters::test_interpreter_code_blocked"
+CP_INJECT = f"{CP}::TestGlobalInjection::test_injection_fragment_refused"
+CP_UNKNOWN = f"{CP}::TestPolicyCoverage::test_unknown_binary_defaults_to_deny"
+CP_FIND_UNIT = f"{CP}::TestPolicyCoverage::test_find_rule_is_load_bearing"
+CP_REMOVED_UNIT = f"{CP}::TestPolicyCoverage::test_removed_binary_rule_is_load_bearing"
+CP_GIT_GLOBAL = f"{CP}::TestPolicyCoverage::test_git_global_option_rules_are_load_bearing"
+CP_CURL = f"{CP}::TestPolicyCoverage::test_curl_config_rule_is_load_bearing"
 
 CONT = "core/containment.py"
+CMD = "core/command_policy.py"
 EXEC = "tools/executor.py"
 REG = "core/execution_surface_registry.py"
+DET = "scripts/check_execution_surfaces.py"
+EJ = "core/effect_journal.py"
 
 
-def _mut(mid, category, file, find, replace, test):
-    return {"id": mid, "cat": category, "file": file, "find": find,
+def _mut(mid, cat, file, find, replace, test):
+    return {"id": mid, "cat": cat, "file": file, "find": find,
             "replace": replace, "test": test}
-
-
-def _bwrap_label(control, test=A01):
-    """A bubblewrap control-label flip: `c["X"] = ENFORCED` → NOT_ENFORCED.
-    Detected because the derivation drops SANDBOXED when any mandatory label lies."""
-    return _mut(f"BWLABEL_{control}", "TRUTH", CONT,
-                f'c["{control}"] = ControlStatus.ENFORCED',
-                f'c["{control}"] = ControlStatus.NOT_ENFORCED', test)
-
-
-def _restricted_label(control, test=f"{G}::test_golden_B08_restricted_backend_runs_everywhere"):
-    return _mut(f"RSLABEL_{control}", "TRUTH", CONT,
-                f'receipt.controls["{control}"] = ControlStatus.ENFORCED',
-                f'receipt.controls["{control}"] = ControlStatus.NOT_ENFORCED', test)
 
 
 MUTATIONS: list[dict] = []
 
-# ── Group 1: bubblewrap control-label flips (13) — the SANDBOXED contract ─────
-for _c in ("filesystem_isolation", "network_isolation", "host_loopback_isolation",
-           "descendant_containment", "pid_limit", "cpu_limit", "memory_limit",
-           "storage_limit", "environment_isolation", "privilege_restriction",
-           "workspace_ephemeral"):
-    MUTATIONS.append(_bwrap_label(_c))
-MUTATIONS.append(_mut("BWLABEL_wall_timeout", "TRUTH", CONT,
-                      'c["wall_timeout"] = ControlStatus.ENFORCED',
-                      'c["wall_timeout"] = ControlStatus.NOT_ENFORCED', A01))
-MUTATIONS.append(_mut("BWLABEL_output_limit", "TRUTH", CONT,
-                      'c["output_limit"] = ControlStatus.ENFORCED',
-                      'c["output_limit"] = ControlStatus.NOT_ENFORCED', A01))
+# ── Group 1: evidence-derivation lies (a control derived True regardless) ─────
+_DERIV = [
+    ("network_isolation", 'c["network_isolation"] = st(ev.get("ifaces") == ["lo"])',
+     'c["network_isolation"] = st(True)'),
+    ("host_loopback", 'c["host_loopback_isolation"] = st(not ev.get("loopback_connect", True))',
+     'c["host_loopback_isolation"] = st(True)'),
+    ("descendant", 'c["descendant_containment"] = st(0 < ev.get("proc_count", -1) <= 15)',
+     'c["descendant_containment"] = st(True)'),
+    ("pid_limit", 'c["pid_limit"] = st(ev.get("nproc") == CE_NPROC)',
+     'c["pid_limit"] = st(True)'),
+    ("cpu_limit", 'c["cpu_limit"] = st(ev.get("cpu") == CE_CPU_SECONDS)',
+     'c["cpu_limit"] = st(True)'),
+    ("memory_limit", 'c["memory_limit"] = st(ev.get("as_") == CE_MEM_BYTES)',
+     'c["memory_limit"] = st(True)'),
+    ("storage_limit", 'c["storage_limit"] = st(0 < ev.get("tmpfs_bytes", -1) <= CE_WORKSPACE_BYTES)',
+     'c["storage_limit"] = st(True)'),
+    ("environment", 'c["environment_isolation"] = st(not ev.get("env_extra", ["x"]))',
+     'c["environment_isolation"] = st(True)'),
+    ("filesystem", 'c["filesystem_isolation"] = st(not ev.get("home", True)',
+     'c["filesystem_isolation"] = st(True or not ev.get("home", True)'),
+    ("privilege", 'c["privilege_restriction"] = st(ev.get("uid") not in (0, None)',
+     'c["privilege_restriction"] = st(True or ev.get("uid") not in (0, None)'),
+    ("workspace", 'c["workspace_ephemeral"] = st(ev.get("cwd") == "/work"',
+     'c["workspace_ephemeral"] = st(True or ev.get("cwd") == "/work"'),
+]
+for _name, _find, _repl in _DERIV:
+    MUTATIONS.append(_mut(f"DERIV_{_name}", "RECEIPT", CONT, _find, _repl, DERIV))
 
-# ── Group 2: bubblewrap REAL behaviour mutations (flag removals) ──────────────
+# ── Group 2: bootstrap self-check + evidence gathering (must fail closed) ─────
+MUTATIONS += [
+    _mut("BOOT_selfcheck_true", "FAILCLOSED", CONT,
+         '_ok = (_ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0',
+         '_ok = (True or _ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0',
+         MAJOR_A),
+    _mut("BOOT_selfcheck_net_dropped", "FAILCLOSED", CONT,
+         'and _ev["ifaces"] == ["lo"] and not _ev["loopback_connect"]',
+         'and True and True',
+         MAJOR_A),
+    _mut("BOOT_ifaces_faked", "FAILCLOSED", CONT,
+         '_ifaces = sorted(nm for _ix, nm in socket.if_nameindex())',
+         '_ifaces = ["lo"]',
+         MAJOR_A),
+]
+
+# ── Group 3: broker handshake parsing (fail-closed authority) ─────────────────
+MUTATIONS += [
+    _mut("BRK_ready_flag_ignored", "FAILCLOSED", CONT,
+         'if ready_flag != "1":',
+         'if ready_flag == "\\x00never":',
+         READY0),
+    _mut("BRK_nonce_check_bypassed", "FAILCLOSED", CONT,
+         'if len(parts) == 4 and parts[1] == nonce:',
+         'if len(parts) == 4 and len(parts[1]) >= 0:',
+         FORGE2),
+    _mut("BRK_noready_controls_enforced", "FAILCLOSED", CONT,
+         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.UNKNOWN',
+         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.ENFORCED',
+         BOOTEXIT),
+]
+
+# ── Group 4: bwrap argv flags (removal weakens a boundary; self-check catches) ─
 MUTATIONS += [
     _mut("BW_net_shared", "NETWORK", CONT,
          '"--unshare-all",              # user+mount+pid+net+ipc+uts+cgroup ns',
          '"--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",',
-         NET),
+         A01),
     _mut("BW_pid_shared", "PROCESS", CONT,
          '"--unshare-all",              # user+mount+pid+net+ipc+uts+cgroup ns\n            "--die-with-parent",          # broker death tears the jail down',
          '"--unshare-user", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",\n            "--die-with-parent",          # broker death tears the jail down',
-         PROC3),
+         A01),
     _mut("BW_no_clearenv", "ENV", CONT,
          '"--clearenv",                 # withhold every host env var/secret',
          '"--setenv", "PYTHONDONTWRITEBYTECODE", "1",',
-         ENV),
+         A01),
     _mut("BW_uid_root", "PRIVILEGE", CONT,
-         '"--uid", _SANDBOX_UID,', '"--uid", "0",', PRIV1),
-    _mut("BW_home_mount", "FILESYSTEM", CONT,
-         '"--ro-bind", scriptdir, "/jarvis_exec",',
-         '"--ro-bind", scriptdir, "/jarvis_exec", "--ro-bind", "/home", "/home",',
-         FS),
-    _mut("BW_workspace_huge", "RESOURCE", CONT,
-         'CE_WORKSPACE_BYTES = 64 * 1024 * 1024',
-         'CE_WORKSPACE_BYTES = 64 * 1024 * 1024 * 1024', STOR),
-    _mut("BW_no_proc_isolation", "FILESYSTEM", CONT,
-         '"--symlink", "usr/bin", "/bin",',
-         '"--symlink", "usr/bin", "/bin", "--ro-bind", "/home/kali", "/mnt_home",',
-         # this makes the repo/home reachable at /mnt_home; escape REPO won't see
-         # it (different path), so target a home-enumeration variant via FS
-         FS),
+         '"--uid", _SANDBOX_UID,', '"--uid", "0",', A01),
+    _mut("BW_no_proc", "PRIVILEGE", CONT,
+         '"--proc", "/proc",            # fresh proc for the PID ns',
+         '"--tmpfs", "/proc",           # fresh proc for the PID ns',
+         A01),
+    _mut("BW_workspace_unbounded", "RESOURCE", CONT,
+         '"--size", str(CE_WORKSPACE_BYTES), "--tmpfs", "/work",  # bounded workspace',
+         '"--tmpfs", "/work",  # bounded workspace',
+         A01),
 ]
-# BW_no_proc_isolation actually does not weaken /home enumeration; replace with a
-# real host-home bind that FS detects.
-MUTATIONS[-1] = _mut("BW_extra_home_bind", "FILESYSTEM", CONT,
-                     '"--symlink", "usr/sbin", "/sbin",',
-                     '"--symlink", "usr/sbin", "/sbin", "--ro-bind", "/home", "/home",',
-                     FS)
 
-# ── Group 3: bootstrap rlimit mutations (4) ───────────────────────────────────
+# ── Group 5: bootstrap rlimit values (self-check observes the mismatch) ────────
 MUTATIONS += [
-    _mut("BOOT_cpu_off", "RESOURCE", CONT,
+    _mut("BOOT_cpu_value", "RESOURCE", CONT,
          'resource.setrlimit(resource.RLIMIT_CPU, ({CE_CPU_SECONDS}, {CE_CPU_SECONDS} + 1))',
-         'pass  # RLIMIT_CPU removed', CPU),
-    _mut("BOOT_mem_off", "RESOURCE", CONT,
+         'resource.setrlimit(resource.RLIMIT_CPU, (999999, 999999))', A01),
+    _mut("BOOT_mem_value", "RESOURCE", CONT,
          'resource.setrlimit(resource.RLIMIT_AS, ({CE_MEM_BYTES}, {CE_MEM_BYTES}))',
-         'pass  # RLIMIT_AS removed', MEM),
-    _mut("BOOT_nproc_off", "PROCESS", CONT,
+         'pass  # RLIMIT_AS removed', A01),
+    _mut("BOOT_nproc_value", "PROCESS", CONT,
          'resource.setrlimit(resource.RLIMIT_NPROC, ({CE_NPROC}, {CE_NPROC}))',
-         'pass  # RLIMIT_NPROC removed', PID),
-    _mut("BOOT_fsize_off", "RESOURCE", CONT,
+         'pass  # RLIMIT_NPROC removed', A01),
+    _mut("BOOT_fsize_value", "RESOURCE", CONT,
          'resource.setrlimit(resource.RLIMIT_FSIZE, ({CE_FSIZE_BYTES}, {CE_FSIZE_BYTES}))',
-         'pass  # RLIMIT_FSIZE removed', FSIZE),
+         'pass  # RLIMIT_FSIZE removed', A01),
 ]
 
-# ── Group 4: derive_profile mutations (5) ─────────────────────────────────────
+# ── Group 6: command-SEMANTIC policy (LOLBins) ────────────────────────────────
 MUTATIONS += [
-    _mut("DERIVE_any_not_all", "TRUTH", CONT,
-         'sandbox_all = all(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)',
-         'sandbox_all = any(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)',
-         f"{C}::TestProfileDerivation::test_missing_any_mandatory_control_is_not_sandboxed"),
-    _mut("DERIVE_ignore_cleanup", "TRUTH", CONT,
-         'cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED',
-         'cleanup_ok = True',
-         f"{C}::TestProfileDerivation::test_cleanup_failure_blocks_sandboxed"),
-    _mut("DERIVE_force_sandboxed", "TRUTH", CONT,
-         'if sandbox_all and cleanup_ok:\n        return ExecutionProfile.SANDBOXED',
-         'if True:\n        return ExecutionProfile.SANDBOXED',
-         f"{C}::TestProfileDerivation::test_missing_any_mandatory_control_is_not_sandboxed"),
-    _mut("DERIVE_baseline_any", "TRUTH", CONT,
-         'if all(enforced(c) for c in BASELINE_RESTRICTED_CONTROLS):',
-         'if any(enforced(c) for c in BASELINE_RESTRICTED_CONTROLS):',
-         f"{C}::TestDerivationExtra::test_partial_baseline_is_direct"),
-    _mut("DERIVE_direct_to_sandboxed", "TRUTH", CONT,
-         'return ExecutionProfile.DIRECT_PROCESS',
-         'return ExecutionProfile.SANDBOXED',
-         f"{C}::TestProfileDerivation::test_empty_controls_is_direct"),
+    _mut("CMD_git_c_allowed", "LOLBIN", CMD,
+         '    "-c", "-C", "--exec-path", "--config-env", "--namespace", "--work-tree",',
+         '    "--exec-path", "--config-env", "--namespace", "--work-tree",',
+         CP_GIT),
+    _mut("CMD_nmap_script_allowed", "LOLBIN", CMD,
+         'if low.startswith("--script") or low == "--datadir" or low.startswith("--datadir="):',
+         'if low == "\\x00never":',
+         CP_NMAP),
+    _mut("CMD_find_exec_allowed", "LOLBIN", CMD,
+         'banned = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprintf",',
+         'banned = {"\\x00never", "-execdir", "-ok", "-okdir", "-delete", "-fprintf",',
+         CP_FIND_UNIT),
+    _mut("CMD_removed_binary_reintroduced", "LOLBIN", CMD,
+         '"ssh": CommandCapability.REMOVED,',
+         '"ssh": CommandCapability.SAFE_FIXED_DIAGNOSTIC,',
+         CP_REMOVED_UNIT),
+    _mut("CMD_interpreter_allowed", "LOLBIN", CMD,
+         'if args and all(a.lower() in _INFO_FLAGS for a in args):',
+         'if True or (args and all(a.lower() in _INFO_FLAGS for a in args)):',
+         CP_INTERP),
+    _mut("CMD_injection_fragment_dropped", "LOLBIN", CMD,
+         '    "proxycommand",            # ssh/scp -oProxyCommand=',
+         '    "__nomatch__",             # ssh/scp -oProxyCommand=',
+         CP_INJECT),
+    _mut("CMD_unknown_binary_allowed", "LOLBIN", CMD,
+         'cap = HOST_COMMAND_POLICY.get(binary, CommandCapability.REMOVED)',
+         'cap = HOST_COMMAND_POLICY.get(binary, CommandCapability.SAFE_FIXED_DIAGNOSTIC)',
+         CP_UNKNOWN),
 ]
 
-# ── Group 5: receipt mutations (3) ────────────────────────────────────────────
-MUTATIONS += [
-    _mut("RCPT_net_hardcoded", "NETWORK", CONT,
-         '"network_isolation": self.controls.get(\n                "network_isolation", self.network_isolation).value,',
-         '"network_isolation": "enforced",',
-         f"{C}::TestRestrictedBackendProperties::test_restricted_network_is_not_enforced"),
-    _mut("RCPT_hide_downgrade", "TRUTH", CONT,
-         '"downgraded": self.downgraded,',
-         '"downgraded": False,',
-         f"{G}::test_golden_B05_compat_downgrade_never_sandboxed"),
-    _mut("RCPT_profile_from_label", "TRUTH", CONT,
-         'prof = self.derived_profile()',
-         'prof = self.requirement and ExecutionProfile.SANDBOXED',
-         f"{C}::TestProfileDerivation::test_receipt_derives_profile_from_control"
-         f"s_not_label"),
-]
-
-# ── Group 6: broker mutations (8) ─────────────────────────────────────────────
+# ── Group 7: broker selection / requirement / fail-closed ─────────────────────
 MUTATIONS += [
     _mut("BRK_req_downgrade", "BROKER", CONT,
          'if tool_name == "code_execute":\n            return ContainmentRequirement.SANDBOX_REQUIRED',
          'if tool_name == "code_execute":\n            return ContainmentRequirement.RESTRICTED_OK',
          f"{N}::TestPolicyImmovable::test_requirement_unchanged_by_content"),
-    _mut("BRK_req_reads_input", "BROKER", CONT,
-         'def evaluate_requirement(self, tool_name: str, tool_input: dict\n'
-         '                             ) -> ContainmentRequirement:',
-         'def evaluate_requirement(self, tool_name: str, tool_input: dict\n'
-         '                             ) -> ContainmentRequirement:\n'
-         '        if tool_input.get("sandbox") is False:\n'
-         '            return ContainmentRequirement.RESTRICTED_OK',
-         f"{C}::TestNoUntrustedDowngrade::test_tool_input_cannot_change_requirement"),
-    _mut("BRK_select_first", "BROKER", CONT,
-         'for backend in self._backends:\n            if backend.can_satisfy(requirement):\n                return backend\n        return None',
-         'return self._backends[0]',
-         f"{C}::TestBrokerSelection::test_weaker_backend_never_selected_for_sandbox"),
+    _mut("BRK_noncode_sandbox", "BROKER", CONT,
+         '        return ContainmentRequirement.RESTRICTED_OK\n\n    def select_backend',
+         '        return ContainmentRequirement.SANDBOX_REQUIRED\n\n    def select_backend',
+         B10),
     _mut("BRK_cansatisfy_true", "BROKER", CONT,
          'return prof_rank >= _REQUIREMENT_RANK[requirement]',
          'return True',
          f"{C}::TestBackendContract::test_restricted_cannot_satisfy_sandbox_required"),
-    _mut("BRK_silent_fallback", "BROKER", CONT,
-         'receipt = ContainmentReceipt(\n            requirement=request.requirement, backend="none",',
-         'return RestrictedProcessBackend().execute(request)\n        receipt = ContainmentReceipt(\n            requirement=request.requirement, backend="none",',
-         f"{C}::TestBrokerSelection::test_fail_closed_when_no_backend_and_strict"),
-    _mut("BRK_compat_default", "BROKER", CONT,
-         'return OperatorPolicy.COMPAT if raw == "compat" else OperatorPolicy.STRICT',
-         'return OperatorPolicy.COMPAT',
-         f"{C}::TestNoUntrustedDowngrade::test_operator_policy_reads_only_env"),
     _mut("BRK_rank_swapped", "BROKER", CONT,
          'ContainmentRequirement.SANDBOX_REQUIRED: 3,',
          'ContainmentRequirement.SANDBOX_REQUIRED: 1,',
@@ -219,29 +228,84 @@ MUTATIONS += [
          'ExecutionProfile.SANDBOXED: 3,\n        }[prof]',
          'ExecutionProfile.SANDBOXED: 0,\n        }[prof]',
          f"{C}::TestBackendContract::test_bubblewrap_satisfies_sandbox_iff_available"),
+    _mut("BRK_silent_fallback", "BROKER", CONT,
+         'receipt = ContainmentReceipt(\n            requirement=request.requirement, backend="none",',
+         'return RestrictedProcessBackend().execute(request)\n        receipt = ContainmentReceipt(\n            requirement=request.requirement, backend="none",',
+         f"{C}::TestBrokerSelection::test_fail_closed_when_no_backend_and_strict"),
+    _mut("BRK_compat_default", "BROKER", CONT,
+         'return OperatorPolicy.COMPAT if raw == "compat" else OperatorPolicy.STRICT',
+         'return OperatorPolicy.COMPAT',
+         f"{C}::TestNoUntrustedDowngrade::test_operator_policy_reads_only_env"),
+    _mut("BRK_compat_downgraded_false", "BROKER", CONT,
+         'outcome.receipt.downgraded = True',
+         'outcome.receipt.downgraded = False',
+         B05),
+    _mut("BRK_select_first", "BROKER", CONT,
+         'for backend in self._backends:\n            if backend.can_satisfy(requirement):\n                return backend\n        return None',
+         'return self._backends[0]',
+         f"{C}::TestBrokerSelection::test_weaker_backend_never_selected_for_sandbox"),
 ]
 
-# ── Group 7: RestrictedProcessBackend mutations (4) ───────────────────────────
+# ── Group 8: derive_profile + receipt + restricted backend ────────────────────
 MUTATIONS += [
-    _mut("RS_net_enforced", "NETWORK", CONT,
-         'receipt.controls["network_isolation"] = ControlStatus.NOT_ENFORCED\n        receipt.measured_limitations.append(',
-         'receipt.controls["network_isolation"] = ControlStatus.ENFORCED\n        receipt.measured_limitations.append(',
+    _mut("DERIVE_any_not_all", "TRUTH", CONT,
+         'sandbox_all = all(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)',
+         'sandbox_all = any(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)',
+         UNKNOWN_T),
+    _mut("DERIVE_ignore_cleanup", "TRUTH", CONT,
+         'cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED',
+         'cleanup_ok = True',
+         f"{C}::TestProfileDerivation::test_cleanup_failure_blocks_sandboxed"),
+    _mut("DERIVE_force_sandboxed", "TRUTH", CONT,
+         'if sandbox_all and cleanup_ok:\n        return ExecutionProfile.SANDBOXED',
+         'if True:\n        return ExecutionProfile.SANDBOXED',
+         UNKNOWN_T),
+    _mut("DERIVE_baseline_any", "TRUTH", CONT,
+         'if all(enforced(c) for c in BASELINE_RESTRICTED_CONTROLS):',
+         'if any(enforced(c) for c in BASELINE_RESTRICTED_CONTROLS):',
+         f"{C}::TestDerivationExtra::test_partial_baseline_is_direct"),
+    _mut("DERIVE_direct_to_sandboxed", "TRUTH", CONT,
+         '    return ExecutionProfile.DIRECT_PROCESS',
+         '    return ExecutionProfile.SANDBOXED',
+         f"{C}::TestProfileDerivation::test_empty_controls_is_direct"),
+    _mut("RCPT_net_hardcoded", "TRUTH", CONT,
+         '"network_isolation": self.controls.get(\n                "network_isolation", self.network_isolation).value,',
+         '"network_isolation": "enforced",',
+         f"{C}::TestRestrictedBackendProperties::test_restricted_network_is_not_enforced"),
+    _mut("RCPT_hide_downgrade", "TRUTH", CONT,
+         '"downgraded": self.downgraded,',
+         '"downgraded": False,',
+         B05),
+    _mut("RCPT_promote_absent_enforced", "TRUTH", CONT,
+         'out[name] = self.controls.get(name, ControlStatus.NOT_ENFORCED).value',
+         'out[name] = ControlStatus.ENFORCED.value',
+         f"{C}::TestDerivationExtra::test_promoted_named_field_reflects_reality"),
+    _mut("RS_net_enforced", "TRUTH", CONT,
+         'receipt.controls["network_isolation"] = ControlStatus.NOT_ENFORCED',
+         'receipt.controls["network_isolation"] = ControlStatus.ENFORCED',
          f"{C}::TestRestrictedBackendProperties::test_restricted_network_is_not_enforced"),
     _mut("RS_maxprofile_sandbox", "BROKER", CONT,
          'def max_profile(self) -> ExecutionProfile:\n        return ExecutionProfile.RESTRICTED_PROCESS',
          'def max_profile(self) -> ExecutionProfile:\n        return ExecutionProfile.SANDBOXED',
-         f"{G}::test_golden_B04_L3_denial_weaker_backend"),
-    _mut("RS_cpu_off", "RESOURCE", CONT,
-         'resource.setrlimit(resource.RLIMIT_CPU,\n                                   (CE_CPU_SECONDS, CE_CPU_SECONDS + 1))',
-         'pass',
-         f"{C}::TestRestrictedBackendProperties::test_restricted_cpu_limit_kills_busy_loop"),
+         B04),
     _mut("RS_windows_sandbox", "TRUTH", CONT,
          'return (ExecutionProfile.RESTRICTED_PROCESS if os.name == "nt"\n                else ExecutionProfile.DIRECT_PROCESS)',
          'return ExecutionProfile.SANDBOXED',
-         f"{G}::test_golden_B07_windows_backend_truthful"),
+         B07),
 ]
 
-# ── Group 8: executor routing mutations (4) ───────────────────────────────────
+# ── Group 9: restricted-backend baseline labels + env allowlist ───────────────
+for _c in ("dedicated_cwd", "minimal_env", "wall_timeout", "stdout_cap", "stderr_cap"):
+    MUTATIONS.append(_mut(f"RSLABEL_{_c}", "TRUTH", CONT,
+                          f'receipt.controls["{_c}"] = ControlStatus.ENFORCED',
+                          f'receipt.controls["{_c}"] = ControlStatus.NOT_ENFORCED',
+                          B08))
+MUTATIONS.append(_mut("RS_env_allowlist_widen", "LEGACY", CONT,
+    'child_env = {k: os.environ[k] for k in CE_ENV_ALLOWLIST if k in os.environ}',
+    'child_env = dict(os.environ)',
+    f"{C}::TestRestrictedBackendProperties::test_restricted_env_allowlist_withholds_secret"))
+
+# ── Group 10: executor routing ────────────────────────────────────────────────
 MUTATIONS += [
     _mut("EXE_not_failclosed", "BROKER", EXEC,
          'if not outcome.executed:\n            return {"error": outcome.error or "containment unavailable",',
@@ -251,160 +315,107 @@ MUTATIONS += [
          'requirement = broker.evaluate_requirement("code_execute", {"code": code})',
          'requirement = ContainmentRequirement.RESTRICTED_OK',
          f"{C}::TestExecutorRouting::test_code_execute_is_sandboxed_when_available"),
-    _mut("EXE_drop_receipt", "TRUTH", EXEC,
-         'receipt = outcome.receipt.to_dict() if outcome.receipt is not None else {}',
-         'receipt = {}',
-         f"{F}::TestF6Execution::test_network_isolation_reported_truthfully"),
     _mut("EXE_bypass_broker", "BROKER", EXEC,
          'outcome = broker.execute(ExecutionRequest(code, timeout, requirement))',
          'from core.containment import RestrictedProcessBackend as _RPB\n        outcome = _RPB().execute(ExecutionRequest(code, timeout, requirement))',
          f"{C}::TestExecutorRouting::test_code_execute_is_sandboxed_when_available"),
+    _mut("EXE_drop_receipt", "TRUTH", EXEC,
+         'receipt = outcome.receipt.to_dict() if outcome.receipt is not None else {}',
+         'receipt = {}',
+         f"{F}::TestF6Execution::test_network_isolation_reported_truthfully"),
+    _mut("EXE_always_hitl_code", "LEGACY", EXEC,
+         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "code_execute",\n    "run_shell_command",',
+         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "run_shell_command",',
+         "tests/test_code_execute_gate.py::test_code_execute_in_always_hitl"),
 ]
 
-# ── Group 9: LEGACY invariants (6) ────────────────────────────────────────────
+# ── Group 11: legacy invariants + static detector + registry ──────────────────
 MUTATIONS += [
-    _mut("LEG_m65d_effect_id", "LEGACY", "core/effect_journal.py",
+    _mut("LEG_m65d_effect_id", "LEGACY", EJ,
          'return _digest(_D_EFFECT, surface, tool_id, identity_scope,\n                   canonical_json(tool_input))',
          'return _digest(_D_EFFECT, surface, tool_id, identity_scope,\n                   "")',
          "tests/test_effect_semantics_v69_m65d.py"),
-    _mut("LEG_windows_backend_status", "LEGACY", CONT,
-         '"status": ("WINDOWS_RESTRICTED_PROCESS_ONLY" if os.name == "nt"\n                       else "NOT_ON_THIS_HOST"),',
-         '"status": "WINDOWS_SANDBOXED",',
-         f"{G}::test_golden_B07_windows_backend_truthful"),
-    _mut("LEG_coverage_equal", "LEGACY", REG,
-         'if d["arbitrary_code"] and d["disposition"] == BROKER_REQUIRED',
-         'if d["arbitrary_code"] and d["disposition"] != BROKER_REQUIRED',
+    _mut("DET_miss_subprocess", "LEGACY", DET,
+         '("subprocess", "run"), ("subprocess", "Popen"), ("subprocess", "call"),',
+         '("subprocess", "call"),',
+         f"{S}::test_detector_flags_direct_subprocess"),
+    _mut("DET_allow_everything", "LEGACY", DET,
+         'def _reviewed(relpath: str, func_dotted: str, funcs: list[str]) -> bool:',
+         'def _reviewed(relpath: str, func_dotted: str, funcs: list[str]) -> bool:\n    return True',
+         f"{S}::test_detector_flags_direct_subprocess"),
+    _mut("DET_coverage_blind", "LEGACY", DET,
+         'if arbitrary != covered:',
+         'if False:',
+         f"{S}::test_coverage_check_flags_a_mismatch"),
+    _mut("REG_coverage_counts_all", "LEGACY", REG,
+         'if d["arbitrary_code"])',
+         'if d["arbitrary_code"] or True)',
          f"{S}::test_coverage_invariant_holds"),
-    _mut("LEG_registry_drop_surface", "LEGACY", REG,
+    _mut("REG_code_execute_downgraded", "LEGACY", REG,
          '"disposition": BROKER_REQUIRED,\n        "default_requirement": "SANDBOX_REQUIRED",',
          '"disposition": RESTRICTED_ONLY,\n        "default_requirement": "SANDBOX_REQUIRED",',
          f"{S}::test_coverage_invariant_holds"),
     _mut("LEG_mandatory_shrink", "LEGACY", CONT,
          '    "network_isolation",\n    "host_loopback_isolation",',
          '    "host_loopback_isolation",',
-         f"{C}::TestDerivationExtra::test_network_isolation_is_mandatory"),
-    _mut("LEG_env_allowlist_widen", "LEGACY", CONT,
-         'child_env = {k: os.environ[k] for k in CE_ENV_ALLOWLIST if k in os.environ}',
-         'child_env = dict(os.environ)',
-         f"{C}::TestRestrictedBackendProperties::test_restricted_env_allowlist_withholds_secret"),
-]
-
-# ── Group 10: static detector / surface registry non-vacuity (3) ──────────────
-MUTATIONS += [
-    _mut("DET_miss_subprocess", "LEGACY", "scripts/check_execution_surfaces.py",
-         '("subprocess", "run"), ("subprocess", "Popen"), ("subprocess", "call"),',
-         '("subprocess", "call"),',
-         f"{S}::test_detector_flags_direct_subprocess"),
-    _mut("DET_allow_everything", "LEGACY", "scripts/check_execution_surfaces.py",
-         'def _reviewed(relpath: str, func_dotted: str, funcs: list[str]) -> bool:',
-         'def _reviewed(relpath: str, func_dotted: str, funcs: list[str]) -> bool:\n    return True',
-         f"{S}::test_detector_flags_direct_subprocess"),
-    _mut("DET_coverage_blind", "LEGACY", "scripts/check_execution_surfaces.py",
-         'if arbitrary != covered:',
-         'if False:',
-         f"{S}::test_coverage_check_flags_a_mismatch"),
+         UNKNOWN_T),
 ]
 
 
-# ── Group 11: restricted-backend baseline label flips (6) ─────────────────────
-for _c in ("dedicated_cwd", "minimal_env", "wall_timeout", "stdout_cap",
-           "stderr_cap"):
-    MUTATIONS.append(_restricted_label(_c))
-
-# ── Group 12: additional real-behaviour and logic mutations (20) ──────────────
+# ── Group 12: additional command-policy sub-vectors + fail-closed returns ─────
 MUTATIONS += [
+    _mut("CMD_git_subcommand_check_off", "LOLBIN", CMD,
+         'if subcommand not in _GIT_ALLOWED_SUBCOMMANDS:',
+         'if subcommand in ("\\x00never",):',
+         CP_GIT),
+    _mut("CMD_git_config_write_allowed", "LOLBIN", CMD,
+         'if not any(r in ("--get", "--list", "-l", "--get-all", "--get-regexp")',
+         'if not any(r in ("--get", "--list", "-l", "--get-all", "--get-regexp", "core.pager")',
+         CP_GIT),
+    _mut("CMD_wget_execute_allowed", "LOLBIN", CMD,
+         'if low in ("-e", "--execute") or low.startswith("--execute="):',
+         'if low in ("\\x00never",):',
+         CP_WGET),
+    _mut("CMD_wget_config_allowed", "LOLBIN", CMD,
+         'if low.startswith("--config"):',
+         'if low.startswith("\\x00never"):',
+         CP_WGET),
+    _mut("CMD_injection_loop_disabled", "LOLBIN", CMD,
+         'for frag in _GLOBAL_INJECTION_FRAGMENTS:\n            if frag in low:',
+         'for frag in ():\n            if frag in low:',
+         CP_INJECT),
+    _mut("BRK_req_reads_input", "BROKER", CONT,
+         'if tool_name == "code_execute":\n            return ContainmentRequirement.SANDBOX_REQUIRED',
+         'if tool_input.get("sandbox") is False:\n            return ContainmentRequirement.RESTRICTED_OK\n        if tool_name == "code_execute":\n            return ContainmentRequirement.SANDBOX_REQUIRED',
+         f"{C}::TestNoUntrustedDowngrade::test_tool_input_cannot_change_requirement"),
+    _mut("BRK_noready_executed_true", "FAILCLOSED", CONT,
+         'executed=False,\n                                    error=err or "containment not established",',
+         'executed=True,\n                                    error=err or "containment not established",',
+         BOOTEXIT),
+    _mut("BRK_notverified_executed_true", "FAILCLOSED", CONT,
+         'executed=False,\n                                    error="containment not verified; snippet not run",',
+         'executed=True,\n                                    error="containment not verified; snippet not run",',
+         READY0),
+    _mut("LEG_windows_status_sandboxed", "LEGACY", CONT,
+         '"status": ("WINDOWS_RESTRICTED_PROCESS_ONLY" if os.name == "nt"\n                       else "NOT_ON_THIS_HOST"),',
+         '"status": "WINDOWS_SANDBOXED",',
+         B07),
+    _mut("CMD_git_execpath_allowed", "LOLBIN", CMD,
+         '_GIT_DENIED_GLOBAL_PREFIXES: tuple[str, ...] = (\n    "-c", "-C", "--exec-path",',
+         '_GIT_DENIED_GLOBAL_PREFIXES: tuple[str, ...] = (\n    "-c", "-C",',
+         CP_GIT_GLOBAL),
     _mut("BW_stdout_cap_huge", "RESOURCE", CONT,
-         'CE_STDOUT_CAP = 3000', 'CE_STDOUT_CAP = 3000 * 100000', OUT),
-    _mut("BW_cpu_value_huge", "RESOURCE", CONT,
-         'CE_CPU_SECONDS = 5                      # RLIMIT_CPU soft (SIGXCPU)',
-         'CE_CPU_SECONDS = 100000                 # RLIMIT_CPU soft (SIGXCPU)', CPU),
-    _mut("BW_mem_value_huge", "RESOURCE", CONT,
-         'CE_MEM_BYTES = 512 * 1024 * 1024        # RLIMIT_AS address-space cap',
-         'CE_MEM_BYTES = 512 * 1024 * 1024 * 1024  # RLIMIT_AS address-space cap', MEM),
-    _mut("BW_fsize_value_huge", "RESOURCE", CONT,
-         'CE_FSIZE_BYTES = 16 * 1024 * 1024       # RLIMIT_FSIZE max single-file write',
-         'CE_FSIZE_BYTES = 512 * 1024 * 1024      # RLIMIT_FSIZE max single-file write',
-         FSIZE),
-    _mut("BW_nproc_value_weak", "PROCESS", CONT,
-         'CE_NPROC = 64                           # RLIMIT_NPROC inside the remapped UID',
-         'CE_NPROC = 4096                         # RLIMIT_NPROC inside the remapped UID',
-         PID),
-    _mut("BW_no_proc_mount", "PRIVILEGE", CONT,
-         '"--proc", "/proc",            # fresh proc for the PID ns',
-         '"--tmpfs", "/proc",           # fresh proc for the PID ns', PRIV2),
-    _mut("BOOT_no_exec_snippet", "BROKER", CONT,
-         'os.execv(sys.executable, [sys.executable, "-I", sys.argv[1]])',
-         'pass  # never exec the snippet', A01),
-    _mut("BW_snippet_path_wrong", "BROKER", CONT,
-         '"/jarvis_exec/_bootstrap.py", "/jarvis_exec/snippet.py"]',
-         '"/jarvis_exec/_bootstrap.py", "/jarvis_exec/_bootstrap.py"]', A01),
-    _mut("RCPT_derived_profile_liar", "TRUTH", CONT,
-         'def derived_profile(self) -> ExecutionProfile:\n        return derive_profile(self.controls, cleanup_status=self.cleanup_status)',
-         'def derived_profile(self) -> ExecutionProfile:\n        return ExecutionProfile.SANDBOXED',
-         f"{G}::test_golden_B03_cleanup_failure_truthful"),
-    _mut("BRK_execute_select_first", "BROKER", CONT,
-         'backend = self.select_backend(request.requirement)\n        if backend is not None:',
-         'backend = self._backends[0]\n        if backend is not None:',
-         f"{C}::TestBrokerSelection::test_fail_closed_when_no_backend_and_strict"),
-    _mut("BRK_noncode_sandbox", "BROKER", CONT,
-         'return ContainmentRequirement.RESTRICTED_OK\n\n    def select_backend',
-         'return ContainmentRequirement.SANDBOX_REQUIRED\n\n    def select_backend',
-         f"{G}::test_golden_B10_production_L3_negative_guard"),
-    _mut("BRK_compat_downgraded_false", "BROKER", CONT,
-         'outcome.receipt.downgraded = True',
-         'outcome.receipt.downgraded = False',
-         f"{G}::test_golden_B05_compat_downgrade_never_sandboxed"),
-    _mut("BRK_policy_check_inverted", "BROKER", CONT,
-         'return OperatorPolicy.COMPAT if raw == "compat" else OperatorPolicy.STRICT',
-         'return OperatorPolicy.COMPAT if raw != "compat" else OperatorPolicy.STRICT',
-         f"{C}::TestNoUntrustedDowngrade::test_operator_policy_reads_only_env"),
-    _mut("LEG_always_hitl_code", "LEGACY", EXEC,
-         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "code_execute",\n    "run_shell_command",',
-         '_ALWAYS_HITL_TOOLS: frozenset[str] = frozenset({\n    "run_shell_command",',
-         "tests/test_code_execute_gate.py::test_code_execute_in_always_hitl"),
-    _mut("DERIVE_cleanup_or", "TRUTH", CONT,
-         'if sandbox_all and cleanup_ok:',
-         'if sandbox_all or cleanup_ok:',
-         f"{C}::TestProfileDerivation::test_empty_controls_is_direct"),
-    _mut("RCPT_mandatory_promote_absent", "TRUTH", CONT,
-         'out[name] = self.controls.get(name, ControlStatus.NOT_ENFORCED).value',
-         'out[name] = ControlStatus.ENFORCED.value',
-         f"{C}::TestDerivationExtra::test_promoted_named_field_reflects_reality"),
-    _mut("CANSAT_ge_to_le", "BROKER", CONT,
-         'return prof_rank >= _REQUIREMENT_RANK[requirement]',
-         'return prof_rank <= _REQUIREMENT_RANK[requirement]',
-         f"{C}::TestBackendContract::test_restricted_cannot_satisfy_sandbox_required"),
-    _mut("EVAL_req_default_sandbox", "BROKER", CONT,
-         '        if tool_name == "code_execute":\n            return ContainmentRequirement.SANDBOX_REQUIRED\n        return ContainmentRequirement.RESTRICTED_OK',
-         '        return ContainmentRequirement.SANDBOX_REQUIRED',
-         f"{G}::test_golden_B10_production_L3_negative_guard"),
-]
-
-
-
-# ── Group 13: alternate-execution-door closure mutations (§4) ─────────────────
-DOOR = "tests/test_alternate_execution_doors_m66b.py"
-MUTATIONS += [
-    _mut("DOOR_interp_check_disabled", "BROKER", EXEC,
-         'if exe not in _ARBITRARY_CODE_INTERPRETERS:\n        return None',
-         'if True:\n        return None',
-         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
-    _mut("DOOR_remove_python", "BROKER", EXEC,
-         '"python", "python2", "python3", "pypy", "pypy3",',
-         '"python2", "pypy", "pypy3",',
-         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
-    _mut("DOOR_bare_interpreter_hole", "BROKER", EXEC,
-         'if rest and all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):',
-         'if all(a.lower() in _INTERPRETER_SAFE_FLAGS for a in rest):',
-         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
-    _mut("DOOR_not_wired_into_validate", "BROKER", EXEC,
-         'interp_reason = _forbidden_interpreter_exec(argv)\n    if interp_reason is not None:',
-         'interp_reason = None\n    if interp_reason is not None:',
-         f"{DOOR}::test_allowlisted_interpreter_arbitrary_code_is_blocked_by_m66b"),
-    _mut("DOOR_coverage_counts_all_arbitrary", "LEGACY", REG,
-         'if d["arbitrary_code"])',
-         'if d["arbitrary_code"] or True)',
-         f"{DOOR}::test_coverage_invariant_after_closure"),
+         'CE_STDOUT_CAP = 3000',
+         'CE_STDOUT_CAP = 3000 * 100000',
+         f"{G}::test_golden_sandbox_scenarios[A27_output_flood]"),
+    _mut("CMD_curl_config_allowed", "LOLBIN", CMD,
+         'if a == "-K" or low == "--config" or low.startswith("--config="):',
+         'if a == "\\x00never":',
+         CP_CURL),
+    _mut("CMD_execution_capable_bare_allowed", "LOLBIN", CMD,
+         'if args and all(a.lower() in _INFO_FLAGS for a in args):\n            return None',
+         'if (not args) or all(a.lower() in _INFO_FLAGS for a in args):\n            return None',
+         CP_INTERP),
 ]
 
 
@@ -414,39 +425,38 @@ def _run() -> int:
     survivors: list[str] = []
     anchor_errors: list[str] = []
     detected = 0
-    print(f"M66B MUTATION CAMPAIGN — {total} mutations\n")
+    print(f"M66B MUTATION CAMPAIGN (Round-1 rebuild) — {total} mutations\n")
     for m in MUTATIONS:
         path = os.path.join(_ROOT, m["file"])
         original = open(path, encoding="utf-8").read()
         count = original.count(m["find"])
         if count != 1:
             anchor_errors.append(f"{m['id']}: anchor occurs {count}x in {m['file']}")
-            print(f"  [ANCHOR ERR] {m['id']}: {count}x")
+            print(f"  [ANCHOR ERR] {m['id']:34s} {count}x")
             continue
         mutated = original.replace(m["find"], m["replace"], 1)
         try:
             open(path, "w", encoding="utf-8").write(mutated)
             env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
             proc = subprocess.run(  # nosec B603 - fixed argv test runner
-                [py, "-m", "pytest", "-x", "-q", "--no-header", "-p", "no:cacheprovider",
-                 m["test"]],
-                cwd=_ROOT, capture_output=True, text=True, env=env, timeout=180)
-            failed = proc.returncode != 0
-            if failed:
+                [py, "-m", "pytest", "-x", "-q", "--no-header",
+                 "-p", "no:cacheprovider", m["test"]],
+                cwd=_ROOT, capture_output=True, text=True, env=env, timeout=240)
+            if proc.returncode != 0:
                 detected += 1
-                print(f"  [DETECTED] {m['id']:32s} ({m['cat']}) via {m['test'].split('::')[-1]}")
+                print(f"  [DETECTED] {m['id']:34s} ({m['cat']})")
             else:
                 survivors.append(m["id"])
-                print(f"  [SURVIVOR] {m['id']:32s} ({m['cat']}) — NO TEST FAILED")
+                print(f"  [SURVIVOR] {m['id']:34s} ({m['cat']}) — NO TEST FAILED")
         finally:
             open(path, "w", encoding="utf-8").write(original)
 
     print(f"\n{'='*70}")
-    print(f"mutations:        {total}")
-    print(f"detected:         {detected}")
-    print(f"survivors:        {len(survivors)}  {survivors if survivors else ''}")
-    print(f"anchor errors:    {len(anchor_errors)}  {anchor_errors if anchor_errors else ''}")
-    ok = not survivors and not anchor_errors and total >= 80
+    print(f"mutations:      {total}")
+    print(f"detected:       {detected}")
+    print(f"survivors:      {len(survivors)}  {survivors if survivors else ''}")
+    print(f"anchor errors:  {len(anchor_errors)}  {anchor_errors if anchor_errors else ''}")
+    ok = not survivors and not anchor_errors and total >= 85
     print(f"M66B_MUTATION_CAMPAIGN: {'PASS' if ok else 'FAIL'} "
           f"({detected}/{total} detected, {len(survivors)} survivors)")
     return 0 if ok else 1

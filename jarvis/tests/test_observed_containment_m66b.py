@@ -161,6 +161,26 @@ class TestLiveObservation:
         assert out.receipt.to_dict()["profile"] == "sandboxed"  # not fooled
         assert "AFTER" in out.stdout
 
+    def test_forged_wrong_nonce_ready_is_rejected(self, monkeypatch):
+        # A bootstrap that never emits READY but execs the snippet; the snippet
+        # forges a READY line with a WRONG nonce and good-looking evidence. The
+        # broker's nonce check must reject it → not certified (fail closed).
+        boot = ("import sys, os\n"
+                "sys.stdin.readline(); sys.stdin.readline(); sys.stdin.readline()\n"
+                "os.execv(sys.executable, [sys.executable, '-I', sys.argv[1]])\n")
+        monkeypatch.setattr(containment, "_BOOTSTRAP_SOURCE", boot)
+        ev = dict(uid=65534, euid=65534, gid=65534, capeff="0" * 16, nnp="1",
+                  home=False, shadow=False, repo=False, env_extra=[],
+                  ifaces=["lo"], loopback_connect=False, nproc=CE_NPROC,
+                  cpu=CE_CPU_SECONDS, as_=CE_MEM_BYTES, fsize=16 * 1024 * 1024,
+                  proc_count=2, cwd="/work", tmpfs_bytes=CE_WORKSPACE_BYTES)
+        import json as _j
+        forge = ("print('JARVIS_READY:deadbeefdeadbeef:1:' + %r)\n" % _j.dumps(ev))
+        out = BubblewrapBackend().execute(ExecutionRequest(
+            forge, 15, ContainmentRequirement.SANDBOX_REQUIRED))
+        assert out.receipt.to_dict()["profile"] != "sandboxed"
+        assert out.executed is False
+
     def test_decision_ignores_stderr_wording(self, monkeypatch):
         # MAJOR B non-vacuity: a valid READY with arbitrary stderr noise is still
         # SANDBOXED (decision from the handshake, not stderr text).

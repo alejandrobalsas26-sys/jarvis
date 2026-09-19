@@ -236,14 +236,13 @@ def _wget_reason(args: list[str]) -> str | None:
 
 
 def _curl_reason(args: list[str]) -> str | None:
+    # curl -K/--config reads a config file that can chain requests and redirect
+    # output over files. (-K is the config flag; lowercase -k is --insecure and
+    # is harmless, so it is deliberately NOT matched here.)
     for a in args:
         low = a.lower()
-        if low in ("-k", "--config"):   # note: -K is config; -k is insecure-TLS
-            pass
-        if low == "-k" or low == "--config" or low.startswith("--config="):
-            # curl -K/--config can chain requests and redirect output over files.
-            if low != "-k":  # -k lowercase is --insecure, harmless here
-                return "curl -K/--config can drive file-overwriting requests; refused"
+        if a == "-K" or low == "--config" or low.startswith("--config="):
+            return "curl -K/--config can drive file-overwriting requests; refused"
     return None
 
 

@@ -170,6 +170,30 @@ class TestPolicyCoverage:
                    if c is CommandCapability.REMOVED}
         assert removed.isdisjoint(COMMAND_ALLOWLIST)
 
+    # ── Unit-level: each policy RULE tested in isolation via command_refusal ──
+    # _validate_command layers a metacharacter block and a name allowlist on top;
+    # those can MASK a weakened policy rule (e.g. `find . -exec … ;` is refused by
+    # the `;` metacharacter regardless of the find rule). Testing command_refusal
+    # directly makes every individual rule load-bearing.
+    def test_find_rule_is_load_bearing(self):
+        assert command_refusal(["find", ".", "-exec", "touch", "X"]) is not None
+        assert command_refusal(["find", ".", "-delete"]) is not None
+        assert command_refusal(["find", ".", "-name", "x.py"]) is None
+
+    def test_removed_binary_rule_is_load_bearing(self):
+        # A REMOVED binary must be refused by the POLICY even if it reached it.
+        for b in ("ssh", "scp", "pip", "gcc", "openssl", "awk", "env", "xargs"):
+            assert command_refusal([b, "whatever"]) is not None, b
+
+    def test_git_global_option_rules_are_load_bearing(self):
+        assert command_refusal(["git", "-C", "/tmp", "status"]) is not None
+        assert command_refusal(["git", "--exec-path=/tmp", "status"]) is not None
+        assert command_refusal(["git", "status"]) is None
+
+    def test_curl_config_rule_is_load_bearing(self):
+        assert command_refusal(["curl", "--config", "evilrc"]) is not None
+        assert command_refusal(["curl", "example.com"]) is None
+
     def test_unknown_binary_defaults_to_deny(self):
         # A binary with no classification is treated as REMOVED (fail closed).
         assert command_policy.classify("totally_unknown_binary_xyz") \
