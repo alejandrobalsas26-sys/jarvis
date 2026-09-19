@@ -52,6 +52,12 @@ class ControlStatus(str, Enum):
     NOT_SUPPORTED = "not_supported"
     NOT_AVAILABLE = "not_available"
     NOT_ENFORCED = "not_enforced"
+    #: V69 M66B Round-1: the control was REQUESTED but its establishment could not
+    #: be OBSERVED for this run (e.g. the readiness handshake did not report it).
+    #: Only ENFORCED earns a strong profile, so UNKNOWN never yields SANDBOXED —
+    #: it forbids overclaiming when observation is missing rather than asserting
+    #: enforcement from configuration alone.
+    UNKNOWN = "unknown"
 
 
 #: The controls a RESTRICTED_PROCESS must have ENFORCED to earn the name. Network

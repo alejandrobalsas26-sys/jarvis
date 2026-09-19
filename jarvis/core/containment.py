@@ -41,11 +41,15 @@ operator-controlled host environment). See ``_operator_policy``.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import secrets
 import shutil
+import socket
 import subprocess  # every call in this module is shell=False with an argv list
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -58,6 +62,20 @@ from core.execution_profile import (
 
 
 # ── Containment requirement (the typed demand, not a second authority plane) ──
+class FailureReason(str, Enum):
+    """Structural, typed reasons a containment run did not produce a verified
+    SANDBOXED execution (§15). The containment DECISION keys on these — never on
+    a stderr substring. Raw stderr is retained only as bounded diagnostics."""
+    BACKEND_NOT_AVAILABLE = "backend_not_available"
+    NAMESPACE_SETUP_FAILED = "namespace_setup_failed"
+    BOOTSTRAP_NOT_READY = "bootstrap_not_ready"        # no valid readiness record
+    CONTAINMENT_NOT_VERIFIED = "containment_not_verified"  # bootstrap self-check failed
+    EXECUTION_FAILED = "execution_failed"
+    TIMEOUT = "timeout"
+    CLEANUP_FAILED = "cleanup_failed"
+    CONTAINMENT_UNAVAILABLE = "containment_unavailable"
+
+
 class ContainmentRequirement(str, Enum):
     """How strongly an authorized operation must be contained before it runs.
 
@@ -228,16 +246,97 @@ _SANDBOX_GID = "65534"
 _JAIL_SHM = os.sep + "dev" + os.sep + "shm"
 _JAIL_TMP = os.sep + "tmp"
 
-#: Set rlimits INSIDE the jail, after the UID is remapped, then exec the snippet.
-#: Load-bearing: setting RLIMIT_NPROC on the bwrap parent counts against the real
-#: UID's existing processes and fails namespace creation with EAGAIN. Inside the
-#: fresh namespace UID the count starts at zero, so the limit is both effective
-#: and scoped to the sandbox (closing the M66A.1 PID-limit hole).
-_BOOTSTRAP_SOURCE = f"""import resource, os, sys
-resource.setrlimit(resource.RLIMIT_CPU, ({CE_CPU_SECONDS}, {CE_CPU_SECONDS} + 1))
-resource.setrlimit(resource.RLIMIT_AS, ({CE_MEM_BYTES}, {CE_MEM_BYTES}))
-resource.setrlimit(resource.RLIMIT_FSIZE, ({CE_FSIZE_BYTES}, {CE_FSIZE_BYTES}))
-resource.setrlimit(resource.RLIMIT_NPROC, ({CE_NPROC}, {CE_NPROC}))
+#: READY-handshake marker. The trusted bootstrap emits exactly one line
+#: ``JARVIS_READY:<nonce>:<0|1>:<evidence-json>`` on stdout, then (only if the
+#: self-check passed) reopens stdin to /dev/null and execs the untrusted snippet.
+#: The nonce arrives on STDIN and is never placed in argv/env/cmdline, so the
+#: snippet — which starts after the nonce is consumed and fd 0 is /dev/null —
+#: cannot learn it and therefore cannot forge readiness.
+_READY_MARKER = "JARVIS_READY"
+
+#: The trusted in-jail bootstrap. It (1) reads the nonce + host-loopback probe
+#: target from stdin, (2) sets rlimits (RLIMIT_NPROC here, not on the bwrap
+#: parent, so it is scoped to the remapped UID — the M66B PID-limit fix),
+#: (3) OBSERVES every mandatory control from within the jail, (4) emits the
+#: readiness record, and (5) runs the snippet ONLY if every mandatory control was
+#: observed established. If any control failed the snippet NEVER runs (§14/§16).
+_BOOTSTRAP_SOURCE = f"""import resource, os, sys, json, socket
+_n = sys.stdin.readline().strip()
+_host = sys.stdin.readline().strip()
+try:
+    _port = int(sys.stdin.readline().strip())
+except Exception:
+    _port = 0
+try:
+    resource.setrlimit(resource.RLIMIT_CPU, ({CE_CPU_SECONDS}, {CE_CPU_SECONDS} + 1))
+    resource.setrlimit(resource.RLIMIT_AS, ({CE_MEM_BYTES}, {CE_MEM_BYTES}))
+    resource.setrlimit(resource.RLIMIT_FSIZE, ({CE_FSIZE_BYTES}, {CE_FSIZE_BYTES}))
+    resource.setrlimit(resource.RLIMIT_NPROC, ({CE_NPROC}, {CE_NPROC}))
+except Exception:
+    pass
+def _rl(name):
+    try:
+        return resource.getrlimit(getattr(resource, name))[0]
+    except Exception:
+        return -1
+_lb = False
+try:
+    _s = socket.socket(); _s.settimeout(2); _s.connect((_host, _port)); _s.close(); _lb = True
+except Exception:
+    _lb = False
+try:
+    _ifaces = sorted(nm for _ix, nm in socket.if_nameindex())
+except Exception:
+    _ifaces = ["<err>"]
+_stt = dict()
+try:
+    for _line in open("/proc/self/status"):
+        if _line.startswith("CapEff:") or _line.startswith("NoNewPrivs:"):
+            _kk, _vv = _line.split(":", 1); _stt[_kk.strip()] = _vv.strip()
+except Exception:
+    pass
+try:
+    _pc = len([d for d in os.listdir("/proc") if d.isdigit()])
+except Exception:
+    _pc = -1
+try:
+    _sv = os.statvfs("/work"); _ws = _sv.f_blocks * _sv.f_frsize
+except Exception:
+    _ws = -1
+_allowed = ("PATH","LANG","LC_ALL","LC_CTYPE","TZ","HOME","PWD",
+            "PYTHONDONTWRITEBYTECODE","SHLVL","_","LOGNAME","USER")
+_env_extra = sorted(k for k in os.environ if k not in _allowed)
+_ev = dict(uid=os.getuid(), euid=os.geteuid(), gid=os.getgid(),
+           capeff=_stt.get("CapEff",""), nnp=_stt.get("NoNewPrivs",""),
+           home=os.path.exists("/home"), shadow=os.path.exists("/etc/shadow"),
+           repo=os.path.exists("/home/kali"),
+           env_extra=_env_extra, ifaces=_ifaces, loopback_connect=_lb,
+           nproc=_rl("RLIMIT_NPROC"), cpu=_rl("RLIMIT_CPU"), as_=_rl("RLIMIT_AS"),
+           fsize=_rl("RLIMIT_FSIZE"), proc_count=_pc, cwd=os.getcwd(), tmpfs_bytes=_ws)
+def _capzero(v):
+    try:
+        return int(v, 16) == 0
+    except Exception:
+        return False
+_ok = (_ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0
+       and not _ev["home"] and not _ev["shadow"] and not _ev["repo"]
+       and _ev["ifaces"] == ["lo"] and not _ev["loopback_connect"]
+       and _capzero(_ev["capeff"]) and _ev["nnp"] == "1"
+       and not _ev["env_extra"]
+       and _ev["nproc"] == {CE_NPROC} and _ev["cpu"] == {CE_CPU_SECONDS}
+       and _ev["as_"] == {CE_MEM_BYTES} and _ev["fsize"] == {CE_FSIZE_BYTES}
+       and 0 < _ev["proc_count"] <= 15
+       and 0 < _ev["tmpfs_bytes"] <= {CE_WORKSPACE_BYTES}
+       and _ev["cwd"] == "/work")
+sys.stdout.write("{_READY_MARKER}:" + _n + ":" + ("1" if _ok else "0")
+                 + ":" + json.dumps(_ev) + chr(10))
+sys.stdout.flush()
+if not _ok:
+    sys.exit(0)
+try:
+    _dn = os.open(os.devnull, os.O_RDONLY); os.dup2(_dn, 0)
+except Exception:
+    pass
 os.execv(sys.executable, [sys.executable, "-I", sys.argv[1]])
 """
 
@@ -478,6 +577,40 @@ class BubblewrapBackend(ContainmentBackend):
                  "/jarvis_exec/_bootstrap.py", "/jarvis_exec/snippet.py"]
         return argv
 
+    #: Mandatory controls whose ENFORCED state is OBSERVED from the readiness
+    #: evidence (not asserted from the requested argv). See derive_from_evidence.
+    def _derive_controls_from_evidence(self, ev: dict) -> dict:
+        from core.execution_profile import ControlStatus as _CS
+
+        def st(cond):
+            return _CS.ENFORCED if cond else _CS.NOT_ENFORCED
+
+        def _capzero(v):
+            try:
+                return int(v, 16) == 0
+            except Exception:
+                return False
+
+        c: dict = {}
+        c["filesystem_isolation"] = st(not ev.get("home", True)
+                                       and not ev.get("shadow", True)
+                                       and not ev.get("repo", True))
+        c["network_isolation"] = st(ev.get("ifaces") == ["lo"])          # canonical
+        c["host_loopback_isolation"] = st(not ev.get("loopback_connect", True))
+        c["descendant_containment"] = st(0 < ev.get("proc_count", -1) <= 15)
+        c["pid_limit"] = st(ev.get("nproc") == CE_NPROC)
+        c["cpu_limit"] = st(ev.get("cpu") == CE_CPU_SECONDS)
+        c["memory_limit"] = st(ev.get("as_") == CE_MEM_BYTES)
+        c["storage_limit"] = st(0 < ev.get("tmpfs_bytes", -1) <= CE_WORKSPACE_BYTES)
+        c["environment_isolation"] = st(not ev.get("env_extra", ["x"]))
+        c["privilege_restriction"] = st(ev.get("uid") not in (0, None)
+                                        and ev.get("euid") not in (0, None)
+                                        and _capzero(ev.get("capeff", ""))
+                                        and ev.get("nnp") == "1")
+        c["workspace_ephemeral"] = st(ev.get("cwd") == "/work"
+                                      and 0 < ev.get("tmpfs_bytes", -1) <= CE_WORKSPACE_BYTES)
+        return c
+
     def execute(self, request: ExecutionRequest) -> ExecutionOutcome:
         import signal
 
@@ -486,10 +619,11 @@ class BubblewrapBackend(ContainmentBackend):
             requirement=request.requirement, backend=self.name, started_at=started)
 
         if not self.available():
-            receipt.failure_reason = "bubblewrap or unprivileged user namespaces unavailable"
+            receipt.failure_reason = FailureReason.BACKEND_NOT_AVAILABLE.value
             receipt.cleanup_status = ControlStatus.ENFORCED  # nothing to clean
             receipt.finished_at = _now()
-            return ExecutionOutcome(executed=False, error=receipt.failure_reason,
+            return ExecutionOutcome(executed=False,
+                                    error="bubblewrap / unprivileged userns unavailable",
                                     receipt=receipt)
 
         scriptdir = tempfile.mkdtemp(prefix="jarvis_sbx_")
@@ -498,69 +632,106 @@ class BubblewrapBackend(ContainmentBackend):
         with open(os.path.join(scriptdir, "snippet.py"), "w", encoding="utf-8") as fh:
             fh.write(request.code)
 
-        # The controls this configuration ENFORCES, recorded as truth. Every one
-        # is proven non-vacuous by a causal test in the escape matrix.
+        # Broker-side controls: the broker itself performs these, so it observes
+        # that they applied. The namespace controls are derived from EVIDENCE below.
         c = receipt.controls
-        c["filesystem_isolation"] = ControlStatus.ENFORCED   # mount ns
-        c["network_isolation"] = ControlStatus.ENFORCED      # network ns (canonical)
-        c["host_loopback_isolation"] = ControlStatus.ENFORCED
-        c["descendant_containment"] = ControlStatus.ENFORCED  # PID ns
-        c["pid_limit"] = ControlStatus.ENFORCED               # RLIMIT_NPROC in ns
-        c["cpu_limit"] = ControlStatus.ENFORCED
-        c["memory_limit"] = ControlStatus.ENFORCED
-        c["storage_limit"] = ControlStatus.ENFORCED           # bounded tmpfs
-        c["environment_isolation"] = ControlStatus.ENFORCED   # --clearenv
-        c["privilege_restriction"] = ControlStatus.ENFORCED   # non-root+caps+nnp
-        c["workspace_ephemeral"] = ControlStatus.ENFORCED
-        # Baseline names too, so the receipt is unambiguously >= RESTRICTED.
-        c["dedicated_cwd"] = ControlStatus.ENFORCED
-        c["minimal_env"] = ControlStatus.ENFORCED
-        c["process_tree_kill"] = ControlStatus.ENFORCED
+        for name in ("dedicated_cwd", "minimal_env", "process_tree_kill",
+                     "stdout_cap", "stderr_cap", "output_limit", "wall_timeout"):
+            c[name] = ControlStatus.ENFORCED
+        # Until observed, every mandatory namespace control is UNKNOWN — never
+        # asserted from the requested argv (§13/MAJOR A).
+        for name in MANDATORY_SANDBOX_CONTROLS:
+            c.setdefault(name, ControlStatus.UNKNOWN)
 
+        nonce = secrets.token_hex(16)
+        probe = _LoopbackProbe()          # a real host listener the jail must NOT reach
         argv = self._bwrap_argv(scriptdir)
+        stdin_payload = f"{nonce}\n{probe.host}\n{probe.port}\n"
+
         stdout = stderr = ""
         returncode = None
         err = None
         proc = None
+        timed_out = False
         try:
             proc = subprocess.Popen(              # shell=False, argv built from constants
-                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                shell=False, start_new_session=True)
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, shell=False, start_new_session=True)
             try:
-                stdout, stderr = proc.communicate(timeout=request.timeout)
+                stdout, stderr = proc.communicate(input=stdin_payload,
+                                                  timeout=request.timeout)
                 returncode = proc.returncode
             except subprocess.TimeoutExpired:
-                # Kill the bwrap process; --die-with-parent + the PID ns mean the
-                # whole jail (init and every descendant, setsid included) dies.
+                timed_out = True
                 _kill_process_tree(proc, True, signal.SIGKILL)
                 with contextlib.suppress(Exception):
                     stdout, stderr = proc.communicate(timeout=5)
                 err = f"Timeout tras {request.timeout}s de ejecución."
-            c["wall_timeout"] = ControlStatus.ENFORCED
-            stdout = (stdout or "")[:CE_STDOUT_CAP]
-            stderr = (stderr or "")[:CE_STDERR_CAP]
-            c["stdout_cap"] = ControlStatus.ENFORCED
-            c["stderr_cap"] = ControlStatus.ENFORCED
-            c["output_limit"] = ControlStatus.ENFORCED
         except Exception as e:             # pragma: no cover - launch failure
             err = str(e)
-            receipt.failure_reason = str(e)
         finally:
             if proc is not None and proc.poll() is None:
                 _kill_process_tree(proc, True, signal.SIGKILL)
+            probe.close()
             cleaned = _rmtree(scriptdir)
             receipt.cleanup_status = (ControlStatus.ENFORCED if cleaned
                                       else ControlStatus.NOT_ENFORCED)
-        # bwrap could not create the namespaces (transient EAGAIN, an LSM change
-        # since probe): the code did NOT run under the claimed controls. Fail
-        # closed — do not report a sandbox that was not established.
-        if returncode is not None and returncode == 1 and "Creating new namespace" in (stderr or ""):
-            receipt.failure_reason = "namespace creation failed at launch"
-            for k in list(c):
-                c[k] = ControlStatus.NOT_AVAILABLE
+
+        # Bounded raw stderr, retained only as diagnostics (never the authority).
+        receipt.measured_limitations.append(
+            "raw stderr (diagnostic, non-authoritative): "
+            + (stderr or "")[:200].replace(chr(10), " "))
+
+        # Parse the ONE readiness record whose nonce matches ours. The snippet
+        # cannot forge it (it never learns the nonce), so its absence means the
+        # trusted bootstrap never reached readiness — setup failed → fail closed.
+        ready_flag = None
+        evidence: dict = {}
+        snippet_out = stdout or ""
+        for idx, line in enumerate((stdout or "").splitlines()):
+            if line.startswith(_READY_MARKER + ":"):
+                parts = line.split(":", 3)
+                if len(parts) == 4 and parts[1] == nonce:
+                    ready_flag = parts[2]
+                    with contextlib.suppress(Exception):
+                        evidence = json.loads(parts[3])
+                    snippet_out = "\n".join((stdout or "").splitlines()[idx + 1:])
+                    break
+
+        if ready_flag is None:
+            # No valid readiness record: the jail never reached the trusted
+            # bootstrap (namespace/mount/resource setup failed, whatever the
+            # stderr says). ZERO untrusted code executed.
+            for name in MANDATORY_SANDBOX_CONTROLS:
+                c[name] = ControlStatus.UNKNOWN
+            receipt.failure_reason = (FailureReason.NAMESPACE_SETUP_FAILED.value
+                                      if returncode not in (0, None)
+                                      else FailureReason.BOOTSTRAP_NOT_READY.value)
             receipt.finished_at = _now()
-            return ExecutionOutcome(executed=False, error=receipt.failure_reason,
+            return ExecutionOutcome(executed=False,
+                                    error=err or "containment not established",
                                     receipt=receipt)
+
+        # We have observed evidence. Derive controls from it — the single source
+        # of enforcement truth. (network_isolation lives in controls, canonical.)
+        c.update(self._derive_controls_from_evidence(evidence))
+
+        if ready_flag != "1":
+            # The trusted bootstrap's self-check failed: a mandatory control was
+            # NOT established, so it exited WITHOUT running the snippet. Fail
+            # closed — zero untrusted code executed — and report the truth.
+            receipt.failure_reason = FailureReason.CONTAINMENT_NOT_VERIFIED.value
+            receipt.finished_at = _now()
+            return ExecutionOutcome(executed=False,
+                                    error="containment not verified; snippet not run",
+                                    receipt=receipt)
+
+        # ready_flag == "1": the snippet ran under a jail whose mandatory controls
+        # were observed established. Report its (bounded) output.
+        stdout = (snippet_out or "")[:CE_STDOUT_CAP]
+        stderr = (stderr or "")[:CE_STDERR_CAP]
+        if timed_out:
+            receipt.failure_reason = FailureReason.TIMEOUT.value
         receipt.finished_at = _now()
         return ExecutionOutcome(executed=True, stdout=stdout, stderr=stderr,
                                 returncode=returncode, error=err, receipt=receipt)
@@ -694,6 +865,48 @@ class ContainmentBroker:
 
 
 # ── Process-tree teardown ─────────────────────────────────────────────────────
+class _LoopbackProbe:
+    """A real host loopback listener the sandbox must NOT be able to reach.
+
+    The bubblewrap backend passes ``(host, port)`` to the in-jail bootstrap, which
+    attempts a connection. In a fresh network namespace the connect fails (the
+    jail's own ``lo`` has no route to this host socket); if the netns were shared
+    the connect would SUCCEED and the readiness self-check would report it — which
+    is exactly how host-loopback isolation is OBSERVED per run rather than
+    asserted from the ``--unshare-net`` flag (MAJOR A). The listener accepts and
+    immediately closes so a shared-netns connect genuinely succeeds (not merely
+    ECONNREFUSED), keeping the probe non-vacuous."""
+
+    def __init__(self) -> None:
+        self.host = "127.0.0.1"
+        self.port = 0
+        self._srv = None
+        self._stop = threading.Event()
+        with contextlib.suppress(Exception):
+            self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._srv.bind((self.host, 0))
+            self._srv.listen(8)
+            self.port = self._srv.getsockname()[1]
+            threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:                # pragma: no cover - timing dependent
+        self._srv.settimeout(0.5)
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._srv.accept()
+                conn.close()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+    def close(self) -> None:
+        self._stop.set()
+        with contextlib.suppress(Exception):
+            if self._srv is not None:
+                self._srv.close()
+
+
 def _kill_process_tree(proc, posix: bool, sig) -> None:
     """Terminate *proc* and every descendant. On POSIX the child leads its own
     session, so one ``killpg`` reaps the tree; for the sandbox the PID namespace
