@@ -66,6 +66,11 @@ class TestProfileDerivation:
                               cleanup_status=ControlStatus.NOT_ENFORCED)
         assert prof is not ExecutionProfile.SANDBOXED
 
+    def test_cleanup_none_default_is_not_sandboxed(self):
+        # Round-2 F5: the default (unobserved) cleanup status must fail closed —
+        # only an explicitly ENFORCED cleanup earns SANDBOXED.
+        assert derive_profile(_all_sandbox_controls()) is not ExecutionProfile.SANDBOXED
+
     def test_receipt_derives_profile_from_controls_not_label(self):
         # A receipt whose backend "claims" sandbox but has a missing control must
         # never render SANDBOXED — the classifier reads controls, not intent.

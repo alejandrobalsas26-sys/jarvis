@@ -74,12 +74,12 @@ MUTATIONS: list[dict] = []
 
 # ── Group 1: evidence-derivation lies (a control derived True regardless) ─────
 _DERIV = [
-    ("network_isolation", 'c["network_isolation"] = st(ev.get("ifaces") == ["lo"])',
-     'c["network_isolation"] = st(True)'),
-    ("host_loopback", 'c["host_loopback_isolation"] = st(not ev.get("loopback_connect", True))',
-     'c["host_loopback_isolation"] = st(True)'),
-    ("descendant", 'c["descendant_containment"] = st(0 < ev.get("proc_count", -1) <= 15)',
-     'c["descendant_containment"] = st(True)'),
+    ("network_isolation", 'c["network_isolation"] = unk(\n            (ev.get("ifaces") == ["lo"] and netns != "" and netns != host_netns),\n            verifiable=bool(host_netns))',
+     'c["network_isolation"] = unk(True, verifiable=True)'),
+    ("host_loopback", 'c["host_loopback_isolation"] = unk(\n            not ev.get("loopback_connect", True), verifiable=probe_live)',
+     'c["host_loopback_isolation"] = unk(True, verifiable=True)'),
+    ("descendant", 'c["descendant_containment"] = unk(\n            (0 < ev.get("proc_count", -1) <= 15 and pidns != "" and pidns != host_pidns),\n            verifiable=bool(host_pidns))',
+     'c["descendant_containment"] = unk(True, verifiable=True)'),
     ("pid_limit", 'c["pid_limit"] = st(ev.get("nproc") == CE_NPROC)',
      'c["pid_limit"] = st(True)'),
     ("cpu_limit", 'c["cpu_limit"] = st(ev.get("cpu") == CE_CPU_SECONDS)',
@@ -90,8 +90,8 @@ _DERIV = [
      'c["storage_limit"] = st(True)'),
     ("environment", 'c["environment_isolation"] = st(not ev.get("env_extra", ["x"]))',
      'c["environment_isolation"] = st(True)'),
-    ("filesystem", 'c["filesystem_isolation"] = st(not ev.get("home", True)',
-     'c["filesystem_isolation"] = st(True or not ev.get("home", True)'),
+    ("filesystem", 'c["filesystem_isolation"] = unk(\n            (not ev.get("home", True) and not ev.get("shadow", True)\n             and not ev.get("repo", True) and not ev.get("canary_read", True)),\n            verifiable=canary_established)',
+     'c["filesystem_isolation"] = unk(True, verifiable=True)'),
     ("privilege", 'c["privilege_restriction"] = st(ev.get("uid") not in (0, None)',
      'c["privilege_restriction"] = st(True or ev.get("uid") not in (0, None)'),
     ("workspace", 'c["workspace_ephemeral"] = st(ev.get("cwd") == "/work"',
@@ -106,14 +106,6 @@ MUTATIONS += [
          '_ok = (_ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0',
          '_ok = (True or _ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0',
          MAJOR_A),
-    _mut("BOOT_selfcheck_net_dropped", "FAILCLOSED", CONT,
-         'and _ev["ifaces"] == ["lo"] and not _ev["loopback_connect"]',
-         'and True and True',
-         MAJOR_A),
-    _mut("BOOT_ifaces_faked", "FAILCLOSED", CONT,
-         '_ifaces = sorted(nm for _ix, nm in socket.if_nameindex())',
-         '_ifaces = ["lo"]',
-         MAJOR_A),
 ]
 
 # ── Group 3: broker handshake parsing (fail-closed authority) ─────────────────
@@ -127,8 +119,8 @@ MUTATIONS += [
          'if len(parts) == 4 and len(parts[1]) >= 0:',
          FORGE2),
     _mut("BRK_noready_controls_enforced", "FAILCLOSED", CONT,
-         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.UNKNOWN',
-         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.ENFORCED',
+         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.UNKNOWN\n            receipt.failure_reason = (FailureReason.NAMESPACE_SETUP_FAILED.value',
+         'for name in MANDATORY_SANDBOX_CONTROLS:\n                c[name] = ControlStatus.ENFORCED\n            receipt.failure_reason = (FailureReason.NAMESPACE_SETUP_FAILED.value',
          BOOTEXIT),
 ]
 
@@ -253,9 +245,9 @@ MUTATIONS += [
          'sandbox_all = any(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)',
          UNKNOWN_T),
     _mut("DERIVE_ignore_cleanup", "TRUTH", CONT,
-         'cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED',
+         'cleanup_ok = cleanup_status is ControlStatus.ENFORCED',
          'cleanup_ok = True',
-         f"{C}::TestProfileDerivation::test_cleanup_failure_blocks_sandboxed"),
+         f"{C}::TestProfileDerivation::test_cleanup_none_default_is_not_sandboxed"),
     _mut("DERIVE_force_sandboxed", "TRUTH", CONT,
          'if sandbox_all and cleanup_ok:\n        return ExecutionProfile.SANDBOXED',
          'if True:\n        return ExecutionProfile.SANDBOXED',
@@ -416,6 +408,79 @@ MUTATIONS += [
          'if args and all(a.lower() in _INFO_FLAGS for a in args):\n            return None',
          'if (not args) or all(a.lower() in _INFO_FLAGS for a in args):\n            return None',
          CP_INTERP),
+]
+
+
+# ── Group 13: Round-2 remediation (lab policy + probe/canary/ns non-vacuity) ──
+CP_LAB = f"{CP}::TestTrustedLab::test_lab_generic_host_exec_is_blocked"
+DEAD_PROBE = f"{OBS}::TestLiveObservation::test_dead_loopback_probe_fails_closed"
+PROBE_UNK = f"{OBS}::TestEvidenceDerivation::test_dead_loopback_probe_yields_unknown"
+CANARY_UNK = f"{OBS}::TestEvidenceDerivation::test_unestablished_canary_yields_unknown_filesystem"
+NETNS_T = f"{OBS}::TestEvidenceDerivation::test_shared_netns_inode_drops_network"
+PIDNS_T = f"{OBS}::TestEvidenceDerivation::test_shared_pidns_inode_drops_descendant"
+
+MUTATIONS += [
+    # MAJOR 1: the lab exemption / lab arg policy
+    _mut("R2_lab_exemption_reinstated", "LOLBIN", EXEC,
+         'policy_reason = _command_policy.command_refusal(argv, lab=is_lab_only)',
+         'policy_reason = None if is_lab_only else _command_policy.command_refusal(argv, lab=is_lab_only)',
+         CP_LAB),
+    _mut("R2_tcpdump_z_allowed", "LOLBIN", CMD,
+         'if a.lower() in ("-z", "--postrotate-command"):',
+         'if a.lower() in ("\\x00never",):',
+         CP_LAB),
+    _mut("R2_tshark_lua_allowed", "LOLBIN", CMD,
+         'if low == "-x" or low.startswith("-x") or "lua_script" in low:',
+         'if low == "\\x00never":',
+         CP_LAB),
+    _mut("R2_sqlmap_eval_allowed", "LOLBIN", CMD,
+         'if (low in ("--eval", "--alert") or low.startswith("--eval=")',
+         'if (low in ("\\x00never",) or low.startswith("\\x00none=")',
+         CP_LAB),
+    _mut("R2_msf_exec_allowed", "LOLBIN", CMD,
+         'if a.lower() in ("-x", "-r", "--resource"):',
+         'if a.lower() in ("\\x00never",):',
+         CP_LAB),
+    _mut("R2_lab_purpose_built_ungoverned", "LOLBIN", CMD,
+         'if cap is CommandCapability.PURPOSE_BUILT_AUTHORIZED:\n            return None\n        policy = _LAB_ARG_POLICIES.get(binary)',
+         'if cap is CommandCapability.PURPOSE_BUILT_AUTHORIZED:\n            return None\n        policy = None and _LAB_ARG_POLICIES.get(binary)',
+         CP_LAB),
+    # MAJOR 2 / F2: host-loopback probe non-vacuity
+    _mut("R2_failclosed_guard_disabled", "FAILCLOSED", CONT,
+         'if not (probe_live and canary_established and host_netns and host_pidns):',
+         'if not (True or probe_live and canary_established and host_netns and host_pidns):',
+         DEAD_PROBE),
+    _mut("R2_probe_live_ignored", "FAILCLOSED", CONT,
+         'not ev.get("loopback_connect", True), verifiable=probe_live)',
+         'not ev.get("loopback_connect", True), verifiable=True)',
+         PROBE_UNK),
+    _mut("R2_probe_verify_live_always_true", "FAILCLOSED", CONT,
+         'if self.port == 0 or self._srv is None:\n            self.live = False\n            return False',
+         'if False:\n            self.live = False\n            return False\n        self.live = True; return True',
+         f"{OBS}::TestEvidenceDerivation::test_verify_live_is_false_for_unbound_probe"),
+    # F3: filesystem host-canary non-vacuity
+    _mut("R2_canary_verifiable_ignored", "RECEIPT", CONT,
+         'verifiable=canary_established)',
+         'verifiable=True)',
+         CANARY_UNK),
+    _mut("R2_canary_read_dropped", "RECEIPT", CONT,
+         'and not ev.get("repo", True) and not ev.get("canary_read", True)),',
+         'and not ev.get("repo", True) and (True or ev.get("canary_read", True))),',
+         DERIV),
+    # F4: structural namespace identity
+    _mut("R2_netns_identity_dropped", "NETWORK", CONT,
+         'ev.get("ifaces") == ["lo"] and netns != "" and netns != host_netns',
+         'ev.get("ifaces") == ["lo"] and (netns == netns or netns != host_netns)',
+         NETNS_T),
+    _mut("R2_pidns_identity_dropped", "PROCESS", CONT,
+         '0 < ev.get("proc_count", -1) <= 15 and pidns != "" and pidns != host_pidns',
+         '0 < ev.get("proc_count", -1) <= 15 and (pidns == pidns or pidns != host_pidns)',
+         PIDNS_T),
+    # F5: cleanup default footgun
+    _mut("R2_cleanup_default_lax", "TRUTH", CONT,
+         'cleanup_ok = cleanup_status is ControlStatus.ENFORCED',
+         'cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED',
+         f"{C}::TestProfileDerivation::test_cleanup_none_default_is_not_sandboxed"),
 ]
 
 

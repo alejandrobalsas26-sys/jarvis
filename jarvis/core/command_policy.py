@@ -54,6 +54,13 @@ class CommandCapability(str, Enum):
     SAFE_WITH_ARGUMENT_POLICY = "safe_with_argument_policy"
     EXECUTION_CAPABLE = "execution_capable"
     REMOVED = "removed"
+    #: V69 M66B Round-2: a purpose-built, operator-authorized offensive/lab tool
+    #: (trusted-lab only). It legitimately needs host network/packet/target access
+    #: — that is its INTENDED function, not a defect — but caller arguments must
+    #: not turn it into GENERIC host arbitrary-code execution. Allowed as-is only
+    #: when it has no reachable generic-host-exec escape; otherwise it is
+    #: SAFE_WITH_ARGUMENT_POLICY with a lab denier.
+    PURPOSE_BUILT_AUTHORIZED = "purpose_built_authorized"
 
 
 #: Purely informational flags an EXECUTION_CAPABLE binary may carry (no code runs).
@@ -264,31 +271,104 @@ _ARG_POLICIES = {
 }
 
 
+# ── Trusted-lab tools (JARVIS_TRUSTED_LAB + FULL_NATO) ────────────────────────
+# Round-2 F1: a blanket exemption made the lab allowlist a SECOND generic-host-exec
+# door — `tcpdump -z <cmd>` runs a host program per rotation, `tshark -X
+# lua_script:` loads host Lua, `sqlmap --eval` evaluates host Python, `msfconsole
+# -x irb` opens a host Ruby shell. These are NOT their offensive purpose; they are
+# accidental generic escapes. Lab tools are now GOVERNED by this policy too:
+# purpose-built ones run as-is (their target/network access IS the point), and the
+# five with a generic-host-exec option carry a lab argument denier.
+_LAB_PURPOSE_BUILT: frozenset[str] = frozenset({
+    "masscan", "nikto", "hydra", "gobuster", "ffuf", "dirb", "sliver",
+    "responder", "crackmapexec", "hashcat", "john",
+})
+_LAB_ARGUMENT_POLICY: frozenset[str] = frozenset({
+    "tcpdump", "tshark", "sqlmap", "msfconsole", "msfvenom",
+})
+LAB_COMMAND_POLICY: dict[str, CommandCapability] = {
+    b: CommandCapability.PURPOSE_BUILT_AUTHORIZED for b in _LAB_PURPOSE_BUILT}
+LAB_COMMAND_POLICY.update(
+    {b: CommandCapability.SAFE_WITH_ARGUMENT_POLICY for b in _LAB_ARGUMENT_POLICY})
+
+
+def _tcpdump_reason(args: list[str]) -> str | None:
+    for a in args:
+        if a.lower() in ("-z", "--postrotate-command"):
+            return "tcpdump -z runs a host command on each rotation; refused"
+    return None
+
+
+def _tshark_reason(args: list[str]) -> str | None:
+    for a in args:
+        low = a.lower()
+        if low == "-x" or low.startswith("-x") or "lua_script" in low:
+            return "tshark -X extension / Lua scripting executes host code; refused"
+    return None
+
+
+def _sqlmap_reason(args: list[str]) -> str | None:
+    for a in args:
+        low = a.lower()
+        if (low in ("--eval", "--alert") or low.startswith("--eval=")
+                or low.startswith("--alert=")):
+            return "sqlmap --eval/--alert evaluates/runs host code; refused"
+    return None
+
+
+def _msf_reason(args: list[str]) -> str | None:
+    for a in args:
+        if a.lower() in ("-x", "-r", "--resource"):
+            return ("msfconsole -x/-r runs arbitrary console/resource commands "
+                    "(e.g. irb = host Ruby shell); refused")
+    return None
+
+
+_LAB_ARG_POLICIES = {
+    "tcpdump": _tcpdump_reason,
+    "tshark": _tshark_reason,
+    "sqlmap": _sqlmap_reason,
+    "msfconsole": _msf_reason,
+    "msfvenom": _msf_reason,
+}
+
+
 def classify(binary: str) -> CommandCapability:
     """The capability class of *binary* (basename). Unknown → REMOVED (deny)."""
     return HOST_COMMAND_POLICY.get(_basename(binary), CommandCapability.REMOVED)
 
 
-def command_refusal(argv: list[str]) -> str | None:
+def command_refusal(argv: list[str], *, lab: bool = False) -> str | None:
     """Return a refusal reason if *argv* would (or could) execute caller-controlled
     code/commands through the host gateway, else ``None``.
 
     This is the single command-semantic authority the executor consults after the
     allowlist + metacharacter + system-path checks. It never GRANTS anything the
-    allowlist did not; it only refuses.
+    allowlist did not; it only refuses. ``lab=True`` governs a trusted-lab-only
+    binary with the LAB policy (Round-2 F1) — lab tools are NOT blanket-exempt.
     """
     if not argv:
         return None
     binary = _basename(argv[0])
     args = argv[1:]
 
-    # 0) Cross-tool command-injection fragments, whatever the binary.
+    # 0) Cross-tool command-injection fragments, whatever the binary or mode.
     for a in args:
         low = a.lower()
         for frag in _GLOBAL_INJECTION_FRAGMENTS:
             if frag in low:
                 return (f"argument {a!r} carries a command-execution option "
                         f"({frag!r}); refused — use code_execute (SANDBOX_REQUIRED)")
+
+    if lab:
+        cap = LAB_COMMAND_POLICY.get(binary)
+        if cap is None:
+            return (f"'{binary}' is not a recognised trusted-lab tool; refused "
+                    "(fail closed)")
+        if cap is CommandCapability.PURPOSE_BUILT_AUTHORIZED:
+            return None
+        policy = _LAB_ARG_POLICIES.get(binary)
+        return policy(args) if policy is not None else None
 
     cap = HOST_COMMAND_POLICY.get(binary, CommandCapability.REMOVED)
 

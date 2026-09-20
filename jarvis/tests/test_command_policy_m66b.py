@@ -155,6 +155,32 @@ class TestTrustedLab:
         assert _blocked("git -c core.pager=touch status", _LAB_COMMAND_ALLOWLIST)
         assert _blocked("python attacker.py", _LAB_COMMAND_ALLOWLIST)
 
+    # ── Round-2 F1: lab tools are GOVERNED, not blanket-exempt ────────────────
+    @pytest.mark.parametrize("cmd", [
+        "tcpdump -i lo -w j -G 1 -z touch",     # -z = host command per rotation
+        "tshark -X lua_script:evil.lua -r j",   # -X lua = host Lua
+        "tshark -Xlua_script:evil.lua",         # clustered form
+        "sqlmap --eval print -u t",             # --eval = host Python
+        "sqlmap --alert touch -u t",            # --alert = host command
+        "msfconsole -x irb",                    # -x irb = host Ruby shell
+        "msfconsole -r evil.rc",                # -r = arbitrary resource script
+    ])
+    def test_lab_generic_host_exec_is_blocked(self, cmd):
+        assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "masscan 1.2.3.4", "nikto -h 1.2.3.4", "hydra -l a -p b t",
+        "gobuster dir -u t", "ffuf -u t", "tcpdump -i lo -c 5",
+        "tshark -i lo -c 5", "sqlmap -u http_target --batch",
+        "hashcat -m 0 h w", "john hashfile",
+    ])
+    def test_lab_purpose_built_still_works(self, cmd):
+        assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd
+
+    def test_unknown_lab_binary_fails_closed(self):
+        from core.command_policy import command_refusal
+        assert command_refusal(["totally_unknown_lab_xyz", "x"], lab=True) is not None
+
 
 # ── Structural coverage (§12): the policy classifies every base binary ────────
 class TestPolicyCoverage:

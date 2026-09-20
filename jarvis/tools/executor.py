@@ -988,11 +988,15 @@ def _validate_command(
     # such tools execute by design and are documented as out of the base-gateway
     # containment scope. A BASE binary stays governed even under trusted-lab, so
     # `git -c`/`python file.py` are refused whether or not lab mode is on.
+    # V69 M66B Round-2 (F1): lab-only binaries are GOVERNED too, by the LAB policy —
+    # not blanket-exempt. Purpose-built offensive tools run as-is (target/network
+    # access is their point), but generic-host-exec escapes (tcpdump -z, tshark -X
+    # lua, sqlmap --eval, msfconsole -x irb) are refused. Base binaries always use
+    # the base policy, even under trusted-lab.
     is_lab_only = executable in extra_allowlist and executable not in COMMAND_ALLOWLIST
-    if not is_lab_only:
-        policy_reason = _command_policy.command_refusal(argv)
-        if policy_reason is not None:
-            return False, policy_reason, []
+    policy_reason = _command_policy.command_refusal(argv, lab=is_lab_only)
+    if policy_reason is not None:
+        return False, policy_reason, []
 
     return True, "", argv
 

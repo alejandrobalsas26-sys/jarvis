@@ -135,7 +135,9 @@ def derive_profile(
         return controls.get(name) is ControlStatus.ENFORCED
 
     sandbox_all = all(enforced(c) for c in MANDATORY_SANDBOX_CONTROLS)
-    cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED
+    # Fail closed on cleanup: only an explicitly ENFORCED cleanup earns SANDBOXED.
+    # A missing/None or unobserved cleanup status is NOT sufficient (Round-2 F5).
+    cleanup_ok = cleanup_status is ControlStatus.ENFORCED
     if sandbox_all and cleanup_ok:
         return ExecutionProfile.SANDBOXED
     if all(enforced(c) for c in BASELINE_RESTRICTED_CONTROLS):
@@ -267,6 +269,9 @@ try:
     _port = int(sys.stdin.readline().strip())
 except Exception:
     _port = 0
+_canary = sys.stdin.readline().strip()          # per-run host-only canary path
+_host_netns = sys.stdin.readline().strip()      # broker's own net-ns identity
+_host_pidns = sys.stdin.readline().strip()      # broker's own pid-ns identity
 try:
     resource.setrlimit(resource.RLIMIT_CPU, ({CE_CPU_SECONDS}, {CE_CPU_SECONDS} + 1))
     resource.setrlimit(resource.RLIMIT_AS, ({CE_MEM_BYTES}, {CE_MEM_BYTES}))
@@ -303,14 +308,31 @@ try:
     _sv = os.statvfs("/work"); _ws = _sv.f_blocks * _sv.f_frsize
 except Exception:
     _ws = -1
+# Per-run host-only canary: the broker created a random file OUTSIDE the jail.
+# A read succeeding proves the host filesystem is reachable (isolation broken).
+_canary_read = False
+try:
+    if _canary:
+        open(_canary, "rb").read(); _canary_read = True
+except Exception:
+    _canary_read = False
+try:
+    _netns = os.readlink("/proc/self/ns/net")
+except Exception:
+    _netns = ""
+try:
+    _pidns = os.readlink("/proc/self/ns/pid")
+except Exception:
+    _pidns = ""
 _allowed = ("PATH","LANG","LC_ALL","LC_CTYPE","TZ","HOME","PWD",
             "PYTHONDONTWRITEBYTECODE","SHLVL","_","LOGNAME","USER")
 _env_extra = sorted(k for k in os.environ if k not in _allowed)
 _ev = dict(uid=os.getuid(), euid=os.geteuid(), gid=os.getgid(),
            capeff=_stt.get("CapEff",""), nnp=_stt.get("NoNewPrivs",""),
            home=os.path.exists("/home"), shadow=os.path.exists("/etc/shadow"),
-           repo=os.path.exists("/home/kali"),
+           repo=os.path.exists("/home/kali"), canary_read=_canary_read,
            env_extra=_env_extra, ifaces=_ifaces, loopback_connect=_lb,
+           netns=_netns, pidns=_pidns,
            nproc=_rl("RLIMIT_NPROC"), cpu=_rl("RLIMIT_CPU"), as_=_rl("RLIMIT_AS"),
            fsize=_rl("RLIMIT_FSIZE"), proc_count=_pc, cwd=os.getcwd(), tmpfs_bytes=_ws)
 def _capzero(v):
@@ -318,9 +340,12 @@ def _capzero(v):
         return int(v, 16) == 0
     except Exception:
         return False
+_ns_ok = (_netns != "" and _netns != _host_netns
+          and _pidns != "" and _pidns != _host_pidns)
 _ok = (_ev["uid"] != 0 and _ev["euid"] != 0 and _ev["gid"] != 0
        and not _ev["home"] and not _ev["shadow"] and not _ev["repo"]
-       and _ev["ifaces"] == ["lo"] and not _ev["loopback_connect"]
+       and not _ev["canary_read"]
+       and _ev["ifaces"] == ["lo"] and not _ev["loopback_connect"] and _ns_ok
        and _capzero(_ev["capeff"]) and _ev["nnp"] == "1"
        and not _ev["env_extra"]
        and _ev["nproc"] == {CE_NPROC} and _ev["cpu"] == {CE_CPU_SECONDS}
@@ -579,10 +604,20 @@ class BubblewrapBackend(ContainmentBackend):
 
     #: Mandatory controls whose ENFORCED state is OBSERVED from the readiness
     #: evidence (not asserted from the requested argv). See derive_from_evidence.
-    def _derive_controls_from_evidence(self, ev: dict) -> dict:
+    def _derive_controls_from_evidence(self, ev: dict, *, probe_live: bool,
+                                       host_netns: str, host_pidns: str,
+                                       canary_established: bool) -> dict:
         from core.execution_profile import ControlStatus as _CS
 
         def st(cond):
+            return _CS.ENFORCED if cond else _CS.NOT_ENFORCED
+
+        def unk(cond, *, verifiable):
+            # ENFORCED only if the observation could actually discriminate; if the
+            # positive fixture was not established, the negative is VACUOUS → UNKNOWN
+            # (Round-2 F2: a negative probe is evidence only if the fixture was live).
+            if not verifiable:
+                return _CS.UNKNOWN
             return _CS.ENFORCED if cond else _CS.NOT_ENFORCED
 
         def _capzero(v):
@@ -591,13 +626,29 @@ class BubblewrapBackend(ContainmentBackend):
             except Exception:
                 return False
 
+        netns = ev.get("netns", "")
+        pidns = ev.get("pidns", "")
         c: dict = {}
-        c["filesystem_isolation"] = st(not ev.get("home", True)
-                                       and not ev.get("shadow", True)
-                                       and not ev.get("repo", True))
-        c["network_isolation"] = st(ev.get("ifaces") == ["lo"])          # canonical
-        c["host_loopback_isolation"] = st(not ev.get("loopback_connect", True))
-        c["descendant_containment"] = st(0 < ev.get("proc_count", -1) <= 15)
+        # Filesystem: fixed-path absence AND a per-run host-only canary the jail
+        # could not read. The canary must have been ESTABLISHED on the host for its
+        # absence-of-read to be non-vacuous (Round-2 F3).
+        c["filesystem_isolation"] = unk(
+            (not ev.get("home", True) and not ev.get("shadow", True)
+             and not ev.get("repo", True) and not ev.get("canary_read", True)),
+            verifiable=canary_established)
+        # Network: only-loopback interfaces AND a net-ns inode distinct from the
+        # broker's own (structural), verifiable only if we learned the host's ns.
+        c["network_isolation"] = unk(
+            (ev.get("ifaces") == ["lo"] and netns != "" and netns != host_netns),
+            verifiable=bool(host_netns))
+        # Host loopback: a failed connect to a PROVEN-LIVE host listener (Round-2 F2).
+        c["host_loopback_isolation"] = unk(
+            not ev.get("loopback_connect", True), verifiable=probe_live)
+        # Descendant containment: a fresh pid-ns (structural inode) plus a bounded
+        # /proc process count (behavioural).
+        c["descendant_containment"] = unk(
+            (0 < ev.get("proc_count", -1) <= 15 and pidns != "" and pidns != host_pidns),
+            verifiable=bool(host_pidns))
         c["pid_limit"] = st(ev.get("nproc") == CE_NPROC)
         c["cpu_limit"] = st(ev.get("cpu") == CE_CPU_SECONDS)
         c["memory_limit"] = st(ev.get("as_") == CE_MEM_BYTES)
@@ -645,8 +696,37 @@ class BubblewrapBackend(ContainmentBackend):
 
         nonce = secrets.token_hex(16)
         probe = _LoopbackProbe()          # a real host listener the jail must NOT reach
+        probe_live = probe.verify_live()  # PROVE it accepts before trusting a miss
+        # Per-run host-only canary OUTSIDE the jail (never bound in): a random file
+        # with random content that MUST be unreadable from the sandbox (Round-2 F3).
+        canary_path, canary_established = _make_host_canary()
+        # The broker's OWN namespace identities, for a structural comparison.
+        host_netns = _read_ns("net")
+        host_pidns = _read_ns("pid")
+
+        # Round-2 F2/F3: if the host-side proof fixtures could not be established,
+        # host-loopback / filesystem / namespace isolation cannot be PROVEN for
+        # this run. Do not execute — a negative probe is not evidence without a
+        # live positive fixture. (Bind to 127.0.0.1:0 and a host tempfile ~never
+        # fail, so this is a safety net, not a normal path.)
+        if not (probe_live and canary_established and host_netns and host_pidns):
+            probe.close()
+            _rmtree_file(canary_path)
+            _rmtree(scriptdir)
+            for name in MANDATORY_SANDBOX_CONTROLS:
+                c[name] = ControlStatus.UNKNOWN
+            receipt.cleanup_status = ControlStatus.ENFORCED  # nothing ran
+            receipt.failure_reason = FailureReason.CONTAINMENT_NOT_VERIFIED.value
+            receipt.finished_at = _now()
+            return ExecutionOutcome(
+                executed=False,
+                error="host proof fixtures (loopback probe / filesystem canary / "
+                      "namespace identity) unavailable; containment cannot be proven",
+                receipt=receipt)
+
         argv = self._bwrap_argv(scriptdir)
-        stdin_payload = f"{nonce}\n{probe.host}\n{probe.port}\n"
+        stdin_payload = (f"{nonce}\n{probe.host}\n{probe.port}\n"
+                         f"{canary_path}\n{host_netns}\n{host_pidns}\n")
 
         stdout = stderr = ""
         returncode = None
@@ -673,7 +753,8 @@ class BubblewrapBackend(ContainmentBackend):
             if proc is not None and proc.poll() is None:
                 _kill_process_tree(proc, True, signal.SIGKILL)
             probe.close()
-            cleaned = _rmtree(scriptdir)
+            canary_gone = _rmtree_file(canary_path)
+            cleaned = _rmtree(scriptdir) and canary_gone
             receipt.cleanup_status = (ControlStatus.ENFORCED if cleaned
                                       else ControlStatus.NOT_ENFORCED)
 
@@ -713,8 +794,12 @@ class BubblewrapBackend(ContainmentBackend):
                                     receipt=receipt)
 
         # We have observed evidence. Derive controls from it — the single source
-        # of enforcement truth. (network_isolation lives in controls, canonical.)
-        c.update(self._derive_controls_from_evidence(evidence))
+        # of enforcement truth. Probe-liveness and host ns identity gate the
+        # network/loopback/pid/filesystem controls so a vacuous fixture yields
+        # UNKNOWN, never a false ENFORCED (Round-2 F2/F3/F4).
+        c.update(self._derive_controls_from_evidence(
+            evidence, probe_live=probe_live, host_netns=host_netns,
+            host_pidns=host_pidns, canary_established=canary_established))
 
         if ready_flag != "1":
             # The trusted bootstrap's self-check failed: a mandatory control was
@@ -880,6 +965,7 @@ class _LoopbackProbe:
     def __init__(self) -> None:
         self.host = "127.0.0.1"
         self.port = 0
+        self.live = False              # bound AND proven to accept (Round-2 F2)
         self._srv = None
         self._stop = threading.Event()
         with contextlib.suppress(Exception):
@@ -899,6 +985,21 @@ class _LoopbackProbe:
                 continue
             except OSError:
                 break
+
+    def verify_live(self) -> bool:
+        """Prove the listener actually accepts, from the HOST side. Only then may
+        a sandbox connect FAILURE be read as host-loopback isolation rather than a
+        dead fixture. Sets and returns ``self.live``."""
+        if self.port == 0 or self._srv is None:
+            self.live = False
+            return False
+        with contextlib.suppress(Exception):
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.settimeout(2)
+            probe.connect((self.host, self.port))
+            probe.close()
+            self.live = True
+        return self.live
 
     def close(self) -> None:
         self._stop.set()
@@ -929,3 +1030,37 @@ def _rmtree(path: str) -> bool:
     with contextlib.suppress(Exception):
         shutil.rmtree(path, ignore_errors=True)
     return not os.path.exists(path)
+
+
+def _rmtree_file(path: str) -> bool:
+    """Remove a single file, returning True iff it is gone (or was never made)."""
+    if not path:
+        return True
+    with contextlib.suppress(Exception):
+        os.unlink(path)
+    return not os.path.exists(path)
+
+
+def _make_host_canary() -> tuple[str, bool]:
+    """Create a per-run HOST-ONLY canary file with random content OUTSIDE any path
+    bound into the jail. Returns ``(path, established)``. Its readability from the
+    sandbox is a POSITIVE, non-vacuous test of filesystem isolation (Round-2 F3):
+    the broker proves the file EXISTS on the host, so a failed read inside the jail
+    is real evidence rather than the absence of a path that never existed."""
+    with contextlib.suppress(Exception):
+        fd, path = tempfile.mkstemp(prefix="jarvis_host_canary_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("JARVIS_HOST_CANARY " + secrets.token_hex(16))
+        # Sanity: the broker (host) can read it; if not, treat as not established.
+        with open(path, encoding="utf-8") as fh:
+            if fh.read():
+                return path, True
+    return "", False
+
+
+def _read_ns(kind: str) -> str:
+    """The broker's own namespace identity (e.g. ``net``/``pid``) as the kernel
+    inode string, for a structural comparison against the jail's (Round-2 F4)."""
+    with contextlib.suppress(Exception):
+        return os.readlink(f"/proc/self/ns/{kind}")
+    return ""
