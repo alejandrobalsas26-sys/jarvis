@@ -133,3 +133,28 @@ BROKER_REQUIRED**. A RESTRICTED_ONLY surface is acceptable only when it is
 arbitrary-execution path in a tool handler
 without a registry declaration fails CI (the coverage test + the static bypass
 detector, §27). No implementation precedes this document.
+
+## F. Known limitation — the static bypass detector's file scope (Round-3)
+
+A fresh, independent Round-2 review of the gen41 frozen candidate (Round-3
+remediation) found that `scripts/check_execution_surfaces.py`'s static bypass
+detector (§27) scans only `tools/executor.py`. §B's other ~26 files are
+declared "reviewed" in `FIXED_INTERNAL_SURFACES`, but that label is **asserted
+by this document and the registry, not machine-verified by CI** — a newly added
+ungoverned `subprocess`/`os.system`/`shell=True` call in any file *other than*
+`tools/executor.py` currently passes CI undetected.
+
+Broadening the scanner's `_TOOL_FILES` to the full §B file set surfaces 22
+additional execution primitives across 12 files (mostly Windows
+hardening/forensics/RF tooling) that have never been individually reviewed
+against this document's granularity (`file:function`, one entry per file today
+where several of these files have five or six distinct call sites). None of
+these are on the LLM-tool-calling surfaces M66B governs (`code_execute`,
+`run_shell_command`, `red_team_shell`); auditing them file-by-file is a
+separate, bounded piece of work this milestone does not close.
+
+One item surfaced in passing and not exploited: `core/github_explorer.py`'s
+`_clone_and_install` runs an unconfirmed `pip install` on any GitHub repo
+matched by a search query, reached via a voice-macro path rather than an LLM
+tool-calling surface — pre-existing, out of M66B's declared scope, flagged for
+separate review rather than fixed here.

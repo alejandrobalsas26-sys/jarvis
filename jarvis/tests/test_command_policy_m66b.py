@@ -164,6 +164,22 @@ class TestTrustedLab:
         "sqlmap --alert touch -u t",            # --alert = host command
         "msfconsole -x irb",                    # -x irb = host Ruby shell
         "msfconsole -r evil.rc",                # -r = arbitrary resource script
+        # ── Round-3 (fresh independent review of the gen41 frozen candidate) ──
+        "ffuf -input-cmd id -input-num 1 -u t",     # runs a host shell command
+        "ffuf --input-cmd id -input-num 1 -u t",    # double-dash form
+        "nikto -config evil.conf -h t",             # PLUGINDIR -> arbitrary Perl
+        "nikto -conf evil.conf -h t",               # Getopt::Long abbreviation
+        "nikto -co evil.conf -h t",                 # shortest unambiguous abbrev
+        "tcpdump -i lo -w j -C 1 -z/bin/true",      # -z value ATTACHED to the flag
+        "tcpdump -i lo -w j -nz /bin/true -C 1",    # -z CLUSTERED with -n
+        # payload deliberately not a real absolute path: "=/bin/true" trips an
+        # unrelated, pre-existing system-path guard in _validate_command before
+        # the command-policy layer this test exercises is even reached.
+        "tcpdump -i lo -w j -C 1 --postrotate-command=touch",  # long-form =value
+        "msfconsole -p evil.rb",                    # `require`s arbitrary Ruby
+        "msfconsole --plugin evil.rb",              # double-dash form
+        "sqlmap -c evil.conf -u t",                 # config-file smuggles --eval
+        "sqlmap --configFile evil.conf -u t",       # double-dash form
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -173,6 +189,14 @@ class TestTrustedLab:
         "gobuster dir -u t", "ffuf -u t", "tcpdump -i lo -c 5",
         "tshark -i lo -c 5", "sqlmap -u http_target --batch",
         "hashcat -m 0 h w", "john hashfile",
+        # Round-3: msfvenom's -p is --payload (mandatory, core usage) and its -o
+        # is --out (mandatory for every real invocation) — NOT msfconsole's
+        # plugin loader. Must NOT be broken by the msfconsole -p/--plugin fix.
+        # (payload name deliberately slash-free: a real `windows/meterpreter/…`
+        # value trips an unrelated, pre-existing system-path guard in
+        # _validate_command that has nothing to do with the lab command policy
+        # this test exercises.)
+        "msfvenom -p mypayload LHOST=1.2.3.4 LPORT=4444 -f exe -o out.exe",
     ])
     def test_lab_purpose_built_still_works(self, cmd):
         assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd

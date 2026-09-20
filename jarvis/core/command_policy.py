@@ -278,13 +278,20 @@ _ARG_POLICIES = {
 # -x irb` opens a host Ruby shell. These are NOT their offensive purpose; they are
 # accidental generic escapes. Lab tools are now GOVERNED by this policy too:
 # purpose-built ones run as-is (their target/network access IS the point), and the
-# five with a generic-host-exec option carry a lab argument denier.
+# ones with a generic-host-exec option carry a lab argument denier.
+#
+# Round-3 (fresh independent review, gen 41 frozen candidate): "purpose-built has
+# no generic-exec escape" was asserted, not verified, for two of the eleven —
+# `ffuf -input-cmd`/`-input-shell` runs a host shell command to generate fuzz
+# input (its own documented feature), and `nikto -config` can point PLUGINDIR at
+# an attacker-controlled directory, so nikto (Perl) `require`s an arbitrary
+# `*.plugin` file on startup. Both moved out of the no-arg-policy set.
 _LAB_PURPOSE_BUILT: frozenset[str] = frozenset({
-    "masscan", "nikto", "hydra", "gobuster", "ffuf", "dirb", "sliver",
+    "masscan", "hydra", "gobuster", "dirb", "sliver",
     "responder", "crackmapexec", "hashcat", "john",
 })
 _LAB_ARGUMENT_POLICY: frozenset[str] = frozenset({
-    "tcpdump", "tshark", "sqlmap", "msfconsole", "msfvenom",
+    "tcpdump", "tshark", "sqlmap", "msfconsole", "msfvenom", "ffuf", "nikto",
 })
 LAB_COMMAND_POLICY: dict[str, CommandCapability] = {
     b: CommandCapability.PURPOSE_BUILT_AUTHORIZED for b in _LAB_PURPOSE_BUILT}
@@ -293,9 +300,21 @@ LAB_COMMAND_POLICY.update(
 
 
 def _tcpdump_reason(args: list[str]) -> str | None:
+    # Round-3: the prior exact-token check (`a.lower() in ("-z", ...)`) missed
+    # tcpdump's own getopt forms for the SAME flag — attached (`-z/path/x`) and
+    # clustered with a preceding boolean short flag (`-nz /path/x`). Verified
+    # against the real binary: both forms reach tcpdump's "-z cannot be used
+    # without -w and (-C or -G)" semantic check, i.e. both are parsed as -z with
+    # the trailing/following token as ITS argument, not two unrelated flags. A
+    # single-dash cluster containing 'z' anywhere is refused; long-form is
+    # refused by prefix so `--postrotate-command=<x>` is covered too.
     for a in args:
-        if a.lower() in ("-z", "--postrotate-command"):
-            return "tcpdump -z runs a host command on each rotation; refused"
+        low = a.lower()
+        if low.startswith("--postrotate-command"):
+            return "tcpdump --postrotate-command runs a host command; refused"
+        if low.startswith("-") and not low.startswith("--") and "z" in low[1:]:
+            return ("tcpdump -z (bare, attached or clustered) runs a host command "
+                     "on each rotation; refused")
     return None
 
 
@@ -308,19 +327,68 @@ def _tshark_reason(args: list[str]) -> str | None:
 
 
 def _sqlmap_reason(args: list[str]) -> str | None:
+    # Round-3: sqlmap's own `-c/--configFile` loads an INI file whose `evalCode`/
+    # `alert` keys map to the SAME internal options as `--eval`/`--alert`
+    # (verified against the installed sqlmap's optiondict). Upstream sqlmap
+    # independently refuses those two keys unless SQLMAP_UNSAFE_EVAL / _ALERT is
+    # set in the environment — but RedTeamShellExecutor inherits the host
+    # process's environment, so that is an external tool's own gate, not this
+    # policy's. Refuse the config-file vector directly rather than rely on it.
     for a in args:
         low = a.lower()
-        if (low in ("--eval", "--alert") or low.startswith("--eval=")
-                or low.startswith("--alert=")):
-            return "sqlmap --eval/--alert evaluates/runs host code; refused"
+        if (low in ("--eval", "--alert", "-c", "--configfile")
+                or low.startswith("--eval=") or low.startswith("--alert=")
+                or low.startswith("-c=") or low.startswith("--configfile=")):
+            return ("sqlmap --eval/--alert (directly or via -c/--configFile) "
+                     "evaluates/runs host code; refused")
     return None
 
 
-def _msf_reason(args: list[str]) -> str | None:
+def _msfconsole_reason(args: list[str]) -> str | None:
     for a in args:
-        if a.lower() in ("-x", "-r", "--resource"):
+        low = a.lower()
+        if low in ("-x", "-r", "--resource"):
             return ("msfconsole -x/-r runs arbitrary console/resource commands "
                     "(e.g. irb = host Ruby shell); refused")
+        if low in ("-p", "--plugin"):
+            return ("msfconsole -p/--plugin `require`s an arbitrary Ruby file on "
+                     "startup, executing its top-level code before any plugin "
+                     "validity check; refused")
+    return None
+
+
+def _msfvenom_reason(args: list[str]) -> str | None:
+    # msfvenom's `-p` is `--payload` (module selection: core, mandatory, expected
+    # usage for every invocation) — NOT msfconsole's `-p/--plugin`. msfvenom has
+    # no plugin-loading flag at all (checked against the installed binary's own
+    # --help); do not share msfconsole's denier here.
+    return None
+
+
+def _ffuf_reason(args: list[str]) -> str | None:
+    # ffuf's flag parser (Go stdlib `flag`) treats a single or double leading
+    # dash identically and takes no abbreviations, so an exact-token check is
+    # sufficient (verified against the installed binary).
+    for a in args:
+        low = a.lower()
+        if low in ("-input-cmd", "--input-cmd", "-input-shell", "--input-shell"):
+            return ("ffuf -input-cmd runs a host shell command to generate fuzz "
+                     "input; refused")
+    return None
+
+
+def _nikto_reason(args: list[str]) -> str | None:
+    # nikto (Perl Getopt::Long) auto-abbreviates unambiguous option prefixes —
+    # verified against the installed binary that `-conf`/`-con`/`-co` all resolve
+    # to `-config`. An exact-string check on "-config" alone is bypassable, so
+    # refuse any unambiguous prefix of "config" (length >= 2; nikto's other
+    # lowercase-c option is "-check6", which diverges at the 2nd character).
+    for a in args:
+        low = a.lower().lstrip("-")
+        if len(low) >= 2 and "config".startswith(low):
+            return ("nikto -config (or an abbreviation of it) can redirect "
+                     "PLUGINDIR to an attacker-controlled directory, causing "
+                     "arbitrary Perl execution on startup; refused")
     return None
 
 
@@ -328,8 +396,10 @@ _LAB_ARG_POLICIES = {
     "tcpdump": _tcpdump_reason,
     "tshark": _tshark_reason,
     "sqlmap": _sqlmap_reason,
-    "msfconsole": _msf_reason,
-    "msfvenom": _msf_reason,
+    "msfconsole": _msfconsole_reason,
+    "msfvenom": _msfvenom_reason,
+    "ffuf": _ffuf_reason,
+    "nikto": _nikto_reason,
 }
 
 
