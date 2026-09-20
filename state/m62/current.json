@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0040-m66b-execution-isolation.json",
-  "latest_snapshot_sha256": "cbc45b8492cc23f5208155e3917f191f2f124c77f09a77a431feaf3c34d5feb7",
+  "latest_snapshot_path": "state/m62/snapshots/0041-m66b-round2-remediation.json",
+  "latest_snapshot_sha256": "aaa33b82124426306730e8bf107cbd959f9494177286770bc6cb10544016535d",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 40,
-  "subject_state_commit": "e29ae5dd97d4378657cba07a29fc32d1d0ceafc9",
+  "state_generation": 41,
+  "subject_state_commit": "df13e7ab4d15bd6331f5c19741e37daf8550c45f",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
