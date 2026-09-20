@@ -245,10 +245,17 @@ def _wget_reason(args: list[str]) -> str | None:
 def _curl_reason(args: list[str]) -> str | None:
     # curl -K/--config reads a config file that can chain requests and redirect
     # output over files. (-K is the config flag; lowercase -k is --insecure and
-    # is harmless, so it is deliberately NOT matched here.)
+    # is harmless, so it is deliberately NOT matched — case-SENSITIVE on purpose.)
+    #
+    # Round-4 (fresh independent review, gen42 frozen candidate): curl's getopt
+    # parser accepts -K's value ATTACHED with no separator (`-Kfile`), same as
+    # its other short options — confirmed live against the installed binary.
+    # An exact `a == "-K"` token check missed this; `startswith` (still
+    # case-sensitive, so "-k..." never matches) catches bare, attached and any
+    # future `-K=file` spelling in one check.
     for a in args:
         low = a.lower()
-        if a == "-K" or low == "--config" or low.startswith("--config="):
+        if a.startswith("-K") or low == "--config" or low.startswith("--config="):
             return "curl -K/--config can drive file-overwriting requests; refused"
     return None
 
@@ -334,23 +341,41 @@ def _sqlmap_reason(args: list[str]) -> str | None:
     # set in the environment — but RedTeamShellExecutor inherits the host
     # process's environment, so that is an external tool's own gate, not this
     # policy's. Refuse the config-file vector directly rather than rely on it.
+    #
+    # Round-4: sqlmap's own CLI parser accepts `-c`'s value ATTACHED with no
+    # separator (`-c<file>`), same as its other short options — confirmed live
+    # against the installed binary (it opened the exact attacker-given path).
+    # `a.startswith("-c")` (case-SENSITIVE) catches bare, attached and any
+    # future `-c=file` spelling in one check. Case-sensitive on purpose: sqlmap
+    # has a DIFFERENT, legitimate `-C COL` (uppercase — column enumeration,
+    # core functionality) that a case-INSENSITIVE check would wrongly refuse;
+    # `--configFile` stays a case-insensitive long-option comparison since
+    # there is no colliding differently-cased long option.
     for a in args:
         low = a.lower()
-        if (low in ("--eval", "--alert", "-c", "--configfile")
-                or low.startswith("--eval=") or low.startswith("--alert=")
-                or low.startswith("-c=") or low.startswith("--configfile=")):
+        if (low in ("--eval", "--alert") or low.startswith("--eval=")
+                or low.startswith("--alert=") or a.startswith("-c")
+                or low.startswith("--configfile")):
             return ("sqlmap --eval/--alert (directly or via -c/--configFile) "
                      "evaluates/runs host code; refused")
     return None
 
 
 def _msfconsole_reason(args: list[str]) -> str | None:
+    # Round-4: msfconsole's Ruby OptionParser accepts every one of these
+    # options' value ATTACHED with no separator (`-p<path>`) as well as the
+    # GNU `--long=value` form — confirmed live against the installed binary for
+    # -p/--plugin (a bare `require()` executed before any plugin-validity
+    # check). `startswith` on both the short and long spelling catches bare,
+    # attached and `=`-attached forms in one check; no other msfconsole flag
+    # begins with "-p", "-x" or "-r" (checked against the installed --help).
     for a in args:
         low = a.lower()
-        if low in ("-x", "-r", "--resource"):
+        if (low.startswith("-x") or low.startswith("-r")
+                or low.startswith("--resource")):
             return ("msfconsole -x/-r runs arbitrary console/resource commands "
                     "(e.g. irb = host Ruby shell); refused")
-        if low in ("-p", "--plugin"):
+        if low.startswith("-p") or low.startswith("--plugin"):
             return ("msfconsole -p/--plugin `require`s an arbitrary Ruby file on "
                      "startup, executing its top-level code before any plugin "
                      "validity check; refused")
@@ -367,25 +392,31 @@ def _msfvenom_reason(args: list[str]) -> str | None:
 
 def _ffuf_reason(args: list[str]) -> str | None:
     # ffuf's flag parser (Go stdlib `flag`) treats a single or double leading
-    # dash identically and takes no abbreviations, so an exact-token check is
-    # sufficient (verified against the installed binary).
+    # dash identically. Round-4: it DOES support `-name=value` (confirmed live
+    # against the installed binary running the attacker command through
+    # -input-cmd=<cmd>) even though it takes no abbreviations and has no
+    # attached-without-separator form — an exact-token-only check missed the
+    # `=` spelling. Match the flag name as an exact token OR as its `=`-prefix.
     for a in args:
         low = a.lower()
-        if low in ("-input-cmd", "--input-cmd", "-input-shell", "--input-shell"):
-            return ("ffuf -input-cmd runs a host shell command to generate fuzz "
-                     "input; refused")
+        for name in ("-input-cmd", "--input-cmd", "-input-shell", "--input-shell"):
+            if low == name or low.startswith(name + "="):
+                return ("ffuf -input-cmd runs a host shell command to generate "
+                         "fuzz input; refused")
     return None
 
 
 def _nikto_reason(args: list[str]) -> str | None:
     # nikto (Perl Getopt::Long) auto-abbreviates unambiguous option prefixes —
     # verified against the installed binary that `-conf`/`-con`/`-co` all resolve
-    # to `-config`. An exact-string check on "-config" alone is bypassable, so
-    # refuse any unambiguous prefix of "config" (length >= 2; nikto's other
-    # lowercase-c option is "-check6", which diverges at the 2nd character).
+    # to `-config`. Round-4: it ALSO accepts the value attached with `=`
+    # (`-config=<file>`, including on an abbreviated prefix) — confirmed live,
+    # which the abbreviation check alone did not cover since "config=/x" is not
+    # a prefix of the literal string "config". Split on "=" first so the
+    # abbreviation check sees only the flag name, not the value.
     for a in args:
-        low = a.lower().lstrip("-")
-        if len(low) >= 2 and "config".startswith(low):
+        head = a.lower().split("=", 1)[0].lstrip("-")
+        if len(head) >= 2 and "config".startswith(head):
             return ("nikto -config (or an abbreviation of it) can redirect "
                      "PLUGINDIR to an attacker-controlled directory, causing "
                      "arbitrary Perl execution on startup; refused")

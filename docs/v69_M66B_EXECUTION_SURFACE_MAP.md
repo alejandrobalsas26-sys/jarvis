@@ -158,3 +158,25 @@ One item surfaced in passing and not exploited: `core/github_explorer.py`'s
 matched by a search query, reached via a voice-macro path rather than an LLM
 tool-calling surface — pre-existing, out of M66B's declared scope, flagged for
 separate review rather than fixed here.
+
+## G. Known limitation — a pre-existing, unrelated over-block in Layer 2 (Round-4)
+
+A fresh Round-2 review of the gen42 frozen candidate found that
+`tools/executor.py:_build_system_dirs` (§155) unconditionally includes
+`Path("/").resolve()` in `_SYSTEM_DIRS`. Because root is an ancestor of every
+non-root absolute path, `_validate_command`'s Layer-2 path check (§969) refuses
+almost any argument that resolves to an absolute path containing at least one
+`/` — confirmed live: `curl http://example.com/`, `curl -s
+https://example.com/path` and `wget http://example.com/file.txt` are all
+refused with "apunta a un directorio del sistema", while `curl example.com`
+(no slash) is allowed. This pre-dates M66B and is orthogonal to the
+command-SEMANTIC policy (§4); it fails CLOSED (over-restrictive, not a new
+escape) rather than open, so it is not a new security hole and is not fixed
+here. It is noted because it INCIDENTALLY masked test coverage for some of
+this document's own findings — several Round-3/4 payload strings that happened
+to contain an absolute path were blocked by this bug rather than by the
+command-policy denier under test, which is why every regression test added in
+Round-3/4 deliberately uses slash-free payload names. Whether `run_shell_command`
+usage of curl/wget/find/git with real URLs or filesystem paths works at all
+today is a question for the owning team; it is out of M66B's declared
+containment/isolation scope to fix.

@@ -180,6 +180,20 @@ class TestTrustedLab:
         "msfconsole --plugin evil.rb",              # double-dash form
         "sqlmap -c evil.conf -u t",                 # config-file smuggles --eval
         "sqlmap --configFile evil.conf -u t",       # double-dash form
+        # ── Round-4 (fresh independent review of the gen42 frozen candidate):
+        # every Round-2/3 denier above used exact-token matching and missed the
+        # SAME real binary's attached (`-Xvalue`) and/or `=`-attached
+        # (`--long=value`, `-x=value`) forms — confirmed live against each
+        # installed binary. Bare filenames (no "/") deliberately, to avoid the
+        # unrelated pre-existing system-path guard noted above. ──
+        "ffuf -input-cmd=id -input-num 1 -u t",     # ffuf's Go flag `=` form
+        "ffuf --input-cmd=id -input-num 1 -u t",
+        "nikto -config=evil.conf -h t",             # Getopt::Long `=` form
+        "nikto -conf=evil.conf -h t",               # abbreviation + `=` form
+        "msfconsole -pevil.rb",                     # attached, NO separator
+        "msfconsole --plugin=evil.rb",              # `=` form
+        "msfconsole -xevil.rc",                     # -x attached, NO separator
+        "sqlmap -cevil.ini -u t",                   # attached, NO separator
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -197,6 +211,10 @@ class TestTrustedLab:
         # _validate_command that has nothing to do with the lab command policy
         # this test exercises.)
         "msfvenom -p mypayload LHOST=1.2.3.4 LPORT=4444 -f exe -o out.exe",
+        # Round-4: sqlmap's -C (uppercase, column enumeration — core legitimate
+        # functionality) is a DIFFERENT flag from -c (config file) despite
+        # colliding once lowercased; must not be broken by the -c fix above.
+        "sqlmap -u t -C user,pass --batch",
     ])
     def test_lab_purpose_built_still_works(self, cmd):
         assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -242,7 +260,13 @@ class TestPolicyCoverage:
 
     def test_curl_config_rule_is_load_bearing(self):
         assert command_refusal(["curl", "--config", "evilrc"]) is not None
+        # Round-4: curl's own getopt parser accepts -K's value ATTACHED with no
+        # separator — an exact `a == "-K"` token check missed this.
+        assert command_refusal(["curl", "-Kevilrc"]) is not None
         assert command_refusal(["curl", "example.com"]) is None
+        # -k (lowercase, --insecure) is a DIFFERENT, harmless flag and must
+        # never be caught by the -K denier.
+        assert command_refusal(["curl", "-k", "example.com"]) is None
 
     def test_unknown_binary_defaults_to_deny(self):
         # A binary with no classification is treated as REMOVED (fail closed).
