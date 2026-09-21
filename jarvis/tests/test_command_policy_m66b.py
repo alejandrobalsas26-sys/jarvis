@@ -210,6 +210,14 @@ class TestTrustedLab:
         "msfconsole -c evil.yml",                    # Framework config load
         "msfconsole -cevil.yml",                      # attached, NO separator
         "msfconsole --config=evil.yml",
+        # ── Round-7 (fresh independent review of the gen45 frozen candidate):
+        # hashcat v7's Assimilation Bridge (-m 72000/73000) `import`s a
+        # caller-overridable Python file via --bridge-parameter1..4 — a
+        # well-known GPU cracker's obscure newest feature is an embedded
+        # generic-code-execution primitive, none of rounds 1-6 examined it. ──
+        "hashcat -m 73000 --bridge-parameter1 evil.py h w",
+        "hashcat -m 73000 --bridge-parameter1=evil.py h w",
+        "hashcat -m 72000 --bridge-parameter4 evil.py h w",
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -240,6 +248,10 @@ class TestTrustedLab:
         # lowercased; must not be broken by the -m fix above.
         "msfconsole -M migrations_dir",
         "msfconsole --migration-path=dir",
+        # Round-7: hashcat mode 72000/73000 WITHOUT a caller-supplied bridge
+        # parameter is legitimate (hashcat's own bundled bridge); only the
+        # plugin-override flags are refused.
+        "hashcat -m 73000 h w",
     ])
     def test_lab_purpose_built_still_works(self, cmd):
         assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd

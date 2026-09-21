@@ -298,13 +298,21 @@ _ARG_POLICIES = {
 # can point at an attacker-authored config file carrying a `[List.External:MODE]`
 # section, which John's own documentation states is TRUSTED, executable input
 # (`--external=MODE` selects it) — confirmed live. Also moved out.
+#
+# Round-7 (fresh independent review, gen45 frozen candidate): hashcat v7's
+# "Assimilation Bridge" (`-m 72000`/`73000`) loads a caller-overridable Python
+# plugin via `--bridge-parameter1..4` and `import`s it — all of its top-level
+# code runs before any cracking attempt, confirmed live with a canary file
+# (ran even though the GPU/OpenCL backend itself failed on this host). A
+# well-known GPU hash-cracker's rarely-examined newest feature is an embedded
+# generic-code-execution primitive; also moved out.
 _LAB_PURPOSE_BUILT: frozenset[str] = frozenset({
     "masscan", "hydra", "gobuster", "dirb", "sliver",
-    "responder", "crackmapexec", "hashcat",
+    "responder", "crackmapexec",
 })
 _LAB_ARGUMENT_POLICY: frozenset[str] = frozenset({
     "tcpdump", "tshark", "sqlmap", "msfconsole", "msfvenom", "ffuf", "nikto",
-    "john",
+    "john", "hashcat",
 })
 LAB_COMMAND_POLICY: dict[str, CommandCapability] = {
     b: CommandCapability.PURPOSE_BUILT_AUTHORIZED for b in _LAB_PURPOSE_BUILT}
@@ -481,6 +489,24 @@ def _john_reason(args: list[str]) -> str | None:
     return None
 
 
+def _hashcat_reason(args: list[str]) -> str | None:
+    # Round-7: `--bridge-parameter1..4` (GNU long-opt style, confirmed live to
+    # accept both space-separated and `=`-attached forms) overrides which
+    # Python file hashcat's v7 Assimilation Bridge (`-m 72000`/`73000`)
+    # `import`s — all of the file's top-level code runs before any cracking
+    # attempt. Refusing the four parameter flags closes the vector without
+    # blocking legitimate use of hashcat's own bundled bridges (mode
+    # 72000/73000 with no caller-supplied plugin path is untouched).
+    for a in args:
+        low = a.lower()
+        if low in ("--bridge-parameter1", "--bridge-parameter2",
+                    "--bridge-parameter3", "--bridge-parameter4") or any(
+                low.startswith(f"--bridge-parameter{n}=") for n in "1234"):
+            return ("hashcat --bridge-parameter1..4 overrides the Python file "
+                     "the Assimilation Bridge imports and runs; refused")
+    return None
+
+
 _LAB_ARG_POLICIES = {
     "tcpdump": _tcpdump_reason,
     "tshark": _tshark_reason,
@@ -490,6 +516,7 @@ _LAB_ARG_POLICIES = {
     "john": _john_reason,
     "ffuf": _ffuf_reason,
     "nikto": _nikto_reason,
+    "hashcat": _hashcat_reason,
 }
 
 
