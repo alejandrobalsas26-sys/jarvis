@@ -293,12 +293,18 @@ _ARG_POLICIES = {
 # input (its own documented feature), and `nikto -config` can point PLUGINDIR at
 # an attacker-controlled directory, so nikto (Perl) `require`s an arbitrary
 # `*.plugin` file on startup. Both moved out of the no-arg-policy set.
+#
+# Round-5 (fresh independent review, gen43 frozen candidate): `john --config`
+# can point at an attacker-authored config file carrying a `[List.External:MODE]`
+# section, which John's own documentation states is TRUSTED, executable input
+# (`--external=MODE` selects it) — confirmed live. Also moved out.
 _LAB_PURPOSE_BUILT: frozenset[str] = frozenset({
     "masscan", "hydra", "gobuster", "dirb", "sliver",
-    "responder", "crackmapexec", "hashcat", "john",
+    "responder", "crackmapexec", "hashcat",
 })
 _LAB_ARGUMENT_POLICY: frozenset[str] = frozenset({
     "tcpdump", "tshark", "sqlmap", "msfconsole", "msfvenom", "ffuf", "nikto",
+    "john",
 })
 LAB_COMMAND_POLICY: dict[str, CommandCapability] = {
     b: CommandCapability.PURPOSE_BUILT_AUTHORIZED for b in _LAB_PURPOSE_BUILT}
@@ -369,6 +375,16 @@ def _msfconsole_reason(args: list[str]) -> str | None:
     # check). `startswith` on both the short and long spelling catches bare,
     # attached and `=`-attached forms in one check; no other msfconsole flag
     # begins with "-p", "-x" or "-r" (checked against the installed --help).
+    #
+    # Round-5: `-m/--module-path DIRECTORY` ("Load an additional module path")
+    # combined with `--[no-]defer-module-loads` forces eager `module_eval` of
+    # every .rb file under the given directory at startup — confirmed live
+    # (a synthetic module's top-level code ran with no -x/-r/-p at all).
+    # Refusing -m/--module-path alone closes it: without an attacker-added
+    # module path, --no-defer-module-loads has nothing extra to eagerly load.
+    # Case-SENSITIVE on "-m": msfconsole also has a DIFFERENT, legitimate
+    # `-M/--migration-path` (uppercase — DB migrations) that a case-insensitive
+    # check would wrongly refuse; the long forms don't collide even lowercased.
     for a in args:
         low = a.lower()
         if (low.startswith("-x") or low.startswith("-r")
@@ -379,6 +395,10 @@ def _msfconsole_reason(args: list[str]) -> str | None:
             return ("msfconsole -p/--plugin `require`s an arbitrary Ruby file on "
                      "startup, executing its top-level code before any plugin "
                      "validity check; refused")
+        if a.startswith("-m") or low.startswith("--module-path"):
+            return ("msfconsole -m/--module-path eagerly module_eval()s "
+                     "arbitrary Ruby under the given directory with "
+                     "--no-defer-module-loads; refused")
     return None
 
 
@@ -423,12 +443,38 @@ def _nikto_reason(args: list[str]) -> str | None:
     return None
 
 
+def _john_reason(args: list[str]) -> str | None:
+    # Round-5: `--config=<file>` lets the caller supply an entirely
+    # attacker-authored config file carrying a `[List.External:MODE]` section;
+    # `--external=<mode>` then selects it. John's own shipped docs
+    # (EXTERNAL.gz) state external-mode programs and config files in general
+    # are TRUSTED input the interpreter compiles and runs — confirmed live
+    # (a synthetic external-mode `generate()` ran on `--stdout`). John's own
+    # parser only accepts the `=`-attached form for these options (a bare
+    # space-separated value is a parse error on the real binary) and DOES
+    # auto-abbreviate unambiguous prefixes (confirmed live: `--con=`/`--ext=`
+    # both resolve) — same split-on-"=" abbreviation-prefix check as nikto.
+    # "external" and "config" diverge from every other john long option by
+    # their 2nd character, so the >= 2 threshold has no real ambiguity; an
+    # abbreviation john itself would reject as ambiguous costs nothing to
+    # refuse pre-emptively.
+    for a in args:
+        head = a.lower().split("=", 1)[0].lstrip("-")
+        if len(head) >= 2 and ("config".startswith(head)
+                                or "external".startswith(head)):
+            return ("john --config/--external loads a config file whose "
+                     "[List.External:MODE] section is compiled and executed as "
+                     "trusted input; refused")
+    return None
+
+
 _LAB_ARG_POLICIES = {
     "tcpdump": _tcpdump_reason,
     "tshark": _tshark_reason,
     "sqlmap": _sqlmap_reason,
     "msfconsole": _msfconsole_reason,
     "msfvenom": _msfvenom_reason,
+    "john": _john_reason,
     "ffuf": _ffuf_reason,
     "nikto": _nikto_reason,
 }

@@ -194,6 +194,15 @@ class TestTrustedLab:
         "msfconsole --plugin=evil.rb",              # `=` form
         "msfconsole -xevil.rc",                     # -x attached, NO separator
         "sqlmap -cevil.ini -u t",                   # attached, NO separator
+        # ── Round-5 (fresh independent review of the gen43 frozen candidate):
+        # two more "purpose-built"/incompletely-checked lab tools had a real
+        # generic-exec escape via a config/module-loading option — a NEW class
+        # of gap (not just another attached/= spelling), confirmed live. ──
+        "john --config=evil.conf --external=Evil --stdout",  # trusted-input
+        "john --con=evil.conf --ext=Evil --stdout",           # abbreviated
+        "msfconsole -q -n --no-defer-module-loads -m evildir",  # module_eval
+        "msfconsole --module-path=evildir --no-defer-module-loads",
+        "msfconsole -mevildir",                      # attached, NO separator
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -215,6 +224,15 @@ class TestTrustedLab:
         # functionality) is a DIFFERENT flag from -c (config file) despite
         # colliding once lowercased; must not be broken by the -c fix above.
         "sqlmap -u t -C user,pass --batch",
+        # Round-5: john's --wordlist mode must not be broken by the new
+        # --config/--external denier (bare "john hashfile" above already
+        # covers the plain crack mode).
+        "john --wordlist=rockyou.txt hashfile",
+        # Round-5: msfconsole's -M/--migration-path (uppercase — DB migrations)
+        # is a DIFFERENT flag from -m (module-path) despite colliding once
+        # lowercased; must not be broken by the -m fix above.
+        "msfconsole -M migrations_dir",
+        "msfconsole --migration-path=dir",
     ])
     def test_lab_purpose_built_still_works(self, cmd):
         assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd
