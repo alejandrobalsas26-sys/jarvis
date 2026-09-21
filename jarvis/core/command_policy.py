@@ -399,6 +399,19 @@ def _msfconsole_reason(args: list[str]) -> str | None:
             return ("msfconsole -m/--module-path eagerly module_eval()s "
                      "arbitrary Ruby under the given directory with "
                      "--no-defer-module-loads; refused")
+        # Round-6: a THIRD, distinct config-loading flag — msfconsole's own
+        # Framework `-c FILE` ("Load the specified configuration file", under
+        # "Framework options" in --help; separate from -p/--plugin, -m/
+        # --module-path and -y/--yaml). Traced through the installed Ruby
+        # source: only pre-selects an existing indexed module name / switches
+        # workspace (no arbitrary-path module_eval found reachable this way),
+        # but it is an unaudited, caller-controlled config-file load on an
+        # already-heavily-abused flag letter; refused defensively rather than
+        # left open pending a deeper trace. Case-SENSITIVE ("-c", not "-C"):
+        # confirmed no legitimate msfconsole flag begins with lowercase "-c".
+        if a.startswith("-c") or low.startswith("--config"):
+            return ("msfconsole -c/--config loads a caller-controlled Framework "
+                     "config file (module/workspace selection); refused")
     return None
 
 

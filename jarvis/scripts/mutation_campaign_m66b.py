@@ -473,6 +473,10 @@ MUTATIONS += [
          'if len(head) >= 2 and ("config".startswith(head)\n                                or "external".startswith(head)):',
          'if False and len(head) >= 2 and ("config".startswith(head)\n                                or "external".startswith(head)):',
          CP_LAB),
+    _mut("R6_msfconsole_config_allowed", "LOLBIN", CMD,
+         'if a.startswith("-c") or low.startswith("--config"):',
+         'if a.startswith("\\x00n1") or low.startswith("\\x00n2"):',
+         CP_LAB),
     _mut("R2_lab_purpose_built_ungoverned", "LOLBIN", CMD,
          'if cap is CommandCapability.PURPOSE_BUILT_AUTHORIZED:\n            return None\n        policy = _LAB_ARG_POLICIES.get(binary)',
          'if cap is CommandCapability.PURPOSE_BUILT_AUTHORIZED:\n            return None\n        policy = None and _LAB_ARG_POLICIES.get(binary)',
@@ -513,6 +517,15 @@ MUTATIONS += [
          'cleanup_ok = cleanup_status is ControlStatus.ENFORCED',
          'cleanup_ok = cleanup_status is not ControlStatus.NOT_ENFORCED',
          f"{C}::TestProfileDerivation::test_cleanup_none_default_is_not_sandboxed"),
+]
+
+# ── Group 14: Round-6 remediation (write_file .git/.svn/.hg metadata door) ────
+AED = "tests/test_alternate_execution_doors_m66b.py"
+MUTATIONS += [
+    _mut("R6_vcs_metadata_write_allowed", "PATH", EXEC,
+         'if _VCS_METADATA_DIRS & set(p.parts):\n        return None',
+         'if False and _VCS_METADATA_DIRS & set(p.parts):\n        return None',
+         f"{AED}::test_resolve_within_allowed_refuses_git_config_relative"),
 ]
 
 

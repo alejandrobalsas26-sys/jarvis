@@ -477,6 +477,25 @@ def _is_foreign_flavour_path(path: str) -> bool:
     return len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha()
 
 
+#: V69 M66B (Round-6, fresh independent review): version-control metadata
+#: directories. A `write_file` target under one of these is refused fail-closed
+#: regardless of which allowed root it resolves under — confirmed live that a
+#: caller-planted (or caller-appended-to) `.git/config` with `core.fsmonitor =
+#: <cmd>` makes an entirely innocuous-looking, already-allowed `git status`
+#: (no -c, no suspicious argv `_git_reason` or `_GLOBAL_INJECTION_FRAGMENTS`
+#: could ever see) execute an arbitrary host command. `_sandbox_allowed_dirs()`
+#: includes `Path.cwd()`, and neither host-gateway shell executor overrides
+#: `subprocess.run`'s inherited `cwd`, so a file written there and a
+#: subsequent, individually-innocuous shell command can be split across two
+#: HITL approvals with nothing suspicious in either one. There is no
+#: legitimate "save this file" request that targets VCS internals, so this is
+#: refused structurally here — the one shared gate every path-taking handler
+#: uses — rather than by trying to enumerate every hook/config key a VCS
+#: might read (`.svn`/`.hg` included defensively; only `.git` is confirmed
+#: live, but the delivery mechanism is identical for any VCS this host has).
+_VCS_METADATA_DIRS = frozenset({".git", ".svn", ".hg"})
+
+
 def _resolve_within_allowed(path: str) -> "Path | None":
     """Resolve *path* and return it iff it is contained within an allowed dir.
 
@@ -485,7 +504,9 @@ def _resolve_within_allowed(path: str) -> "Path | None":
     or symlinks whose target lands outside (``.resolve()`` follows symlinks and
     normalizes ``..`` *before* the containment test, so a symlink inside an
     allowed dir pointing outside is still rejected). Any resolution failure
-    (malformed path, OS error) is likewise treated as not-allowed.
+    (malformed path, OS error) is likewise treated as not-allowed. A path
+    passing through a version-control metadata directory (``.git``/``.svn``/
+    ``.hg``) at any depth is refused the same way — see `_VCS_METADATA_DIRS`.
     """
     if not isinstance(path, str) or not path.strip():
         return None
@@ -496,6 +517,8 @@ def _resolve_within_allowed(path: str) -> "Path | None":
     try:
         p = Path(path).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):
+        return None
+    if _VCS_METADATA_DIRS & set(p.parts):
         return None
     for allowed in _sandbox_allowed_dirs():
         try:

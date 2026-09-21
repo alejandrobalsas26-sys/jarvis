@@ -203,6 +203,13 @@ class TestTrustedLab:
         "msfconsole -q -n --no-defer-module-loads -m evildir",  # module_eval
         "msfconsole --module-path=evildir --no-defer-module-loads",
         "msfconsole -mevildir",                      # attached, NO separator
+        # ── Round-6 (fresh independent review of the gen44 frozen candidate):
+        # a THIRD, distinct msfconsole config-loading flag, unaudited by
+        # rounds 2-5. See test_alternate_execution_doors_m66b.py for the
+        # separate, more severe write_file+.git/config finding this round. ──
+        "msfconsole -c evil.yml",                    # Framework config load
+        "msfconsole -cevil.yml",                      # attached, NO separator
+        "msfconsole --config=evil.yml",
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd

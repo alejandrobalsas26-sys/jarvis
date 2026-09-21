@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import pytest
 
-from tools.executor import _validate_command, _forbidden_interpreter_exec
+from tools.executor import (
+    _validate_command,
+    _forbidden_interpreter_exec,
+    _resolve_within_allowed,
+)
 from core.execution_surface_registry import (
     ARBITRARY_CODE_SURFACES,
     BROKER_REQUIRED,
@@ -140,3 +144,53 @@ def test_detector_flags_new_interpreter_launch_outside_broker():
 
 def test_detector_allows_reviewed_fixed_internal_launch():
     assert scan_source(_FIXED_INTERNAL, "tools/executor.py") == []
+
+
+# ── §6 (Round-6, fresh independent review): a THIRD alternate door — a
+# write_file target under a VCS metadata directory (.git/.svn/.hg). `git
+# status` (an already-allowed, argv-innocuous base command) executes whatever
+# `core.fsmonitor` names in `.git/config`; neither host-gateway shell executor
+# overrides `subprocess.run`'s inherited cwd, and `_sandbox_allowed_dirs()`
+# includes `Path.cwd()`, so a write_file call and a later, individually
+# innocent-looking `git status` — no -c, no suspicious argv at all — chain
+# into arbitrary host code with nothing suspicious in either HITL approval.
+# `_git_reason` cannot see this: it only ever inspects argv, never file
+# contents. Closed structurally in `_resolve_within_allowed`, the one shared
+# containment gate every path-taking handler (read_file, write_file, …) uses,
+# rather than by trying to enumerate every hook/config key a VCS might read.
+def test_resolve_within_allowed_refuses_git_config_relative():
+    assert _resolve_within_allowed(".git/config") is None
+
+
+def test_resolve_within_allowed_refuses_git_hooks():
+    assert _resolve_within_allowed(".git/hooks/pre-commit") is None
+
+
+def test_resolve_within_allowed_refuses_git_metadata_under_every_allowed_root():
+    import os
+    home = os.path.expanduser("~")
+    for root in ("Downloads", "Documents"):
+        assert _resolve_within_allowed(
+            os.path.join(home, root, "proj", ".git", "config")) is None
+
+
+def test_resolve_within_allowed_refuses_svn_and_hg_too():
+    assert _resolve_within_allowed(".svn/entries") is None
+    assert _resolve_within_allowed(".hg/hgrc") is None
+
+
+def test_resolve_within_allowed_still_allows_a_normal_file():
+    # The fix must not become a blanket denial — only VCS metadata paths.
+    resolved = _resolve_within_allowed("m66b_round6_ordinary_file.txt")
+    assert resolved is not None
+    assert ".git" not in resolved.parts
+
+
+def test_msfconsole_c_config_is_blocked_and_uppercase_m_still_works():
+    from core.command_policy import command_refusal
+    assert command_refusal(["msfconsole", "-c", "evil.yml"], lab=True) is not None
+    assert command_refusal(["msfconsole", "-cevil.yml"], lab=True) is not None
+    assert command_refusal(["msfconsole", "--config=evil.yml"], lab=True) is not None
+    # -M/--migration-path (uppercase, DB migrations) is a different, legitimate
+    # flag and must not be caught by the -c/--config denier.
+    assert command_refusal(["msfconsole", "-M", "migrations_dir"], lab=True) is None
