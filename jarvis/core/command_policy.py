@@ -365,6 +365,20 @@ def _sqlmap_reason(args: list[str]) -> str | None:
     # core functionality) that a case-INSENSITIVE check would wrongly refuse;
     # `--configFile` stays a case-insensitive long-option comparison since
     # there is no colliding differently-cased long option.
+    #
+    # Round-9 (fresh independent review, gen47 frozen candidate): sqlmap's
+    # `--tamper`, `--preprocess` and `--postprocess` each take a script path
+    # that sqlmap `__import__`s during init() (option.py `_setTamperingFunctions`
+    # / `_setPreprocessFunctions` / `_setPostprocessFunctions`) — Python runs the
+    # imported file's top-level code BEFORE sqlmap checks the required
+    # tamper()/preprocess()/postprocess() function even exists. That is generic
+    # host code execution outside sqlmap's target-exploitation capability.
+    # argparse auto-abbreviates (`--tamp=` reaches `--tamper`), so match a
+    # split-on-"=" leading-dash-stripped head that is a prefix of any of the
+    # three names (>= 4 chars: "tamp"/"prep"/"post" are the shortest unambiguous
+    # prefixes among sqlmap's own long options — shorter prefixes argparse would
+    # itself reject as ambiguous, so refusing them costs nothing).
+    _EXEC_SCRIPT_OPTS = ("tamper", "preprocess", "postprocess")
     for a in args:
         low = a.lower()
         if (low in ("--eval", "--alert") or low.startswith("--eval=")
@@ -372,6 +386,10 @@ def _sqlmap_reason(args: list[str]) -> str | None:
                 or low.startswith("--configfile")):
             return ("sqlmap --eval/--alert (directly or via -c/--configFile) "
                      "evaluates/runs host code; refused")
+        head = low.split("=", 1)[0].lstrip("-")
+        if len(head) >= 4 and any(name.startswith(head) for name in _EXEC_SCRIPT_OPTS):
+            return ("sqlmap --tamper/--preprocess/--postprocess imports and runs "
+                     "a caller-supplied Python script on the host; refused")
     return None
 
 

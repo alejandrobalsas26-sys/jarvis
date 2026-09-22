@@ -231,6 +231,17 @@ class TestTrustedLab:
         "msfconsole --migration-path evildir",
         "msfconsole -Mevildir",                       # attached, NO separator
         "msfconsole --migration-path=evildir",
+        # ── Round-9 (fresh independent review of the gen47 frozen candidate):
+        # sqlmap --tamper/--preprocess/--postprocess each take a script path
+        # sqlmap __import__s during init(), running the file's top-level code
+        # before it even checks the required function exists. argparse
+        # auto-abbreviates (--tamp= reaches --tamper), and a bare slash-free
+        # filename slips past the §G Layer-2 path guard. ──
+        "sqlmap --tamper=evil.py --batch",
+        "sqlmap --tamper evil.py --batch",
+        "sqlmap --tamp=evil.py --batch",              # argparse abbreviation
+        "sqlmap --preprocess=evil.py --batch",
+        "sqlmap --postprocess=evil.py --batch",
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -260,6 +271,12 @@ class TestTrustedLab:
         # parameter is legitimate (hashcat's own bundled bridge); only the
         # plugin-override flags are refused.
         "hashcat -m 73000 h w",
+        # Round-9: the tamper/preprocess/postprocess denier is a prefix match
+        # on those three option names only; legitimate sqlmap options that do
+        # not share that prefix (technique, dbms, threads, --data POST body)
+        # must remain allowed.
+        "sqlmap -u t --technique=BEUSTQ --dbms=mysql --threads=4 --batch",
+        "sqlmap -u t --data=id=1 --batch",
     ])
     def test_lab_purpose_built_still_works(self, cmd):
         assert _allowed(cmd, _LAB_COMMAND_ALLOWLIST), cmd
