@@ -390,9 +390,24 @@ def _msfconsole_reason(args: list[str]) -> str | None:
     # (a synthetic module's top-level code ran with no -x/-r/-p at all).
     # Refusing -m/--module-path alone closes it: without an attacker-added
     # module path, --no-defer-module-loads has nothing extra to eagerly load.
-    # Case-SENSITIVE on "-m": msfconsole also has a DIFFERENT, legitimate
-    # `-M/--migration-path` (uppercase — DB migrations) that a case-insensitive
-    # check would wrongly refuse; the long forms don't collide even lowercased.
+    # Case-SENSITIVE on "-m": the long forms don't collide even lowercased.
+    #
+    # Round-8 (fresh independent review, gen46 frozen candidate): Round-5's
+    # reasoning that `-M/--migration-path` is merely "different and
+    # legitimate" was WRONG — it independently verified `-m` is dangerous but
+    # never checked whether `-M` is too. Traced through the installed Ruby
+    # source: `-M DIRECTORY` appends to `options.database.migrations_paths`
+    # (parsed_options/base.rb), forwarded to `db_manager.init_db`, and
+    # `ActiveRecord::MigrationContext#migrate` (db_manager/migration.rb) LOADS
+    # every pending .rb file under those paths as a side effect of ordinary
+    # console startup touching `framework.db` — ActiveRecord migrations run
+    # their top-level code unconditionally when loaded, before any `up`/
+    # `change` method is invoked. Confirmed live: a planted migration file's
+    # top-level `File.write` ran and its version was recorded in
+    # schema_migrations, with no db_migrate command and no other flag beyond
+    # `-M <dir>`. Same class of bug as -m/--module-path, a different Rails
+    # subsystem; -M is refused too, case-sensitively (there is no legitimate
+    # use of this flag in this gateway's threat model).
     for a in args:
         low = a.lower()
         if (low.startswith("-x") or low.startswith("-r")
@@ -407,6 +422,10 @@ def _msfconsole_reason(args: list[str]) -> str | None:
             return ("msfconsole -m/--module-path eagerly module_eval()s "
                      "arbitrary Ruby under the given directory with "
                      "--no-defer-module-loads; refused")
+        if a.startswith("-M") or low.startswith("--migration-path"):
+            return ("msfconsole -M/--migration-path loads caller-supplied "
+                     "ActiveRecord migration .rb files at ordinary startup, "
+                     "running their top-level code; refused")
         # Round-6: a THIRD, distinct config-loading flag — msfconsole's own
         # Framework `-c FILE` ("Load the specified configuration file", under
         # "Framework options" in --help; separate from -p/--plugin, -m/

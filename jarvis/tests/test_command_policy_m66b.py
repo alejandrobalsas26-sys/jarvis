@@ -218,6 +218,19 @@ class TestTrustedLab:
         "hashcat -m 73000 --bridge-parameter1 evil.py h w",
         "hashcat -m 73000 --bridge-parameter1=evil.py h w",
         "hashcat -m 72000 --bridge-parameter4 evil.py h w",
+        # ── Round-8 (fresh independent review of the gen46 frozen candidate):
+        # Round-5's reasoning that msfconsole -M/--migration-path is merely
+        # "different from -m and legitimate" was WRONG — it independently
+        # verified -m is dangerous but never checked -M itself. A caller-
+        # supplied directory is appended to migrations_paths and every
+        # pending .rb file under it is LOADED (running its top-level code
+        # unconditionally, standard ActiveRecord/Rails behavior) at ordinary
+        # console startup — confirmed live via a real throwaway Postgres +
+        # planted migration file. ──
+        "msfconsole -M evildir",
+        "msfconsole --migration-path evildir",
+        "msfconsole -Mevildir",                       # attached, NO separator
+        "msfconsole --migration-path=evildir",
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
@@ -243,11 +256,6 @@ class TestTrustedLab:
         # --config/--external denier (bare "john hashfile" above already
         # covers the plain crack mode).
         "john --wordlist=rockyou.txt hashfile",
-        # Round-5: msfconsole's -M/--migration-path (uppercase — DB migrations)
-        # is a DIFFERENT flag from -m (module-path) despite colliding once
-        # lowercased; must not be broken by the -m fix above.
-        "msfconsole -M migrations_dir",
-        "msfconsole --migration-path=dir",
         # Round-7: hashcat mode 72000/73000 WITHOUT a caller-supplied bridge
         # parameter is legitimate (hashcat's own bundled bridge); only the
         # plugin-override flags are refused.

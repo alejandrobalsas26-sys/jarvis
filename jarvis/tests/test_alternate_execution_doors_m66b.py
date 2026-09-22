@@ -186,11 +186,28 @@ def test_resolve_within_allowed_still_allows_a_normal_file():
     assert ".git" not in resolved.parts
 
 
-def test_msfconsole_c_config_is_blocked_and_uppercase_m_still_works():
+def test_msfconsole_c_config_is_blocked():
     from core.command_policy import command_refusal
     assert command_refusal(["msfconsole", "-c", "evil.yml"], lab=True) is not None
     assert command_refusal(["msfconsole", "-cevil.yml"], lab=True) is not None
     assert command_refusal(["msfconsole", "--config=evil.yml"], lab=True) is not None
-    # -M/--migration-path (uppercase, DB migrations) is a different, legitimate
-    # flag and must not be caught by the -c/--config denier.
-    assert command_refusal(["msfconsole", "-M", "migrations_dir"], lab=True) is None
+
+
+# ── Round-8 (fresh independent review of the gen46 frozen candidate): the
+# Round-5/6 comments here and in test_command_policy_m66b.py both asserted
+# -M/--migration-path is "different from -m and legitimate" — TRUE that it's a
+# different flag, WRONG that it's safe. It was never independently checked.
+# Traced through the installed msfconsole's Ruby source: -M's directory is
+# appended to migrations_paths and every pending .rb file under it is LOADED
+# (top-level code runs unconditionally — standard ActiveRecord/Rails
+# behavior) at ordinary console startup, via `framework.db` being touched
+# with no db_migrate command needed. Confirmed live with a real throwaway
+# Postgres cluster and a planted migration file.
+def test_msfconsole_migration_path_is_blocked():
+    from core.command_policy import command_refusal
+    assert command_refusal(["msfconsole", "-M", "evildir"], lab=True) is not None
+    assert command_refusal(["msfconsole", "--migration-path", "evildir"],
+                            lab=True) is not None
+    assert command_refusal(["msfconsole", "-Mevildir"], lab=True) is not None
+    assert command_refusal(["msfconsole", "--migration-path=evildir"],
+                            lab=True) is not None
