@@ -497,12 +497,22 @@ def _ffuf_reason(args: list[str]) -> str | None:
     # -input-cmd=<cmd>) even though it takes no abbreviations and has no
     # attached-without-separator form — an exact-token-only check missed the
     # `=` spelling. Match the flag name as an exact token OR as its `=`-prefix.
+    #
+    # Round-11 (fresh independent review, gen49 frozen candidate): `-config
+    # <file>` loads a TOML config that can itself set ffuf's `inputcommands`/
+    # `inputshell` — the SAME host-shell-command capability the -input-cmd/
+    # -input-shell denier above exists to refuse. Confirmed live: a config with
+    # `[input] inputcommands = [...]` ran an arbitrary /bin/sh command at
+    # startup. Same config-indirect class as sqlmap -c/--configFile (Round-3)
+    # and nikto -config (Round-3); refuse the config-load vector directly.
+    _EXEC = ("-input-cmd", "--input-cmd", "-input-shell", "--input-shell",
+             "-config", "--config")
     for a in args:
         low = a.lower()
-        for name in ("-input-cmd", "--input-cmd", "-input-shell", "--input-shell"):
+        for name in _EXEC:
             if low == name or low.startswith(name + "="):
-                return ("ffuf -input-cmd runs a host shell command to generate "
-                         "fuzz input; refused")
+                return ("ffuf -input-cmd/-input-shell run a host shell command, "
+                         "and -config can set the same via a TOML file; refused")
     return None
 
 

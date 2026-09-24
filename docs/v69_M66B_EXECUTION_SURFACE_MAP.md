@@ -180,3 +180,18 @@ Round-3/4 deliberately uses slash-free payload names. Whether `run_shell_command
 usage of curl/wget/find/git with real URLs or filesystem paths works at all
 today is a question for the owning team; it is out of M66B's declared
 containment/isolation scope to fix.
+
+## H. Known limitation — `open_application` uncurated fallback (Round-11)
+
+A fresh independent review of the gen49 frozen candidate noted (as an
+observation, not scored BLOCKER/MAJOR) that `tools/executor.py:
+_tool_open_application`, when the requested name is not in the curated
+`APP_MAP`, falls back to launching any bare PATH executable matching
+`^[a-zA-Z0-9._-]+$` with no arguments (`shell=False`). This surface is NOT one
+of the two caller-argv gateways M66B governs (`run_shell_command`,
+`RedTeamShellExecutor.execute_shell`), never consults `core.command_policy`,
+and launching a program is the app-launcher's declared capability. It is
+recorded here as follow-up engineering debt — the uncurated fallback is broader
+than the curated map (e.g. a bare `make` would run a Makefile in the process
+CWD) — rather than claimed closed or silently widened in scope. Narrowing the
+fallback to the curated map is a separate, bounded change outside M66B.

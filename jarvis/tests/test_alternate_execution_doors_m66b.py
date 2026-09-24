@@ -251,3 +251,29 @@ def test_msfconsole_legitimate_abbreviations_still_allowed():
         ["msfconsole", "--yaml", "db.yml"],
     ):
         assert command_refusal(argv, lab=True) is None, argv
+
+
+# ── Round-11 (fresh independent review of the gen49 frozen candidate): ffuf's
+# `-config <file>` loads a TOML config that can set `inputcommands`/`inputshell`
+# — the same host-shell-command capability `-input-cmd`/`-input-shell` are
+# refused for. A slash-free argv (`ffuf -config evilrc`) clears the §G path
+# guard and the config body is never argv-inspected, so the refusal must be at
+# the config-load flag itself. Direct-call (§8 non-vacuity).
+def test_ffuf_config_load_is_blocked():
+    from core.command_policy import command_refusal
+    for argv in (
+        ["ffuf", "-config", "evilrc"],
+        ["ffuf", "-config=evilrc"],
+        ["ffuf", "--config", "evilrc"],
+        ["ffuf", "--config=evilrc"],
+    ):
+        assert command_refusal(argv, lab=True) is not None, argv
+
+
+def test_ffuf_ordinary_fuzzing_still_allowed():
+    from core.command_policy import command_refusal
+    for argv in (
+        ["ffuf", "-u", "t", "-w", "words.txt"],
+        ["ffuf", "-u", "t", "-mc", "200", "-t", "40"],
+    ):
+        assert command_refusal(argv, lab=True) is None, argv

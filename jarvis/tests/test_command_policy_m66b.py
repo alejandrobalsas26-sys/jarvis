@@ -257,6 +257,13 @@ class TestTrustedLab:
         "msfconsole --migr d",                        # --migration-path abbrev
         "msfconsole --reso f",                        # --resource abbreviation
         "msfconsole --conf y",                        # --config abbreviation
+        # ── Round-11 (fresh independent review of the gen49 frozen candidate):
+        # ffuf -config loads a TOML file that can set `inputcommands`/
+        # `inputshell` — the same host-shell capability -input-cmd is refused
+        # for. Same config-indirect class as sqlmap -c / nikto -config. ──
+        "ffuf -config evilrc",
+        "ffuf -config=evilrc",
+        "ffuf --config evilrc",
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd
