@@ -242,6 +242,21 @@ class TestTrustedLab:
         "sqlmap --tamp=evil.py --batch",              # argparse abbreviation
         "sqlmap --preprocess=evil.py --batch",
         "sqlmap --postprocess=evil.py --batch",
+        # ── Round-10 (fresh independent review of the gen48 frozen candidate):
+        # msfconsole parses argv with Ruby OptionParser, which accepts any
+        # UNAMBIGUOUS PREFIX of a long option. The R4-R9 deniers matched with
+        # `typed.startswith(canonical)` (full-long-form only), so every
+        # abbreviation resolved past them (verified live against the bundled
+        # ruby). Switched to `canonical.startswith(head)` (nikto/john style).
+        # Also `-x`'s long alias `--execute-command` was missing entirely. ──
+        "msfconsole --execute-command X",             # -x long alias, was missing
+        "msfconsole --exec X",                        # abbreviation of it
+        "msfconsole --plug f",                        # --plugin abbreviation
+        "msfconsole --plu f",
+        "msfconsole --module-p d",                    # --module-path abbreviation
+        "msfconsole --migr d",                        # --migration-path abbrev
+        "msfconsole --reso f",                        # --resource abbreviation
+        "msfconsole --conf y",                        # --config abbreviation
     ])
     def test_lab_generic_host_exec_is_blocked(self, cmd):
         assert _blocked(cmd, _LAB_COMMAND_ALLOWLIST), cmd

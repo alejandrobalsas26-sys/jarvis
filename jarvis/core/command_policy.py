@@ -426,37 +426,59 @@ def _msfconsole_reason(args: list[str]) -> str | None:
     # `-M <dir>`. Same class of bug as -m/--module-path, a different Rails
     # subsystem; -M is refused too, case-sensitively (there is no legitimate
     # use of this flag in this gateway's threat model).
+    # Round-6: `-c/--config` is a THIRD config-loading flag (Framework config
+    # file), refused defensively. Round-8: `-M/--migration-path` LOADS caller
+    # ActiveRecord migrations at startup (see below). Both governed here.
+    #
+    # Round-10 (fresh independent review, gen48 frozen candidate): the long-form
+    # checks above used `typed.startswith(canonical)`, which only catches the
+    # FULL long option. But msfconsole parses argv with Ruby's OptionParser,
+    # which accepts any UNAMBIGUOUS PREFIX (`--plug`/`--reso`/`--migr`/
+    # `--module-p`/`--conf`/`--exec` all resolve to their dangerous option —
+    # verified live against the bundled ruby using the real option definitions).
+    # The correct, abbreviation-safe direction is `canonical.startswith(head)`,
+    # exactly what _nikto_reason/_john_reason/_sqlmap_reason already do; msfconsole
+    # (the only lab tool using an abbreviating parser) was never migrated to it.
+    # Also, `-x`'s LONG alias `--execute-command` was missing entirely. Both
+    # closed below: short options keep their case-sensitive attached-form checks,
+    # and every dangerous long option is matched as a prefix of its canonical
+    # name. An ambiguous prefix OptionParser would itself reject (e.g. `--modu`,
+    # module-count vs module-path) is over-refused here, which costs nothing.
+    _EXEC_LONG = ("execute-command", "resource", "plugin", "module-path",
+                  "migration-path", "config")
     for a in args:
         low = a.lower()
-        if (low.startswith("-x") or low.startswith("-r")
-                or low.startswith("--resource")):
-            return ("msfconsole -x/-r runs arbitrary console/resource commands "
-                    "(e.g. irb = host Ruby shell); refused")
-        if low.startswith("-p") or low.startswith("--plugin"):
+        # Short forms (OptionParser: attached or space-separated). Case-sensitive
+        # where an uppercase letter is a DIFFERENT, examined option: -m
+        # (module-path) vs -M (migration-path, also dangerous), -c (config) has
+        # no dangerous -C. -x/-r/-p have no colliding uppercase short option.
+        if low.startswith("-x") or low.startswith("-r"):
+            return ("msfconsole -x/-r/--execute-command/--resource run arbitrary "
+                    "console/resource commands (e.g. irb = host Ruby shell); refused")
+        if low.startswith("-p"):
             return ("msfconsole -p/--plugin `require`s an arbitrary Ruby file on "
                      "startup, executing its top-level code before any plugin "
                      "validity check; refused")
-        if a.startswith("-m") or low.startswith("--module-path"):
+        if a.startswith("-m"):
             return ("msfconsole -m/--module-path eagerly module_eval()s "
                      "arbitrary Ruby under the given directory with "
                      "--no-defer-module-loads; refused")
-        if a.startswith("-M") or low.startswith("--migration-path"):
+        if a.startswith("-M"):
             return ("msfconsole -M/--migration-path loads caller-supplied "
                      "ActiveRecord migration .rb files at ordinary startup, "
                      "running their top-level code; refused")
-        # Round-6: a THIRD, distinct config-loading flag — msfconsole's own
-        # Framework `-c FILE` ("Load the specified configuration file", under
-        # "Framework options" in --help; separate from -p/--plugin, -m/
-        # --module-path and -y/--yaml). Traced through the installed Ruby
-        # source: only pre-selects an existing indexed module name / switches
-        # workspace (no arbitrary-path module_eval found reachable this way),
-        # but it is an unaudited, caller-controlled config-file load on an
-        # already-heavily-abused flag letter; refused defensively rather than
-        # left open pending a deeper trace. Case-SENSITIVE ("-c", not "-C"):
-        # confirmed no legitimate msfconsole flag begins with lowercase "-c".
-        if a.startswith("-c") or low.startswith("--config"):
+        if a.startswith("-c"):
             return ("msfconsole -c/--config loads a caller-controlled Framework "
                      "config file (module/workspace selection); refused")
+        # Long forms, including OptionParser abbreviations: refuse any "--" arg
+        # whose head (before "=") is a non-empty prefix of a dangerous option.
+        if low.startswith("--"):
+            head = low[2:].split("=", 1)[0]
+            if head and any(name.startswith(head) for name in _EXEC_LONG):
+                return ("msfconsole long option (or an OptionParser abbreviation) "
+                         "reaching a code-loading flag "
+                         "(--execute-command/--resource/--plugin/--module-path/"
+                         "--migration-path/--config); refused")
     return None
 
 

@@ -211,3 +211,43 @@ def test_msfconsole_migration_path_is_blocked():
     assert command_refusal(["msfconsole", "-Mevildir"], lab=True) is not None
     assert command_refusal(["msfconsole", "--migration-path=evildir"],
                             lab=True) is not None
+
+
+# ── Round-10 (fresh independent review of the gen48 frozen candidate): the R4-R9
+# msfconsole deniers matched long options with `typed.startswith(canonical)`,
+# which only catches the FULL long form. msfconsole parses argv with Ruby's
+# OptionParser, which accepts any UNAMBIGUOUS PREFIX — so `--plug`/`--reso`/
+# `--migr`/`--module-p`/`--conf`/`--exec` all resolved to their dangerous
+# option and slipped past the deniers (verified live against the bundled ruby
+# using the real option definitions). `-x`'s long alias `--execute-command`
+# was also missing entirely. Direct-call (§8 non-vacuity: asserts the
+# command_policy layer itself refuses, not some earlier gate).
+def test_msfconsole_optionparser_abbreviations_are_blocked():
+    from core.command_policy import command_refusal
+    for argv in (
+        ["msfconsole", "--execute-command", "X"],   # -x long alias (was missing)
+        ["msfconsole", "--exec", "X"],              # abbreviation of it
+        ["msfconsole", "--plug", "f"],              # --plugin
+        ["msfconsole", "--plu", "f"],
+        ["msfconsole", "--module-p", "d"],          # --module-path
+        ["msfconsole", "--migr", "d"],              # --migration-path
+        ["msfconsole", "--reso", "f"],              # --resource
+        ["msfconsole", "--conf", "y"],              # --config
+    ):
+        assert command_refusal(argv, lab=True) is not None, argv
+
+
+def test_msfconsole_legitimate_abbreviations_still_allowed():
+    # The prefix-of-canonical direction must not over-block safe options whose
+    # own (usable, unambiguous) abbreviations are NOT prefixes of a dangerous
+    # option name. --module-count / --no-defer-module-loads / --environment
+    # (and its --env abbreviation) / --yaml all stay allowed.
+    from core.command_policy import command_refusal
+    for argv in (
+        ["msfconsole", "--module-count"],
+        ["msfconsole", "--no-defer-module-loads", "-q"],
+        ["msfconsole", "--environment", "production"],
+        ["msfconsole", "--env", "production"],
+        ["msfconsole", "--yaml", "db.yml"],
+    ):
+        assert command_refusal(argv, lab=True) is None, argv
