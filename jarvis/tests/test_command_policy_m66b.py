@@ -75,6 +75,11 @@ class TestNmap:
         "nmap --script-updatedb",
         "nmap -datadir /tmp 1.2.3.4",
         "nmap --datadi /tmp 1.2.3.4",
+        # Round-13: --resume replays a command line nmap parses OUT of the
+        # given file, so a stored --script= reaches NSE without appearing here.
+        "nmap --resume resume.txt",
+        "nmap -resume resume.txt",
+        "nmap --resum resume.txt",
     ])
     def test_nmap_nse_blocked(self, cmd):
         assert _blocked(cmd), cmd

@@ -3824,6 +3824,22 @@ class ToolExecutor:
         if _contains_shell_metacharacters(scan_type):
             return {"error": "scan_type inválido: contiene metacaracteres de shell prohibidos."}
 
+        # V69 M66B (Round-13): this is a SECOND caller-controlled nmap argv
+        # surface. `target` is regex-validated, but `scan_type` was only
+        # metacharacter-screened and never reached the command-SEMANTIC policy,
+        # so `--script=…`/`--datadir`/`--resume` were accepted here while the
+        # same tokens are refused on the shell gateway. python-nmap builds
+        # `[nmap, -oX, -, <hosts>] + shlex.split(arguments)`, so the flags are
+        # real nmap flags and NSE Lua is generic host code. Route the effective
+        # argv through the one authority instead of re-implementing it.
+        try:
+            scan_argv = ["nmap", *shlex.split(scan_type)]
+        except ValueError as e:
+            return {"error": f"scan_type inválido: {e}"}
+        policy_reason = _command_policy.command_refusal(scan_argv)
+        if policy_reason:
+            return {"error": f"scan_type bloqueado por política: {policy_reason}"}
+
         try:
             import nmap
         except ImportError:

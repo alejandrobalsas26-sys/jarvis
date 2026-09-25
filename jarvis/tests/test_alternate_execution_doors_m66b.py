@@ -337,3 +337,80 @@ def test_sqlmap_unrelated_options_still_allowed():
         ["sqlmap", "-u", "t", "--exclude-sysdbs"],
     ):
         assert command_refusal(argv, lab=True) is None, argv
+
+
+# ── Round-13 (fresh independent review of the gen51 frozen candidate): four
+# ABSENT controls — a flag family never enumerated, a parser spelling never
+# covered, a config-indirect input never considered, and a second ungoverned
+# argv surface. All four were live while the 113-mutation campaign passed,
+# because every mutation weakens an EXISTING denier and none of these existed
+# to be weakened. Direct-call (§8 non-vacuity) plus over-block guards.
+def test_bare_token_is_not_an_info_flag_for_interpreters():
+    # A bare non-option token is a script/goal name: `python3 version` and
+    # `node version` run ./version, `make version` runs a cwd Makefile recipe
+    # through /bin/sh — all reachable because write_file can plant that file in
+    # Path.cwd(), which both shell gateways inherit.
+    from tools.executor import _validate_command
+    for cmd in ("python3 version", "python version", "node version",
+                "make version", "python3 setup.py", "make all"):
+        ok, _msg, _argv = _validate_command(cmd)
+        assert not ok, cmd
+
+
+def test_interpreter_info_flags_and_npm_version_still_allowed():
+    # npm is the one binary for which a bare `version` is a subcommand.
+    from tools.executor import _validate_command
+    for cmd in ("python3 --version", "python -V", "node --version",
+                "make --version", "npm --version", "npm version", "npm -v"):
+        ok, msg, _argv = _validate_command(cmd)
+        assert ok, cmd + " -> " + msg
+
+
+def test_wget_getopt_long_abbreviations_are_blocked():
+    # wget's getopt_long accepts any unambiguous prefix, so --conf=/--exec=/
+    # --use-a= reached --config/--execute/--use-askpass (confirmed live); a
+    # caller-authored wgetrc naming use_askpass runs a host program.
+    from core.command_policy import command_refusal
+    for argv in (["wget", "--conf=w"], ["wget", "--confi=w"], ["wget", "--config=w"],
+                 ["wget", "--exec=x"], ["wget", "--execut=x"], ["wget", "-e", "x"],
+                 ["wget", "--use-a=/h"], ["wget", "--use-ask=/h"], ["wget", "--use"]):
+        assert command_refusal(argv) is not None, argv
+
+
+def test_wget_legitimate_neighbours_still_allowed():
+    # -c/--continue, --content-*, --exclude-*, --user* are NOT prefixes of a
+    # denied name and must keep working.
+    from core.command_policy import command_refusal
+    for argv in (["wget", "-c", "http://t/f"], ["wget", "--continue", "http://t/f"],
+                 ["wget", "--content-disposition", "http://t/f"],
+                 ["wget", "--exclude-directories=/a", "http://t/f"],
+                 ["wget", "--user=bob", "http://t/f"],
+                 ["wget", "--user-agent=x", "http://t/f"]):
+        assert command_refusal(argv) is None, argv
+
+
+def test_nmap_resume_replay_is_blocked():
+    # --resume replays a command line nmap parses OUT of the given file, so a
+    # stored --script= reaches NSE without appearing in this argv.
+    from core.command_policy import command_refusal
+    for argv in (["nmap", "--resume", "r.txt"], ["nmap", "-resume", "r.txt"],
+                 ["nmap", "--resum", "r.txt"], ["nmap", "--res", "r.txt"]):
+        assert command_refusal(argv) is not None, argv
+    # -r (consecutive ports) and --reason stay allowed.
+    for argv in (["nmap", "-r", "127.0.0.1"], ["nmap", "--reason", "127.0.0.1"]):
+        assert command_refusal(argv) is None, argv
+
+
+def test_network_scan_scan_type_is_governed_by_command_policy():
+    # A SECOND caller-controlled nmap argv surface: scan_type was only
+    # metacharacter-screened and never reached the command-SEMANTIC policy.
+    from tools.executor import ToolExecutor
+    ex = ToolExecutor.__new__(ToolExecutor)
+    for st in ("--script=pwn.nse", "-script pwn.nse", "--script-args x",
+               "--datadir d", "--resume r.txt"):
+        err = ex._tool_network_scan("127.0.0.1", st).get("error", "")
+        assert "pol" in err, st + " -> " + err
+    # An ordinary scan type must clear the policy (it may then fail for an
+    # unrelated environmental reason, which is not a policy refusal).
+    err = ex._tool_network_scan("127.0.0.1", "-sS -sV").get("error", "")
+    assert "bloqueado por" not in err, err

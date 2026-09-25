@@ -64,9 +64,26 @@ class CommandCapability(str, Enum):
 
 
 #: Purely informational flags an EXECUTION_CAPABLE binary may carry (no code runs).
+#:
+#: Round-13 (fresh independent review, gen51 frozen candidate): the bare token
+#: "version" used to live here for `npm version`, but a bare non-option token is
+#: a FILENAME/GOAL to every other EXECUTION_CAPABLE binary — `python3 version`
+#: and `node version` run `./version`, and `make version` runs the `version:`
+#: recipe of a cwd Makefile through /bin/sh (all confirmed live). Since
+#: `_sandbox_allowed_dirs()` includes `Path.cwd()` and neither shell gateway
+#: overrides `subprocess.run`'s cwd, `write_file` could plant that file: the
+#: same two-innocuous-approvals shape as the Round-6 `.git/config` finding, and
+#: it walked straight past the check that refuses `python -c`. Bare tokens are
+#: no longer informational for anyone; npm's spelling is handled separately.
 _INFO_FLAGS: frozenset[str] = frozenset({
-    "--version", "-v", "-V", "--help", "-h", "version", "--info",
+    "--version", "-v", "-V", "--help", "-h", "--info",
 })
+
+#: The one binary for which a bare `version` token is a SUBCOMMAND rather than a
+#: script/goal name. Verified against the installed npm: with planted
+#: package.json lifecycle scripts and .npmrc, none of its permitted spellings
+#: runs anything.
+_BARE_SUBCOMMAND_INFO: dict[str, frozenset[str]] = {"npm": frozenset({"version"})}
 
 #: Cross-tool command-injection option fragments. If ANY argument contains one of
 #: these (case-insensitively), the command is refused whatever the binary — these
@@ -241,23 +258,48 @@ def _nmap_reason(args: list[str]) -> str | None:
     # be refused too. Deliberately NOT prefix-matching `script` down to "s":
     # `-sC`/`-sV`/`-sn` are ordinary scan-type flags that run only nmap's OWN
     # bundled scripts, which is its declared capability, not caller code.
+    #
+    # Round-13: `--resume <file>` replays a command line nmap PARSES OUT of the
+    # given output file ("No other arguments are permitted, as Nmap parses the
+    # output file to use the same ones specified previously"), so a stored
+    # `--script=` reaches NSE without ever appearing in this argv — the same
+    # config-indirect class already closed for sqlmap -c, nikto -config and
+    # ffuf -config, but on a BASE gateway binary. Refused by prefix (>= 3, so
+    # the legitimate short `-r` is untouched and `--reason` does not match).
     for a in args:
         head = a.lower().lstrip("-").split("=", 1)[0]
-        if head.startswith("script") or (len(head) >= 2 and "datadir".startswith(head)):
-            return ("nmap NSE scripting (--script/--datadir, any dash or "
-                    "abbreviated spelling) executes code; refused")
+        if (head.startswith("script")
+                or (len(head) >= 2 and "datadir".startswith(head))
+                or (len(head) >= 3 and "resume".startswith(head))):
+            return ("nmap NSE scripting (--script/--datadir) and --resume, which "
+                    "replays a command line parsed from a file, execute code in "
+                    "any dash or abbreviated spelling; refused")
     return None
 
 
 def _wget_reason(args: list[str]) -> str | None:
+    # Round-13 (fresh independent review, gen51 frozen candidate): these three
+    # checks matched forward (`typed.startswith(canonical)`), but wget parses
+    # with getopt_long, which accepts any UNAMBIGUOUS PREFIX — `--conf=`,
+    # `--exec=` and `--use-a=` all reached the real flags (confirmed live), so
+    # a caller-authored wgetrc naming a `use_askpass` helper ran a host program
+    # with both argv tokens slash-free. Same wrong-direction class Round-10
+    # fixed for msfconsole, never migrated here. The correct direction is
+    # `canonical.startswith(head)`, applied to `--` forms only: a shorter
+    # prefix wget itself rejects as ambiguous costs nothing to refuse, while
+    # legitimate neighbours keep working because they are NOT prefixes of a
+    # denied name (`--continue`/`--content-*`, `--exclude-*`, `--user*`).
+    # Single-dash shorts are matched exactly so `-c` (--continue) stays usable.
+    _DENIED = ("config", "execute", "use-askpass")
     for a in args:
         low = a.lower()
-        if low == "--use-askpass" or low.startswith("--use-askpass="):
-            return "wget --use-askpass runs a helper command; refused"
-        if low in ("-e", "--execute") or low.startswith("--execute="):
+        if low == "-e":
             return "wget -e/--execute sets .wgetrc directives (askpass); refused"
-        if low.startswith("--config"):
-            return "wget --config can set an askpass helper; refused"
+        if low.startswith("--"):
+            head = low[2:].split("=", 1)[0]
+            if head and any(name.startswith(head) for name in _DENIED):
+                return ("wget --config/--execute/--use-askpass (or an "
+                        "abbreviation) can set or run an askpass helper; refused")
     return None
 
 
@@ -667,7 +709,11 @@ def command_refusal(argv: list[str], *, lab: bool = False) -> str | None:
 
     if cap is CommandCapability.EXECUTION_CAPABLE:
         # An interpreter/build tool: only purely informational flags are safe.
-        if args and all(a.lower() in _INFO_FLAGS for a in args):
+        # Round-13: a bare non-option token is a script/goal name to python,
+        # node and make, so it is informational ONLY for the binary that
+        # declares it as a subcommand (see _BARE_SUBCOMMAND_INFO).
+        allowed = _INFO_FLAGS | _BARE_SUBCOMMAND_INFO.get(binary, frozenset())
+        if args and all(a.lower() in allowed for a in args):
             return None
         return (f"'{binary}' with code/script/module/recipe arguments is arbitrary "
                 "code execution and is not permitted from the host command gateway "
