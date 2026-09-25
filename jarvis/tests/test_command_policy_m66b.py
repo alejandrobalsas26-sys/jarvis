@@ -62,6 +62,19 @@ class TestNmap:
         "nmap --script http-title 1.2.3.4",
         "nmap --script-args x=1 1.2.3.4",
         "nmap --datadir /tmp 1.2.3.4",
+        # ── Round-12 (fresh independent review of the gen50 frozen candidate):
+        # nmap's getopt_long accepts a SINGLE leading dash for long options
+        # identically, so `-script=x` initialises the NSE Lua engine exactly
+        # like `--script=x` (confirmed live). NSE Lua has os.execute/io.popen,
+        # and nmap is a BASE gateway binary — reachable with no trusted-lab
+        # mode. `--datadi` is an unambiguous abbreviation of --datadir. ──
+        "nmap -script=http-title 1.2.3.4",
+        "nmap -script http-title 1.2.3.4",
+        "nmap -script-args x=1 1.2.3.4",
+        "nmap -script-trace 1.2.3.4",
+        "nmap --script-updatedb",
+        "nmap -datadir /tmp 1.2.3.4",
+        "nmap --datadi /tmp 1.2.3.4",
     ])
     def test_nmap_nse_blocked(self, cmd):
         assert _blocked(cmd), cmd

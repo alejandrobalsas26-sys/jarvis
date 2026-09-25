@@ -223,10 +223,29 @@ def _git_reason(args: list[str]) -> str | None:
 
 
 def _nmap_reason(args: list[str]) -> str | None:
+    # Round-12 (fresh independent review, gen50 frozen candidate): the prior
+    # check matched only the DOUBLE-dash spellings, but nmap's getopt_long
+    # accepts a single leading dash for long options identically — `-script=x`
+    # initialises the NSE Lua engine exactly like `--script=x` (confirmed live:
+    # both reach "NSE: failed to initialize the script engine"). NSE Lua has
+    # os.execute/io.popen, so a caller-authored .nse is generic host code —
+    # and nmap is a BASE gateway binary, so this needed no trusted-lab mode.
+    # Same "spelling the parser accepts" class as the msfconsole abbreviations.
+    # Strip leading dashes and split on "=" before matching, so every spelling
+    # of the same flag gets the same policy.
+    #
+    # `script` is matched by prefix so the whole NSE family is covered
+    # (--script-args/-args-file/-help/-trace/-timeout/-updatedb). `datadir` is
+    # matched as a prefix-of-canonical (>= 2 chars) since it has no sibling
+    # sharing its prefix, so `--datadi` etc. are unambiguous to nmap and must
+    # be refused too. Deliberately NOT prefix-matching `script` down to "s":
+    # `-sC`/`-sV`/`-sn` are ordinary scan-type flags that run only nmap's OWN
+    # bundled scripts, which is its declared capability, not caller code.
     for a in args:
-        low = a.lower()
-        if low.startswith("--script") or low == "--datadir" or low.startswith("--datadir="):
-            return "nmap NSE scripting (--script/--datadir) executes code; refused"
+        head = a.lower().lstrip("-").split("=", 1)[0]
+        if head.startswith("script") or (len(head) >= 2 and "datadir".startswith(head)):
+            return ("nmap NSE scripting (--script/--datadir, any dash or "
+                    "abbreviated spelling) executes code; refused")
     return None
 
 
@@ -378,18 +397,28 @@ def _sqlmap_reason(args: list[str]) -> str | None:
     # three names (>= 4 chars: "tamp"/"prep"/"post" are the shortest unambiguous
     # prefixes among sqlmap's own long options — shorter prefixes argparse would
     # itself reject as ambiguous, so refusing them costs nothing).
-    _EXEC_SCRIPT_OPTS = ("tamper", "preprocess", "postprocess")
+    #
+    # Round-12: `--eval`/`--alert` were matched as full tokens only, while the
+    # SAME function's tamper/preprocess/postprocess check was already
+    # abbreviation-safe — an internal inconsistency. argparse accepts `--eva`
+    # and `--ale` (each unambiguous: only --eval starts with "eva", only
+    # --alert with "ale"), so both are folded into the prefix set below. The
+    # threshold drops to 3 to cover them; shorter prefixes are ambiguous among
+    # sqlmap's own options and it rejects them itself. Upstream sqlmap also
+    # gates these two behind SQLMAP_UNSAFE_EVAL/_ALERT, but per this function's
+    # Round-3 note the policy refuses them directly rather than relying on an
+    # external tool's own gate.
+    _EXEC_SCRIPT_OPTS = ("tamper", "preprocess", "postprocess", "eval", "alert")
     for a in args:
         low = a.lower()
-        if (low in ("--eval", "--alert") or low.startswith("--eval=")
-                or low.startswith("--alert=") or a.startswith("-c")
-                or low.startswith("--configfile")):
+        if (a.startswith("-c") or low.startswith("--configfile")):
             return ("sqlmap --eval/--alert (directly or via -c/--configFile) "
                      "evaluates/runs host code; refused")
         head = low.split("=", 1)[0].lstrip("-")
-        if len(head) >= 4 and any(name.startswith(head) for name in _EXEC_SCRIPT_OPTS):
-            return ("sqlmap --tamper/--preprocess/--postprocess imports and runs "
-                     "a caller-supplied Python script on the host; refused")
+        if len(head) >= 3 and any(name.startswith(head) for name in _EXEC_SCRIPT_OPTS):
+            return ("sqlmap --tamper/--preprocess/--postprocess/--eval/--alert "
+                     "(any abbreviated spelling) import or run caller-supplied "
+                     "code on the host; refused")
     return None
 
 

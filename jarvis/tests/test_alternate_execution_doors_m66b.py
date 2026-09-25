@@ -277,3 +277,63 @@ def test_ffuf_ordinary_fuzzing_still_allowed():
         ["ffuf", "-u", "t", "-mc", "200", "-t", "40"],
     ):
         assert command_refusal(argv, lab=True) is None, argv
+
+
+# ── Round-12 (fresh independent review of the gen50 frozen candidate): two
+# "spelling the parser accepts" gaps. (1) nmap's getopt_long treats a single
+# leading dash for long options identically, so `-script=`/`-datadir` reached
+# the NSE Lua engine (os.execute/io.popen) while only the `--` spellings were
+# refused — and nmap is a BASE gateway binary, needing no trusted-lab mode.
+# (2) sqlmap's `--eval`/`--alert` were full-token-matched while the SAME
+# function's tamper/preprocess/postprocess check was already abbreviation-safe;
+# argparse accepts the unambiguous `--eva`/`--ale`. Direct-call (§8
+# non-vacuity), plus the over-block guards that keep ordinary scanning working.
+def test_nmap_nse_blocked_in_every_dash_spelling():
+    from core.command_policy import command_refusal
+    for argv in (
+        ["nmap", "-script=x.nse", "127.0.0.1"],
+        ["nmap", "-script", "x.nse", "127.0.0.1"],
+        ["nmap", "--script=x.nse", "127.0.0.1"],
+        ["nmap", "-script-args=a=b"],
+        ["nmap", "-script-trace"],
+        ["nmap", "-datadir", "d"],
+        ["nmap", "--datadi", "d"],
+    ):
+        assert command_refusal(argv, lab=False) is not None, argv
+
+
+def test_nmap_ordinary_scan_flags_still_allowed():
+    # -sC/-sV/-sn run only nmap's OWN bundled scripts/probes (its declared
+    # capability); -d/-dd are debug. None may be caught by the NSE denier.
+    from core.command_policy import command_refusal
+    for argv in (
+        ["nmap", "-sV", "-sC", "127.0.0.1"],
+        ["nmap", "-sn", "127.0.0.1"],
+        ["nmap", "-A", "-T4", "127.0.0.1"],
+        ["nmap", "-d", "127.0.0.1"],
+        ["nmap", "-dd", "-v", "127.0.0.1"],
+    ):
+        assert command_refusal(argv, lab=False) is None, argv
+
+
+def test_sqlmap_eval_alert_abbreviations_blocked():
+    from core.command_policy import command_refusal
+    for argv in (
+        ["sqlmap", "--eva=X"],
+        ["sqlmap", "--ale=X"],
+        ["sqlmap", "--eval", "X"],
+        ["sqlmap", "--alert=X"],
+    ):
+        assert command_refusal(argv, lab=True) is not None, argv
+
+
+def test_sqlmap_unrelated_options_still_allowed():
+    # --all/--eta/--exclude-sysdbs share a leading letter with alert/eval but
+    # are not prefixes of them; they must stay allowed.
+    from core.command_policy import command_refusal
+    for argv in (
+        ["sqlmap", "-u", "t", "--all", "--batch"],
+        ["sqlmap", "-u", "t", "--eta"],
+        ["sqlmap", "-u", "t", "--exclude-sysdbs"],
+    ):
+        assert command_refusal(argv, lab=True) is None, argv
