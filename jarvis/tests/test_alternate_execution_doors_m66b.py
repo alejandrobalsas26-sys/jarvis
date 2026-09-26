@@ -414,3 +414,64 @@ def test_network_scan_scan_type_is_governed_by_command_policy():
     # unrelated environmental reason, which is not a policy refusal).
     err = ex._tool_network_scan("127.0.0.1", "-sS -sV").get("error", "")
     assert "bloqueado por" not in err, err
+
+
+# ── Round-14 (fresh independent review of the gen52 frozen candidate): two more
+# ABSENT controls. (1) `git_query` was a THIRD caller-argv git surface and the
+# most exposed one — RiskClass.READ_ONLY and HITL-EXEMPT, so zero operator
+# approvals — whose only checks were a metacharacter screen and a short
+# write-flag denylist. It never reached command_refusal, so `git log
+# --output=<path> --format=%xNN…` was an arbitrary-path, arbitrary-content file
+# write: enough to rewrite .git/config with a core.fsmonitor hook (host code on
+# the next ordinary git command) without ever calling write_file, so the
+# _VCS_METADATA_DIRS guard did not apply. (2) hashcat and john store their
+# ORIGINAL argv in a session file and re-parse it on restore, so the
+# session-REPLAY family reinstates flags the policy refuses — the same
+# config-indirect class as nmap --resume.
+def test_git_query_defers_to_the_command_policy():
+    from tools.executor import ToolExecutor
+    ex = ToolExecutor.__new__(ToolExecutor)
+    # --output/-o is an arbitrary-path file write and is exactly what
+    # _git_reason's banned_sub_opts refuses on the shell gateway.
+    for args in ("--output=.git/config", "--output=/tmp/x", "-o /tmp/x",
+                 "--format=%x41 --output=cfg"):
+        err = ex._tool_git_query(operation="log", args=args).get("error", "")
+        assert err, args
+    # stash mutates the working tree and is outside the policy's git grammar,
+    # so it is no longer an offered operation.
+    assert ex._tool_git_query(operation="stash", args="clear").get("error")
+    # destructive branch flags stay refused by the handler's own denylist
+    for args in ("-D x", "-M y"):
+        assert ex._tool_git_query(operation="branch", args=args).get("error"), args
+
+
+def test_git_query_ordinary_read_only_queries_still_work():
+    from tools.executor import ToolExecutor
+    ex = ToolExecutor.__new__(ToolExecutor)
+    for op, args in (("status", ""), ("log", "-n 3"), ("diff", ""),
+                     ("branch", ""), ("show", "HEAD")):
+        err = ex._tool_git_query(operation=op, args=args).get("error", "")
+        assert "bloqueado por" not in err and "escritura" not in err, (op, args, err)
+
+
+def test_hashcat_and_john_session_replay_is_blocked():
+    from core.command_policy import command_refusal
+    for argv in (["hashcat", "--restore"], ["hashcat", "--rest"], ["hashcat", "--res"],
+                 ["hashcat", "--restore-file-path=f"], ["hashcat", "--restore-f=f"],
+                 ["john", "--restore=p"], ["john", "--restore"], ["john", "--res=p"],
+                 ["john", "--catch-up=p"], ["john", "--cat=p"],
+                 ["john", "--status=p"], ["john", "--sta=p"]):
+        assert command_refusal(argv, lab=True) is not None, argv
+
+
+def test_hashcat_and_john_ordinary_cracking_still_allowed():
+    # --restore-disable only SUPPRESSES the session file; --remove/--runtime and
+    # john's --show/--session/--stdout are not prefixes of a denied name.
+    from core.command_policy import command_refusal
+    for argv in (["hashcat", "-m", "0", "h", "w"],
+                 ["hashcat", "--restore-disable", "-m", "0", "h", "w"],
+                 ["hashcat", "--remove", "-m", "0", "h", "w"],
+                 ["hashcat", "--runtime=60", "h", "w"],
+                 ["john", "hashfile"], ["john", "--wordlist=r.txt", "hashfile"],
+                 ["john", "--show", "hashfile"], ["john", "--session=s", "hashfile"]):
+        assert command_refusal(argv, lab=True) is None, argv

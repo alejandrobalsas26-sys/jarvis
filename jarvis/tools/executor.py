@@ -4432,8 +4432,14 @@ class ToolExecutor:
             return {"error": str(e)}
 
     def _tool_git_query(self, operation: str = "status", args: str = "") -> dict:
-        """[EXEMPT] Read-only git: status, diff, log, show, branch, stash."""
-        allowed_ops = {"status", "diff", "log", "show", "branch", "stash"}
+        """[EXEMPT] Read-only git: status, diff, log, show, branch.
+
+        V69 M66B (Round-14): `stash` was declared here but mutates the working
+        tree, and it is outside the command-policy git grammar this handler now
+        defers to — so it is no longer offered rather than being accepted here
+        and refused a few lines later.
+        """
+        allowed_ops = {"status", "diff", "log", "show", "branch"}
         if operation not in allowed_ops:
             return {"error": f"Operación inválida. Permitidas: {', '.join(sorted(allowed_ops))}"}
         if _FORBIDDEN_CHARS_RE.search(args):
@@ -4445,10 +4451,28 @@ class ToolExecutor:
                 extra = shlex.split(args)
             except ValueError as e:
                 return {"error": f"args malformados: {e}"}
-            write_flags = {"--add", "-A", "--amend", "-m", "--force", "-f", "--delete", "-d"}
+            write_flags = {"--add", "-A", "--amend", "-m", "--force", "-f",
+                           "--delete", "-d", "-D", "-M", "--move"}
             if any(f in write_flags for f in extra):
                 return {"error": "Flags de escritura no permitidos en modo read-only."}
             argv.extend(extra)
+
+        # V69 M66B (Round-14): this is a THIRD caller-controlled git argv surface,
+        # and the most exposed one — it is RiskClass.READ_ONLY and in
+        # _HITL_EXEMPT_TOOLS, so it runs with ZERO operator approvals. Its own
+        # checks were a metacharacter screen plus a short write-flag denylist; it
+        # never reached the command-SEMANTIC policy, so `git log
+        # --output=<path> --format=%xNN…` was an arbitrary-path,
+        # arbitrary-content file write — enough to rewrite `.git/config` with a
+        # `core.fsmonitor` hook (host code on the next ordinary git command)
+        # without ever calling write_file, so the _VCS_METADATA_DIRS guard did
+        # not apply. `--output` is exactly what _git_reason's banned_sub_opts
+        # exists to refuse, and `stash` is outside its subcommand grammar. Route
+        # the effective argv through the one authority instead of maintaining a
+        # second, weaker copy of it here.
+        policy_reason = _command_policy.command_refusal(argv)
+        if policy_reason:
+            return {"error": f"git_query bloqueado por política: {policy_reason}"}
 
         if operation == "log" and "--oneline" not in argv:
             argv.append("--oneline")

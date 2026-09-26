@@ -619,6 +619,15 @@ def _john_reason(args: list[str]) -> str | None:
     # their 2nd character, so the >= 2 threshold has no real ambiguity; an
     # abbreviation john itself would reject as ambiguous costs nothing to
     # refuse pre-emptively.
+    #
+    # Round-14 (fresh independent review, gen52 frozen candidate): john stores
+    # its ORIGINAL argv in a `.rec` session file and re-parses it on restore, so
+    # `--restore=<name>` (and `--catch-up=`/`--status=`, which read the same
+    # file) replay the very `--config`/`--external` pair refused above — the
+    # session-REPLAY member of the config-indirect class already closed for nmap
+    # --resume, sqlmap -c, ffuf -config and nikto -config. `<name>.rec` resolves
+    # RELATIVE TO THE CWD, i.e. straight into a write_file-writable root, and the
+    # token is slash-free so the Layer-2 path guard never sees it.
     for a in args:
         head = a.lower().split("=", 1)[0].lstrip("-")
         if len(head) >= 2 and ("config".startswith(head)
@@ -626,6 +635,12 @@ def _john_reason(args: list[str]) -> str | None:
             return ("john --config/--external loads a config file whose "
                      "[List.External:MODE] section is compiled and executed as "
                      "trusted input; refused")
+        if len(head) >= 3 and ("restore".startswith(head)
+                                or "catch-up".startswith(head)
+                                or "status".startswith(head)):
+            return ("john --restore/--catch-up/--status replay a .rec session "
+                     "file that carries the original argv, reinstating "
+                     "--config/--external; refused")
     return None
 
 
@@ -637,6 +652,17 @@ def _hashcat_reason(args: list[str]) -> str | None:
     # attempt. Refusing the four parameter flags closes the vector without
     # blocking legitimate use of hashcat's own bundled bridges (mode
     # 72000/73000 with no caller-supplied plugin path is untouched).
+    #
+    # Round-14: hashcat likewise stores its original argv in a `.restore`
+    # session file and re-parses it, so `--restore` (with or without
+    # `--restore-file-path=<file>`) replays the bridge-parameter flags refused
+    # above — proven by a restore file carrying a bogus flag, which hashcat
+    # reported as `unrecognized option`. The restore file is pure ASCII, so
+    # write_file plants it verbatim in the inherited cwd, and the path token is
+    # slash-free. Matched prefix-of-canonical (>= 3): `--restore-disable`, which
+    # only SUPPRESSES the session file, is deliberately NOT caught, and
+    # `--remove`/`--runtime` are not prefixes of either denied name.
+    _REPLAY = ("restore", "restore-file-path")
     for a in args:
         low = a.lower()
         if low in ("--bridge-parameter1", "--bridge-parameter2",
@@ -644,6 +670,11 @@ def _hashcat_reason(args: list[str]) -> str | None:
                 low.startswith(f"--bridge-parameter{n}=") for n in "1234"):
             return ("hashcat --bridge-parameter1..4 overrides the Python file "
                      "the Assimilation Bridge imports and runs; refused")
+        head = low.split("=", 1)[0].lstrip("-")
+        if len(head) >= 3 and any(name.startswith(head) for name in _REPLAY):
+            return ("hashcat --restore/--restore-file-path replay a session file "
+                     "that carries the original argv, reinstating "
+                     "--bridge-parameter1..4; refused")
     return None
 
 
