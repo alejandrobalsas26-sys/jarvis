@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **52** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **53** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0052-m66b-round13-remediation.json` |
-| **Snapshot SHA256** | `0df7da0b8def31875cd95ed8dc0107e7c554607f5a89edb38a64739eed36d21b` |
-| **Subject state commit** | `f7e62ef62a40cea1a2cba1dbf6904a4d9eba3fd9` (M66B Round-13 remediation; eval-v7 spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0053-m66b-round14-remediation.json` |
+| **Snapshot SHA256** | `a6ebf8acf9ed4e403cd06efa567bcee4d09301fb1a167ec45f68e2f99d49d8c6` |
+| **Subject state commit** | `8817c491d1609cbf9359b1009f0c261c99b0cefd` (M66B Round-14 remediation; eval-v7 spent once, 005 not eligible, 004 still held) |
 | **Integration authority** | base `3bd46fbdb06744de5e07485db62050e3e9eedf6b` → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 37's `cfa23bb…` and gen 39's `3bd46fb…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -44,11 +44,11 @@ asks Git, not prose, about branch, ancestry and `master`.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m66a1-four-layer-defense-truth` — gen 38 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `f7e62ef62a40cea1a2cba1dbf6904a4d9eba3fd9` — the commit gen 52 describes AND the commit its integration authority governs |
+| Governed subject | `8817c491d1609cbf9359b1009f0c261c99b0cefd` — the commit gen 53 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
-| `origin/master` | `3bd46fbdb06744de5e07485db62050e3e9eedf6b` — **untouched by M62**, gen 39 integrated, and the **integration base** gen 52 authorises a fast-forward FROM |
+| `origin/master` | `3bd46fbdb06744de5e07485db62050e3e9eedf6b` — **untouched by M62**, gen 39 integrated, and the **integration base** gen 53 authorises a fast-forward FROM |
 | Merge / tag / release / version bump | **none** — `core/version.py` still declares `MILESTONE = 61`, deliberately |
 
 **Every hash here is a current identity, not a restart target.** Start from current HEAD; do
@@ -73,7 +73,7 @@ name the commit that carries it (§2).
 | Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35 GOVERNANCE-ONLY. Six findings (D49–D54, §7): executable authority changes only inside a governed subject. **0** spends. `…S5G1_…md` |
 | Earlier milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36, RUNTIME + GOVERNANCE. An observed error after the boundary no longer means *nothing happened* (D55–D63, §7). **0** spends. `…M65D_…md` |
 | Earlier milestone | **M66A — EPISTEMIC DELIBERATION, no science.** Gen 37, RUNTIME+GOVERNANCE. One epistemic plane on `TaskDecision`; policy only **STRENGTHEN**s; `REQUIRED_FAIL_CLOSED` withheld until verified. 3 MAJORs, **51/51** mutations, **0** survivors, **0** spends. `…M66A_…md` |
-| Last milestone | **M66B — EXECUTION ISOLATION & NETWORK CONTAINMENT, no science.** Gen **52** (Round-13). `code_execute`→**SANDBOXED** (bubblewrap ns), EVIDENCE-DERIVED, fail-closed; host-command doors incapable of generic code; write_file barred from VCS-metadata. R1-R13 fixed (R13 **3 BLOCKER+1 MAJOR**); **116/116** mutations, **0** survivors, **0** spends. `docs/v69_M66B_EXECUTION_SURFACE_MAP.md` |
+| Last milestone | **M66B — EXECUTION ISOLATION & NETWORK CONTAINMENT, no science.** Gen **53** (Round-14). `code_execute`→**SANDBOXED** (bubblewrap ns), EVIDENCE-DERIVED, fail-closed; host-command doors incapable of generic code; write_file barred from VCS-metadata. R1-R14 fixed (R14 **1 BLOCKER+1 MAJOR**); **119/119** mutations, **0** survivors, **0** spends. `docs/v69_M66B_EXECUTION_SURFACE_MAP.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4`, `v6`, `v7` `USED_IMMUTABLE`; `eval-v5` frozen and retired |
 | Live training since S3N | **three runs** — candidates 003, 004 and 005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003 × `v4`), S3Y (004 × `v6`), S4E (005 vs 004 × `v7`, Protocol V4). One plan, one holdout commit and one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
