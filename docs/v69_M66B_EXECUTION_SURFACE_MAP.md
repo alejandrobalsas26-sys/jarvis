@@ -20,6 +20,10 @@ The machine-readable version — the source of the §26 coverage gate — is
   HITL + `shell=False`); arbitrary-code-capable only via allowlisted interpreters.
   Declared with its containment posture; full sandboxing is out of scope because
   the tool's legitimate purpose needs host network/filesystem.
+  **The per-binary ARGUMENT policy applied to these surfaces is BEST-EFFORT
+  DEFENCE-IN-DEPTH, not a containment boundary — see the §J.3 decision.** M66B's
+  containment CLAIM rests on BROKER_REQUIRED, which is evidence-derived and was
+  clean across all eighteen review rounds.
 * **FIXED_INTERNAL_EXEMPT** — fixed literal argv (a named binary), not
   caller-controlled arbitrary code; reviewed infrastructure launch.
 * **DOCUMENT_ONLY** — belongs to another subsystem with its own containment
@@ -300,3 +304,51 @@ with §J.1/§J.2 as the follow-up work. M66B as it stands has done (i) eighteen
 times. Nothing in this document chooses for the reader, and no generation to date
 authorises (ii) — making that change is a milestone-scope decision, not a
 remediation.
+
+### J.3 DECISION (recorded) — the containment claim rests on the broker
+
+The §J question was put to the repository owner with the evidence above, and was
+decided: **move the containment claim to the broker.** This subsection records
+that decision and what it does and does not change.
+
+**What M66B now claims.** `code_execute` routes through the ContainmentBroker and
+is SANDBOX_REQUIRED; its SANDBOXED profile is evidence-derived, requires all 13
+MANDATORY_SANDBOX_CONTROLS plus an ENFORCED cleanup status, uses a
+nonce-authenticated stdin handshake with a proven-live loopback probe and a
+per-run host filesystem canary, and yields UNKNOWN rather than a false ENFORCED
+when a condition is unverifiable. That is the containment boundary. Eighteen
+independent rounds probed it and none found a way to report SANDBOXED without
+evidence, or to satisfy the handshake without a real sandbox.
+
+**What M66B no longer claims.** The per-binary argument grammar in
+`core/command_policy.py` is NOT a containment boundary and must not be relied on
+as one. It is a denylist over ~23 third-party binaries with independently
+evolving parsers, and eighteen consecutive independent reviews each defeated it.
+It stays in the tree, and every one of the eighteen fixes stays, because
+defence-in-depth that removes eighteen real reachable capability escapes is worth
+keeping — but its status is BEST-EFFORT. A future reviewer finding a nineteenth
+gap in it is therefore expected, and is NOT a regression of a sealed claim.
+
+**Why this is the honest resolution rather than the convenient one.** The
+alternative was to keep patching until a round returned empty. On eighteen rounds
+of evidence — and given that Round 18 found its defect purely by changing the
+question, and that rounds 13-18 were all invisible to a campaign passing 131/131
+— an empty round would have certified the reviewer's imagination, not the
+boundary. Sealing on "no reviewer found anything this time" would have stated
+something the evidence does not support.
+
+**Named follow-up work, explicitly NOT closed by M66B.**
+
+  * **J.3.a** — invert the base binaries with no positive grammar (curl, wget,
+    find) from denylists to per-binary argv ALLOWLISTS, so they fail closed the
+    way `EXECUTION_CAPABLE`'s positive `_INFO_FLAGS` allowlist already does. That
+    construct produced none of the eighteen defects; CLAUDE.md §4 already directs
+    it ("Default to ALLOWLISTS, not denylists").
+  * **J.3.b** — route `run_shell_command` and `RedTeamShellExecutor.execute_shell`
+    through the same ContainmentBroker as `code_execute`, at minimum with an
+    ephemeral cwd holding no real host state. This closes Round-18's CATEGORY
+    rather than its instances: an unenumerated file-reading flag would read an
+    empty ephemeral file.
+  * Everything already listed in §F, §G, §H, §I remains open.
+
+This decision changes a CLAIM, not code. No behaviour changed in this commit.
