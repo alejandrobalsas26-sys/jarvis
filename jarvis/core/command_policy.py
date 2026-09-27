@@ -306,20 +306,48 @@ def _git_reason(args: list[str]) -> str | None:
     # and they were reachable from `git_query`, which is declared READ_ONLY and
     # HITL-EXEMPT. Refused per ACTION. `-c` is deliberately NOT banned globally:
     # `git log -c` is a legitimate combined-diff read.
-    _WRITE_BY_SUBCOMMAND: dict[str, tuple[str, ...]] = {
-        "branch": ("-c", "-C", "--copy", "-m", "-M", "--move", "-d", "-D",
-                   "--delete", "--create-reflog", "--edit-description", "-u",
-                   "--set-upstream", "--set-upstream-to", "--unset-upstream",
-                   "-f", "--force"),
-        "tag": ("-d", "--delete", "-a", "--annotate", "-s", "--sign", "-m",
-                "--message", "-F", "--file", "-f", "--force", "--create-reflog"),
-        "symbolic-ref": ("-d", "--delete"),
+    # Round-17 (fresh independent review, gen55 frozen candidate): the table
+    # below was matched EXACT-or-`=` (`r == banned or r.startswith(banned+"=")`),
+    # the direction this module abandoned in Round-9 — while git's parse-options
+    # abbreviates every unambiguous long option for `branch` and `symbolic-ref`
+    # too. The bare-operand fallback further down masked most abbreviations by
+    # accident (an abbreviated `--dele x` still leaves `x` as a positional), so
+    # exactly the write actions taking NO required operand escaped. Confirmed
+    # live against git 2.53.0: `--edit-desc` wrote branch.<name>.description AND
+    # executed the ambient GIT_EDITOR, `--set-upstream-t=master` wrote
+    # branch.<name>.remote/.merge, `--unset-u` removed them, and
+    # `symbolic-ref --del` deleted the ref — every one of them reachable from
+    # git_query, which is declared READ_ONLY and HITL-EXEMPT (zero approvals).
+    # Shorts stay EXACT and case-sensitive, so `-c` cannot acquire `-C`'s
+    # meaning and `git log -c` stays a legitimate combined-diff read; longs match
+    # prefix-of-canonical. An abbreviation ambiguous between a write and a read
+    # (`--f` for --force/--format) is refused, which loses no working read: git
+    # itself errors on an ambiguous abbreviation.
+    _WRITE_SHORT_BY_SUBCOMMAND: dict[str, tuple[str, ...]] = {
+        "branch": ("-c", "-C", "-m", "-M", "-d", "-D", "-u", "-f"),
+        "tag": ("-d", "-a", "-s", "-m", "-F", "-f"),
+        "symbolic-ref": ("-d",),
     }
-    for banned in _WRITE_BY_SUBCOMMAND.get(subcommand, ()):
-        for r in rest:
-            if r == banned or r.startswith(banned + "="):
-                return (f"git {subcommand} {banned} writes refs/metadata; refused "
-                        "via the host gateway")
+    _WRITE_LONG_BY_SUBCOMMAND: dict[str, tuple[str, ...]] = {
+        "branch": ("copy", "move", "delete", "create-reflog",
+                   "edit-description", "set-upstream", "set-upstream-to",
+                   "unset-upstream", "force"),
+        "tag": ("delete", "annotate", "sign", "message", "file", "force",
+                "create-reflog"),
+        "symbolic-ref": ("delete",),
+    }
+    for banned in _WRITE_SHORT_BY_SUBCOMMAND.get(subcommand, ()):
+        if banned in rest:
+            return (f"git {subcommand} {banned} writes refs/metadata; refused "
+                    "via the host gateway")
+    _write_longs = _WRITE_LONG_BY_SUBCOMMAND.get(subcommand, ())
+    for r in rest:
+        if not r.startswith("--"):
+            continue
+        head = r[2:].split("=", 1)[0]
+        if head and any(name.startswith(head) for name in _write_longs):
+            return (f"git {subcommand} write action --{head} (an abbreviation of "
+                    "a ref/metadata write) is refused via the host gateway")
     # Subcommands whose write behaviour is a bare SUB-ACTION or a bare operand.
     if subcommand in ("branch", "tag", "remote", "reflog", "symbolic-ref"):
         positionals = [r for r in rest if not r.startswith("-")]
@@ -338,14 +366,31 @@ def _git_reason(args: list[str]) -> str | None:
             # `git branch <name>` CREATES and `git tag <name>` CREATES. A bare
             # operand is only a read when an explicit read selector is present
             # (--list/--contains/--points-at/--merged/--sort/--format/…).
-            read_selectors = ("-l", "--list", "--contains", "--no-contains",
-                              "--merged", "--no-merged", "--points-at", "--sort",
-                              "--format", "-a", "--all", "-r", "--remotes",
-                              "-v", "-vv", "--verbose", "-n", "--show-current",
-                              "-i", "--ignore-case", "--column")
-            if positionals and not any(
-                    r == s or r.startswith(s + "=") for r in rest
-                    for s in read_selectors):
+            # Round-17: the write grammar above is abbreviation-aware, so this
+            # selector list must be too — otherwise PARSER ALIASES CHANGE POLICY
+            # in the other direction and a legitimate abbreviated read
+            # (`git branch --con HEAD`, `git tag --merge HEAD`) is refused as a
+            # create. This direction fails CLOSED, so it was never a containment
+            # defect, but the asymmetry is exactly the shape this module exists
+            # to remove. Matching here cannot widen the write surface: any token
+            # that is a prefix of a WRITE action name has already been refused
+            # above, before control reaches this line.
+            _READ_SHORT = ("-l", "-a", "-r", "-v", "-vv", "-n", "-i")
+            _READ_LONG = ("list", "contains", "no-contains", "merged",
+                          "no-merged", "points-at", "sort", "format", "all",
+                          "remotes", "verbose", "show-current", "ignore-case",
+                          "column", "omit-empty")
+            has_read_selector = False
+            for r in rest:
+                if r in _READ_SHORT:
+                    has_read_selector = True
+                    break
+                if r.startswith("--"):
+                    h = r[2:].split("=", 1)[0]
+                    if h and any(name.startswith(h) for name in _READ_LONG):
+                        has_read_selector = True
+                        break
+            if positionals and not has_read_selector:
                 return (f"git {subcommand} with a bare operand creates a "
                         f"{'branch' if subcommand == 'branch' else 'tag'}; "
                         "refused via the host gateway")

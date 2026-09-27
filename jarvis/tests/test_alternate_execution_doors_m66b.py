@@ -14,9 +14,14 @@ BROKER_REQUIRED or explicitly incapable of arbitrary code.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tools.executor import (
+    FILE_CAPABLE_TOOLS,
+    FileIntent,
+    ToolExecutor,
     _validate_command,
     _forbidden_interpreter_exec,
     _resolve_within_allowed,
@@ -662,3 +667,182 @@ class TestGitConfigOrderAndRefWrites:
                          ("branch", "--list")):
             err = ex._tool_git_query(operation=op, args=args).get("error", "")
             assert not err, (op, args, err)
+
+
+# ══════════════════ Round-17 — ref-write ABBREVIATIONS ══════════════════════
+#
+# Round-16 added a per-ACTION git ref-write grammar but matched it EXACT-or-`=`,
+# the direction this module abandoned in Round-9. git's parse-options abbreviates
+# every unambiguous long option for `branch`/`tag`/`symbolic-ref` too, and the
+# bare-operand fallback masked most abbreviations by accident, so exactly the
+# write actions taking NO required operand escaped. Confirmed live against git
+# 2.53.0: `--edit-desc` wrote branch.<name>.description AND executed the ambient
+# GIT_EDITOR, `--set-upstream-t=master` wrote branch.<name>.remote/.merge,
+# `--unset-u` removed them, `symbolic-ref --del` deleted the ref — all reachable
+# from git_query, which is READ_ONLY and HITL-EXEMPT (zero approvals).
+class TestGitRefWriteAbbreviations:
+    @pytest.mark.parametrize("arg", [
+        "--edit-description", "--edit-descriptio", "--edit-descri", "--edit-desc",
+        "--edit-de", "--edit-d",
+        "--unset-upstream", "--unset-upstrea", "--unset-up", "--unset-u",
+        "--create-reflog", "--create-reflo", "--create", "--creat", "--crea",
+        "--force", "--forc", "--for", "--fo", "--f",
+    ])
+    def test_operandless_branch_write_abbreviations_are_refused(self, arg):
+        assert command_refusal(["git", "branch", arg]) is not None, arg
+
+    @pytest.mark.parametrize("arg", [
+        "--set-upstream-to=master", "--set-upstream-t=master",
+        "--set-upstream=master", "--set-upstrea=master", "--set-u=master",
+        "--se=master",
+    ])
+    def test_branch_set_upstream_abbreviations_are_refused(self, arg):
+        assert command_refusal(["git", "branch", arg]) is not None, arg
+
+    @pytest.mark.parametrize("arg", ["--copy", "--cop", "--co", "--c",
+                                     "--move", "--mov", "--mo", "--m"])
+    def test_branch_copy_move_abbreviations_are_refused(self, arg):
+        assert command_refusal(["git", "branch", arg, "x", "y"]) is not None, arg
+
+    @pytest.mark.parametrize("arg", ["--delete", "--delet", "--dele", "--del",
+                                     "--de", "--d"])
+    def test_branch_delete_abbreviations_are_refused(self, arg):
+        assert command_refusal(["git", "branch", arg, "x"]) is not None, arg
+
+    @pytest.mark.parametrize("arg", ["-c", "-C", "-m", "-M", "-d", "-D", "-u", "-f"])
+    def test_branch_short_writes_stay_refused(self, arg):
+        assert command_refusal(["git", "branch", arg, "x", "y"]) is not None, arg
+
+    @pytest.mark.parametrize("arg", ["--delete", "--dele", "--del", "--de", "--d"])
+    def test_symbolic_ref_delete_abbreviations_are_refused(self, arg):
+        assert command_refusal(
+            ["git", "symbolic-ref", arg, "refs/heads/x"]) is not None, arg
+
+    @pytest.mark.parametrize("arg", [
+        "--delete", "--dele", "--annotate", "--annot", "--anno", "--ann",
+        "--sign", "--sig", "--si", "--message=x", "--messag=x", "--mess=x",
+        "--file", "--fil", "--fi", "--force", "--forc", "--create-reflog",
+        "--creat",
+    ])
+    def test_tag_write_abbreviations_are_refused(self, arg):
+        assert command_refusal(["git", "tag", arg, "t"]) is not None, arg
+
+    @pytest.mark.parametrize("arg", ["-d", "-a", "-s", "-m", "-F", "-f"])
+    def test_tag_short_writes_stay_refused(self, arg):
+        assert command_refusal(["git", "tag", arg, "t"]) is not None, arg
+
+    # The other half of parser-equivalence: an ABBREVIATED READ must stay a read.
+    # This direction fails closed, so it was never a containment defect — but the
+    # asymmetry is the shape this module exists to remove, and this test is what
+    # keeps the write-side prefix matching from being "fixed" by over-refusing.
+    @pytest.mark.parametrize("rest", [
+        ["--con", "HEAD"], ["--conta", "HEAD"], ["--contains", "HEAD"],
+        ["--no-contains", "HEAD"], ["--merge", "HEAD"], ["--me", "HEAD"],
+        ["--merged", "HEAD"], ["--no-merged", "HEAD"], ["--point", "HEAD"],
+        ["--po", "HEAD"], ["--points-at", "HEAD"], ["--sor=-committerdate"],
+        ["--so=-committerdate"], ["--form=%(refname)"], ["--forma=%(refname)"],
+        ["--format=%(refname)"], ["--show"], ["--sh"], ["--show-current"],
+        ["--colum"], ["--column"], ["--list"], ["-a"], ["-v"], ["-vv"],
+    ])
+    def test_branch_read_abbreviations_survive(self, rest):
+        assert command_refusal(["git", "branch", *rest]) is None, rest
+
+    @pytest.mark.parametrize("rest", [
+        ["--cont", "HEAD"], ["--merge", "HEAD"], ["--sort=v:refname"],
+        ["--forma=%(refname)"], ["-l"], ["--list", "v1*"], ["--column"],
+    ])
+    def test_tag_read_abbreviations_survive(self, rest):
+        assert command_refusal(["git", "tag", *rest]) is None, rest
+
+    @pytest.mark.parametrize("rest", [["--shor", "HEAD"], ["--short", "HEAD"],
+                                      ["-q", "HEAD"], ["HEAD"]])
+    def test_symbolic_ref_read_survives(self, rest):
+        assert command_refusal(["git", "symbolic-ref", *rest]) is None, rest
+
+    # `-c` must NOT be banned globally: `git log -c` is a combined-diff READ.
+    @pytest.mark.parametrize("argv", [
+        ["git", "log", "-c", "-n1"], ["git", "log", "-m", "-n1"],
+        ["git", "diff", "-M"], ["git", "diff", "-C"],
+        ["git", "show", "-m", "HEAD"],
+    ])
+    def test_short_flags_of_other_subcommands_are_untouched(self, argv):
+        assert command_refusal(argv) is None, argv
+
+    @pytest.mark.parametrize("args", [
+        "--edit-desc", "--edit-d", "--unset-u", "--set-upstream-t=master",
+        "--creat", "--forc",
+    ])
+    def test_git_query_cannot_reach_write_abbreviations(self, args):
+        ex = ToolExecutor.__new__(ToolExecutor)
+        out = ex._tool_git_query(operation="branch", args=args)
+        assert out.get("error"), (args, out)
+
+
+# ═══════════ Round-17 — every path-shaped handler argument is gated ═════════
+#
+# `packet_tracer_open` consumed a caller path and handed it to Popen unexamined.
+# It IS HITL-challenged (REVERSIBLE), but AUTHORIZATION IS NOT CONTAINMENT. The
+# existing coverage test could not see it, because it only iterates the tools
+# ALREADY in FILE_CAPABLE_TOOLS — an ABSENT control, invisible to a mutation
+# campaign, which can only weaken a control that exists. This test inverts the
+# direction: it scans every handler for a path-shaped parameter and requires the
+# registry to know about it, so the NEXT such handler fails a test instead of
+# shipping ungated.
+_PATH_SHAPED = re.compile(
+    r"(^|_)(path|paths|file|files|filepath|filename|archivo|archivos|ruta|"
+    r"folder|dir|directory|carpeta)(_|$)", re.IGNORECASE)
+
+
+class TestEveryPathShapedHandlerArgumentIsRegistered:
+    def test_no_unregistered_path_shaped_handler_argument(self):
+        import inspect
+        unregistered: list[tuple[str, str]] = []
+        for name in dir(ToolExecutor):
+            if not name.startswith("_tool_"):
+                continue
+            tool = name[len("_tool_"):]
+            try:
+                sig = inspect.signature(getattr(ToolExecutor, name))
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                continue
+            for param in sig.parameters:
+                if param == "self" or not _PATH_SHAPED.search("_" + param + "_"):
+                    continue
+                if tool not in FILE_CAPABLE_TOOLS:
+                    unregistered.append((tool, param))
+        assert not unregistered, (
+            "handler(s) take a path-shaped argument but are absent from "
+            f"FILE_CAPABLE_TOOLS, so nothing checks their gate: {unregistered}")
+
+    def test_the_scan_is_not_vacuous(self):
+        """The regex must actually match the arguments it is meant to find —
+        otherwise the test above passes by seeing nothing at all."""
+        assert _PATH_SHAPED.search("_file_path_")
+        assert _PATH_SHAPED.search("_folder_path_")
+        assert _PATH_SHAPED.search("_filepath_")
+        assert _PATH_SHAPED.search("_save_path_")
+        assert not _PATH_SHAPED.search("_target_")
+        found = 0
+        import inspect
+        for name in dir(ToolExecutor):
+            if not name.startswith("_tool_"):
+                continue
+            try:
+                sig = inspect.signature(getattr(ToolExecutor, name))
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                continue
+            found += sum(1 for p in sig.parameters
+                         if p != "self" and _PATH_SHAPED.search("_" + p + "_"))
+        assert found >= 9, f"scan found only {found} path-shaped arguments"
+
+    def test_packet_tracer_open_is_registered_and_gated(self):
+        import inspect
+        assert FILE_CAPABLE_TOOLS.get("packet_tracer_open") == (
+            "file_path", FileIntent.READ)
+        src = inspect.getsource(ToolExecutor._tool_packet_tracer_open)
+        assert "_gate_path" in src
+
+    def test_packet_tracer_open_refuses_a_path_outside_the_roots(self):
+        ex = ToolExecutor.__new__(ToolExecutor)
+        out = ex._tool_packet_tracer_open(file_path="/etc/hostname")
+        assert out.get("error_code") == "PATH_NOT_ALLOWED", out

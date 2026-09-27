@@ -577,6 +577,11 @@ FILE_CAPABLE_TOOLS: dict[str, tuple[str, FileIntent]] = {
     "analizar_codigo_sast": ("filepath", FileIntent.ANALYZE),
     "hash_file": ("path", FileIntent.HASH),
     "ingest_docs": ("folder_path", FileIntent.INGEST),
+    # Round-17: packet_tracer_open consumes a caller path too. It was the one
+    # path-shaped handler argument in this module with no technical gate, and
+    # because the coverage test below only iterates the tools ALREADY listed
+    # here, its absence was invisible to it (an "absent control").
+    "packet_tracer_open": ("file_path", FileIntent.READ),
 }
 
 
@@ -3795,6 +3800,22 @@ class ToolExecutor:
     # ── Packet Tracer / Networking ────────────────────────────────────────────
 
     def _tool_packet_tracer_open(self, file_path: str = "") -> dict:
+        # Round-17 (fresh independent review, gen55 frozen candidate): file_path
+        # reached Popen unexamined. packet_tracer_open IS HITL-challenged
+        # (REVERSIBLE), but AUTHORIZATION IS NOT CONTAINMENT — an approved launch
+        # must still stay inside the declared roots. Confirmed live with a canary
+        # on PATH: file_path "/etc/hostname", which _resolve_within_allowed
+        # refuses, was handed to the launched process verbatim. Gating also
+        # absolutises the argument, so a caller-chosen name can no longer arrive
+        # at the child as a leading-dash option. The gate runs BEFORE the binary
+        # is located: a refused path must be refused identically on a host where
+        # Packet Tracer is absent, otherwise the containment decision would
+        # depend on what happens to be installed.
+        resolved: Path | None = None
+        if file_path:
+            resolved, gate_error = _gate_path(file_path, FileIntent.READ)
+            if gate_error:
+                return gate_error
         OS = platform.system()
         candidates: dict[str, list[str]] = {
             "Windows": [
@@ -3810,9 +3831,9 @@ class ToolExecutor:
                 break
         if not pt_cmd:
             return {"error": "Packet Tracer no encontrado en el PATH."}
-        args = [pt_cmd] + ([file_path] if file_path else [])
+        args = [pt_cmd] + ([str(resolved)] if resolved else [])
         subprocess.Popen(args, shell=False)
-        return {"status": "launched", "file": file_path or "nuevo proyecto"}
+        return {"status": "launched", "file": str(resolved) if resolved else "nuevo proyecto"}
 
     def _tool_network_scan(self, target: str, scan_type: str = "-sS -sV") -> dict:
         """[VALIDATED] Target and scan_type validated before passing to python-nmap."""

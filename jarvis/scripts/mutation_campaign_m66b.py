@@ -587,9 +587,32 @@ MUTATIONS += [
          'if False and pos_at is not None and pos_at < read_at:',
          f"{AED}::TestGitConfigOrderAndRefWrites::test_action_less_config_write_is_refused"),
     _mut("R16_git_ref_write_actions_allowed", "LOLBIN", CMD,
-         'if r == banned or r.startswith(banned + "="):',
-         'if False and r == banned:',
+         'if banned in rest:',
+         'if False and banned in rest:',
          f"{AED}::TestGitConfigOrderAndRefWrites::test_ref_writing_actions_are_refused"),
+    # Round-17: the per-ACTION table was matched EXACT-or-`=`, so every git
+    # abbreviation of a write action escaped. Prefix-of-canonical closes it; this
+    # mutation removes the prefix arm and must be caught.
+    _mut("R17_git_ref_write_abbrev_allowed", "LOLBIN", CMD,
+         'if head and any(name.startswith(head) for name in _write_longs):',
+         'if False and any(name == head for name in _write_longs):',
+         f"{AED}::TestGitRefWriteAbbreviations::"
+         "test_operandless_branch_write_abbreviations_are_refused"),
+    # The other direction of parser-equivalence: making the READ selectors exact
+    # again over-refuses a legitimate abbreviated read. It fails closed, so it is
+    # not a containment defect — this mutation keeps the asymmetry from returning
+    # unnoticed, which is what would push a future fix back toward exact matching.
+    _mut("R17_read_selector_exact_only", "LOLBIN", CMD,
+         'if h and any(name.startswith(h) for name in _READ_LONG):',
+         'if h and any(name == h for name in _READ_LONG):',
+         f"{AED}::TestGitRefWriteAbbreviations::"
+         "test_branch_read_abbreviations_survive"),
+    # Round-17: packet_tracer_open handed its caller path to Popen unexamined.
+    _mut("R17_packet_tracer_path_ungated", "PATH", EXEC,
+         'resolved, gate_error = _gate_path(file_path, FileIntent.READ)',
+         'resolved, gate_error = (Path(file_path), None)',
+         f"{AED}::TestEveryPathShapedHandlerArgumentIsRegistered::"
+         "test_packet_tracer_open_refuses_a_path_outside_the_roots"),
     _mut("R6_vcs_metadata_write_allowed", "PATH", EXEC,
          'if _VCS_METADATA_DIRS & set(p.parts):\n        return None',
          'if False and _VCS_METADATA_DIRS & set(p.parts):\n        return None',

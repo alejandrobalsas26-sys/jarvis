@@ -195,3 +195,38 @@ recorded here as follow-up engineering debt — the uncurated fallback is broade
 than the curated map (e.g. a bare `make` would run a Makefile in the process
 CWD) — rather than claimed closed or silently widened in scope. Narrowing the
 fallback to the curated map is a separate, bounded change outside M66B.
+
+## I. Known limitations carried forward from the Round-17 review
+
+A fresh independent review of the gen55 frozen candidate raised two items it
+explicitly declined to score, having been unable to reproduce either on this
+host. Both are recorded here as follow-up engineering debt rather than claimed
+closed, and neither is a containment claim M66B makes.
+
+**I.1 — `_VCS_METADATA_DIRS` is a case-sensitive component match.**
+`tools/executor.py: _resolve_within_allowed` refuses a path whose components
+intersect `frozenset({".git", ".svn", ".hg"})`. The comparison is exact and
+case-sensitive. On this Linux/ext4 host that is complete, because `.GIT` and
+`.git` are distinct directories and only the latter is git's metadata directory.
+On a case-insensitive filesystem (APFS by default, NTFS) a differently-cased
+component would name the same directory while failing this match. The reviewer
+could obtain no live evidence either way here, and M66B targets this host, so
+this is NOT scored as a defect — but any port of this gate to such a filesystem
+must fold case before comparing. The fix is one `.lower()`; it is deliberately
+not applied blind, because a fix with no failing test to prove it is not
+evidence.
+
+**I.2 — `RedTeamShellExecutor._classify` parses in non-POSIX mode.**
+`_classify` uses `shlex.split(command, posix=False)` while `_validate_command`
+(the policy gate) and the execution path both re-derive their argv from a
+POSIX-mode `shlex.split` of the same immutable string. A parsing-mode mismatch
+therefore exists, but it reaches only the cosmetic trust/challenge-tier label —
+never the argv that is policy-checked or executed. Its failure direction is
+over-refusal and extra operator friction, not a bypass. Recorded so the mismatch
+is on the record and does not later get "fixed" by making the POLICY gate use
+the non-POSIX parse, which would be the dangerous direction.
+
+**What §28 still excludes.** Neither item above, nor anything in §F/§G/§H,
+constitutes a claim of repository-wide execution-surface closure. The detector's
+file scope (§F), non-tool-calling installation/execution paths repository-wide,
+and the Layer-2 absolute-path over-restriction (§G) remain open follow-up work.

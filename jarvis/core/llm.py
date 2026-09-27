@@ -809,7 +809,7 @@ TOOLS: list[dict] = [
         "function": {
             "name": "git_query",
             "description": (
-                "Run read-only git commands: status, diff, log, show, branch, stash. "
+                "Run read-only git commands: status, diff, log, show, branch. "
                 "Use to check code changes before a commit, review recent history, "
                 "or understand the current repo state during a dev session. "
                 "Never writes to the repo — purely informational."
@@ -819,7 +819,7 @@ TOOLS: list[dict] = [
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "enum": ["status", "diff", "log", "show", "branch", "stash"],
+                        "enum": ["status", "diff", "log", "show", "branch"],
                         "description": "Git subcommand to run",
                     },
                     "args": {
