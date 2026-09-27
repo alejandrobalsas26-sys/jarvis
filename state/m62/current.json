@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0057-m66b-round18-and-claim-decision.json",
-  "latest_snapshot_sha256": "ef6c24a60b82fa7d86977a1c00d48c4918a408607d64137038212c2bfca897fe",
+  "latest_snapshot_path": "state/m62/snapshots/0058-m66b-round19-ci-fail-closed.json",
+  "latest_snapshot_sha256": "8aadfab8d3af189a5f056288b89a04e1d1f050417707445b891535c5f4a5d294",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 57,
-  "subject_state_commit": "65cb900540b61061afda5e66277f58a5cd09f72b",
+  "state_generation": 58,
+  "subject_state_commit": "6e5e9e291b14af62160b83fca6a031665efcde4b",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
