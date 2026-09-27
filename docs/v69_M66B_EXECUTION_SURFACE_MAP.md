@@ -352,3 +352,63 @@ something the evidence does not support.
   * Everything already listed in §F, §G, §H, §I remains open.
 
 This decision changes a CLAIM, not code. No behaviour changed in this commit.
+
+## K. The first CI run of this branch was RED — what it found, and what it means
+
+This section exists because the failure below must not be recorded as benign. A
+previous generation in this repository's history (gen 31) described a red blocking
+CI job as an "invocation artifact"; that framing is checked first here, and
+rejected.
+
+**The gate.** CI run 36339803977 (`workflow_dispatch`, branch, headSha
+6a45f3703344a31c365660adf8579936c6a4c003) came back FAILURE. Nine of ten jobs were
+SUCCESS; the mandatory `Deterministic suite (3.11, authoritative)` job was RED:
+5 failed, 11861 passed, 171 skipped. This was the FIRST CI run this branch ever
+had, so the red gate was new information, not a known condition.
+
+**The root cause, single and confirmed.** GitHub runners have no usable
+bubblewrap/user-namespace backend. M66B made `code_execute` SANDBOX_REQUIRED and
+fail-closed, so on such a host the broker refuses: `{"error_class":
+"containment_unavailable", "containment": {"backend": "none", "controls": {}},
+"stdout": "", "returncode": None}`. Five M66A.1 four-layer tests were written when
+`code_execute` still EXECUTED under process limits, and assert that it does —
+`profile != "direct_process"`, memory/CPU rlimits firing, `wall_timeout` and
+`dedicated_cwd` ENFORCED. Those assertions are unsatisfiable when nothing runs.
+Reproduced locally by making the `bwrap` probe fail: the same five tests, the same
+five failures.
+
+**This is NOT a silent fallback.** It was checked specifically, because
+`profile: direct_process` in the failure output reads like one. It is not: the
+report is a REFUSAL, `backend` is `none`, `controls` is `{}`, `stdout` is empty and
+`returncode` is `None`. Nothing executed. `ExecutionProfile` has only
+DIRECT_PROCESS/RESTRICTED_PROCESS/SANDBOXED, so `direct_process` is the truthful
+floor meaning "containment achieved: none" — a confusing LABEL on a refusal, not a
+claim that a direct process ran.
+
+**A real defect this exposed.** `test_profile_is_restricted_not_direct` already
+carried a `containment_unavailable` branch, added by an earlier M66B round, and
+that branch asserted `profile != "direct_process"` — which the actual refusal
+violates. It had never been exercised on a sandbox-less host, so it shipped
+asserting something false. This is the milestone's own rule turned on its author:
+a branch written for a condition that was never observed is configuration, not
+evidence.
+
+**The resolution, and why it is not a skip.** Skipping the five tests would record
+a red gate as benign AND leave M66B's central refusal path asserted nowhere.
+Instead each test now asserts the contract that actually holds on a sandbox-less
+host, via one shared `_assert_nothing_ran` helper — and that contract is STRICTLY
+STRONGER than the one it replaces: not "the limit was enforced" but "no process
+ran at all" (refusal class, `backend == none`, `controls == {}`, empty stdout,
+`returncode is None`). `TestFailClosedBranchIsNotAnEscapeHatch` pins the
+discriminator so the branch cannot silently swallow a real failure, including six
+cases where evidence of execution must make the contract FAIL. Verified in both
+environments: 132 passed with a usable sandbox, 132 passed with the probe forced
+to fail.
+
+**The coverage statement this makes explicit.** The L3 process-limit assertions
+(memory, CPU, fsize, wall timeout, dedicated cwd, minimal env) are only
+EXERCISABLE on a host with a usable sandbox backend. On CI they are not tested —
+the refusal contract is tested instead. That is a real, permanent limitation of
+CI as a witness for those specific properties, and it is recorded here rather than
+implied by a green check mark. Anyone reading a future green CI run must not infer
+that the L3 limits were verified by it.

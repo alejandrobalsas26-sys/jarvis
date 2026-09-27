@@ -323,6 +323,43 @@ class TestF5F19Approval:
 
 # ══════════════════════════ F6 — EXECUTION ══════════════════════════════════
 
+
+# ── M66B interaction: the L3-limit assertions need a usable sandbox backend ──
+#
+# M66A.1 wrote the F6/L3 tests below when `code_execute` still EXECUTED under
+# process-level limits. M66B made `code_execute` SANDBOX_REQUIRED and fail-closed:
+# on a host with no usable sandbox backend it now REFUSES, so no process runs and
+# there are no L3 controls to observe. Five of these tests asserted the old
+# behaviour and therefore failed on the first CI run of the M66B branch (GitHub
+# runners have no bubblewrap), while passing on any host that has one.
+#
+# The resolution is NOT to skip them. A skip would let a red gate be recorded as
+# benign and would leave the refusal path — which is the whole point of M66B —
+# asserted nowhere. Instead each test asserts the contract that ACTUALLY holds on
+# a sandbox-less host, and that contract is STRICTLY STRONGER than the one it
+# replaces: not "the limit was enforced" but "NOTHING RAN AT ALL".
+#
+# Note what this repairs: the containment_unavailable branch already present in
+# `test_profile_is_restricted_not_direct` asserted `profile != "direct_process"`,
+# and the real refusal reports `profile: direct_process` (the truthful floor for
+# "containment achieved: none" — `ExecutionProfile` has no NONE member). That
+# branch had never been exercised on a sandbox-less host, so it shipped asserting
+# something false. The profile LABEL is not the security claim; "no process ran"
+# is, and that is what is asserted here.
+def _containment_refused(r: dict) -> bool:
+    return r.get("error_class") == "containment_unavailable"
+
+
+def _assert_nothing_ran(r: dict) -> None:
+    """The fail-closed contract: a refusal, and no evidence of any execution."""
+    assert r.get("error_class") == "containment_unavailable", r
+    assert "CONTAINMENT_UNAVAILABLE" in (r.get("error") or ""), r
+    c = r["containment"]
+    assert c.get("backend") == "none", c
+    assert c.get("controls") == {}, c
+    assert not r.get("stdout"), r
+    assert r.get("returncode") is None, r
+
 class TestF6Execution:
     def test_profile_is_restricted_not_direct(self, executor):
         # V69 M66B: code_execute now routes through the ContainmentBroker and
@@ -332,9 +369,13 @@ class TestF6Execution:
         # either runs RESTRICTED_PROCESS under explicit operator compat or fails
         # closed. It is never silently downgraded to direct.
         r = executor.execute("code_execute", {"code": "print('hi')"})
-        if "error" in r and r.get("error_class") == "containment_unavailable":
-            # fail-closed (no sandbox, strict policy) — zero code ran, still not direct
-            assert r["containment"]["profile"] != "direct_process"
+        if _containment_refused(r):
+            # Fail-closed: zero code ran. The profile label is the truthful floor
+            # ("containment achieved: none"), NOT a statement that a direct
+            # process was used — so assert the refusal contract instead, which is
+            # stronger than any claim about the label.
+            _assert_nothing_ran(r)
+            assert "hi" not in (r.get("stdout") or "")
             return
         assert r["containment"]["profile"] in ("sandboxed", "restricted_process")
         assert r["containment"]["profile"] != "direct_process"
@@ -354,6 +395,9 @@ class TestF6Execution:
         r = executor.execute("code_execute",
                              {"code": "x=bytearray(1024*1024*1024);print('ALLOC')"})
         assert "ALLOC" not in r.get("stdout", "")
+        if _containment_refused(r):
+            _assert_nothing_ran(r)   # stronger: the allocation never even started
+            return
         assert r.get("returncode") not in (0, None) or "MemoryError" in r.get("stderr", "")
 
     def test_timeout_bounds_runaway(self, executor):
@@ -510,6 +554,10 @@ class TestCrossLayerProperties:
 
     def test_B_l2_permits_but_l3_limits_still_apply(self, executor):
         r = executor.execute("code_execute", {"code": "print('x')"})
+        if _containment_refused(r):
+            # L3 has nothing to limit because L2's permit never reached execution.
+            _assert_nothing_ran(r)
+            return
         controls = r["containment"]["controls"]
         assert controls.get("dedicated_cwd") == "enforced"
         assert controls.get("minimal_env") == "enforced"
@@ -680,6 +728,9 @@ class TestExecutionProfileClassifier:
 
     def test_timeout_control_reported_enforced(self, executor):
         r = executor.execute("code_execute", {"code": "print(1)"})
+        if _containment_refused(r):
+            _assert_nothing_ran(r)   # no process to time out
+            return
         assert r["containment"]["controls"]["wall_timeout"] == "enforced"
 
 
@@ -718,6 +769,9 @@ class TestMoreExecutionLimits:
         # is removed the wall timeout fires instead (error set) — a distinct,
         # mutation-detectable outcome.
         r = executor.execute("code_execute", {"code": "\nwhile True:\n    pass\n", "timeout": 12})
+        if _containment_refused(r):
+            _assert_nothing_ran(r)   # the busy loop never started
+            return
         assert r.get("error") is None, "CPU rlimit did not fire before the wall timeout"
         assert r.get("returncode") not in (0, None)
 
@@ -878,3 +932,39 @@ class TestRound2Fixes:
             {"url": "https://h/?token=sk-CAP-SECRET-9999"},
             {"url": "x"})
         assert "sk-CAP-SECRET-9999" not in d.render_preview()
+
+
+class TestFailClosedBranchIsNotAnEscapeHatch:
+    """Non-vacuity for the `_containment_refused` branch added above.
+
+    A conditional that could swallow a real failure would let the L3 assertions be
+    silently skipped on every host. These tests pin the discriminator itself, with
+    no dependence on whether THIS host has a sandbox backend."""
+
+    def test_the_discriminator_does_not_fire_on_a_successful_run(self):
+        assert not _containment_refused(
+            {"containment": {"backend": "bubblewrap", "profile": "sandboxed",
+                             "controls": {"wall_timeout": "enforced"}},
+             "stdout": "hi", "returncode": 0})
+
+    def test_the_discriminator_fires_only_on_the_refusal_class(self):
+        assert _containment_refused({"error_class": "containment_unavailable"})
+        for other in ("policy_denied", "timeout", "", None):
+            assert not _containment_refused({"error_class": other}), other
+
+    def test_the_refusal_contract_rejects_evidence_of_execution(self):
+        """`_assert_nothing_ran` must FAIL if anything actually ran — otherwise the
+        branch would certify a silent fallback as a clean refusal."""
+        base = {"error_class": "containment_unavailable",
+                "error": "CONTAINMENT_UNAVAILABLE: refusing to execute (fail closed).",
+                "containment": {"backend": "none", "controls": {}},
+                "stdout": "", "returncode": None}
+        _assert_nothing_ran(dict(base))                      # the honest refusal
+        for bad in ({"stdout": "hi"}, {"returncode": 0}, {"returncode": 1},
+                    {"containment": {"backend": "bubblewrap", "controls": {}}},
+                    {"containment": {"backend": "none",
+                                     "controls": {"wall_timeout": "enforced"}}},
+                    {"error": "something else"}):
+            probe = dict(base); probe.update(bad)
+            with pytest.raises(AssertionError):
+                _assert_nothing_ran(probe)
