@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0056-m66b-round17-remediation.json",
-  "latest_snapshot_sha256": "dc6a4b9d049b2d5048c7e5939a80efefe12b9f471cafb25c3ab11dd52b971eec",
+  "latest_snapshot_path": "state/m62/snapshots/0057-m66b-round18-and-claim-decision.json",
+  "latest_snapshot_sha256": "ef6c24a60b82fa7d86977a1c00d48c4918a408607d64137038212c2bfca897fe",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 56,
-  "subject_state_commit": "6a11319a06562a112dd4bb3ec4ac0adc914d9e1e",
+  "state_generation": 57,
+  "subject_state_commit": "65cb900540b61061afda5e66277f58a5cd09f72b",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
