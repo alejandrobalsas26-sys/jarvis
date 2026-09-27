@@ -266,9 +266,89 @@ def _git_reason(args: list[str]) -> str | None:
                                  "rename-section", "edit"):
             return (f"git config {first_positional} writes configuration; "
                     "refused via the host gateway")
-        if not any(r in ("--get", "--list", "-l", "--get-all", "--get-regexp")
-                   for r in rest):
+        # Round-16 (fresh independent review, gen54 frozen candidate): the
+        # Round-15 test above only inspects tokens that start with "-", but
+        # git's LEGACY IMPLICIT SET form carries no action flag at all — the
+        # write is expressed purely in positionals (`git config <name> <value>`).
+        # It therefore reached the present-good predicate below, which a read
+        # flag placed AFTER the positionals satisfies, because git parses with
+        # PARSE_OPT_STOP_AT_NON_OPTION and swallows that flag as the optional
+        # [value-pattern] third positional. Confirmed live: `git config
+        # core.fsmonitor <cmd> --list` returns 0, writes .git/config, and the
+        # next ordinary git command runs the hook through /bin/sh — and with
+        # `--global` it writes $HOME/.gitconfig, outside every sandbox root.
+        #
+        # Requiring "absence of write" for an action-less form means bounding
+        # the ORDER: a read action must appear BEFORE any positional. Every
+        # write spelling puts its positionals first (git itself rejects the
+        # flag-first write orderings with "wrong number of arguments"), while
+        # every legitimate read names its action first — `--get <name>`,
+        # `--get-all <name>`, `--get-regexp <re>`, `--get-urlmatch <s> <url>`,
+        # `--list`, `-l`, with `--local`/`--global`/`--show-origin`/`--type=`/
+        # `--name-only` in any position. So this is checked by position, not by
+        # counting positionals (which would wrongly refuse `--get-urlmatch`'s
+        # two operands and `-f <file> <name>`).
+        _READ_ACTIONS = ("--get", "--list", "-l", "--get-all", "--get-regexp",
+                         "--get-urlmatch")
+        read_at = next((i for i, r in enumerate(rest) if r in _READ_ACTIONS), None)
+        pos_at = next((i for i, r in enumerate(rest) if not r.startswith("-")), None)
+        if read_at is None:
             return "git config may only READ (--get/--list) via the host gateway"
+        if pos_at is not None and pos_at < read_at:
+            return ("git config with operands before the read action is a WRITE "
+                    "(the legacy implicit-set form swallows a trailing read flag "
+                    "as its value-pattern); refused via the host gateway")
+    # Round-16: the grammar above is per-SUBCOMMAND, so ref-WRITING actions of
+    # otherwise-readable subcommands were reachable — `git branch -c/--copy`,
+    # `--create-reflog`, `--edit-description`, `remote remove`, `tag <name>`,
+    # `reflog expire/delete`, `symbolic-ref` writes. Those mutate `.git/`, the
+    # directory `_resolve_within_allowed` refuses for every file-taking handler,
+    # and they were reachable from `git_query`, which is declared READ_ONLY and
+    # HITL-EXEMPT. Refused per ACTION. `-c` is deliberately NOT banned globally:
+    # `git log -c` is a legitimate combined-diff read.
+    _WRITE_BY_SUBCOMMAND: dict[str, tuple[str, ...]] = {
+        "branch": ("-c", "-C", "--copy", "-m", "-M", "--move", "-d", "-D",
+                   "--delete", "--create-reflog", "--edit-description", "-u",
+                   "--set-upstream", "--set-upstream-to", "--unset-upstream",
+                   "-f", "--force"),
+        "tag": ("-d", "--delete", "-a", "--annotate", "-s", "--sign", "-m",
+                "--message", "-F", "--file", "-f", "--force", "--create-reflog"),
+        "symbolic-ref": ("-d", "--delete"),
+    }
+    for banned in _WRITE_BY_SUBCOMMAND.get(subcommand, ()):
+        for r in rest:
+            if r == banned or r.startswith(banned + "="):
+                return (f"git {subcommand} {banned} writes refs/metadata; refused "
+                        "via the host gateway")
+    # Subcommands whose write behaviour is a bare SUB-ACTION or a bare operand.
+    if subcommand in ("branch", "tag", "remote", "reflog", "symbolic-ref"):
+        positionals = [r for r in rest if not r.startswith("-")]
+        if subcommand == "remote":
+            if positionals and positionals[0] not in ("show", "get-url"):
+                return ("git remote sub-action other than show/get-url mutates "
+                        "remotes; refused via the host gateway")
+        elif subcommand == "reflog":
+            if positionals and positionals[0] != "show":
+                return ("git reflog sub-action other than show mutates reflogs; "
+                        "refused via the host gateway")
+        elif subcommand == "symbolic-ref":
+            if len(positionals) > 1:
+                return "git symbolic-ref with a value writes a ref; refused"
+        else:
+            # `git branch <name>` CREATES and `git tag <name>` CREATES. A bare
+            # operand is only a read when an explicit read selector is present
+            # (--list/--contains/--points-at/--merged/--sort/--format/…).
+            read_selectors = ("-l", "--list", "--contains", "--no-contains",
+                              "--merged", "--no-merged", "--points-at", "--sort",
+                              "--format", "-a", "--all", "-r", "--remotes",
+                              "-v", "-vv", "--verbose", "-n", "--show-current",
+                              "-i", "--ignore-case", "--column")
+            if positionals and not any(
+                    r == s or r.startswith(s + "=") for r in rest
+                    for s in read_selectors):
+                return (f"git {subcommand} with a bare operand creates a "
+                        f"{'branch' if subcommand == 'branch' else 'tag'}; "
+                        "refused via the host gateway")
     return None
 
 

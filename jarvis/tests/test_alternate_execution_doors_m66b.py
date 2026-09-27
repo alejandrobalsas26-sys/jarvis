@@ -21,6 +21,7 @@ from tools.executor import (
     _forbidden_interpreter_exec,
     _resolve_within_allowed,
 )
+from core.command_policy import command_refusal
 from core.execution_surface_registry import (
     ARBITRARY_CODE_SURFACES,
     BROKER_REQUIRED,
@@ -562,3 +563,102 @@ def test_firewall_rule_protocol_is_validated_before_interpolation():
         assert sa._block_port_firewall(70000, "TCP") is False
     finally:
         sa.subprocess.run = orig
+
+
+# ── Round-16 (fresh independent review of the gen54 frozen candidate): the
+# Round-15 write-action test only inspected tokens starting with "-", but git's
+# LEGACY IMPLICIT SET form expresses the write purely in positionals
+# (`git config <name> <value>`), so it reached the present-good predicate, which
+# a read flag placed AFTER the operands satisfies — git parses with
+# PARSE_OPT_STOP_AT_NON_OPTION and swallows that flag as the [value-pattern]
+# operand. Confirmed live: rc=0, .git/config written, next ordinary git command
+# ran the fsmonitor hook; with --global it writes $HOME/.gitconfig, outside every
+# sandbox root. Fixed by ORDER: a read action must precede any operand. The same
+# per-SUBCOMMAND-not-per-ACTION gap also let ref-writing actions through.
+class TestGitConfigOrderAndRefWrites:
+    @pytest.mark.parametrize("argv", [
+        ["git", "config", "core.fsmonitor", "V", "--list"],
+        ["git", "config", "core.fsmonitor", "V", "--get"],
+        ["git", "config", "core.fsmonitor", "V", "-l"],
+        ["git", "config", "core.fsmonitor", "V", "--get-all"],
+        ["git", "config", "core.fsmonitor", "V", "--get-regexp"],
+        ["git", "config", "--global", "core.fsmonitor", "V", "--list"],
+        ["git", "config", "--system", "core.fsmonitor", "V", "--list"],
+        ["git", "config", "-f", "cfgname", "sec.key", "V", "--list"],
+        ["git", "config", "--local", "include.path", "f", "--list"],
+        ["git", "config", "--type=path", "core.hooksPath", "hd", "--list"],
+        ["git", "config", "core.pager", "touch"],
+    ])
+    def test_action_less_config_write_is_refused(self, argv):
+        assert command_refusal(argv) is not None, argv
+
+    @pytest.mark.parametrize("argv", [
+        ["git", "config", "--get", "user.name"],
+        ["git", "config", "--list"],
+        ["git", "config", "-l"],
+        ["git", "config", "--get-all", "remote.origin.url"],
+        ["git", "config", "--get-regexp", "^user"],
+        ["git", "config", "--local", "--list"],
+        ["git", "config", "--global", "--list"],
+        ["git", "config", "--show-origin", "--list"],
+        ["git", "config", "--get", "--type=bool", "core.bare"],
+        ["git", "config", "--list", "--name-only"],
+        ["git", "config", "--get-urlmatch", "http", "hostonly"],
+        ["git", "config", "--get", "-f", "cfgname", "sec.key"],
+    ])
+    def test_config_read_surface_survives(self, argv):
+        assert command_refusal(argv) is None, argv
+
+    @pytest.mark.parametrize("argv", [
+        ["git", "branch", "-c", "a", "b"], ["git", "branch", "-C", "a", "b"],
+        ["git", "branch", "--copy", "a", "b"], ["git", "branch", "-m", "a", "b"],
+        ["git", "branch", "-d", "x"], ["git", "branch", "-D", "x"],
+        ["git", "branch", "--create-reflog", "x"],
+        ["git", "branch", "--edit-description"],
+        ["git", "branch", "-u", "origin/x"], ["git", "branch", "--unset-upstream"],
+        ["git", "branch", "newbranch"], ["git", "tag", "newtag"],
+        ["git", "tag", "-d", "t"], ["git", "tag", "-a", "t"],
+        ["git", "remote", "add", "n", "u"], ["git", "remote", "remove", "n"],
+        ["git", "remote", "set-url", "n", "u"], ["git", "remote", "prune", "n"],
+        ["git", "reflog", "expire", "--all"], ["git", "reflog", "delete", "x"],
+        ["git", "symbolic-ref", "HEAD", "refs/heads/x"],
+        ["git", "symbolic-ref", "-d", "HEAD"],
+    ])
+    def test_ref_writing_actions_are_refused(self, argv):
+        assert command_refusal(argv) is not None, argv
+
+    @pytest.mark.parametrize("argv", [
+        ["git", "branch"], ["git", "branch", "-a"], ["git", "branch", "-v"],
+        ["git", "branch", "--list"], ["git", "branch", "--list", "mas*"],
+        ["git", "branch", "--contains", "HEAD"],
+        ["git", "branch", "--merged", "HEAD"],
+        ["git", "branch", "--points-at", "HEAD"],
+        ["git", "branch", "--show-current"],
+        ["git", "tag"], ["git", "tag", "-l"], ["git", "tag", "--list", "v1*"],
+        ["git", "tag", "--points-at", "HEAD"],
+        ["git", "remote"], ["git", "remote", "-v"],
+        ["git", "remote", "show", "origin"], ["git", "remote", "get-url", "origin"],
+        ["git", "reflog"], ["git", "reflog", "show", "HEAD"],
+        ["git", "symbolic-ref", "HEAD"],
+        # -c is a legitimate combined-diff read for log and must NOT be banned
+        # globally just because `git branch -c` copies a branch.
+        ["git", "log", "-c", "-n1"],
+        ["git", "status"], ["git", "diff"], ["git", "show", "HEAD"],
+        ["git", "rev-parse", "HEAD"], ["git", "describe"], ["git", "shortlog", "-n"],
+        ["git", "ls-files"], ["git", "cat-file", "-p", "HEAD"],
+        ["git", "for-each-ref"], ["git", "count-objects", "-v"], ["git", "version"],
+    ])
+    def test_read_only_git_surface_survives(self, argv):
+        assert command_refusal(argv) is None, argv
+
+    def test_git_query_inherits_the_ref_write_refusals(self):
+        from tools.executor import ToolExecutor
+        ex = ToolExecutor.__new__(ToolExecutor)
+        for args in ("-c master copied_x", "--create-reflog newref",
+                     "--edit-description", "newbranch", "-D x"):
+            assert ex._tool_git_query(operation="branch", args=args).get("error"), args
+        for op, args in (("status", ""), ("log", "-n 3"), ("diff", ""),
+                         ("show", "HEAD"), ("branch", ""), ("branch", "-a"),
+                         ("branch", "--list")):
+            err = ex._tool_git_query(operation=op, args=args).get("error", "")
+            assert not err, (op, args, err)
