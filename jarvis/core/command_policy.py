@@ -448,7 +448,30 @@ def _wget_reason(args: list[str]) -> str | None:
     # legitimate neighbours keep working because they are NOT prefixes of a
     # denied name (`--continue`/`--content-*`, `--exclude-*`, `--user*`).
     # Single-dash shorts are matched exactly so `-c` (--continue) stays usable.
-    _DENIED = ("config", "execute", "use-askpass")
+    #
+    # Round-18 (fresh independent review, gen56 frozen candidate): the three
+    # names above were the only ones enumerated, and they were all chosen by
+    # asking "can this RUN a program". Nothing asked "can this READ a local file
+    # and PUT IT ON THE WIRE" — so `--post-file=` and `--body-file=` were never
+    # considered, though they are wget's documented way to send a local file's
+    # CONTENT as the request body to a caller-chosen host. Confirmed live against
+    # a loopback listener: `_validate_command` returned ok and the listener
+    # received the canary file's exact bytes. wget is a BASE (non-lab)
+    # SAFE_WITH_ARGUMENT_POLICY binary whose declared capability is fetching and
+    # probing, not reading-and-transmitting arbitrary local files, so this is a
+    # capability escape and not merely an unpleasant feature. `--load-cookies`
+    # joins them: it also reads a local file and transmits data derived from it
+    # (as cookie headers rather than as a body — that direction was NOT
+    # separately body-proven here, and is refused on the same reasoning rather
+    # than on its own live evidence). `-i/--input-file` is deliberately NOT
+    # refused: it reads a local file, but consumes it as a URL LIST, so the file
+    # content does not become request content.
+    #
+    # §G's over-broad "/"-containing-argument block does not cover this: wget and
+    # curl both accept a bare `host:port` target with no scheme and no slash, and
+    # a file resting directly in the sandboxed CWD is named without a slash too.
+    _DENIED = ("config", "execute", "use-askpass", "post-file", "body-file",
+               "load-cookies")
     for a in args:
         low = a.lower()
         if low == "-e":
@@ -456,8 +479,9 @@ def _wget_reason(args: list[str]) -> str | None:
         if low.startswith("--"):
             head = low[2:].split("=", 1)[0]
             if head and any(name.startswith(head) for name in _DENIED):
-                return ("wget --config/--execute/--use-askpass (or an "
-                        "abbreviation) can set or run an askpass helper; refused")
+                return ("wget --config/--execute/--use-askpass/--post-file/"
+                        "--body-file/--load-cookies (or an abbreviation) runs an "
+                        "askpass helper or sends a local file's content; refused")
     return None
 
 
@@ -472,10 +496,56 @@ def _curl_reason(args: list[str]) -> str | None:
     # An exact `a == "-K"` token check missed this; `startswith` (still
     # case-sensitive, so "-k..." never matches) catches bare, attached and any
     # future `-K=file` spelling in one check.
+    #
+    # Round-18 (fresh independent review, gen56 frozen candidate): -K was the
+    # only option enumerated, because every prior round asked "can this RUN a
+    # program". The read-a-local-file-and-SEND-IT family was never considered:
+    # -d/--data/--data-ascii/--data-binary/--data-urlencode, -F/--form,
+    # -T/--upload-file and --json all read a local file (via curl's `@name`
+    # convention, or directly for -T) and transmit its CONTENT to a
+    # caller-chosen host. Confirmed live against a loopback listener: the real
+    # gateway validator returned ok and the listener received the canary file's
+    # exact bytes. curl is a BASE (non-lab) SAFE_WITH_ARGUMENT_POLICY binary
+    # whose declared capability is fetching and probing, so this is a capability
+    # escape. -b/--cookie is refused on the same reasoning (it reads a local
+    # file and transmits data derived from it as cookie headers); that direction
+    # was NOT separately body-proven here, unlike the body family.
+    #
+    # NOT refused, verified live against the installed binary: `--data-raw` and
+    # `--form-string` do NOT interpret `@name` (the literal text "@c.txt" was
+    # sent instead of the file's contents), so they cannot read a local file and
+    # refusing them would only cost a legitimate inline-body request.
+    #
+    # curl does NOT abbreviate long options, so the long names are matched
+    # exactly (bare or `=`-joined). Its SHORT options DO cluster, and a clustered
+    # denied letter is fully honoured — `-sd@file` and `-skd@file` both sent the
+    # file (confirmed live), so a first-letter-only test is insufficient. The
+    # cluster is therefore scanned letter by letter, and the scan FAILS CLOSED:
+    # an unrecognised letter is treated as a value-less boolean and scanning
+    # CONTINUES, so a denied letter behind one cannot hide. Scanning stops only
+    # at a letter positively known to consume a value, because everything after
+    # it is that value — which keeps `-Xdelete` and `-ofile` precise instead of
+    # refusing them for containing a "d".
+    _DENIED_LONG = ("data", "data-ascii", "data-binary", "data-urlencode",
+                    "form", "upload-file", "json", "cookie", "config")
+    _DENIED_SHORT = "dFTbK"
+    _TAKES_VALUE = "AcCDeEHmoruUwxXyYz"
     for a in args:
         low = a.lower()
-        if a.startswith("-K") or low == "--config" or low.startswith("--config="):
-            return "curl -K/--config can drive file-overwriting requests; refused"
+        if low.startswith("--"):
+            head = low[2:].split("=", 1)[0]
+            if head in _DENIED_LONG:
+                return ("curl --config or a local-file-as-request-body option "
+                        "(--data*/--form/--upload-file/--json/--cookie) reads a "
+                        "local file and sends its content; refused")
+            continue
+        if a.startswith("-") and len(a) > 1:
+            for ch in a[1:]:
+                if ch in _DENIED_SHORT:
+                    return (f"curl -{ch} reads a local file and sends its "
+                            "content (or drives a config file); refused")
+                if ch in _TAKES_VALUE:
+                    break
     return None
 
 

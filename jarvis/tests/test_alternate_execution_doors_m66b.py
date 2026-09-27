@@ -846,3 +846,103 @@ class TestEveryPathShapedHandlerArgumentIsRegistered:
         ex = ToolExecutor.__new__(ToolExecutor)
         out = ex._tool_packet_tracer_open(file_path="/etc/hostname")
         assert out.get("error_code") == "PATH_NOT_ALLOWED", out
+
+
+# ══════ Round-18 — curl/wget read-a-local-file-and-SEND-IT family ═══════════
+#
+# Seventeen rounds asked "can this argument make the binary RUN a program". None
+# asked "can it make the binary READ a local file and PUT IT ON THE WIRE". So
+# curl's -d/--data*/-F/--form/-T/--upload-file/--json and wget's
+# --post-file/--body-file were never enumerated on two BASE (non-lab) gateway
+# binaries. Confirmed live against a loopback listener before the fix: the real
+# gateway validator returned ok and the listener received the canary file's exact
+# bytes; after the fix the same commands are refused and the listener receives
+# nothing, while a plain diagnostic fetch still succeeds.
+#
+# Shape (c), ABSENT-CONTROL: a mutation campaign can only weaken a check that
+# exists, so an unenumerated flag FAMILY is invisible to it — which is why a
+# 127/127-passing campaign coexisted with this.
+class TestCurlWgetLocalFileExfiltration:
+    @pytest.mark.parametrize("rest", [
+        ["-d", "@c.txt"], ["--data", "@c.txt"], ["--data-ascii", "@c.txt"],
+        ["--data-binary", "@c.txt"], ["--data-urlencode", "@c.txt"],
+        ["--data=@c.txt"], ["--data-binary=@c.txt"], ["-d@c.txt"],
+        ["-F", "f=@c.txt"], ["--form", "f=@c.txt"], ["-Ff=@c.txt"],
+        ["-T", "c.txt"], ["--upload-file", "c.txt"], ["-Tc.txt"],
+        ["--json", "@c.txt"], ["--json=@c.txt"],
+        ["-b", "c.txt"], ["--cookie", "c.txt"],
+    ])
+    def test_curl_local_file_body_options_are_refused(self, rest):
+        assert command_refusal(["curl", *rest, "127.0.0.1:8080"]) is not None, rest
+
+    # curl's short options CLUSTER, and a clustered denied letter is honoured in
+    # full: `-sd@file` and `-skd@file` both sent the file (verified live). A
+    # first-letter-only test would miss every one of these.
+    @pytest.mark.parametrize("tok", ["-sd@c.txt", "-skd@c.txt", "-vsd@c.txt",
+                                     "-Lsd@c.txt", "-sT", "-skT", "-sF", "-sb",
+                                     "-LkvT"])
+    def test_curl_clustered_short_options_are_scanned(self, tok):
+        assert command_refusal(["curl", tok, "c.txt",
+                                "127.0.0.1:8080"]) is not None, tok
+
+    # Verified live against the installed binary: these do NOT interpret `@name`
+    # (the literal text was sent, not the file), so refusing them would cost a
+    # legitimate request and buy nothing.
+    @pytest.mark.parametrize("rest", [["--data-raw", "@c.txt"],
+                                      ["--form-string", "f=@c.txt"]])
+    def test_curl_options_that_cannot_read_a_file_stay_allowed(self, rest):
+        assert command_refusal(["curl", *rest, "127.0.0.1:8080"]) is None, rest
+
+    # The cluster scan stops at a letter that positively consumes a value, so a
+    # "d"/"F"/"T"/"b" inside that VALUE is not mistaken for the option itself.
+    @pytest.mark.parametrize("argv", [
+        ["curl", "example.com"], ["curl", "-k", "example.com"],
+        ["curl", "-s", "example.com"], ["curl", "-sS", "example.com"],
+        ["curl", "-I", "example.com"], ["curl", "-L", "example.com"],
+        ["curl", "-sLkv", "example.com"], ["curl", "-X", "GET", "example.com"],
+        ["curl", "-Xdelete", "example.com"], ["curl", "-o", "out.txt", "x.com"],
+        ["curl", "-odata.txt", "example.com"], ["curl", "-A", "agent-d", "x.com"],
+        ["curl", "-H", "X-Id: d", "example.com"], ["curl", "-m", "5", "x.com"],
+        ["curl", "--max-time", "5", "example.com"],
+        ["curl", "--user-agent", "x", "example.com"],
+        ["curl", "--url", "example.com"],
+    ])
+    def test_curl_diagnostic_surface_survives(self, argv):
+        assert command_refusal(argv) is None, argv
+
+    @pytest.mark.parametrize("tok", [
+        "--post-file=c.txt", "--post-fil=c.txt", "--post-f=c.txt",
+        "--body-file=c.txt", "--body-fil=c.txt", "--body-f=c.txt",
+        "--load-cookies=c.txt", "--load-cook=c.txt", "--load-c=c.txt",
+        "--load=c.txt",
+    ])
+    def test_wget_local_file_body_options_are_refused(self, tok):
+        assert command_refusal(["wget", tok, "127.0.0.1:8080"]) is not None, tok
+
+    @pytest.mark.parametrize("rest", [
+        ["--post-data=inline", "127.0.0.1:8080"], ["--page-requisites", "u"],
+        ["--progress=bar", "u"], ["-q", "u"], ["--timeout=5", "u"],
+        ["--tries=2", "u"], ["-O", "out", "u"], ["-c", "u"], ["--continue", "u"],
+        ["--content-disposition", "u"], ["--user=bob", "u"],
+        ["--user-agent=x", "u"],
+    ])
+    def test_wget_diagnostic_surface_survives(self, rest):
+        assert command_refusal(["wget", *rest]) is None, rest
+
+    # Both gateways share one validator, so neither may accept these.
+    @pytest.mark.parametrize("cmd", [
+        "curl -s --data-binary @c.txt 127.0.0.1:8080",
+        "curl -sd@c.txt 127.0.0.1:8080",
+        "curl -s -T c.txt 127.0.0.1:8080",
+        "wget -q -O nul --post-file=c.txt 127.0.0.1:8080",
+    ])
+    def test_the_shell_gateway_validator_refuses_them(self, cmd):
+        ok, err, _argv = _validate_command(cmd)
+        assert not ok, (cmd, err)
+
+    def test_a_plain_diagnostic_fetch_is_still_allowed(self):
+        """Non-vacuity: the refusals above must not be a blanket curl/wget block."""
+        for cmd in ("curl -sI 127.0.0.1:8080", "curl -s 127.0.0.1:8080",
+                    "wget -q -O nul 127.0.0.1:8080"):
+            ok, err, _argv = _validate_command(cmd)
+            assert ok, (cmd, err)

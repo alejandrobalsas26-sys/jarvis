@@ -408,9 +408,14 @@ MUTATIONS += [
          'CE_STDOUT_CAP = 3000',
          'CE_STDOUT_CAP = 3000 * 100000',
          f"{G}::test_golden_sandbox_scenarios[A27_output_flood]"),
+    # Round-18 retarget: the Round-4 `-K`/`--config` line was folded into the
+    # long-name table and the cluster scan, so the old anchor no longer exists.
+    # `-K` now lives in _DENIED_SHORT and `config` in _DENIED_LONG; this mutation
+    # removes the config name from the long table and must still be caught by the
+    # Round-4 curl test.
     _mut("CMD_curl_config_allowed", "LOLBIN", CMD,
-         'if a.startswith("-K") or low == "--config" or low.startswith("--config="):',
-         'if a == "\\x00never":',
+         '"form", "upload-file", "json", "cookie", "config")',
+         '"form", "upload-file", "json", "cookie")',
          CP_CURL),
     _mut("CMD_execution_capable_bare_allowed", "LOLBIN", CMD,
          'if args and all(a.lower() in allowed for a in args):\n            return None',
@@ -613,6 +618,29 @@ MUTATIONS += [
          'resolved, gate_error = (Path(file_path), None)',
          f"{AED}::TestEveryPathShapedHandlerArgumentIsRegistered::"
          "test_packet_tracer_open_refuses_a_path_outside_the_roots"),
+    # Round-18: the read-a-local-file-and-SEND-IT family was never enumerated on
+    # curl/wget, two BASE gateway binaries. Each of these mutations restores one
+    # face of that gap and must be caught.
+    _mut("R18_curl_body_family_allowed", "LOLBIN", CMD,
+         'if head in _DENIED_LONG:',
+         'if False and head in _DENIED_LONG:',
+         f"{AED}::TestCurlWgetLocalFileExfiltration::"
+         "test_curl_local_file_body_options_are_refused"),
+    _mut("R18_curl_cluster_first_letter_only", "LOLBIN", CMD,
+         'for ch in a[1:]:',
+         'for ch in a[1:2]:',
+         f"{AED}::TestCurlWgetLocalFileExfiltration::"
+         "test_curl_clustered_short_options_are_scanned"),
+    _mut("R18_curl_short_denylist_emptied", "LOLBIN", CMD,
+         '_DENIED_SHORT = "dFTbK"',
+         '_DENIED_SHORT = "K"',
+         f"{AED}::TestCurlWgetLocalFileExfiltration::"
+         "test_curl_local_file_body_options_are_refused"),
+    _mut("R18_wget_post_file_allowed", "LOLBIN", CMD,
+         '_DENIED = ("config", "execute", "use-askpass", "post-file", "body-file",',
+         '_DENIED = ("config", "execute", "use-askpass",  # post-file, body-file,',
+         f"{AED}::TestCurlWgetLocalFileExfiltration::"
+         "test_wget_local_file_body_options_are_refused"),
     _mut("R6_vcs_metadata_write_allowed", "PATH", EXEC,
          'if _VCS_METADATA_DIRS & set(p.parts):\n        return None',
          'if False and _VCS_METADATA_DIRS & set(p.parts):\n        return None',

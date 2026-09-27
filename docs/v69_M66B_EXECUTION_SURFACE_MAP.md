@@ -230,3 +230,73 @@ the non-POSIX parse, which would be the dangerous direction.
 constitutes a claim of repository-wide execution-surface closure. The detector's
 file scope (§F), non-tool-calling installation/execution paths repository-wide,
 and the Layer-2 absolute-path over-restriction (§G) remain open follow-up work.
+
+## J. Round-18 STRUCTURAL finding — UNRESOLVED, needs an explicit decision
+
+This section records evidence, not a decision. It does NOT re-label any claim
+M66B makes; it states what eighteen rounds of independent review have shown, so
+that the choice below is made deliberately rather than by default.
+
+**The evidence.** Eighteen consecutive fresh, independent, read-only reviews have
+each found at least one live, reproduced defect in the command-argument policy
+layer. All eighteen were the same family — a caller-controlled argument, or a file
+whose content is interpreted, reaching a capability the policy intended to deny —
+but they were NOT converging on a shrinking remainder:
+
+  * Rounds 1-17 all asked "can this argument make the binary RUN a program",
+    and found seventeen distinct answers (config files, plugin loaders, session
+    replay, hook paths, parser abbreviations, operand order, per-action grammar).
+  * Round 18 changed the QUESTION to "can this argument make the binary READ a
+    local file and PUT IT ON THE WIRE" and immediately found a live bypass on
+    TWO of the five BASE (non-lab) gateway binaries — curl's
+    `-d/--data*/-F/--form/-T/--upload-file/--json` and wget's
+    `--post-file/--body-file`, none of which any test, any doc, or any of the
+    127 mutations had ever considered.
+  * Rounds 13-18 were all invisible to the mutation campaign, which passes at
+    131/131. A mutation campaign can only weaken a check that EXISTS; it cannot
+    invent one that was never written. So campaign health is evidence about the
+    checks present, and says nothing about the checks absent.
+
+The honest reading: the defect supply in this layer is bounded by the reviewer's
+choice of question, not by the code's completeness. A clean round would be
+evidence about one reviewer's coverage, not about the boundary being sound.
+
+**Why the model, not the instances, is the issue.** The layer is a DENYLIST of
+dangerous argument grammars across ~23 third-party binaries, each with its own
+independently-evolving parser and a combined flag surface in the hundreds. A
+denylist fails OPEN on an unanticipated flag; an allowlist fails CLOSED. This is
+also what this repository's own standing directive already says — `jarvis/CLAUDE.md`
+§4: "Default to ALLOWLISTS, not denylists." The one place M66B did invert the
+direction is the strongest part of the design: `EXECUTION_CAPABLE` binaries are
+gated by a POSITIVE `_INFO_FLAGS` allowlist, and it is structurally immune to
+this entire class — a missed alias there can only cause over-refusal, never a
+bypass. Not one of the eighteen defects was in that construct.
+
+**The two candidate resolutions, and what each does and does not fix.**
+
+1. *Per-binary argv ALLOWLIST* — enumerate the small set of flags each binary
+   actually needs for its declared diagnostic purpose; refuse everything else.
+   Would have prevented all eighteen defects with zero foreknowledge of any
+   specific flag, because none of them belongs to a minimal diagnostic set. Cost:
+   legitimate-but-unlisted usage gets refused until someone adds it — a nuisance
+   that fails closed. Does not remove the need for argv semantics where a listed
+   flag is itself dangerous.
+2. *Route host commands through the same ContainmentBroker as `code_execute`* —
+   an ephemeral, isolated cwd with no view of real host state. Converts "prove
+   this argv is safe" (unbounded) into "prove the environment is safe regardless
+   of argv" (bounded, evidence-derived — the model `core/containment.py` already
+   implements and proves). This is what actually closes Round-18's CATEGORY
+   rather than its two instances: a file-reading flag nobody has enumerated yet
+   would read an empty ephemeral file. Does not by itself address a
+   code-execution-shaped escape, where argv semantics still matter.
+
+The two are complementary, not alternatives.
+
+**The decision that is OPEN.** Either (i) continue patching toward a clean
+round, accepting that a clean round certifies a reviewer rather than a boundary,
+or (ii) state plainly in the governance record that this argument-grammar layer
+is BEST-EFFORT defence-in-depth and move the containment CLAIM to the broker,
+with §J.1/§J.2 as the follow-up work. M66B as it stands has done (i) eighteen
+times. Nothing in this document chooses for the reader, and no generation to date
+authorises (ii) — making that change is a milestone-scope decision, not a
+remediation.
