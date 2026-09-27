@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0054-m66b-round15-remediation.json",
-  "latest_snapshot_sha256": "1d89d0628bc6b941dfd1ed63e02066be7c80617ec16869edb4ec4e3d0581a8e2",
+  "latest_snapshot_path": "state/m62/snapshots/0055-m66b-round16-remediation.json",
+  "latest_snapshot_sha256": "efb13b059590d4bc1c70df2c68a274f60eb1fe8a7ac4875f6a2af34163506d0a",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 54,
-  "subject_state_commit": "167d4d22c7a5c38cc7b01c51ae6d00ec97d170e8",
+  "state_generation": 55,
+  "subject_state_commit": "5cfe4772a7a3b9f3ecbc4b8c53fd3155d5eafc21",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
