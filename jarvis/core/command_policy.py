@@ -233,6 +233,39 @@ def _git_reason(args: list[str]) -> str | None:
         if any(r == b or r.startswith(b + "=") for b in banned_sub_opts):
             return f"git {subcommand} option carrying a command is refused"
     if subcommand == "config":
+        # Round-15 (fresh independent review, gen53 frozen candidate): requiring a
+        # read flag to be PRESENT is not the same as requiring a write action to be
+        # ABSENT. `git config --replace-all core.fsmonitor <cmd> --list` satisfied
+        # the old check and WROTE .git/config, because the legacy form takes
+        # `name value [value-pattern]` and swallows the trailing read flag as the
+        # optional value-pattern positional — confirmed live (rc=0, config
+        # modified, and the next ordinary git command then ran the fsmonitor hook
+        # through /bin/sh). That reopened the Round-6 primitive without write_file
+        # (so _VCS_METADATA_DIRS never applied) and without git_query (so
+        # Round-14's routing never applied). The other write actions happened to
+        # fail on git's own argc rules, which is the tool saving us rather than
+        # the policy, so every write action is now refused independently of which
+        # read flags accompany it. git config DOES abbreviate its subcommand
+        # options (`--rep` writes — confirmed live), so this matches
+        # prefix-of-canonical, the direction used throughout this module. No
+        # read-only config option is a prefix of a write-action name, so the
+        # legitimate read surface (--get/--get-all/--get-regexp/--list/-l plus
+        # --local/--global/--show-origin/--type/--all/--regexp/--url…) is intact.
+        _WRITE_ACTIONS = ("add", "replace-all", "unset", "unset-all",
+                          "remove-section", "rename-section", "edit")
+        for r in rest:
+            head = r.split("=", 1)[0].lstrip("-")
+            if r.startswith("-") and head and any(
+                    name.startswith(head) for name in _WRITE_ACTIONS):
+                return ("git config write action (--add/--replace-all/--unset/"
+                        "--unset-all/--remove-section/--rename-section/--edit, "
+                        "any abbreviation) is refused via the host gateway")
+        # New-style subcommand form: `git config set|unset|…  <key> <value>`.
+        first_positional = next((r for r in rest if not r.startswith("-")), None)
+        if first_positional in ("set", "unset", "remove-section",
+                                 "rename-section", "edit"):
+            return (f"git config {first_positional} writes configuration; "
+                    "refused via the host gateway")
         if not any(r in ("--get", "--list", "-l", "--get-all", "--get-regexp")
                    for r in rest):
             return "git config may only READ (--get/--list) via the host gateway"

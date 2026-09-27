@@ -475,3 +475,90 @@ def test_hashcat_and_john_ordinary_cracking_still_allowed():
                  ["john", "hashfile"], ["john", "--wordlist=r.txt", "hashfile"],
                  ["john", "--show", "hashfile"], ["john", "--session=s", "hashfile"]):
         assert command_refusal(argv, lab=True) is None, argv
+
+
+# ── Round-15 (fresh independent review of the gen53 frozen candidate): requiring
+# a read flag to be PRESENT is not requiring a write action to be ABSENT. git's
+# legacy `config --replace-all name value [value-pattern]` swallows a trailing
+# `--list` as the optional value-pattern, so the write went through and .git/config
+# gained a `core.fsmonitor` hook — the Round-6 primitive reached WITHOUT write_file
+# (so _VCS_METADATA_DIRS never applied) and WITHOUT git_query (so Round-14's
+# routing never applied). git config also abbreviates (`--rep` writes), and the
+# other write actions were saved only by git's own argc rules, which is the tool
+# saving us rather than the policy.
+def test_git_config_write_actions_are_refused_with_any_read_flag_present():
+    from tools.executor import _validate_command
+    for cmd in ("git config --replace-all core.fsmonitor V --list",
+                "git config --replace core.fsmonitor V --list",
+                "git config --repl core.fsmonitor V --get",
+                "git config --rep core.fsmonitor V -l",
+                "git config --add core.fsmonitor V --list",
+                "git config --unset core.filemode --list",
+                "git config --unset-all core.filemode --get",
+                "git config --remove-section core --list",
+                "git config --rename-section a b --list",
+                "git config -e --list",
+                "git config --edit --list",
+                "git config set core.fsmonitor V --list",
+                "git config unset core.fsmonitor --list"):
+        ok, _msg, _argv = _validate_command(cmd)
+        assert not ok, cmd
+
+
+def test_git_config_read_surface_is_intact():
+    from tools.executor import _validate_command
+    for cmd in ("git config --get user.name", "git config --list", "git config -l",
+                "git config --get-all remote.origin.url",
+                "git config --get-regexp ^user", "git config --local --list",
+                "git config --show-origin --list",
+                "git config --get --type=bool core.bare",
+                "git config --list --name-only"):
+        ok, msg, _argv = _validate_command(cmd)
+        assert ok, cmd + " -> " + msg
+
+
+def test_git_query_is_not_an_arbitrary_file_read_primitive():
+    # `git diff --no-index <a> <b>` made this READ_ONLY, HITL-EXEMPT tool read
+    # and print arbitrary host paths, bypassing _resolve_within_allowed — the one
+    # centralized file-read gate. Absolute escapes are the unambiguous fixture; a
+    # "../../" string's meaning depends on the CWD (see
+    # test_read_file_sandbox_cwd.py) so it is deliberately not asserted here.
+    from tools.executor import ToolExecutor
+    ex = ToolExecutor.__new__(ToolExecutor)
+    for args in ("--no-index /dev/null /etc/hostname", "--no-index=x /etc/hostname",
+                 "/etc/hostname", "/etc/passwd"):
+        assert ex._tool_git_query(operation="diff", args=args).get("error"), args
+    for op, args in (("status", ""), ("log", "-n 3"), ("diff", ""),
+                     ("show", "HEAD"), ("branch", "")):
+        err = ex._tool_git_query(operation=op, args=args).get("error", "")
+        assert not err, (op, args, err)
+
+
+def test_firewall_rule_protocol_is_validated_before_interpolation():
+    # proto/port are interpolated into a PowerShell -Command PROGRAM string, so
+    # shell=False does not help: the element IS the program. A refused protocol
+    # must return False without ever building or dispatching it.
+    from core import security_auditor as sa
+    calls = []
+    orig = sa.subprocess.run
+
+    def _spy(*a, **k):
+        calls.append(a[0])
+        raise FileNotFoundError("powershell")
+
+    sa.subprocess.run = _spy
+    try:
+        for proto in ("TCP -Action Block ; Start-Process x ; echo", "TCP;x",
+                      "'; x ;'", "ICMP", ""):
+            calls.clear()
+            assert sa._block_port_firewall(4455, proto) is False, proto
+            assert not calls, proto
+        for proto in ("TCP", "udp"):
+            calls.clear()
+            sa._blocked_ports.discard(4456)
+            sa._block_port_firewall(4456, proto)
+            assert calls, proto
+        sa._blocked_ports.discard(4457)
+        assert sa._block_port_firewall(70000, "TCP") is False
+    finally:
+        sa.subprocess.run = orig

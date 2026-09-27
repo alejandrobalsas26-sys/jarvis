@@ -271,6 +271,27 @@ def _block_port_firewall(port: int, proto: str = "TCP") -> bool:
     """
     if port in _blocked_ports:
         return True
+    # V69 M66B (Round-15): `proto` and `port` are interpolated into a PowerShell
+    # `-Command` PROGRAM string below. They are one `list[str]` element, so
+    # shell=False does not help — the element IS the program. An unvalidated
+    # `proto` such as "TCP -Action Block ; Start-Process x ; echo" appends
+    # statements to it. The sibling host-mutation path (network_quarantine)
+    # validates its IP before building argv; this one did not. Validate to the
+    # closed protocol set and an in-range port, mirroring that precedent, before
+    # any interpolation. (Windows-target-only in practice: powershell is absent
+    # on the Linux dev host, so this is a latent defect there, not a live one.)
+    proto = str(proto).upper()
+    if proto not in ("TCP", "UDP"):
+        logger.warning("Firewall: refused non-enumerated protocol {!r}", proto)
+        return False
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        logger.warning("Firewall: refused non-integer port {!r}", port)
+        return False
+    if not 1 <= port <= 65535:
+        logger.warning("Firewall: refused out-of-range port {}", port)
+        return False
     rule_name = f"JARVIS_AUTO_BLOCK_{proto}_{port}"
     try:
         result = subprocess.run(

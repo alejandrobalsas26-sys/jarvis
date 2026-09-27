@@ -4455,6 +4455,24 @@ class ToolExecutor:
                            "--delete", "-d", "-D", "-M", "--move"}
             if any(f in write_flags for f in extra):
                 return {"error": "Flags de escritura no permitidos en modo read-only."}
+            # V69 M66B (Round-15): `git diff --no-index <a> <b>` makes git read
+            # two ARBITRARY host paths and print them, which turned this
+            # READ_ONLY, HITL-EXEMPT tool into a second door past
+            # `_resolve_within_allowed` — the one centralized file-read gate
+            # (M66A.1 §F1). Confirmed: `--no-index /dev/null /etc/hostname`
+            # returned the file's contents while the shared gate refuses that
+            # path. Refuse the flag, and require every path-like token to clear
+            # the same gate every other file-taking handler uses.
+            if any(f == "--no-index" or f.startswith("--no-index=")
+                   for f in extra):
+                return {"error": "git diff --no-index lee rutas arbitrarias; "
+                                 "no permitido en modo read-only."}
+            for tok in extra:
+                if tok.startswith("-"):
+                    continue
+                if "/" in tok or "\\" in tok:
+                    if _resolve_within_allowed(tok) is None:
+                        return {"error": f"Ruta fuera del sandbox: {tok!r}"}
             argv.extend(extra)
 
         # V69 M66B (Round-14): this is a THIRD caller-controlled git argv surface,
