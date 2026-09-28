@@ -604,12 +604,12 @@ differ.
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `test_reasoning_distillation_m67a.py` | 83 | §18 synthetic corpus, adapters, provenance, dedupe, splitting, operators, extraction, quality, skills, benchmark, manifests, CLI |
+| `test_reasoning_distillation_m67a.py` | 82 | §18 synthetic corpus, adapters, provenance, dedupe, splitting, operators, extraction, quality, skills, benchmark, manifests, CLI |
 | `test_reasoning_privacy_m67a.py` | 39 | §4 explicit status, auditable findings, the secret-lifting leak, both write gates, gitignore verification, body blindness, §13 |
 | `test_reasoning_leakage_m67a.py` | 26 | §17's seven checks, the guard's surface, frozen-holdout immutability in both directions, growth |
 | `test_reasoning_recursion_m67a.py` | 28 | §12 termination, the cap not being acceptance, chain integrity, repair being subtractive |
 | `test_reasoning_absent_controls_m67a.py` | 28 | §22 absent controls |
-| **Total** | **204** | |
+| **Total** | **203** | |
 
 ### Absent-control coverage (§22)
 

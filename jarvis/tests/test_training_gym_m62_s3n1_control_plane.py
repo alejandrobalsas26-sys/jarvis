@@ -1514,15 +1514,79 @@ def test_a_next_that_swapped_the_axis_fails_verification(sandbox):
 
 
 # ── 15. the test baseline and its caveat ─────────────────────────────────────────────
-def test_the_authoritative_focused_baseline_is_preserved(snapshot):
+def _authoritative_ci_step() -> dict:
+    """The one step ``.github/workflows/ci.yml`` runs as the release correctness gate.
+
+    Read out of the workflow rather than hardcoded: a baseline that *describes* an
+    invocation is evidence only if it is checked against the invocation it describes.
+
+    ``yaml`` is imported here rather than guarded by ``importorskip`` at module scope on
+    purpose. PyYAML is a declared base dependency, and an authority contract that SKIPS
+    when its own evidence is unreadable is exactly the silent pass this file exists to
+    refuse: if the workflow cannot be read, this must fail, not vanish.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    steps = [s for s in workflow["jobs"]["tests"].get("steps", []) if isinstance(s, dict)]
+    running = [s for s in steps if "pytest" in str(s.get("run", ""))]
+    assert len(running) == 1, (
+        f"the authoritative job must hold exactly one pytest invocation, found "
+        f"{len(running)}; which command is authoritative would otherwise be ambiguous")
+    return running[0]
+
+
+def test_the_authoritative_baseline_names_the_command_ci_actually_runs(snapshot):
+    """V69 M67A gen 62: this used to assert ``"jarvis/" in working_directory`` and
+    ``"-k m62" in invocation``. Both searched prose; neither checked a contract.
+
+    Generation 61 moved the baseline off the pre-D48 FOCUSED selection onto the
+    authoritative two-tree command, which ci.yml runs from the repository ROOT. That edit
+    was correct and it broke the first assertion — the seal went red on the very
+    measurement it was recording. The second assertion did NOT break, which was worse: it
+    kept passing because the new declaration happens to contain the sentence "-k m62 is
+    NOT the authority: D48." An assertion satisfied by an explanation that *denies* the
+    thing it searches for is not checking anything at all.
+
+    So the contract is now taken from the workflow and compared against the declaration,
+    the way the caveat below is compared against the file it names. The counts still move
+    freely as tests are added; what may not move is zero failures, the command itself,
+    and the directory that command runs in.
+    """
     baseline = snapshot["test_baseline"]
     # The counts MOVE as tests are added; pinning them here would make every milestone a
     # two-place edit and would say nothing. What must never move is zero failures and the
     # authoritative invocation.
     assert baseline["failed"] == 0
     assert baseline["passed"] >= 3076, "the suite may grow, never shrink silently"
-    assert "-k m62" in baseline["invocation"]
-    assert "jarvis/" in baseline["working_directory"]
+
+    step = _authoritative_ci_step()
+    ci_command = str(step["run"]).strip()
+
+    # The declaration leads with the command and explains itself after the first comma.
+    # Only the command is the contract, so no amount of prose can satisfy it.
+    declared = baseline["invocation"].split(",", 1)[0].strip()
+    assert declared == ci_command, (
+        f"the baseline declares the invocation {declared!r}, but the authoritative job "
+        f"runs {ci_command!r}")
+
+    # D48: the authority is the explicit two-tree argument list, never a -k selection.
+    argv = declared.split()
+    assert "-k" not in argv, (
+        f"the authoritative invocation must not select with -k, got {declared!r}")
+    for tree in ("jarvis/tests", "tests"):
+        assert tree in argv, f"the authoritative command drops {tree}: {declared!r}"
+
+    # ...and it runs from the repository ROOT. That is a property of the STEP, not of the
+    # sentence describing it. Neighbouring steps in the same job DO set
+    # `working-directory`, so its absence here is a decision, not an oversight.
+    assert "working-directory" not in step, (
+        "the authoritative suite no longer runs from the repository root, yet the "
+        "baseline still declares that it does")
+    assert "ROOT" in baseline["working_directory"], (
+        f"the baseline must declare the repository ROOT it is measured from, got "
+        f"{baseline['working_directory']!r}")
 
 
 def test_the_root_invocation_caveat_is_preserved_and_not_mislabelled(snapshot):
