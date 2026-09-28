@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0060-m67a-bom-fix.json",
-  "latest_snapshot_sha256": "e3693cab02fe0c5390abd566300bb2dd11d88ffe324f2f723bdb29b2a930e4b2",
+  "latest_snapshot_path": "state/m62/snapshots/0061-m67a-baseline.json",
+  "latest_snapshot_sha256": "d7f4848e17a573b705acb1013642b094da201629699f174194cfb92472ae9a8e",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 60,
+  "state_generation": 61,
   "subject_state_commit": "6033e81ccb94a4eb5cc1f00752abc343f1fdee8b",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
