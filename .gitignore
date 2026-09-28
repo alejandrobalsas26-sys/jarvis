@@ -131,3 +131,17 @@ jarvis/evaluation/evaluations/
 jarvis/evaluation/reports/
 jarvis/evaluation/proposals/
 jarvis/evaluation/quarantine/
+
+# v69 M67A REASONING DISTILLATION — the private reasoning corpus.
+#
+# Historical AI conversations are the operator's own private material: they contain names,
+# paths, credentials, secret-like tokens and private conversation content (§4). Raw
+# conversations and every body-bearing derived artifact stay LOCAL and OUTSIDE Git.
+#
+# `reasoning_distillation.storage.assert_root_is_gitignored` does NOT trust these lines: it
+# asks `git check-ignore` about the live root before anything is written, and an
+# inconclusive answer is a refusal rather than permission. A .gitignore line is a claim; the
+# check is a measurement. Both exist because the default corpus root is OUTSIDE the
+# repository (~/.local/reasoning_corpus) and this pattern only covers the in-repo fallback.
+.local/
+reasoning_corpus/
