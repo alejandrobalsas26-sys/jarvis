@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **61** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **62** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0061-m67a-baseline.json` |
-| **Snapshot SHA256** | `d7f4848e17a573b705acb1013642b094da201629699f174194cfb92472ae9a8e` |
-| **Subject state commit** | `6033e81ccb94a4eb5cc1f00752abc343f1fdee8b` (M67A distillation foundation; eval-v7 spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0062-m67a-baseline-contract-remediation.json` |
+| **Snapshot SHA256** | `567ba99b965e11edc8ae5d1810eed0c7bf4cb93baa8ef6a3c3572b24cf01dcbb` |
+| **Subject state commit** | `a0c3fc2bf25047cd63793c781aaa7a7156e03d04` (M67A distillation foundation, gen-62 baseline-contract remediation; eval-v7 spent once, 005 not eligible, 004 still held) |
 | **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 37's `cfa23bb…`, gen 39's `3bd46fb…` and gen 58's `7125557…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -73,7 +73,7 @@ name the commit that carries it (§2).
 | Earlier milestone | **S5G.1 — PRE-INTEGRATION HARDENING, no science.** Gen 35. Six findings (D49–D54, §7): executable authority changes only inside a governed subject. **0** spends. `…S5G1_…md` |
 | Earlier milestone | **M65D — TRUTHFUL UNCERTAIN-EFFECT SEMANTICS, no science.** Gen 36. An observed error after the boundary no longer means *nothing happened* (D55–D63, §7). **0** spends. `…M65D_…md` |
 | Earlier milestone | **M66A — EPISTEMIC DELIBERATION, no science.** Gen 37. One epistemic plane on `TaskDecision`; policy only **STRENGTHEN**s; `REQUIRED_FAIL_CLOSED` withheld until verified. **51/51** mutations, **0** spends. `…M66A_…md` |
-| Last milestone | **M67A — REASONING DISTILLATION FOUNDATION, no science.** Gen **61**, DATA+INFRASTRUCTURE ONLY. Traces → typed decision procedures: provenance, explicit export status, family dedupe and split, 7-check firewall, bounded repair (cap 3), 15-dimension gate, multi-family skills, a harness that **runs nothing**. **204** tests incl. absent-control; **0** spends, no corpus ingested. `docs/v69_M67A_…md` |
+| Last milestone | **M67A — REASONING DISTILLATION FOUNDATION, no science.** Gen **62**, DATA+INFRASTRUCTURE ONLY. Traces → typed decision procedures: provenance, explicit export status, family dedupe and split, 7-check firewall, bounded repair (cap 3), 15-dimension gate, multi-family skills, a harness that **runs nothing**. **203** tests incl. absent-control; **0** spends, no corpus ingested. `docs/v69_M67A_…md` |
 | Earlier milestone | **M66B — EXECUTION ISOLATION & NETWORK CONTAINMENT, no science.** Gen 58 (R19). `code_execute`→**SANDBOXED**, evidence-derived, fail-closed = the containment **CLAIM**; L3 limits need a sandbox host, CI cannot witness (§K). Argument grammar **BEST-EFFORT**, NOT a boundary (§J.3). **131/131** mutations, **0** spends. `docs/v69_M66B_EXECUTION_SURFACE_MAP.md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
 | Live training since S3N | **three runs** — candidates 003–005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |

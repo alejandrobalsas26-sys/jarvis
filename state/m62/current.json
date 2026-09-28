@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0061-m67a-baseline.json",
-  "latest_snapshot_sha256": "d7f4848e17a573b705acb1013642b094da201629699f174194cfb92472ae9a8e",
+  "latest_snapshot_path": "state/m62/snapshots/0062-m67a-baseline-contract-remediation.json",
+  "latest_snapshot_sha256": "567ba99b965e11edc8ae5d1810eed0c7bf4cb93baa8ef6a3c3572b24cf01dcbb",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 61,
-  "subject_state_commit": "6033e81ccb94a4eb5cc1f00752abc343f1fdee8b",
+  "state_generation": 62,
+  "subject_state_commit": "a0c3fc2bf25047cd63793c781aaa7a7156e03d04",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
