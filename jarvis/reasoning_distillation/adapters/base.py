@@ -160,7 +160,11 @@ def decode(content: bytes, *, filename: str) -> str:
     text = content.decode("utf-8", "surrogateescape")
     # A UTF-8 BOM is an encoding artifact, not content. Left in place it would change the
     # first segment's digest depending on which editor saved the file.
-    return text.lstrip("﻿")
+    # The escape, never the literal character: a raw U+FEFF in source is an invisible
+    # character, which `test_no_literal_bidi_or_invisible_characters_in_any_python_source`
+    # refuses across the whole tree. That gate is right - an invisible codepoint in source
+    # is the homoglyph hazard class - and it caught this line.
+    return text.lstrip("\ufeff")
 
 
 def refuse_absent_format(extension: str) -> "AdapterNotImplemented":
