@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0058-m66b-round19-ci-fail-closed.json",
-  "latest_snapshot_sha256": "8aadfab8d3af189a5f056288b89a04e1d1f050417707445b891535c5f4a5d294",
+  "latest_snapshot_path": "state/m62/snapshots/0059-m67a-reasoning-corpus.json",
+  "latest_snapshot_sha256": "3e77c1441e56e9c86e20797ea1097e1d1db399c8253730cbf4ac272dcb2d3772",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 58,
-  "subject_state_commit": "6e5e9e291b14af62160b83fca6a031665efcde4b",
+  "state_generation": 59,
+  "subject_state_commit": "17d9dc6a67c0d631cc55fe72a4cca52f1138a0d1",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
