@@ -124,8 +124,20 @@ async def _bounded(awaitable, budget: float, *, what: str):
     A non-positive budget means the absolute deadline has already passed, so the
     call is refused WITHOUT being started — starting it would be the thing the
     deadline exists to prevent.
+
+    V69 M68A gen 64 — the refusal CLOSES the coroutine it was handed. Python
+    evaluates the argument before this function runs, so a refused call still
+    produced a live coroutine object; dropping it emitted
+    ``RuntimeWarning: coroutine '...' was never awaited`` on every expired
+    deadline. Measured, not theorised. Nothing executed either way — the security
+    property was never in question — but "never started" should leave no debris,
+    and a warning the runtime emits on a correct path is noise that hides the
+    warnings that matter.
     """
     if budget <= 0:
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
         logger.warning(f"AGENTIC: {what} refused — run deadline already passed")
         raise asyncio.TimeoutError(what)
     return await asyncio.wait_for(awaitable, timeout=budget)

@@ -1068,3 +1068,39 @@ def test_the_system_prompt_advertises_exactly_the_validated_tool_set():
     system = captured["messages"][0]["content"]
     for tool in SOC_ADVERTISED_TOOLS:
         assert tool in system, f"{tool} is validated but never advertised"
+
+
+def test_a_refused_call_leaves_no_unawaited_coroutine():
+    """V69 M68A gen 64. `_bounded`'s refusal path dropped the coroutine it was
+    handed — Python builds it before `_bounded` runs — so every expired deadline
+    emitted `RuntimeWarning: coroutine '...' was never awaited`.
+
+    Nothing executed either way, so the security property was never at stake; this
+    pins the cleanliness of a path the deadline takes on purpose. Asserted as a
+    warning-free property rather than by looking for a `close()` call, so any
+    correct implementation passes.
+    """
+    import gc
+    import warnings
+
+    from core.agentic_loop import _bounded
+
+    started = {"n": 0}
+
+    async def _never():
+        started["n"] += 1
+        await asyncio.sleep(3600)
+
+    async def _go():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(asyncio.TimeoutError):
+                await _bounded(_never(), 0.0, what="probe")
+            gc.collect()
+            return [str(w.message) for w in caught]
+
+    messages = asyncio.run(_go())
+
+    assert started["n"] == 0, "the call was started despite a spent deadline"
+    assert not [m for m in messages if "never awaited" in m], (
+        f"the refusal dropped a live coroutine: {messages}")

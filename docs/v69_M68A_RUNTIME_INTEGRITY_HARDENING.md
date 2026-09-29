@@ -447,10 +447,10 @@ module's own prose describing the bug**. They are AST-based now, and that failur
 recorded here because it is the same class of mistake as the defects themselves:
 a check that cannot fail is a control that is not there.
 
-### Two defects M68A found in its own work
+### Three defects M68A found in its own work
 
-Recorded because both are the same class as the four findings, and because the
-second one was found by the gate rather than by reading.
+Recorded because all three are the same class as the four findings, and because
+the last two were found by running something rather than by reading it.
 
 **1. Three absent-control probes passed on this document's prose.** They searched
 raw text for a name that must be absent from the *code* — and the paragraphs
@@ -478,3 +478,18 @@ hazard, in a docstring that describes the failure mode sentence for sentence. Th
 lesson is not "restore your globals" — it is that the repository had written the
 warning down and a new fixture did not read it. `_BUS_GLOBALS` is now shared
 vocabulary between the two modules.
+
+**3. `_bounded`'s refusal dropped the coroutine it was handed.** Python builds the
+argument before the function runs, so refusing a call on a spent deadline left a
+live coroutine object that nothing ever awaited — `RuntimeWarning: coroutine '...'
+was never awaited`, on every expired deadline.
+
+Nothing executed either way, so the security property was never at stake: the call
+genuinely does not start, which is what the deadline is for. But a warning the
+runtime emits on a *correct* path is noise, and noise on a correct path is what
+hides the warnings that matter. The refusal now closes what it declines to start.
+
+This one was found by probing the new path for warnings after the generation-63
+carrier was already sealed. Sealed generations are never amended, so the repair is
+**generation 64** — a successor subject plus its own carrier, the same shape
+generation 62 used to repair generation 61.
