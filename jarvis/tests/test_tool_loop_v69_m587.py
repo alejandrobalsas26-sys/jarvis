@@ -52,10 +52,22 @@ def test_empty_args_allowed_for_no_param_tool():
     assert ok is True and args == {}
 
 
-def test_none_eligible_set_allows_any_wellformed_name():
-    # When no eligibility set is supplied, only structural validation applies.
-    ok, args, _ = validate_tool_call("anything", '{"a":1}', None)
-    assert ok is True and args == {"a": 1}
+def test_absent_eligible_set_is_refused_not_treated_as_unrestricted():
+    """V69 M68A §B — REPLACES `test_none_eligible_set_allows_any_wellformed_name`,
+    which asserted the exact behaviour an external audit later identified as a
+    fail-open: it pinned `None` to mean "only structural validation applies", i.e.
+    unrestricted eligibility. `core/llm.py` reached that value by normalising an
+    EXHAUSTED tool set (`{...} or None`), so the moment the round budget dropped
+    every tool, every tool name validated. An absent eligibility set is now a
+    refusal: the caller must state what is eligible, and "nothing" is a statement.
+    """
+    ok, args, reason = validate_tool_call("anything", '{"a":1}', None)
+    assert ok is False and args == {} and reason == "no_eligible_tools"
+
+
+def test_empty_eligible_set_is_refused():
+    ok, args, reason = validate_tool_call("web_search", '{"q":"x"}', set())
+    assert ok is False and args == {} and reason == "no_eligible_tools"
 
 
 # ── round / retry / repair bounds ─────────────────────────────────────────────

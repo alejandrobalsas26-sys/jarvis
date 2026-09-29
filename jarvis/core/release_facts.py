@@ -196,7 +196,7 @@ line in ``core/`` and ``tools/`` containing the marker, and a *description* of a
 suppression must not be counted as one.
 """
 
-BANDIT_SCANNED_LINES = 88_908
+BANDIT_SCANNED_LINES = 93_736
 """Non-vacuity evidence: a clean scan over an empty tree is not a clean scan.
 
 MEASURED against the current tree (the test allows a 5% tolerance), so it is

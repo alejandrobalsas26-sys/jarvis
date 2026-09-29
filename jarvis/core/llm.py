@@ -3246,7 +3246,8 @@ class LLM:
         # a final answer (which then gets the contract num_predict) — the loop is
         # bounded by a real limit, never only by wall-clock, and a JSON call is never
         # truncated to enforce it.
-        from core.tool_loop import ToolLoopBudget, publish_tool_metrics, validate_tool_call
+        from core.tool_loop import (ToolLoopBudget, eligible_tool_names,
+                                    publish_tool_metrics, validate_tool_call)
         _tool_budget = ToolLoopBudget()
         # V69 M64.1 — compiled once per turn, reused across every tool round.
         _mesh_directive: str | None = None
@@ -3578,13 +3579,27 @@ class LLM:
 
             # ── Añadir turno del asistente al historial ───────────────────────
             if accumulated_calls:
+                # V69 M68A §B — bound the calls ONE response may request. The
+                # round budget bounded the number of asks, not the size of each,
+                # so a single response could execute arbitrarily many tools inside
+                # one "round". Truncating here, before the assistant turn reaches
+                # history, keeps the tool_call/tool pairing coherent: a call the
+                # model is never shown cannot be left without a result.
+                _requested = list(accumulated_calls.values())
+                _admit = _tool_budget.admit_response_calls(len(_requested))
+                if _admit < len(_requested):
+                    logger.warning(
+                        "TOOL_LOOP: response requested {} tool calls; {} admitted, "
+                        "{} refused (per-response ceiling)".format(
+                            len(_requested), _admit, len(_requested) - _admit))
+                _requested = _requested[:_admit]
                 tool_calls_list = [
                     {
                         "id": v["id"],
                         "type": "function",
                         "function": {"name": v["name"], "arguments": v["arguments"]},
                     }
-                    for v in accumulated_calls.values()
+                    for v in _requested
                 ]
                 self.history.append({
                     "role": "assistant",
@@ -3785,10 +3800,12 @@ class LLM:
                 # malformed/partial JSON and names outside the eligible set. Truncated
                 # tool JSON and hallucinated tool names never reach the executor, and
                 # effectful arguments are never freely guessed/repaired.
-                _eligible_names = {
-                    t.get("function", {}).get("name")
-                    for t in _turn_tools if isinstance(t, dict)
-                } or None
+                # V69 M68A §B — `eligible_tool_names` is TOTAL and never None.
+                # The `or None` that used to close this set expression turned an
+                # EXHAUSTED turn (round budget spent, tools dropped at the top of
+                # the loop) into an UNRESTRICTED one, because None was the value
+                # the validator read as "no eligibility constraint".
+                _eligible_names = eligible_tool_names(_turn_tools)
                 _ok_call, tool_input, _bad_reason = validate_tool_call(
                     tool_name, tc["function"]["arguments"], _eligible_names)
                 # V69 M54.13 — never print a raw/large tool payload into the
@@ -3814,7 +3831,17 @@ class LLM:
                     # NEVER executes; a bounded failure envelope keeps the tool_call/
                     # tool pairing coherent so the loop cannot be driven to run an
                     # unvalidated (possibly effectful) call.
-                    if _bad_reason == "tool_not_eligible":
+                    if _bad_reason == "no_eligible_tools":
+                        # V69 M68A §B — the turn has NO eligible tools (the round
+                        # budget is spent, or policy withheld every one). That is a
+                        # denial, not a malformed call: it must not consume the
+                        # repair budget, and it must never execute.
+                        _tool_budget.note_denied()
+                        _err_class, _msg = "no_eligible_tools", (
+                            "No tool is eligible for this turn, so `"
+                            f"{tool_name}` was NOT executed. Answer directly with "
+                            "what you already have.")
+                    elif _bad_reason == "tool_not_eligible":
                         _tool_budget.note_denied()
                         _err_class, _msg = "tool_not_eligible", (
                             f"`{tool_name}` is not an eligible tool for this turn. It "
@@ -3950,9 +3977,24 @@ class LLM:
         Agentic SOC reasoning — given accumulated incident context, return the
         next tool to invoke or declare the incident RESOLVED.
 
-        Returns a dict with keys: tool, input, reasoning.
-        Special tool name "RESOLVED" signals end of the ReAct loop.
+        Returns the wire form of a validated :class:`~core.agentic_decision.Decision`:
+        ``status``, ``tool``, ``input``, ``reasoning``, ``detail``. ``status`` is
+        always present and is the ONLY field a caller may dispatch on.
+
+        V69 M68A §C — this method used to end with::
+
+            return {"tool": "RESOLVED", "input": {}, "reasoning": "not parseable"}
+
+        so a truncated stream, an error page rendered as prose or a bare apology
+        from the model produced the same value as a contained incident, and the
+        ReAct loop closed a live incident and logged it as *resolved*. A reply
+        that is not a decision is now ``INVALID_DECISION``; a reply that never
+        arrived is ``MODEL_ERROR``; neither can ever read as ``RESOLVED``.
         """
+        from core.agentic_decision import (
+            SOC_ADVERTISED_TOOLS, invalid, model_error, validate_decision,
+        )
+
         context_summary = json.dumps(context, ensure_ascii=False, default=str)[:4000]
 
         system = (
@@ -3960,38 +4002,53 @@ class LLM:
             "Given the incident context, decide the next single action to take.\n\n"
             "Respond ONLY with valid JSON in this exact format (no markdown fences):\n"
             '{"tool": "<tool_name_or_RESOLVED>", "input": {}, "reasoning": "<brief>"}\n\n'
-            "Available tools: network_scan, whois_lookup, check_connectivity, "
-            "forensic_capture, run_shell_command.\n"
+            # Rendered from the SAME tuple the validator uses, so the advertised
+            # set and the dispatchable set cannot drift apart.
+            f"Available tools: {', '.join(SOC_ADVERTISED_TOOLS)}.\n"
             "Use RESOLVED when the incident is fully assessed or contained. "
             "Prefer information gathering before active response. "
             "Minimize tool calls — one action per cycle."
         )
 
-        response = await self.client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": f"Incident context:\n{context_summary}"},
-            ],
-            stream=False,
-        )
+        try:
+            response = await self.client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": f"Incident context:\n{context_summary}"},
+                ],
+                stream=False,
+            )
+            raw = (response.choices[0].message.content or "").strip()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # No usable reply arrived. That is a statement about the transport,
+            # and it says NOTHING about the incident.
+            return model_error(f"{type(exc).__name__}: {exc}").as_dict()
 
-        raw = (response.choices[0].message.content or "").strip()
         # Strip markdown code fences if the model emits them
         raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.MULTILINE).strip()
 
+        parsed = None
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             m = re.search(r'\{.*\}', raw, re.DOTALL)
             if m:
                 try:
-                    return json.loads(m.group(0))
+                    parsed = json.loads(m.group(0))
                 except json.JSONDecodeError:
-                    pass
-        return {"tool": "RESOLVED",
-                "input": {},
-                "reasoning": f"LLM response not parseable: {raw[:100]}"}
+                    parsed = None
+
+        if parsed is None:
+            return invalid(f"model reply did not parse as JSON: {raw[:120]}").as_dict()
+
+        # `honour_status=False`: the envelope status is OURS. A model that could
+        # set it could assert RESOLVED without the sentinel, which is the audited
+        # defect wearing a different field name.
+        return validate_decision(parsed, allowed_tools=SOC_ADVERTISED_TOOLS,
+                                 honour_status=False).as_dict()
 
     async def chat(self, user_message: str) -> str:
         """Wrapper no-streaming: acumula el stream completo y retorna el string."""

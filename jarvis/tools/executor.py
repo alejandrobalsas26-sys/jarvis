@@ -1049,6 +1049,47 @@ if TYPE_CHECKING:  # pragma: no cover — annotations only
     from core.effect_journal import DurableEffectJournal
 
 
+class JournalLifecycle(Enum):
+    """V69 M68A §A — the FOUR distinguishable states of this process's journal.
+
+    The external audit found that three of them were being carried in one
+    boolean (``_journal_ready``) plus a nullable slot, and that the collapse was
+    not lossless: an initialisation ERROR and an operator-DISABLED journal both
+    ended up as ``(_journal_ready=True, _journal=None)``. The first effectful
+    call refused correctly, and then every later call in the same process read
+    that pair as "the operator switched durability off" and EXECUTED — a
+    fail-OPEN reached purely by asking twice.
+
+    The required property is that these four are never equal::
+
+        DISABLED != INITIALIZING != READY != FAILED
+
+    and that ``READY`` is observable ONLY after construction *and*
+    verification have both returned. Every other state is fail-closed: it
+    either refuses (``INITIALIZING``/``FAILED``) or carries the operator's
+    deliberate, audited choice (``DISABLED``).
+    """
+
+    #: Never asked for. The next request will attempt construction.
+    UNINITIALIZED = "UNINITIALIZED"
+    #: Constructed by the caller and handed to ``__init__``, not yet verified.
+    #: NOT ``READY``: the constructor argument proves construction, never health.
+    UNVERIFIED = "UNVERIFIED"
+    #: Construction/verification is running RIGHT NOW. Nothing is proven, so
+    #: nothing may execute — a re-entrant request refuses rather than borrowing
+    #: a half-built journal.
+    INITIALIZING = "INITIALIZING"
+    #: Constructed AND verified. The only state in which effects may proceed.
+    READY = "READY"
+    #: The operator switched durability off (``JARVIS_EFFECT_JOURNAL=0``).
+    #: In-process guarantees only, and the disposition says so.
+    DISABLED = "DISABLED"
+    #: Construction or verification FAILED. Permanently fail-closed for the
+    #: life of the process: re-raising is what keeps this distinct from
+    #: ``DISABLED``, which is the whole point of the state machine.
+    FAILED = "FAILED"
+
+
 class _EffectHooks:
     """The one line of communication between the effect protocol and a gate.
 
@@ -1205,7 +1246,14 @@ class ToolExecutor:
         # session never touches the disk and a test never inherits another
         # test's durable state.
         self._journal: "DurableEffectJournal | None" = journal
-        self._journal_ready: bool = journal is not None
+        # V69 M68A §A. An injected journal is UNVERIFIED, never READY: the
+        # argument proves somebody constructed it, which is not the same claim
+        # as "it is healthy". It is verified on first use, exactly like one this
+        # executor constructs itself, so there is no door into READY that skips
+        # verification. See `JournalLifecycle`.
+        self._journal_state: JournalLifecycle = (
+            JournalLifecycle.UNVERIFIED if journal is not None
+            else JournalLifecycle.UNINITIALIZED)
         self._journal_error: str = ""
 
     #: How long a recorded effect suppresses an identical repeat, in seconds.
@@ -1287,22 +1335,61 @@ class ToolExecutor:
         the guarantee while the system believed it had it — it raises, and
         `_execute_effect_protocol` turns that into a refusal (§25).
         """
-        if self._journal_ready:
+        state = self._journal_state
+        if state is JournalLifecycle.READY:
             return self._journal
+        if state is JournalLifecycle.DISABLED:
+            return None
+        if state is JournalLifecycle.FAILED:
+            # V69 M68A §A. THE defect. This used to return None, which
+            # `_durable_effect` reads as operator-DISABLED — so the second
+            # effectful call of a process whose journal failed to open executed
+            # the effect that the first call had correctly refused. A failed
+            # initialisation is not an absent journal; it is an unusable one,
+            # and it must keep refusing for as long as it is unusable.
+            from core.effect_journal import JournalUnhealthy
+            raise JournalUnhealthy(
+                self._journal_error
+                or "the durable effect journal failed to initialise")
+        if state is JournalLifecycle.INITIALIZING:
+            # Re-entrant request while construction is still running. Nothing is
+            # verified, so nothing may execute; borrowing the half-built object
+            # is the same fail-open by a shorter route.
+            from core.effect_journal import JournalUnhealthy
+            raise JournalUnhealthy(
+                "the durable effect journal is still initialising")
+
         from core.effect_journal import DurableEffectJournal, journal_enabled
 
-        self._journal_ready = True
-        if not journal_enabled():
+        # INITIALIZING is published BEFORE the work, READY only after it. The
+        # old code published its readiness flag here and then constructed, so a
+        # raise left "ready" asserted over a journal that did not exist.
+        self._journal_state = JournalLifecycle.INITIALIZING
+        try:
+            if state is JournalLifecycle.UNVERIFIED:
+                journal = self._journal
+            else:
+                if not journal_enabled():
+                    self._journal = None
+                    self._journal_state = JournalLifecycle.DISABLED
+                    return None
+                journal = DurableEffectJournal()
+            # V69 M65D. Opening proves the FILE is there, not that it is usable:
+            # a corrupt-but-openable database passed this point and then raised a
+            # raw sqlite3.DatabaseError out of `reserve`, past the refusal
+            # envelope §25 promises. `assert_healthy` is the check that already
+            # knew; it simply was never called on the effect path.
+            journal.assert_healthy()
+        except BaseException as exc:
+            # BaseException deliberately: a CancelledError or a KeyboardInterrupt
+            # part-way through construction leaves exactly as little proven as a
+            # sqlite error does, and inheriting READY from either is the bug.
             self._journal = None
-            return None
-        journal = DurableEffectJournal()
-        # V69 M65D. Opening proves the FILE is there, not that it is usable: a
-        # corrupt-but-openable database passed this point and then raised a raw
-        # sqlite3.DatabaseError out of `reserve`, past the refusal envelope §25
-        # promises. `assert_healthy` is the check that already knew; it simply
-        # was never called on the effect path.
-        journal.assert_healthy()
+            self._journal_error = str(exc) or exc.__class__.__name__
+            self._journal_state = JournalLifecycle.FAILED
+            raise
         self._journal = journal
+        self._journal_state = JournalLifecycle.READY
         return self._journal
 
     @staticmethod
@@ -1525,11 +1612,57 @@ class ToolExecutor:
         # Keyboard fallback — runs in thread pool so event loop stays free.
         # Reached on: STT unavailable, vocal timeout, or low-confidence transcript.
         # Security: still requires an explicit 'y'; never auto-approves.
-        auth = await loop.run_in_executor(
-            None, lambda: input("  ¿Autorizar ejecución? (y/N): ")
-        )
+        #
+        # V69 M68A §D — but only where there is somebody to type it. `input()` on a
+        # non-interactive stdin either raises EOFError immediately or, on a pipe
+        # that nobody ever writes to or closes (a systemd unit, a container with
+        # stdin held open, a CI runner), blocks FOREVER. The await above it is
+        # unbounded, and `run_agentic_incident` only consulted its deadline between
+        # cycles, so a headless run reached this line and hung with no timeout, no
+        # terminal event and an incident still open.
+        #
+        # The fix is to REFUSE, not to walk away from the call. Wrapping this in
+        # `asyncio.wait_for` would return control while the executor thread stayed
+        # blocked inside `input()` — an abandoned thread holding the default
+        # executor and still owning stdin, so the NEXT approval prompt would read
+        # the keystroke this one was waiting for. Detecting that nobody can answer
+        # is the only answer that costs nothing and loses nothing: it is
+        # fail-closed (deny), and it never starts the thread at all.
+        if not self._approval_input_is_interactive():
+            logger.warning(
+                "VAP: no interactive stdin — keyboard authorisation is impossible, "
+                "DENIED fail-closed")
+            return False, "keyboard:denied:no_interactive_stdin"
+
+        try:
+            auth = await loop.run_in_executor(
+                None, lambda: input("  ¿Autorizar ejecución? (y/N): ")
+            )
+        except (EOFError, OSError) as exc:
+            # stdin was interactive when we looked and is gone now. Still a denial.
+            logger.warning(f"VAP: keyboard authorisation unavailable ({exc}) — DENIED")
+            return False, "keyboard:denied:stdin_unavailable"
         granted = auth.strip().lower() == "y"
         return granted, f"keyboard:{'granted' if granted else 'denied'}"
+
+    @staticmethod
+    def _approval_input_is_interactive() -> bool:
+        """Whether a human could actually answer a keyboard prompt right now.
+
+        V69 M68A §D. Separated from :meth:`_challenge` so it can be tested
+        directly and so the decision has exactly one implementation. Fail-closed
+        by construction: anything it cannot positively establish is False.
+        """
+        stream = getattr(sys, "stdin", None)
+        if stream is None:
+            return False
+        if getattr(stream, "closed", False):
+            return False
+        try:
+            return bool(stream.isatty())
+        except (ValueError, OSError):
+            # A detached or already-closed stream. Not interactive.
+            return False
 
     # ── Async executor gate ───────────────────────────────────────────────────
 

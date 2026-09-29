@@ -131,7 +131,24 @@ def _make_executor():
     return ToolExecutor(stt_queue=asyncio.Queue(), stt_listener=_FakeSTT())
 
 
-def _run_challenge(monkeypatch, keyboard_value):
+class _InteractiveStdin:
+    """A stdin that reports itself as a terminal.
+
+    V69 M68A §D — `_challenge` now refuses to block on `input()` when nothing can
+    answer it, because on a non-interactive stdin that never closes the call blocks
+    FOREVER and the agentic loop consulted its deadline only between cycles. A test
+    whose subject is the KEYBOARD fallback therefore has to supply a keyboard:
+    under pytest, stdin is not a tty, so without this the guard (correctly) denies
+    before the fallback is ever reached.
+    """
+
+    closed = False
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _run_challenge(monkeypatch, keyboard_value, *, interactive: bool = True):
     import tools.executor as ex
 
     async def _noop(_evt):
@@ -139,6 +156,8 @@ def _run_challenge(monkeypatch, keyboard_value):
 
     monkeypatch.setattr(ex, "_aura_broadcast", _noop)
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: keyboard_value)
+    if interactive:
+        monkeypatch.setattr("sys.stdin", _InteractiveStdin())
 
     te = _make_executor()
     return asyncio.run(te._challenge("run_shell_command", "ls -la"))
@@ -160,6 +179,36 @@ def test_low_confidence_keyboard_empty_denies(monkeypatch):
     granted, audit = _run_challenge(monkeypatch, "")
     assert granted is False
     assert audit == "keyboard:denied"
+
+
+def test_headless_keyboard_authorisation_denies_without_blocking(monkeypatch):
+    """V69 M68A §D — with no interactive stdin there is nobody to type `y`, and
+    `input()` would block forever with an incident still open. Fail closed, and do
+    NOT start the thread: a `wait_for` here would return while that thread stayed
+    blocked inside `input()` still owning stdin, so the next prompt would consume
+    this one's keystroke.
+    """
+    called = {"input": 0}
+
+    def _tripwire(*_a, **_k):
+        called["input"] += 1
+        raise AssertionError("input() must not be reached without a terminal")
+
+    import tools.executor as ex
+
+    async def _noop(_evt):
+        return None
+
+    monkeypatch.setattr(ex, "_aura_broadcast", _noop)
+    monkeypatch.setattr("builtins.input", _tripwire)
+    monkeypatch.setattr("sys.stdin", None)
+
+    te = _make_executor()
+    granted, audit = asyncio.run(te._challenge("run_shell_command", "ls -la"))
+
+    assert granted is False
+    assert audit == "keyboard:denied:no_interactive_stdin"
+    assert called["input"] == 0, "the blocking prompt was entered anyway"
 
 
 # ─────────────────────────── llm.aclose (Task 7) ────────────────────────────

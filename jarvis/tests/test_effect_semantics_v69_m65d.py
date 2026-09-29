@@ -2129,14 +2129,19 @@ def test_a_corrupt_journal_refuses_rather_than_raising_sqlite(h, monkeypatch, tm
     import sqlite3 as _sqlite3
 
     from core.effect_journal import JournalUnhealthy
+    from tools.executor import JournalLifecycle
 
     h.add_tool()
 
     def _unhealthy():
         raise JournalUnhealthy("failed its integrity check")
 
+    # V69 M68A §A — `_journal_ready` (a bool) became `_journal_state` (a
+    # JournalLifecycle). UNINITIALIZED is what `False` meant here: nothing has
+    # been attempted yet, so the next call attempts construction.
     monkeypatch.setattr(h.journal, "assert_healthy", _unhealthy)
-    monkeypatch.setattr(h.executor, "_journal_ready", False)
+    monkeypatch.setattr(h.executor, "_journal_state",
+                        JournalLifecycle.UNINITIALIZED)
     monkeypatch.setattr(h.executor, "_journal", None)
     monkeypatch.setattr("core.effect_journal.DurableEffectJournal",
                         lambda *a, **kw: h.journal)
@@ -2149,7 +2154,9 @@ def test_a_corrupt_journal_refuses_rather_than_raising_sqlite(h, monkeypatch, tm
 
     monkeypatch.setattr(h.journal, "assert_healthy", lambda: None)
     monkeypatch.setattr(h.journal, "reserve", _raises)
-    monkeypatch.setattr(h.executor, "_journal_ready", True)
+    # READY is what `True` meant: constructed AND verified, so `_effect_journal`
+    # hands this journal straight back.
+    monkeypatch.setattr(h.executor, "_journal_state", JournalLifecycle.READY)
     monkeypatch.setattr(h.executor, "_journal", h.journal)
     result = asyncio.run(h.call())
     assert h.count() == 0
