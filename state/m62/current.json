@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0063-m68a-runtime-integrity.json",
-  "latest_snapshot_sha256": "15ee03264e0b286ae93cbda23e5a217ee19fd8324da23f77b91e1f52d835d995",
+  "latest_snapshot_path": "state/m62/snapshots/0064-m68a-deadline-refusal.json",
+  "latest_snapshot_sha256": "435d49bf5462063af2f86d657f5ce5e833d2dcc99ae9b676b88f06e0d82f24b4",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 63,
-  "subject_state_commit": "441b00b816ef131fbaa5793ce6a172f8a0cf7a00",
+  "state_generation": 64,
+  "subject_state_commit": "cfb7b8e502117d103434e9767937b6ad06ecf8b1",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }

@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **63** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **64** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0063-m68a-runtime-integrity.json` |
-| **Snapshot SHA256** | `15ee03264e0b286ae93cbda23e5a217ee19fd8324da23f77b91e1f52d835d995` |
-| **Subject state commit** | `441b00b816ef131fbaa5793ce6a172f8a0cf7a00` (M68A runtime integrity hardening; eval-v7 spent once, 005 not eligible, 004 still held) |
+| **Latest snapshot** | `state/m62/snapshots/0064-m68a-deadline-refusal.json` |
+| **Snapshot SHA256** | `435d49bf5462063af2f86d657f5ce5e833d2dcc99ae9b676b88f06e0d82f24b4` |
+| **Subject state commit** | `cfb7b8e502117d103434e9767937b6ad06ecf8b1` (M68A runtime integrity hardening; eval-v7 spent once, 005 not eligible, 004 still held) |
 | **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 37's `cfa23bb…`, gen 39's `3bd46fb…`, gen 58's `7125557…` and gen 62's `2c08607…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -43,12 +43,12 @@ asks Git, not prose, about branch, ancestry and `master`.
 | Field | Value |
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
-| Branch | `jarvis-v69-m68a-runtime-integrity-hardening` — gen 63 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `441b00b816ef131fbaa5793ce6a172f8a0cf7a00` — the commit gen 63 describes AND the commit its integration authority governs |
+| Branch | `jarvis-v69-m68a-runtime-integrity-hardening` — gen 64 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
+| Governed subject | `cfb7b8e502117d103434e9767937b6ad06ecf8b1` — the commit gen 64 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
-| `origin/master` | `2c08607abc7429592de06570c4a2939c0eccb2af` — **untouched by M62**, gen 62 integrated, and the **integration base** gen 63 authorises a fast-forward FROM |
+| `origin/master` | `2c08607abc7429592de06570c4a2939c0eccb2af` — **untouched by M62**, gen 62 integrated, and the **integration base** gen 64 authorises a fast-forward FROM |
 | Merge / tag / release / version bump | **none** — `core/version.py` still declares `MILESTONE = 61`, deliberately |
 
 **Every hash here is a current identity, not a restart target.** Start from current HEAD; do
@@ -70,7 +70,7 @@ name the commit that carries it (§2).
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends. `…S4H_…md` |
 | Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME/REPOSITORY, no science** (gens 29–33). **Universal exactly-once NOT claimed**: 23/24 effectful tools `NON_REPLAYABLE`. **0** spends. `…ROWS_THROUGH_S5F.md` |
 | Earlier milestones | **S5G · S5G.1 · M65D · M66A — V4 CONTROL PLANE, PRE-INTEGRATION HARDENING, UNCERTAIN EFFECTS, EPISTEMIC DELIBERATION; no science.** Gens 34–37. V4 declares only commits that already exist and **DERIVES** the observation; executable authority changes only inside a governed subject (D49–D54); an error after the boundary no longer means *nothing happened* (D55–D63); policy only **STRENGTHEN**s. **0** spends. `…S5G_…md` · `…S5G1_…md` · `…M65D_…md` · `…M66A_…md` |
-| Last milestone | **M68A — RUNTIME INTEGRITY HARDENING, no science.** Gen 63. A STATIC audit of `7125557…` revalidated against current master: **4/4 CONFIRMED**. A failed journal read as operator-DISABLED and the *second* effect ran; an exhausted tool set became **unrestricted**; a parse failure returned **RESOLVED**; cancellation identity and the deadline were shared. **112** tests, **22/22** mutations, **0** spends. `docs/v69_M68A_…md` |
+| Last milestone | **M68A — RUNTIME INTEGRITY HARDENING, no science.** Gen 64. A STATIC audit of `7125557…` revalidated against current master: **4/4 CONFIRMED**. A failed journal read as operator-DISABLED and the *second* effect ran; an exhausted tool set became **unrestricted**; a parse failure returned **RESOLVED**; cancellation identity and the deadline were shared. **113** tests, **22/22** mutations, **0** spends. `docs/v69_M68A_…md` |
 | Earlier milestone | **M67A — REASONING DISTILLATION FOUNDATION, no science.** Gen 62, DATA+INFRASTRUCTURE ONLY. Traces → typed decision procedures behind a 7-check firewall and a 15-dimension gate; a harness that **runs nothing**. **203** tests; **0** spends, no corpus ingested. `docs/v69_M67A_…md` |
 | Earlier milestone | **M66B — EXECUTION ISOLATION & CONTAINMENT, no science.** Gen 58. `code_execute`→**SANDBOXED**, evidence-derived, fail-closed; L3 limits need a sandbox host, CI cannot witness (§K). Argument grammar **BEST-EFFORT**, NOT a boundary. **131/131** mutations, **0** spends. `…M66B_…md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
@@ -414,7 +414,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            12311 passed · 45 skipped · 0 failed      [M68A, measured]
+result            12312 passed · 45 skipped · 0 failed      [M68A, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [M68A, re-measured]
