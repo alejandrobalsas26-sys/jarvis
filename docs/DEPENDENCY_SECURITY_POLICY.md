@@ -170,14 +170,14 @@ that case:
 
 ---
 
-## 5. The 490 Low Bandit findings
+## 5. The 491 Low Bandit findings
 
 **These are not claimed to be harmless.** They are recorded, bounded and enforced.
 
 | | |
 |---|---|
-| Approved baseline | **490** (`core.release_facts.BANDIT_LOW_BASELINE`) |
-| Currently observed | **490**, same command, no exclusions |
+| Approved baseline | **491** (`core.release_facts.BANDIT_LOW_BASELINE`) |
+| Currently observed | **491**, same command, no exclusions |
 
 > **Baseline history.** Set at **488** at the M61.8 closure commit, where it was
 > measured and correct. Breached by `436119b` ("feat(runtime): add situational
@@ -187,7 +187,13 @@ that case:
 > a `finally` during socket teardown (B110). The breach survived five weeks because the
 > only thing enforcing this ceiling is a test in CI's authoritative job, and that job
 > could not collect; see `jarvis/docs/V69_S5E_REALITY_RECONCILIATION.md`. The blocking
-> Medium/High gate was not touched and remains at zero.
+> Medium/High gate was not touched and remains at zero. Re-approved at **490** by V69
+> M66B for the execution-containment broker, and at **491** by V69 M68B for exactly one
+> finding: `core/bounded_output.py` bounds a contained execution's output while it runs
+> instead of truncating an already-accumulated string, and a module that reads subprocess
+> pipes must `import subprocess` — B404 on the import alone. That module starts no process
+> and makes no subprocess call (no B603); argv construction and `shell=False` stay in
+> `core/containment.py`. Medium/High remain at zero.
 | Enforcement | `jarvis/scripts/check_bandit_low_baseline.py` and `tests/test_bandit_low_baseline_v69_m618.py` |
 | Rule | `observed <= baseline` |
 
@@ -303,7 +309,7 @@ A release is **not** blocked by:
 
 Carried into `69.61.0`, deliberately and with the reasoning stated:
 
-1. **490 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
+1. **491 Low Bandit findings**, baselined and enforced (§5). Not eliminated.
 2. **The advisory `pip-audit` result is not triaged.** M61 made the result visible;
    acting on it is separate work. This is the highest-value item for the next
    maintenance pass.

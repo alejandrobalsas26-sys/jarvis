@@ -60,11 +60,8 @@ _PS_PATH = "/api/ps"
 
 def default_base_url() -> str:
     """The normalized Ollama base URL (``scheme://host:port``)."""
-    try:
-        from core.model_router import normalize_ollama_host
-        return normalize_ollama_host()
-    except Exception:  # noqa: BLE001
-        return "http://127.0.0.1:11434"
+    from core.ollama_endpoint import ollama_base_url
+    return ollama_base_url()
 
 
 class NativeTransportError(Exception):

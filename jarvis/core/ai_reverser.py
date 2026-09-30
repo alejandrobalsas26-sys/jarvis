@@ -14,6 +14,8 @@ import os
 import re
 from pathlib import Path
 
+from core.ollama_endpoint import ollama_base_url
+
 logger = logging.getLogger("jarvis.ai_reverser")
 
 try:
@@ -23,7 +25,10 @@ except Exception:
     pefile = None
     _PEFILE_OK = False
 
-_OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434")
+# V69 M68B (D): resolved through the canonical path. This module used to read
+# its OWN variable (JARVIS_OLLAMA_URL) with its own localhost default, so a
+# deployment that configured OLLAMA_HOST silently left this client behind.
+_OLLAMA_URL = ollama_base_url()
 _RE_MODEL = os.environ.get("JARVIS_RE_MODEL", "qwen2.5:7b-instruct-q4_K_M")
 _MAX_STRINGS = 280
 _PACK_ENTROPY = 7.2

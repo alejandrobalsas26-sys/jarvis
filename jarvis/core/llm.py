@@ -1,8 +1,9 @@
 """
 core/llm.py — LLM Brain offline via Ollama (OpenAI-compatible REST API).
 
-Usa AsyncOpenAI apuntando a http://localhost:11434/v1 para compatibilidad
-con cualquier modelo Ollama que soporte tool use (qwen2.5-coder, llama3.1, etc.).
+Usa AsyncOpenAI apuntando al endpoint que ``core.ollama_endpoint`` resuelve (V69
+M68B/D: OLLAMA_HOST, o el loopback por defecto) para compatibilidad con cualquier
+modelo Ollama que soporte tool use (qwen2.5-coder, llama3.1, etc.).
 Mantiene toda la lógica asíncrona de streaming y el ciclo tool_use.
 
 v3: Integración MCP asíncrona con packet_tracer_bridge.py via stdio transport.
@@ -1208,9 +1209,14 @@ class LLM:
         # deadline: the per-turn deadline is derived from the risk-sized TurnBudget
         # and applied per request via `with_options(timeout=...)`, because this
         # client is shared with the verifier.
+        # V69 M68B (D): the endpoint is RESOLVED, not written. This literal was
+        # the bypass: the Dockerfile ships OLLAMA_HOST=http://host.docker.internal
+        # and every health/availability/diagnostic path honoured it, while this —
+        # the only client that actually infers — always targeted localhost.
         from core.config import settings as _cfg
+        from core.ollama_endpoint import ollama_openai_base_url
         self.client = AsyncOpenAI(
-            base_url="http://localhost:11434/v1",
+            base_url=ollama_openai_base_url(),
             api_key="ollama",
             timeout=httpx.Timeout(
                 connect=float(getattr(_cfg, "turn_connect_timeout_s", 5.0)),

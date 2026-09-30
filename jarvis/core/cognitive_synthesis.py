@@ -233,6 +233,7 @@ def _live_synthesizer():
     Guarded: any import/wiring failure degrades to the deterministic answer."""
     try:
         from core.model_router import model_for_role, ModelRole
+        from core.ollama_endpoint import ollama_base_url
         import httpx
     except Exception:  # noqa: BLE001
         return None
@@ -241,7 +242,7 @@ def _live_synthesizer():
         model = model_for_role(ModelRole.DEEP)
         async with httpx.AsyncClient(timeout=_SYNTH_TIMEOUT_S) as client:
             r = await client.post(
-                "http://127.0.0.1:11434/api/generate",
+                ollama_base_url() + "/api/generate",   # V69 M68B (D): one resolver
                 json={"model": model, "prompt": prompt, "stream": False,
                       "options": {"temperature": 0.1}})
             r.raise_for_status()

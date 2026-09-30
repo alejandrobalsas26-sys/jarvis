@@ -14,11 +14,8 @@ from loguru import logger
 
 def _ollama_base() -> str:
     """Normalized Ollama base URL (shared with the runtime resolver)."""
-    try:
-        from core.model_router import normalize_ollama_host
-        return normalize_ollama_host()
-    except Exception:
-        return "http://127.0.0.1:11434"
+    from core.ollama_endpoint import ollama_base_url
+    return ollama_base_url()
 
 
 def _configured_role_model(role_name: str, default: str) -> str:

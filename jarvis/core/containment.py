@@ -54,6 +54,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
+from core.bounded_output import (
+    BoundedCapture,
+    TerminationReason,
+    capture_bounded,
+)
 from core.execution_profile import (
     BASELINE_RESTRICTED_CONTROLS,
     ControlStatus,
@@ -165,6 +170,11 @@ class ContainmentReceipt:
     downgraded: bool = False
     started_at: str | None = None
     finished_at: str | None = None
+    #: V69 M68B (A): the POSITIVE output-accounting contract — how many bytes the
+    #: child produced, how many this process retained, and why the capture ended.
+    #: ``None`` means no capture happened (the run never executed), which is
+    #: deliberately distinct from a capture that retained zero bytes.
+    output_accounting: dict | None = None
 
     def enforced(self, name: str) -> bool:
         return self.controls.get(name) is ControlStatus.ENFORCED
@@ -197,6 +207,23 @@ class ContainmentReceipt:
             out[name] = self.controls.get(name, ControlStatus.NOT_ENFORCED).value
         if self.failure_reason is not None:
             out["failure_reason"] = self.failure_reason
+        # V69 M68B (A): promote the output accounting so an operator (and the
+        # model) can SEE that output was truncated, and by how much, instead of
+        # inferring it from a string that merely stops. Absent when nothing ran.
+        if self.output_accounting is not None:
+            acc = self.output_accounting
+            out["output_accounting"] = dict(acc)
+            out["output_bytes_seen"] = {
+                "stdout": acc.get("stdout", {}).get("bytes_seen", 0),
+                "stderr": acc.get("stderr", {}).get("bytes_seen", 0),
+            }
+            out["output_bytes_retained"] = {
+                "stdout": acc.get("stdout", {}).get("bytes_retained", 0),
+                "stderr": acc.get("stderr", {}).get("bytes_retained", 0),
+            }
+            out["stdout_truncated"] = bool(acc.get("stdout", {}).get("truncated"))
+            out["stderr_truncated"] = bool(acc.get("stderr", {}).get("truncated"))
+            out["termination_reason"] = acc.get("termination_reason")
         if self.started_at is not None:
             out["started_at"] = self.started_at
         if self.finished_at is not None:
@@ -231,6 +258,19 @@ CE_NPROC = 64                           # RLIMIT_NPROC inside the remapped UID
 CE_WORKSPACE_BYTES = 64 * 1024 * 1024   # tmpfs /work size (storage bound)
 CE_STDOUT_CAP = 3000
 CE_STDERR_CAP = 1000
+
+#: V69 M68B (A) — the RETENTION bound, in bytes, enforced WHILE the child runs.
+#: CE_STDOUT_CAP/CE_STDERR_CAP are character caps applied to the finished string;
+#: they say nothing about parent memory, because `communicate()` had already read
+#: the pipe to EOF by the time they were applied. These are what
+#: `core.bounded_output` actually keeps: four bytes per capped character (the
+#: widest UTF-8 encoding, so the character cap is always reachable) plus a reserve
+#: for the sandbox readiness record, which is consumed from the head of stdout
+#: before the snippet's own output begins. Everything beyond is counted and
+#: dropped as it arrives.
+CE_OUTPUT_RESERVE_BYTES = 8 * 1024
+CE_STDOUT_RETAIN_BYTES = CE_STDOUT_CAP * 4 + CE_OUTPUT_RESERVE_BYTES
+CE_STDERR_RETAIN_BYTES = CE_STDERR_CAP * 4 + CE_OUTPUT_RESERVE_BYTES
 
 #: The only environment variables a contained execution inherits. Everything
 #: else — API keys, tokens, the operator's shell env, JARVIS_* settings — is
@@ -404,6 +444,37 @@ class ContainmentBackend:
         raise NotImplementedError
 
 
+def _record_output_accounting(
+    receipt: ContainmentReceipt,
+    capture: BoundedCapture,
+    *,
+    stdout_text: str,
+    stderr_text: str,
+) -> tuple[str, str]:
+    """Fold the BYTE bound (enforced during execution) and the CHARACTER cap
+    (applied to the finished string) into one record, and return the capped text.
+
+    Two different truncations can happen and they are not interchangeable:
+    ``bytes_seen > bytes_retained`` means the parent refused to store more —
+    the memory bound; ``len(text) > cap`` means the caller is handed less than
+    was retained — the presentation bound. ``truncated`` is true if EITHER fired,
+    and both numbers stay in the record so an operator can tell which did.
+    """
+    out = stdout_text[:CE_STDOUT_CAP]
+    err = stderr_text[:CE_STDERR_CAP]
+    acc = capture.to_dict()
+    acc["stdout"]["char_cap"] = CE_STDOUT_CAP
+    acc["stderr"]["char_cap"] = CE_STDERR_CAP
+    acc["stdout"]["chars_returned"] = len(out)
+    acc["stderr"]["chars_returned"] = len(err)
+    acc["stdout"]["truncated"] = bool(
+        acc["stdout"]["truncated"] or len(out) < len(stdout_text))
+    acc["stderr"]["truncated"] = bool(
+        acc["stderr"]["truncated"] or len(err) < len(stderr_text))
+    receipt.output_accounting = acc
+    return out, err
+
+
 # ── RestrictedProcessBackend (M66A.1 semantics, now a named backend) ──────────
 class RestrictedProcessBackend(ContainmentBackend):
     """The M66A.1 RESTRICTED_PROCESS: dedicated cwd, minimal env, wall timeout,
@@ -467,8 +538,12 @@ class RestrictedProcessBackend(ContainmentBackend):
         with open(script, "w", encoding="utf-8") as fh:
             fh.write(request.code)
 
+        # V69 M68B (A): BINARY pipes. Decoding is deferred to the end of the
+        # bounded capture, so the parent never holds a decoded copy of an
+        # unbounded read — and a snippet emitting invalid bytes can no longer
+        # raise UnicodeDecodeError out of the capture.
         popen_kwargs = dict(cwd=workdir, env=child_env, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, shell=False)
+                            stderr=subprocess.PIPE, shell=False)
         if posix:
             popen_kwargs["preexec_fn"] = _preexec
         elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
@@ -481,17 +556,27 @@ class RestrictedProcessBackend(ContainmentBackend):
         try:
             proc = subprocess.Popen(              # shell=False, argv is [python, -I, script]
                 [sys.executable, "-I", script], **popen_kwargs)
-            try:
-                stdout, stderr = proc.communicate(timeout=request.timeout)
-                returncode = proc.returncode
-            except subprocess.TimeoutExpired:
-                _kill_process_tree(proc, posix, signal.SIGKILL)
-                with contextlib.suppress(Exception):
-                    stdout, stderr = proc.communicate(timeout=5)
+            # The bound is enforced DURING execution: bytes past the retention
+            # limit are counted and dropped as they arrive, and both pipes keep
+            # draining so the child is never blocked into a pseudo-bound.
+            capture = capture_bounded(
+                proc,
+                stdout_limit=CE_STDOUT_RETAIN_BYTES,
+                stderr_limit=CE_STDERR_RETAIN_BYTES,
+                timeout=request.timeout,
+                on_timeout=lambda: _kill_process_tree(proc, posix, signal.SIGKILL),
+            )
+            if capture.termination_reason is TerminationReason.TIMEOUT:
                 err = f"Timeout tras {request.timeout}s de ejecución."
+                # Unchanged contract: a timed-out run reports NO returncode. The
+                # signal the reaper observed is kept in the accounting record.
+                returncode = None
+            else:
+                returncode = capture.returncode
             receipt.controls["wall_timeout"] = ControlStatus.ENFORCED
-            stdout = (stdout or "")[:CE_STDOUT_CAP]
-            stderr = (stderr or "")[:CE_STDERR_CAP]
+            stdout, stderr = _record_output_accounting(
+                receipt, capture,
+                stdout_text=capture.stdout.text, stderr_text=capture.stderr.text)
             receipt.controls["stdout_cap"] = ControlStatus.ENFORCED
             receipt.controls["stderr_cap"] = ControlStatus.ENFORCED
         except Exception as e:             # pragma: no cover - launch failure
@@ -733,20 +818,30 @@ class BubblewrapBackend(ContainmentBackend):
         err = None
         proc = None
         timed_out = False
+        capture: BoundedCapture | None = None
         try:
             proc = subprocess.Popen(              # shell=False, argv built from constants
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, shell=False, start_new_session=True)
-            try:
-                stdout, stderr = proc.communicate(input=stdin_payload,
-                                                  timeout=request.timeout)
-                returncode = proc.returncode
-            except subprocess.TimeoutExpired:
+                stderr=subprocess.PIPE, shell=False, start_new_session=True)
+            # V69 M68B (A): bounded during execution (see the restricted backend).
+            # The retention limit reserves room for the readiness record, which is
+            # consumed from the head of stdout before the snippet's own output, so
+            # the snippet still gets its full CE_STDOUT_CAP characters.
+            capture = capture_bounded(
+                proc,
+                stdout_limit=CE_STDOUT_RETAIN_BYTES,
+                stderr_limit=CE_STDERR_RETAIN_BYTES,
+                timeout=request.timeout,
+                input_bytes=stdin_payload.encode("utf-8"),
+                on_timeout=lambda: _kill_process_tree(proc, True, signal.SIGKILL),
+            )
+            stdout = capture.stdout.text
+            stderr = capture.stderr.text
+            if capture.termination_reason is TerminationReason.TIMEOUT:
                 timed_out = True
-                _kill_process_tree(proc, True, signal.SIGKILL)
-                with contextlib.suppress(Exception):
-                    stdout, stderr = proc.communicate(timeout=5)
                 err = f"Timeout tras {request.timeout}s de ejecución."
+            else:
+                returncode = capture.returncode
         except Exception as e:             # pragma: no cover - launch failure
             err = str(e)
         finally:
@@ -757,6 +852,14 @@ class BubblewrapBackend(ContainmentBackend):
             cleaned = _rmtree(scriptdir) and canary_gone
             receipt.cleanup_status = (ControlStatus.ENFORCED if cleaned
                                       else ControlStatus.NOT_ENFORCED)
+
+        # Record the accounting for EVERY path that got as far as a capture,
+        # including the two that return executed=False below: "the jail produced
+        # 9 GiB of stderr and never reached readiness" is exactly the diagnosis a
+        # bare failure_reason cannot give. The success path folds in the character
+        # caps afterwards.
+        if capture is not None:
+            receipt.output_accounting = capture.to_dict()
 
         # Bounded raw stderr, retained only as diagnostics (never the authority).
         receipt.measured_limitations.append(
@@ -813,8 +916,13 @@ class BubblewrapBackend(ContainmentBackend):
 
         # ready_flag == "1": the snippet ran under a jail whose mandatory controls
         # were observed established. Report its (bounded) output.
-        stdout = (snippet_out or "")[:CE_STDOUT_CAP]
-        stderr = (stderr or "")[:CE_STDERR_CAP]
+        if capture is not None:
+            stdout, stderr = _record_output_accounting(
+                receipt, capture,
+                stdout_text=snippet_out or "", stderr_text=stderr or "")
+        else:                              # pragma: no cover - launch failure only
+            stdout = (snippet_out or "")[:CE_STDOUT_CAP]
+            stderr = (stderr or "")[:CE_STDERR_CAP]
         if timed_out:
             receipt.failure_reason = FailureReason.TIMEOUT.value
         receipt.finished_at = _now()

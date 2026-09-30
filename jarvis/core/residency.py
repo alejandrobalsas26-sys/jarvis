@@ -270,11 +270,8 @@ async def inspect_loaded_models(*, base_url: str | None = None, client=None,
     import httpx
 
     if base_url is None:
-        try:
-            from core.ollama_native import default_base_url
-            base_url = default_base_url()
-        except Exception:  # noqa: BLE001
-            base_url = "http://127.0.0.1:11434"
+        from core.ollama_endpoint import ollama_base_url
+        base_url = ollama_base_url()
     owns = client is None
     if client is None:
         client = httpx.AsyncClient(timeout=timeout_s)

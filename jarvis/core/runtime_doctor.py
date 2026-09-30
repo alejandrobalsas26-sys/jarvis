@@ -415,9 +415,12 @@ def check_model_runtime() -> list[Finding]:
                         "install Ollama for local inference")]
     try:
         import httpx
-        from core.config import settings
-        base = getattr(settings, "ollama_host", "") or "http://127.0.0.1:11434"
-        response = httpx.get(f"{base.rstrip('/')}/api/tags", timeout=3.0)
+        from core.ollama_endpoint import resolve_endpoint
+        # V69 M68B (D): `settings.ollama_host` is not a field on Settings, so this
+        # getattr ALWAYS returned "" and the health check always probed loopback —
+        # a different host from the one inference used.
+        endpoint = resolve_endpoint()
+        response = httpx.get(endpoint.api_url("/api/tags"), timeout=3.0)
         models = [m.get("name", "") for m in (response.json().get("models") or [])]
         return [Finding(
             "model.ollama", "model_runtime",

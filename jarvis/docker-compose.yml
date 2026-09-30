@@ -16,7 +16,24 @@ services:
       JARVIS_ENV: ${JARVIS_ENV:-production}
     ports:
       - "8765:8765"
+    # V69 M68B (E) — persistence is classified, not blanket.
+    #   /app/data  DURABLE_SECURITY_STATE. Holds the M65C/M65D durable effect
+    #              journal (data/effect_journal.db). The retry authority reads it
+    #              to decide whether an effect already happened, so losing it on
+    #              `up --force-recreate` REPLAYS effects that already ran.
+    #   /app/logs  AUDIT_EVIDENCE. The append-only tactic/shutdown audit trail.
+    # Deliberately NOT persisted: per-execution containment workspaces under
+    # /tmp (core.containment proves it deleted them — a volume would resurrect
+    # attacker-controlled files), bytecode, and .env (a secret in a named volume
+    # outlives every `docker compose down` an operator would expect to clear it;
+    # it arrives through env_file instead).
+    # This buys survival of CONTAINER RECREATION. It is NOT a crash-durability
+    # claim: no Compose configuration can make one.
+    # Ownership: the image creates /app/data and /app/logs and chowns them to the
+    # non-root `jarvis` user before USER jarvis, so a fresh named volume inherits
+    # a writable root. See core/deployment_persistence.py for the classification.
     volumes:
+      - jarvis_data:/app/data
       - jarvis_logs:/app/logs
     depends_on:
       postgres:
@@ -55,4 +72,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  jarvis_data:
   jarvis_logs:

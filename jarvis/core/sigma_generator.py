@@ -84,8 +84,9 @@ Map all techniques to correct ATT&CK tags (attack.tXXXX format).
     try:
         from openai import AsyncOpenAI
 
+        from core.ollama_endpoint import ollama_openai_base_url
         ollama_client = AsyncOpenAI(
-            base_url="http://localhost:11434/v1",
+            base_url=ollama_openai_base_url(),   # V69 M68B (D): one resolver
             api_key="ollama",
         )
 

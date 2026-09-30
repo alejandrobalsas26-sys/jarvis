@@ -40,11 +40,22 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY --chown=jarvis:jarvis . .
 
-RUN mkdir -p logs && chown jarvis:jarvis logs
+# V69 M68B (E): create AND own every managed directory before dropping to the
+# non-root user. `/app` itself stays root-owned (COPY --chown sets ownership on
+# the copied CONTENT, not on WORKDIR) and `data` is excluded by .dockerignore, so
+# without this line the runtime user could not create it — and
+# core/managed_paths._resolve swallows that OSError by design, which made every
+# durable write fail silently. A volume mounted onto a directory the runtime user
+# cannot write is a volume that holds nothing.
+RUN mkdir -p logs data data/sessions data/diagnostics data/backups data/exports \
+    && chown -R jarvis:jarvis logs data
 
 USER jarvis
 
 # Ollama runs on the host/another container; reach it via this default.
+# V69 M68B (D): OLLAMA_HOST is THE variable core.ollama_endpoint reads, and every
+# path — health check, availability probe, diagnostics AND inference — resolves
+# through it. Before M68B the inference client ignored this and used localhost.
 ENV OLLAMA_HOST=http://host.docker.internal:11434
 
 # Healthcheck: confirm the base Python environment imports cleanly. (The base

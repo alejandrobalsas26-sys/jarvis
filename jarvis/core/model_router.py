@@ -11,10 +11,11 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
+
+from core.ollama_endpoint import ollama_base_url
 
 if TYPE_CHECKING:
     from core.model_capabilities import InferenceSurface
@@ -31,32 +32,27 @@ _DEFAULT_VISION    = "gemma3:4b"
 _DEFAULT_EMBEDDING = "nomic-embed-text:latest"
 _DEFAULT_VERIFIER  = "qwen3:8b"
 
-_DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-
 
 def normalize_ollama_host(raw: str | None = None) -> str:
     """Return a well-formed ``scheme://host:port`` Ollama base URL.
 
-    Tolerates the bare forms operators (and ``windows_hardener``) sometimes set,
-    e.g. ``127.0.0.1`` or ``localhost:11434``, which would otherwise produce an
-    invalid ``127.0.0.1/api/tags`` when a caller does ``f"{host}/api/tags"``.
-    Missing scheme defaults to ``http``; missing port defaults to ``11434``.
+    V69 M68B (D): this is now a FACADE. The resolution itself lives in
+    ``core.ollama_endpoint`` — the one path health, availability, diagnostics and
+    inference all share. A second implementation here is exactly the defect M68B
+    removed, so this function must delegate and never parse.
+
+    Behaviour is unchanged: bare forms operators (and ``windows_hardener``) set,
+    e.g. ``127.0.0.1`` or ``localhost:11434``, normalise rather than producing an
+    invalid ``127.0.0.1/api/tags``; an unusable value degrades to the loopback
+    default instead of raising (``core.ollama_endpoint.require_endpoint`` is the
+    strict gate for entry points that must fail explicitly).
     """
-    val = (raw if raw is not None else os.getenv("OLLAMA_HOST", "") or "").strip()
-    if not val:
-        return _DEFAULT_OLLAMA_HOST
-    if "://" not in val:
-        val = "http://" + val
-    parsed = urlparse(val)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 11434
-    return f"{scheme}://{host}:{port}"
+    return ollama_base_url(raw if (raw is None or raw.strip()) else None)
 
 
 MODEL_FAST = os.getenv("JARVIS_MODEL_FAST", _DEFAULT_FAST)
 MODEL_DEEP = os.getenv("JARVIS_MODEL_DEEP", _DEFAULT_DEEP)
-OLLAMA_URL = normalize_ollama_host()
+OLLAMA_URL = normalize_ollama_host()   # resolved through core.ollama_endpoint
 COMPLEXITY_THRESHOLD = 0.6
 
 _TECH_TERMS = {

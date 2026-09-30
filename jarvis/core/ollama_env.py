@@ -121,11 +121,19 @@ class OllamaEnvTruth:
         """V69 M55.5 — the five HONEST categories, never conflated: what JARVIS
         recommends, what THIS process's env holds, what the server actually reveals,
         whether the server's settings are verified (always False — the API cannot), and
-        what remains unknown (the server's real parallel/max-loaded config)."""
+        what remains unknown (the server's real parallel/max-loaded config).
+
+        V69 M68B (D) adds a sixth that was previously a hardcoded literal: the
+        ENDPOINT this process resolves, and where that value came from."""
+        from core.ollama_endpoint import endpoint_report
         rec = self.configured_by_jarvis or {}
         proc = self.process_environment or {}
         return {
-            "host": "127.0.0.1",
+            # V69 M68B (D): the endpoint ACTUALLY in use, with its provenance. The
+            # literal "127.0.0.1" that used to sit here was false in every
+            # non-loopback deployment — including the supported Docker one, whose
+            # image sets OLLAMA_HOST=http://host.docker.internal:11434.
+            "endpoint": endpoint_report(),
             "recommended": {
                 "num_parallel": rec.get("num_parallel"),
                 "max_loaded_models": rec.get("max_loaded_models"),

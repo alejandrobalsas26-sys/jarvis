@@ -89,8 +89,12 @@ def _check_ollama():
     # report a successfully-read local file as "ollama responsive". Validated through
     # core.url_policy: http/https only, no embedded credentials, redirects re-checked,
     # and the destination pinned to loopback/private because Ollama is a local server.
+    from core.ollama_endpoint import resolve_endpoint
     from core.url_policy import UrlPolicyError, open_url
-    url = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434") + "/api/tags"
+    # V69 M68B (D): the canonical resolver. This probe read its own variable
+    # (JARVIS_OLLAMA_URL) with its own default, so it could report "responsive"
+    # about a server no inference call would ever reach.
+    url = resolve_endpoint().api_url("/api/tags")
     try:
         with open_url(url, timeout=4, require_local=True, label="ollama") as r:
             return ("ollama", getattr(r, "status", 200) == 200, "responsive")

@@ -63,12 +63,21 @@ WARMING_STATES = frozenset({FastState.PROBING, FastState.WARMING,
                             FastState.MODEL_LOADING, FastState.PREWARMING})
 
 
+def _default_base_url() -> str:
+    """The canonical Ollama endpoint (V69 M68B/D). A default factory rather than a
+    literal, so a readiness probe and an inference call can never disagree."""
+    from core.ollama_endpoint import ollama_base_url
+    return ollama_base_url()
+
+
 @dataclass
 class FastReadiness:
     """Bounded readiness state for the interactive FAST role."""
 
     model: str = ""
-    base_url: str = "http://localhost:11434"
+    # V69 M68B (D): resolved, not a literal — a default that ignores OLLAMA_HOST
+    # made readiness a statement about a different server than inference used.
+    base_url: str = field(default_factory=_default_base_url)
     clock: Callable[[], float] = time.monotonic
     _state: FastState = field(default=FastState.CONFIGURED)
     _last_probe_ms: float | None = field(default=None)

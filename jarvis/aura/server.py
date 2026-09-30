@@ -12,13 +12,16 @@ v27.0 additions:
 """
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import re
 import secrets
 import psutil
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -193,40 +196,351 @@ def _ws_token_valid(token: "str | None") -> bool:
     return secrets.compare_digest(str(token), _AURA_WS_TOKEN)
 
 
+# ── V69 M68B (B) — bounded per-connection delivery ───────────────────────────
+#
+# BroadcastManager.broadcast() used to be:
+#
+#     for ws in set(self._clients):
+#         try:
+#             await ws.send_text(payload)      # <- the producer awaits a SOCKET
+#         except Exception:
+#             dead.add(ws)
+#
+# One sequential await per client, on the producer's own stack. A browser tab that
+# stops reading fills its TCP receive window; `send_text` then waits on the
+# transport's drain future, which resolves only when THAT client reads. Nothing in
+# the path bounded the wait, so a single wedged consumer stalled
+# `telemetry_broadcaster` and — because `core.correlator` is attached directly to
+# `manager.broadcast` — stalled compound-incident correlation too. Detection
+# latency became a function of the slowest HUD tab.
+#
+# The shape that fixes it, and the reason each part is there:
+#
+#   bounded queue per connection   the producer's per-client cost is one
+#                                  put_nowait: O(1), never awaits a socket
+#   ONE owned writer per queue     the only frame that touches the websocket, so
+#                                  concurrency is exactly one task per connection
+#                                  and never a task per event
+#   explicit send deadline         a writer that cannot place one frame inside the
+#                                  deadline declares the client dead; without it
+#                                  the stall moves into the writer instead of
+#                                  being removed
+#   explicit overflow policy       drop-oldest, counted. Telemetry is a stream of
+#                                  snapshots: the NEWEST frame is the one a HUD
+#                                  needs, so an evicted frame is the right loss
+#                                  and a hidden loss is the wrong one
+#   deterministic teardown         the writer is cancelled and awaited, so a
+#                                  disconnected client leaves no task behind
+#
+# Deliberately NOT solved with `asyncio.create_task(ws.send_text(...))` per client
+# per event: that trades a bounded stall for unbounded task growth, reorders
+# frames on the wire, and keeps only a weak reference to each task.
+
+#: Frames buffered per connection before the overflow policy fires.
+AURA_CLIENT_QUEUE_MAX = 256
+#: One frame's send deadline. A client that cannot accept a frame within this is
+#: not slow, it is gone.
+AURA_SEND_TIMEOUT_S = 5.0
+#: How long a writer may finish in-flight work during teardown.
+AURA_WRITER_DRAIN_S = 2.0
+
+#: Queued BEHIND the frames a channel already holds at teardown. The writer
+#: flushes what it has, sees this, and exits — so closing a healthy connection
+#: costs one loop turn instead of always waiting out AURA_WRITER_DRAIN_S. The
+#: drain is then a CEILING for a wedged client, not the normal cost.
+_SHUTDOWN = object()
+
+
+class OverflowPolicy(str, Enum):
+    """What a full per-connection queue does. Explicit and observable."""
+
+    DROP_OLDEST = "drop_oldest"
+
+
+@dataclass
+class ChannelMetrics:
+    """Counters only — never payloads. A frame may contain operator data."""
+
+    queued: int = 0
+    sent: int = 0
+    dropped_overflow: int = 0
+    dropped_closed: int = 0
+    send_timeouts: int = 0
+    send_errors: int = 0
+    high_watermark: int = 0
+    last_drop_reason: str | None = None
+
+    def snapshot(self, *, depth: int = 0, capacity: int = 0) -> dict:
+        return {
+            "queued": self.queued,
+            "sent": self.sent,
+            "dropped_overflow": self.dropped_overflow,
+            "dropped_closed": self.dropped_closed,
+            "send_timeouts": self.send_timeouts,
+            "send_errors": self.send_errors,
+            "queue_depth": depth,
+            "queue_capacity": capacity,
+            "high_watermark": self.high_watermark,
+            "last_drop_reason": self.last_drop_reason,
+            "overflow_policy": OverflowPolicy.DROP_OLDEST.value,
+        }
+
+
+class _ClientChannel:
+    """One websocket, one bounded queue, one owned writer task."""
+
+    def __init__(self, ws, *, maxsize: int = AURA_CLIENT_QUEUE_MAX,
+                 send_timeout: float = AURA_SEND_TIMEOUT_S,
+                 on_dead=None) -> None:
+        self.ws = ws
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, int(maxsize)))
+        self._send_timeout = float(send_timeout)
+        self._on_dead = on_dead
+        self._task: asyncio.Task | None = None
+        self._closing = False
+        self.metrics = ChannelMetrics()
+
+    # -- lifecycle -----------------------------------------------------------
+    def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(
+                self._run(), name=f"aura-writer-{id(self.ws):x}")
+
+    @property
+    def task(self) -> "asyncio.Task | None":
+        return self._task
+
+    @property
+    def closing(self) -> bool:
+        return self._closing
+
+    def depth(self) -> int:
+        return self._queue.qsize()
+
+    def snapshot(self) -> dict:
+        return self.metrics.snapshot(depth=self._queue.qsize(),
+                                     capacity=self._queue.maxsize)
+
+    # -- producer side (NEVER awaits a socket) --------------------------------
+    def offer(self, payload: str) -> bool:
+        """Hand one frame to this connection. Returns True when it was accepted.
+
+        This is the producer's ENTIRE per-client cost. It is synchronous on
+        purpose: there is no await here for a slow consumer to block on.
+        """
+        if self._closing:
+            self.metrics.dropped_closed += 1
+            self.metrics.last_drop_reason = "closing"
+            return False
+        try:
+            self._queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            # DROP_OLDEST: evict the stalest frame and admit the newest. Exactly
+            # one frame is lost either way; this chooses which.
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait(payload)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                self.metrics.dropped_overflow += 1
+                self.metrics.last_drop_reason = "overflow"
+                return False
+            self.metrics.dropped_overflow += 1
+            self.metrics.last_drop_reason = "overflow_evicted_oldest"
+        self.metrics.queued += 1
+        depth = self._queue.qsize()
+        if depth > self.metrics.high_watermark:
+            self.metrics.high_watermark = depth
+        return True
+
+    # -- the owned writer -----------------------------------------------------
+    async def _run(self) -> None:
+        try:
+            while True:
+                payload = await self._queue.get()
+                if payload is _SHUTDOWN:
+                    break
+                try:
+                    await asyncio.wait_for(self.ws.send_text(payload),
+                                           timeout=self._send_timeout)
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    self.metrics.send_timeouts += 1
+                    self.metrics.last_drop_reason = "send_timeout"
+                    break
+                except Exception:
+                    self.metrics.send_errors += 1
+                    self.metrics.last_drop_reason = "send_error"
+                    break
+                self.metrics.sent += 1
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._closing = True
+            if self._on_dead is not None:
+                try:
+                    self._on_dead(self.ws)
+                except Exception:  # noqa: BLE001 - reaping must never raise
+                    pass
+
+    async def aclose(self, *, drain_s: float = AURA_WRITER_DRAIN_S) -> None:
+        """Deterministic teardown: stop accepting, let the writer flush what it
+        already holds, then cancel and AWAIT it so no task outlives the socket."""
+        self._closing = True
+        task = self._task
+        if task is None or task.done():
+            return
+        try:
+            self._queue.put_nowait(_SHUTDOWN)
+        except asyncio.QueueFull:
+            # Full queue: the sentinel matters more than the stalest frame.
+            with contextlib.suppress(asyncio.QueueEmpty, asyncio.QueueFull):
+                self._queue.get_nowait()
+                self._queue.put_nowait(_SHUTDOWN)
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=drain_s)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            pass
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+
 class BroadcastManager:
-    """
-    Thread-safe (asyncio-safe) fan-out broadcaster.
-    Set mutations between await points are safe without a lock (asyncio is single-threaded).
+    """Fan-out broadcaster with a bounded, isolated lifecycle per connection.
+
+    ``broadcast()`` is O(clients) synchronous offers and never awaits a socket, so
+    one slow or dead consumer can no longer hold a producer.
     """
 
-    def __init__(self) -> None:
-        self._clients: set[WebSocket] = set()
+    def __init__(self, *, queue_max: int = AURA_CLIENT_QUEUE_MAX,
+                 send_timeout: float = AURA_SEND_TIMEOUT_S) -> None:
+        # Kept as the public membership view (``ws in manager._clients``).
+        self._clients: set = set()
+        self._channels: "dict[int, _ClientChannel]" = {}
+        self._queue_max = queue_max
+        self._send_timeout = send_timeout
 
-    async def connect(self, ws: WebSocket) -> None:
+    # -- membership ----------------------------------------------------------
+    async def connect(self, ws) -> None:
         await ws.accept()
-        self._clients.add(ws)
+        self._register(ws)
         logger.debug(f"AURA: +client  total={len(self._clients)}")
 
-    def disconnect(self, ws: WebSocket) -> None:
+    def _register(self, ws) -> None:
+        """Attach a bounded channel and start its owned writer."""
+        self._clients.add(ws)
+        channel = _ClientChannel(ws, maxsize=self._queue_max,
+                                 send_timeout=self._send_timeout,
+                                 on_dead=self._reap)
+        self._channels[id(ws)] = channel
+        channel.start()
+
+    def _reap(self, ws) -> None:
+        """Called by a writer that has stopped. Membership must reflect reality
+        the moment the writer dies, not at the next broadcast."""
         self._clients.discard(ws)
+        self._channels.pop(id(ws), None)
+
+    def disconnect(self, ws) -> None:
+        """Synchronous removal (kept for existing callers). The writer is
+        cancelled; use ``aclose_client`` when the caller can await."""
+        self._clients.discard(ws)
+        channel = self._channels.pop(id(ws), None)
+        if channel is not None and channel.task is not None:
+            channel.task.cancel()
         logger.debug(f"AURA: -client  total={len(self._clients)}")
 
+    async def aclose_client(self, ws, *,
+                            drain_s: float = AURA_WRITER_DRAIN_S) -> None:
+        """Awaitable removal: no writer task survives this call."""
+        self._clients.discard(ws)
+        channel = self._channels.pop(id(ws), None)
+        if channel is not None:
+            await channel.aclose(drain_s=drain_s)
+        logger.debug(f"AURA: -client  total={len(self._clients)}")
+
+    # -- the producer path ---------------------------------------------------
     async def broadcast(self, event: dict) -> None:
-        """Send `event` to every connected client; prune dead sockets."""
-        if not self._clients:
+        """Offer ``event`` to every connected client. Bounded and non-blocking:
+        the cost is one serialisation plus one put_nowait per client."""
+        if not self._channels:
             return
         payload = json.dumps(event, ensure_ascii=False, default=str)
-        dead: set[WebSocket] = set()
-        for ws in set(self._clients):
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.add(ws)
-        self._clients -= dead
+        for channel in list(self._channels.values()):
+            channel.offer(payload)
+
+    # -- observability / shutdown --------------------------------------------
+    def stats(self) -> dict:
+        return {
+            "clients": len(self._clients),
+            "queue_capacity": self._queue_max,
+            "send_timeout_s": self._send_timeout,
+            "overflow_policy": OverflowPolicy.DROP_OLDEST.value,
+            "channels": [c.snapshot() for c in self._channels.values()],
+        }
+
+    async def aclose(self, *, drain_s: float = AURA_WRITER_DRAIN_S) -> None:
+        """Application shutdown: every writer is cancelled and awaited."""
+        channels = list(self._channels.values())
+        self._channels.clear()
+        self._clients.clear()
+        for channel in channels:
+            await channel.aclose(drain_s=drain_s)
 
 
 # ── Module-level singletons ──────────────────────────────────────────────────
 manager = BroadcastManager()
+
+# V69 M68B (B) — the bounded fire-and-forget seam.
+#
+# `broadcast()` did `asyncio.create_task(_corr.ingest(event))` per event and the
+# websocket endpoint did `asyncio.create_task(_handle_hud_command(...))` per
+# command. Both were unbounded (concurrency equal to the arrival rate) and both
+# were UNTRACKED — asyncio keeps only a weak reference to a running task, so a
+# task nobody holds may be garbage-collected mid-await and simply stop, silently.
+#
+# One ceiling, one strong reference set, one counter. Over the ceiling the
+# coroutine is closed (no "never awaited" warning) and the drop is counted, which
+# is a policy; growing without limit is not.
+AURA_MAX_INFLIGHT_TASKS = 64
+_bounded_tasks: "set[asyncio.Task]" = set()
+_bounded_dropped = 0
+
+
+def _spawn_bounded(coro, *, name: str) -> "asyncio.Task | None":
+    """Schedule background work under a finite ceiling, keeping a strong ref."""
+    global _bounded_dropped
+    if len(_bounded_tasks) >= AURA_MAX_INFLIGHT_TASKS:
+        coro.close()
+        _bounded_dropped += 1
+        return None
+    try:
+        task = asyncio.create_task(coro, name=name)
+    except RuntimeError:                     # no running loop (shutdown race)
+        coro.close()
+        _bounded_dropped += 1
+        return None
+    _bounded_tasks.add(task)
+    task.add_done_callback(_bounded_tasks.discard)
+    return task
+
+
+def bounded_task_stats() -> dict:
+    """Counters only — never event payloads."""
+    return {"inflight": len(_bounded_tasks), "capacity": AURA_MAX_INFLIGHT_TASKS,
+            "dropped": _bounded_dropped}
+
+
+def _reset_bounded_tasks() -> None:
+    """Cancel and forget every tracked task. Used at shutdown and by tests."""
+    global _bounded_dropped
+    for task in list(_bounded_tasks):
+        task.cancel()
+    _bounded_tasks.clear()
+    _bounded_dropped = 0
+
 
 # Pending OTP / confirm futures keyed by id(ws)
 _pending_ws_responses: dict[int, asyncio.Future] = {}
@@ -273,17 +587,24 @@ async def _lifespan(app: FastAPI):
     from core.correlator import correlator
     # Attach correlator to raw manager.broadcast to avoid recursive re-ingestion
     correlator.attach(manager.broadcast)
-    asyncio.create_task(correlator.start(), name="correlator")
+    corr_task = asyncio.create_task(correlator.start(), name="correlator")
 
-    task = asyncio.create_task(telemetry_broadcaster())
+    task = asyncio.create_task(telemetry_broadcaster(), name="telemetry-broadcaster")
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # V69 M68B (B): application shutdown is part of the contract. Every task
+        # this module owns — the telemetry producer, the correlator, the bounded
+        # fan-out and every per-connection writer — is cancelled and awaited here.
+        for pending in (task, corr_task):
+            pending.cancel()
+        for pending in (task, corr_task):
+            try:
+                await pending
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        _reset_bounded_tasks()
+        await manager.aclose()
 
 
 app = FastAPI(
@@ -338,6 +659,11 @@ def _dispatch_decision_support(args: dict) -> dict:
     return rank_options(options).to_dict()
 
 
+# V69 M68B (B): every operator-triggered job below is spawned through
+# `_spawn_bounded`, not `asyncio.create_task`. Two reasons, both measured: a HUD
+# can issue commands faster than the jobs finish (unbounded concurrency), and an
+# untracked task holds only a weak reference, so a long job nobody keeps may be
+# collected mid-await and simply stop with no error anywhere.
 async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) -> dict:
     """Route validated HUD commands to appropriate tool functions."""
     try:
@@ -558,7 +884,7 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                     logger.debug(f"AURA: team_runtime fallback → orchestrator: {exc}")
                     await orchestrator.run_task(task, agents, ctx)
 
-            asyncio.create_task(_run_controlled_team())
+            _spawn_bounded(_run_controlled_team(), name="hud-controlled-team")
             return {"status": "started", "agents": agents}
 
         elif cmd == "plan_task":
@@ -591,7 +917,7 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
                 except Exception as exc:
                     logger.debug(f"AURA: plan_task error: {exc}")
 
-            asyncio.create_task(_run_plan())
+            _spawn_bounded(_run_plan(), name="hud-plan-task")
             return {"status": "started", "domain": td.domain.value,
                     "planning": True}
 
@@ -648,37 +974,38 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             incidents = correlator.get_active_incidents()
             if not incidents:
                 return {"error": "no active incidents"}
-            asyncio.create_task(generate_incident_report(
+            _spawn_bounded(generate_incident_report(
                 incidents[0], [], broadcast_fn,
                 orchestrator._ollama_client,
                 orchestrator._deep_model,
-            ))
+            ), name="hud-incident-report")
             return {"status": "generating", "incident_id": incidents[0].get("incident_id")}
 
         elif cmd == "consolidate_memory":
             from core.memory_consolidator import consolidate_memory
             from core.agent_orchestrator  import orchestrator
-            asyncio.create_task(consolidate_memory(
+            _spawn_bounded(consolidate_memory(
                 broadcast_fn,
                 orchestrator._ollama_client,
                 orchestrator._deep_model,
-            ))
+            ), name="hud-consolidate-memory")
             return {"status": "consolidating"}
 
         # ── v39.0 Self-healing remediator ────────────────────────────────────
         elif cmd == "execute_mitigation":
             script_path = str(args.get("script_path", ""))[:300]
             from core.auto_remediator import execute_mitigation
-            asyncio.create_task(
-                execute_mitigation(script_path, broadcast_fn, _executor_ref)
-            )
+            _spawn_bounded(
+                execute_mitigation(script_path, broadcast_fn, _executor_ref),
+                name="hud-execute-mitigation")
             return {"status": "otp_challenge_issued"}
 
         # ── v43.0 BIFROST PROTOCOL ───────────────────────────────────────────
         elif cmd == "deploy_sigma_rule":
             draft_path = str(args.get("draft_path", ""))[:300]
             from core.detection_engineer import deploy_approved_rule
-            asyncio.create_task(deploy_approved_rule(draft_path, broadcast_fn))
+            _spawn_bounded(deploy_approved_rule(draft_path, broadcast_fn),
+                           name="hud-deploy-sigma")
             return {"status": "deploying"}
 
         elif cmd == "run_bas_scenario":
@@ -687,14 +1014,34 @@ async def _dispatch_hud_command(cmd: str, args: dict, executor, broadcast_fn) ->
             if not _TARGET_RE.match(target):
                 return {"error": "Invalid target format"}
             from tools.breach_simulator import run_full_bas_scenario
-            asyncio.create_task(run_full_bas_scenario(
+            _spawn_bounded(run_full_bas_scenario(
                 target, broadcast_fn, scenario,
-            ))
+            ), name="hud-bas-scenario")
             return {"status": "started", "scenario": scenario, "target": target}
 
         return {"error": f"Handler not implemented for '{cmd}'"}
     except Exception as e:
         return {"error": str(e)}
+
+
+async def _ws_send(ws, payload: dict) -> bool:
+    """Send ONE frame to ONE websocket under the same deadline the channel writers
+    use. Every direct send in this module goes through here.
+
+    V69 M68B (B): a send with no deadline holds its task for as long as the client
+    refuses to read. That is not the producer stall Finding B was about — these
+    sends run in a connection's own handler or in a bounded background task — but
+    64 wedged HUD replies exhaust AURA_MAX_INFLIGHT_TASKS and starve the correlator
+    fan-out, which is the same leak one layer down. Returns whether it landed;
+    a False means the client is gone, never a reason to retry.
+    """
+    try:
+        await asyncio.wait_for(ws.send_json(payload), timeout=AURA_SEND_TIMEOUT_S)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:          # noqa: BLE001 - a dead client is data, not a crash
+        return False
 
 
 async def _handle_hud_command(
@@ -716,14 +1063,14 @@ async def _handle_hud_command(
     try:
         check_prompt_injection(cmd, source="hud_command")
     except SanitizationError:
-        await ws.send_json({
+        await _ws_send(ws, {
             "type": "hud_command_error", "request_id": req_id,
             "error": "Command rejected by sanitizer",
         })
         return
 
     if cmd not in _HUD_ALLOWED_COMMANDS:
-        await ws.send_json({
+        await _ws_send(ws, {
             "type": "hud_command_error", "request_id": req_id,
             "error": f"Command '{sanitize_for_hud(cmd)}' not in HUD allowlist",
         })
@@ -737,14 +1084,14 @@ async def _handle_hud_command(
     if cmd in _HIGH_RISK_HUD:
         challenge = getattr(executor, "_challenge", None)
         if not callable(challenge):
-            await ws.send_json({
+            await _ws_send(ws, {
                 "type":       "hud_approval_required_out_of_band",
                 "request_id": req_id,
                 "cmd":        sanitize_for_hud(cmd),
                 "error":      "approval_required_out_of_band",
             })
             return
-        await ws.send_json({
+        await _ws_send(ws, {
             "type":       "hud_approval_pending_out_of_band",
             "request_id": req_id,
             "cmd":        sanitize_for_hud(cmd),
@@ -752,7 +1099,7 @@ async def _handle_hud_command(
         })
         granted, _audit = await challenge(f"hud:{cmd}", sanitize_for_hud(str(args)[:120]))
         if not granted:
-            await ws.send_json({
+            await _ws_send(ws, {
                 "type": "hud_command_error", "request_id": req_id,
                 "error": "High-risk command denied (out-of-band approval).",
             })
@@ -763,7 +1110,7 @@ async def _handle_hud_command(
         args_preview = sanitize_for_hud(str(args)[:60])
         fut_c: asyncio.Future = asyncio.get_event_loop().create_future()
         _pending_ws_responses[id(ws)] = fut_c
-        await ws.send_json({
+        await _ws_send(ws, {
             "type":       "hud_confirm_required",
             "request_id": req_id,
             "message":    f"Confirm: {sanitize_for_hud(cmd)} {args_preview}",
@@ -771,7 +1118,7 @@ async def _handle_hud_command(
         try:
             confirm = await asyncio.wait_for(fut_c, timeout=15.0)
             if confirm.get("confirmed") is not True:
-                await ws.send_json({
+                await _ws_send(ws, {
                     "type": "hud_command_error", "request_id": req_id,
                     "error": "Command declined",
                 })
@@ -782,7 +1129,7 @@ async def _handle_hud_command(
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
     result = await _dispatch_hud_command(cmd, args, executor, broadcast_fn)
-    await ws.send_json({
+    await _ws_send(ws, {
         "type":       "hud_command_result",
         "request_id": req_id,
         "cmd":        cmd,
@@ -810,14 +1157,14 @@ async def _ws_endpoint(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
     await manager.connect(ws)
-    try:
-        await ws.send_text(json.dumps({
-            "type":      "system",
-            "message":   "AURA pipeline connected.",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }))
-    except Exception:
-        pass
+    # Bounded like every other send (V69 M68B/B): a client that completes the
+    # handshake and then stops reading used to hold this frame — and this
+    # connection's whole handler — indefinitely.
+    await _ws_send(ws, {
+        "type":      "system",
+        "message":   "AURA pipeline connected.",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
 
     try:
         while True:
@@ -828,9 +1175,9 @@ async def _ws_endpoint(ws: WebSocket) -> None:
                     if not isinstance(raw, dict):
                         continue
                     if "cmd" in raw:
-                        asyncio.create_task(
-                            _handle_hud_command(raw, ws, _executor_ref, broadcast)
-                        )
+                        _spawn_bounded(
+                            _handle_hud_command(raw, ws, _executor_ref, broadcast),
+                            name="hud-command")
                     elif "otp_response" in raw or "confirmed" in raw:
                         fut = _pending_ws_responses.pop(id(ws), None)
                         if fut and not fut.done():
@@ -840,7 +1187,12 @@ async def _ws_endpoint(ws: WebSocket) -> None:
             except asyncio.TimeoutError:
                 pass
     except WebSocketDisconnect:
-        manager.disconnect(ws)
+        pass
+    finally:
+        # V69 M68B (B): cleanup in a `finally`, not only in the disconnect
+        # handler. A transport error, a cancellation or a shutdown used to leave
+        # the client in the set with a live writer behind it.
+        await manager.aclose_client(ws)
         _pending_ws_responses.pop(id(ws), None)
 
 
@@ -872,7 +1224,8 @@ async def _ui() -> FileResponse:
 
 @app.get("/health")
 async def _health() -> dict:
-    return {"status": "ok", "clients": len(manager._clients)}
+    return {"status": "ok", "clients": len(manager._clients),
+            "delivery": manager.stats(), "tasks": bounded_task_stats()}
 
 
 # ── Public broadcast coroutine ────────────────────────────────────────────────
@@ -898,7 +1251,7 @@ async def broadcast(event: dict) -> None:
 
     try:
         from core.correlator import correlator as _corr
-        asyncio.create_task(_corr.ingest(event))
+        _spawn_bounded(_corr.ingest(event), name="correlator-ingest")
     except Exception:
         pass
 

@@ -261,7 +261,8 @@ async def analyze_room(
     snap_path.write_bytes(frame_bytes)
 
     try:
-        ollama_host = "http://127.0.0.1:11434"
+        from core.ollama_endpoint import ollama_base_url
+        ollama_host = ollama_base_url()   # V69 M68B (D): one resolver
         payload = {
             "model": model_vision,
             "messages": [{
@@ -323,9 +324,10 @@ async def analyze_screen_vision(
             }],
             "stream": False,
         }
+        from core.ollama_endpoint import ollama_base_url
         async with aiohttp.ClientSession() as s:
             async with s.post(
-                "http://127.0.0.1:11434/api/chat",
+                ollama_base_url() + "/api/chat",   # V69 M68B (D): one resolver
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as r:
