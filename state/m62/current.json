@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0064-m68a-deadline-refusal.json",
-  "latest_snapshot_sha256": "435d49bf5462063af2f86d657f5ce5e833d2dcc99ae9b676b88f06e0d82f24b4",
+  "latest_snapshot_path": "state/m62/snapshots/0065-m68b-resource-lifecycle.json",
+  "latest_snapshot_sha256": "958cf95440603f6bb1e3fdb2c63ab5264dca13047f8c9d6459e0325bc2f82f07",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 64,
-  "subject_state_commit": "cfb7b8e502117d103434e9767937b6ad06ecf8b1",
+  "state_generation": 65,
+  "subject_state_commit": "13f335ac5654fc2983fc260c8ebef1a49063ebe6",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
