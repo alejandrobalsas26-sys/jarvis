@@ -611,7 +611,11 @@ TOOLS: list[dict] = [
             "description": (
                 "Write or append text content to a file in Downloads, Documents, or the project dir. "
                 "Use to create scripts, reports, configs, notes, or any text artifact. "
-                "mode='w' overwrites, mode='a' appends. Requires NATO authorization."
+                "mode='w' overwrites, mode='a' appends. Requires NATO authorization. "
+                "V69 M68C: when EDITING a file you read, pass expected_sha256 from that "
+                "read_file result's source.sha256. The write then happens only if the file "
+                "is still that version; if it changed, nothing is written and you get "
+                "PRECONDITION_STALE instead of silently destroying the other edit."
             ),
             "parameters": {
                 "type": "object",
@@ -619,6 +623,20 @@ TOOLS: list[dict] = [
                     "path": {"type": "string", "description": "Target file path (absolute or relative to Downloads)"},
                     "content": {"type": "string", "description": "Text content to write"},
                     "mode": {"type": "string", "enum": ["w", "a"], "description": "Write (overwrite) or append"},
+                    "expected_sha256": {
+                        "type": "string",
+                        "description": (
+                            "Optimistic-concurrency precondition: the sha256 the file had "
+                            "when you read it (read_file -> source.sha256), or the literal "
+                            "'ABSENT' to require that no file exists yet. Omit only for a "
+                            "brand-new artifact you did not read first."),
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": (
+                            "Validate the precondition and write NOTHING. Returns "
+                            "VALIDATED_NOT_APPLIED - which is not an applied write."),
+                    },
                 },
                 "required": ["path", "content"],
             },
@@ -813,7 +831,9 @@ TOOLS: list[dict] = [
                 "Run read-only git commands: status, diff, log, show, branch. "
                 "Use to check code changes before a commit, review recent history, "
                 "or understand the current repo state during a dev session. "
-                "Never writes to the repo — purely informational."
+                "Never writes to the repo — purely informational. V69 M68C: stdout is a "
+                "capped DISPLAY rendering. Check 'truncated' and 'transport' before "
+                "reasoning about completeness: a cut diff is not a patch."
             ),
             "parameters": {
                 "type": "object",

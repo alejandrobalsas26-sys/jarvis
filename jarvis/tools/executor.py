@@ -143,6 +143,17 @@ _PYTHON_EXECUTABLES: frozenset[str] = frozenset({"python", "python3"})
 # core/command_policy.py. `_forbidden_interpreter_exec` is kept as a thin shim.
 from core import command_policy as _command_policy
 
+# V69 M68C: ONE source-identity / atomic-CAS-write / transport-identity
+# definition, shared by read_file, write_file and git_query. Deliberately not a
+# second copy of anything: `core.source_integrity` maps its terminal statuses
+# onto M65D's ExternalOutcome vocabulary rather than inventing a parallel one.
+from core.source_integrity import (
+    WriteStatus,
+    cas_write_text,
+    identify_source,
+    identify_transport,
+)
+
 
 def _forbidden_interpreter_exec(argv: list[str]) -> str | None:
     """Back-compat shim → the unified command-semantic policy (EXECUTION_CAPABLE
@@ -542,6 +553,22 @@ ERR_UNSUPPORTED_EXTENSION = "UNSUPPORTED_EXTENSION"
 ERR_READ_FAILED = "READ_FAILED"
 ERR_INVALID_MODE = "INVALID_MODE"
 ERR_WRITE_FAILED = "WRITE_FAILED"
+# V69 M68C. Two states the old codes could not express. A stale precondition is
+# not a write failure — nothing was written and the caller's expectation is
+# simply out of date — and an UNCERTAIN effect is neither success nor no-effect,
+# which is exactly the distinction M65D exists to preserve.
+ERR_PRECONDITION_STALE = "PRECONDITION_STALE"
+ERR_WRITE_UNCERTAIN = "WRITE_UNCERTAIN"
+
+#: Extensions whose `content` IS the file's own text. Everything else handled by
+#: `_tool_read_file` (pdf, docx, xlsx, pptx, rtf, images) yields EXTRACTED text,
+#: so "I read this" and "this is what the file contains" are different claims
+#: and `SourceIdentity.content_derived` records which one was made.
+_TEXT_SOURCE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".py", ".js", ".sh", ".yaml", ".yml",
+    ".json", ".xml", ".html", ".css", ".log", ".c",
+    ".cpp", ".h", ".java", ".go", ".rs", ".env", ".csv",
+})
 
 
 # ── V69 M66A.1 (L2): typed, CENTRALIZED file-access decision ──────────────────
@@ -3122,8 +3149,23 @@ class ToolExecutor:
                     "error_code": ERR_UNSUPPORTED_EXTENSION,
                 }
 
-            if len(content) > max_chars:
+            # V69 M68C (Finding A): a truncated read is not a complete one.
+            # The marker below is DISPLAY: it lives inside `content`, so a
+            # complete file whose last line happens to say the same thing is
+            # byte-indistinguishable from a cut one (measured). The authority is
+            # the out-of-band `truncated` flag and the `source` identity, whose
+            # digest is over the COMPLETE file either way — so truncating the
+            # rendering never costs a caller its ability to state a write
+            # precondition, and never lets it claim it saw the whole file.
+            full_chars = len(content)
+            if full_chars > max_chars:
                 content = content[:max_chars] + f"\n\n[...truncado a {max_chars} chars]"
+            identity = identify_source(
+                p,
+                content_chars_total=full_chars,
+                content_chars_returned=min(full_chars, max_chars),
+                content_derived=ext not in _TEXT_SOURCE_EXTENSIONS,
+            )
 
             return {
                 "file": str(p.name),
@@ -3131,6 +3173,9 @@ class ToolExecutor:
                 "size_kb": round(p.stat().st_size / 1024, 2),
                 "content": content,
                 "chars": len(content),
+                # Out of band, and the field a mutation path must branch on.
+                "truncated": identity.truncated,
+                "source": identity.to_dict(),
             }
         except Exception as e:
             return {"error": f"Error leyendo {path}: {e}", "error_code": ERR_READ_FAILED}
@@ -4309,8 +4354,36 @@ class ToolExecutor:
 
     # ── V59.0 APEX — Power Tools ──────────────────────────────────────────────
 
-    def _tool_write_file(self, path: str, content: str, mode: str = "w") -> dict:
-        """[HITL] Write text content to a file in Downloads, Documents, or project dir."""
+    def _tool_write_file(self, path: str, content: str, mode: str = "w",
+                         expected_sha256: str | None = None,
+                         dry_run: bool = False) -> dict:
+        """[HITL] Write text content to a file in Downloads, Documents, or project dir.
+
+        V69 M68C (Findings B/D/E). This was ``open(p, "w")``: no precondition, no
+        temp file, no post-state check. Measured lost update — JARVIS read
+        ``VERSION = 1``, a human changed the file to ``VERSION = 2``, JARVIS wrote
+        its edit, and the human's line was gone under a success receipt.
+
+        Three things changed and none of them is cosmetic:
+
+        * ``expected_sha256`` is an OPTIMISTIC-CONCURRENCY precondition. Supply the
+          ``source.sha256`` that ``read_file`` returned and the write happens only
+          if the file is still that version; otherwise nothing is written and the
+          status is ``REJECTED_STALE``. The literal ``"ABSENT"`` means "I expect no
+          file here" and loses to one that appeared. Omitted, the historic
+          last-writer-wins behaviour is preserved — the parameter is additive — but
+          a SUPPLIED precondition is enforced, at the mutation boundary, inside
+          :func:`~core.source_integrity.cas_write_text`.
+        * ``mode="w"`` is now an ATOMIC REPLACEMENT (temp file in the target's own
+          directory, fsync, ``os.replace``). Atomic VISIBILITY only: crash
+          durability is not claimed and the receipt says so.
+        * the result carries a RECEIPT with before/after file identity. An
+          ``APPLIED`` status requires post-state evidence; a digest that does not
+          match what was meant to land is ``PARTIAL_OR_UNKNOWN``, never success.
+
+        The receipt DESCRIBES what happened. It does not grant authority — nothing
+        reads one to decide whether it may write.
+        """
         # Same single containment definition as _tool_read_file — see
         # _resolve_within_allowed. Fail-closed before any directory is created.
         p = _resolve_within_allowed(path)
@@ -4325,14 +4398,44 @@ class ToolExecutor:
                 "error": "mode debe ser 'w' (write/overwrite) o 'a' (append).",
                 "error_code": ERR_INVALID_MODE,
             }
-        p.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with open(p, mode, encoding="utf-8") as f:
-                f.write(content)
-            return {"written": str(p), "bytes": len(content.encode("utf-8")), "mode": mode}
-        except Exception as e:
+            receipt = cas_write_text(
+                p, content, mode=mode,
+                expected_sha256=expected_sha256, dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001 - a receipt beats a traceback
             return {"error": str(e), "error_code": ERR_WRITE_FAILED}
 
+        payload = {"receipt": receipt.to_dict(), "mode": mode}
+        if receipt.status is WriteStatus.APPLIED:
+            # Legacy success shape preserved for existing callers.
+            payload.update({"written": str(p), "bytes": receipt.bytes_written})
+            return payload
+        if receipt.status is WriteStatus.REJECTED_STALE:
+            logger.warning(
+                "write_file rechazado: la version esperada ya no esta en disco (%s)",
+                receipt.reason)
+            payload.update({
+                "error": "Precondicion fallida: el archivo cambio desde la lectura; "
+                         "no se sobreescribio nada.",
+                "error_code": ERR_PRECONDITION_STALE})
+            return payload
+        if receipt.status is WriteStatus.VALIDATED_NOT_APPLIED:
+            # Validated is NOT applied, and must not be reported as a write.
+            payload.update({"validated": True, "written": None})
+            return payload
+        if receipt.status is WriteStatus.REJECTED_INVALID:
+            payload.update({"error": receipt.reason or "solicitud invalida",
+                            "error_code": ERR_INVALID_MODE})
+            return payload
+        if receipt.status is WriteStatus.PARTIAL_OR_UNKNOWN:
+            payload.update({
+                "error": "El efecto es INCIERTO: la escritura comenzo y el estado "
+                         "final no pudo verificarse.",
+                "error_code": ERR_WRITE_UNCERTAIN})
+            return payload
+        payload.update({"error": receipt.reason or "escritura fallida",
+                        "error_code": ERR_WRITE_FAILED})
+        return payload
     def _tool_code_execute(self, code: str, timeout: int = 15) -> dict:
         """[HITL] Execute a Python snippet through the containment broker.
 
@@ -4653,11 +4756,24 @@ class ToolExecutor:
 
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=15, shell=False)
+            # V69 M68C (Finding C): this cap used to be SILENT. Measured: 31876
+            # characters of `git log` arrived as exactly 3000 and nothing in the
+            # result said so, which is the shape in which a display snippet gets
+            # mistaken for a whole diff. The rendering is still capped — a
+            # terminal needs that — but the cut is now out of band, and the
+            # digest is over the COMPLETE output, so a truncated rendering cannot
+            # be self-consistent. `transport.usable_as_patch_artifact` is the
+            # explicit answer to "is this a patch?": for a cut diff it is False.
+            shown = proc.stdout[:3000]
+            transport = identify_transport(
+                proc.stdout, shown, producer=f"git {operation}")
             return {
                 "operation": operation,
-                "stdout": proc.stdout[:3000],
+                "stdout": shown,
                 "stderr": proc.stderr[:500],
                 "returncode": proc.returncode,
+                "truncated": transport.truncated,
+                "transport": transport.to_dict(),
             }
         except FileNotFoundError:
             return {"error": "git no encontrado en el PATH del sistema."}
