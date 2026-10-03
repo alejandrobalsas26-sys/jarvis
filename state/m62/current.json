@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0065-m68b-resource-lifecycle.json",
-  "latest_snapshot_sha256": "958cf95440603f6bb1e3fdb2c63ab5264dca13047f8c9d6459e0325bc2f82f07",
+  "latest_snapshot_path": "state/m62/snapshots/0066-m68c-patch-execution.json",
+  "latest_snapshot_sha256": "ac55139ffa1044b4c9671516248f96786dbd50e843b6f7182f099c438e82b17c",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 65,
-  "subject_state_commit": "13f335ac5654fc2983fc260c8ebef1a49063ebe6",
+  "state_generation": 66,
+  "subject_state_commit": "09dc73ad10cc8c856171e622e3b6552698343322",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
