@@ -9,9 +9,9 @@
 |---|---|
 | **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **65** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0066-m68c-patch-execution.json` |
-| **Snapshot SHA256** | `ac55139ffa1044b4c9671516248f96786dbd50e843b6f7182f099c438e82b17c` |
-| **Subject state commit** | `09dc73ad10cc8c856171e622e3b6552698343322` (M68C patch & SWE execution integrity; eval-v7 spent once, 005 not eligible, 004 held) |
+| **Latest snapshot** | `state/m62/snapshots/0067-m67a1-corpus-qualification.json` |
+| **Snapshot SHA256** | `ef4e08c7dda939f5ef06398c5439895f93024de5aa1004183d074b130d3e6920` |
+| **Subject state commit** | `2249e65e2dc2f9b06de99ee6c97c650d98456fff` (M67A.1 real legacy corpus qualification; eval-v7 spent once, 005 not eligible, 004 held) |
 | **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 37's `cfa23bb…`, gen 39's `3bd46fb…`, gen 58's `7125557…`, gen 62's `2c08607…` and gen 64's `7ae48a2…` are integrated |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -44,7 +44,7 @@ asks Git, not prose, about branch, ancestry and `master`.
 |---|---|
 | Repository | `alejandrobalsas26-sys/jarvis` (`origin`, HTTPS) |
 | Branch | `jarvis-v69-m68b-resource-lifecycle-hardening` — gen 65 records it as **provenance**; under V4 the branch NAME is not authority (§2) |
-| Governed subject | `09dc73ad10cc8c856171e622e3b6552698343322` — the commit gen 66 describes AND the commit its integration authority governs |
+| Governed subject | `2249e65e2dc2f9b06de99ee6c97c650d98456fff` — the commit gen 67 describes AND the commit its integration authority governs |
 | Training source commits | 003 `bac49c4a…` · 004 `80565d32…` · 005 `08a7e81f157184389ef14d54007478076314c434`. **Deliberately different from the subject commit** |
 | HEAD | a descendant of the subject commit; resolve with `git rev-parse HEAD` |
 | Divergence from origin | `0  0` |
@@ -69,8 +69,8 @@ name the commit that carries it (§2).
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, terminal `completed` |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends. `…S4H_…md` |
 | Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME/REPOSITORY, no science** (gens 29–33). **Universal exactly-once NOT claimed**: 23/24 effectful tools `NON_REPLAYABLE`. **0** spends. `…ROWS_THROUGH_S5F.md` |
-| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION DATA, RUNTIME INTEGRITY, RESOURCE LIFECYCLE; no science.** Gens 34–65. V4 **DERIVES** the integration observation; executable authority changes only inside a governed subject (D49–D54); an error **after** the effect boundary no longer means *nothing happened* (D55–D63); `code_execute`→**SANDBOXED**, evidence-derived, fail-closed, **CI cannot witness** the L3 limits; a failed journal read as operator-DISABLED (D76–D79). **0** spends. `…S5G_…md` · `…S5G1_…md` · `…M65D_…md` · `…M66A_…md` · `…M66B_…md` · `…M67A_…md` · `…M68A_…md` · `…M68B_…md` |
-| Last milestone | **M68C — PATCH & SWE EXECUTION INTEGRITY, no science.** Gen 66. A/B/C/E **CONFIRMED**; **D NOT_REPRODUCIBLE** — no patch-application path exists. A 22890-char file read as `chars: 8028`; `open(p,'w')` destroyed a human's edit, reported success. CAS+atomic+flock; receipts on M65D's `ExternalOutcome`. **123** tests, **52/52** mutations, **0** spends. `…M68C_…md` |
+| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B · M68C — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION DATA, RUNTIME INTEGRITY, RESOURCE LIFECYCLE, PATCH INTEGRITY; no science.** Gens 34–66. V4 **DERIVES** the integration observation; executable authority changes only inside a governed subject (D49–D54); an error **after** the effect boundary no longer means *nothing happened* (D55–D63); `code_execute`→**SANDBOXED**, evidence-derived, fail-closed, **CI cannot witness** the L3 limits; a failed journal read as operator-DISABLED (D76–D79); CAS+flock writes (D86–D90). **0** spends. `…S5G_…md` · `…S5G1_…md` · `…M65D_…md` · `…M66A_…md` · `…M66B_…md` · `…M67A_…md` · `…M68A_…md` · `…M68B_…md` · `…M68C_…md` |
+| Last milestone | **M67A.1 — REAL LEGACY CORPUS QUAL., no science.** Gen 67. `.docx` DECIDED: 286 paras, **0** styles/role markers → **REFUSED**, not 281 `UNKNOWN` turns. Corpus **NOT qualified**: 0 conversations, 0 families, no holdout. §7 denylist enforced. **82** tests, **28/29** muts, **0** spends. `…M67A1_…md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
 | Live training since S3N | **three runs** — candidates 003–005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003×`v4`), S3Y (004×`v6`), S4E (005 vs 004×`v7`, Protocol V4). One plan, one holdout commit, one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
@@ -276,7 +276,7 @@ the archive and the snapshot's `defects` record, which carries every defect in f
 | **D49–D54** | **FIXED · S5G.1** | Checker on its **own** trailing surface; a trailing `conftest.py` deselected failures; **no CI job ran the checker**; the pin was **resealable beside it**. **Executable authority changes only inside a governed subject; sealed artefacts are append-only.** `…S5G1_…md`. |
 | **D55–D63** | **FIXED · M65D** | An error **after** the effect boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: `integration_base` is **advance-only, never rewind**. **D58/D61**: right decision, wrong **identity**. `…M65D_…md`. |
 | **D76–D79** | ACCEPTED LIMITATION · M68A | A **real-TTY** operator who walks away still blocks that approval; the **run deadline** bounds it. `cancel_execution(token)` exists, **no caller wired**. Decision validation is **STRUCTURAL**. `READY` is **not re-verified per call**. |
-| **D86–D90** | **FIXED · M68C** | Truncation was in-band; `chars` was the cut length. `write_file` had no precondition and no post-state check. `git_query` cut stdout unmarked. **D90**: M68C's own fix had CAS with **no lock** — two `APPLIED` receipts, one file. `…M68C_…md`. |
+| **D86–D90** | **FIXED · M68C** | Truncation was in-band; `chars` was the cut length. `write_file` had no precondition and no post-state check. **D90**: M68C's own fix had CAS with **no lock** — two `APPLIED` receipts, one file. `…M68C_…md`. |
 | **D81–D85** | **FIXED · M68B** | A bounded *string* read as bounded *memory*; a wedged HUD socket held correlation; a file marked analysed **before** its read; inference and health named different hosts; `/app/data` unpersisted. `…M68B_…md`. |
 
 ### Limitations that travel into any successor run
@@ -414,7 +414,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            12592 passed · 48 skipped · 0 failed      [M68C, measured]
+result            12674 passed · 48 skipped · 0 failed    [M67A.1, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [M68C, re-measured]
