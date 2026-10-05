@@ -313,4 +313,25 @@ def known_labels() -> dict:
     return out
 
 
-__all__ = ["TranscriptAdapter", "known_labels"]
+def role_for_label(raw: str) -> "TurnRole | None":
+    """The role a candidate label denotes, or ``None`` when the table does not know it.
+
+    Public so that a second adapter over a different CONTAINER can reuse this table
+    instead of restating it. M67A.1 added the DOCX adapter, and a Word-saved chat uses the
+    same ``Human:`` / ``Claude:`` vocabulary as a ``.txt`` one — only the bytes around it
+    differ. Two copies of the table would be two places for it to drift, and a role table
+    that drifts between containers means the same conversation classifies differently
+    depending on which file the operator happened to save it as.
+
+    The table stays CLOSED: this returns ``None`` rather than a guess, and every caller
+    turns ``None`` into ``UNKNOWN`` plus a review reason.
+    """
+    return _LABELS.get(_normalize_label(raw))
+
+
+def label_shaped(line: str) -> str:
+    """The candidate label text from a label-shaped line, or ``""``. See :func:`_shaped_label`."""
+    return _shaped_label(line)
+
+
+__all__ = ["TranscriptAdapter", "known_labels", "label_shaped", "role_for_label"]

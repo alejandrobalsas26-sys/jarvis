@@ -53,13 +53,16 @@ from ..models import ReviewStatus, SourceType, TurnRole
 
 #: Bump when any adapter's parsing behaviour changes for identical input. Recorded per
 #: adapter in the manifest (§20), so a corpus rebuilt after an adapter fix is comparable.
-ADAPTER_VERSION = "m67a.adapters.1"
+ADAPTER_VERSION = "m67a1.adapters.2"
 
 #: Formats deliberately NOT implemented, and what would be needed to implement each.
 #: Present in the registry so the gap is a recorded decision rather than an omission.
+#: ``docx`` LEFT this list at M67A.1: a real sample arrived, so the format became
+#: decidable and :mod:`reasoning_distillation.adapters.docx_export` now decides it. The
+#: original reason was not refuted - the sample confirmed Word stores layout rather than
+#: roles - so the adapter refuses a role-less document with structural counts instead of
+#: guessing. An entry is removed here only when an adapter replaces it.
 DELIBERATELY_ABSENT: dict[str, str] = {
-    "docx": "needs sample .docx exports: the role structure of a Word-saved chat is "
-            "layout, not markup, and guessing it would mislabel answers as reasoning",
     "html": "needs sample .html exports: the per-provider DOM differs and a generic "
             "tag-strip loses the role boundaries entirely",
     "pdf": "not requested by §5 and not inspected; a PDF of a chat has no role structure "

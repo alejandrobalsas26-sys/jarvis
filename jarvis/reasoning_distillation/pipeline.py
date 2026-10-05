@@ -64,7 +64,13 @@ MAX_SOURCE_BYTES = 32 * 1024 * 1024
 
 #: Extensions the ingest stage will OPEN. An allowlist (§29): a corpus directory that happens to
 #: contain a `.sqlite` or a `.pem` must not be swept into the pipeline because it was in the folder.
-INGESTIBLE_SUFFIXES: tuple[str, ...] = (".txt", ".md", ".markdown", ".json", ".jsonl")
+INGESTIBLE_SUFFIXES: tuple[str, ...] = (
+    ".txt", ".md", ".markdown", ".json", ".jsonl",
+    # M67A.1: a real Word export arrived. `.docx` is on the allowlist, which only means
+    # the stage will OPEN it - `docx_export` still decides whether it holds a
+    # conversation, and refuses it with structural counts when it does not.
+    ".docx",
+)
 
 
 class PipelineError(SchemaError):

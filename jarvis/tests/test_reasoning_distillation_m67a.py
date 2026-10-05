@@ -310,12 +310,27 @@ def test_unknown_schema_version_is_refused_by_the_adapter():
 
 
 def test_deliberately_absent_formats_name_what_is_needed_to_add_them():
-    """§5: do not implement an adapter because it could theoretically exist."""
+    """§5: do not implement an adapter because it could theoretically exist.
+
+    RESCOPED at M67A.1, and the rescoping is the point rather than a convenience. This
+    test used to assert the property through ``chat.docx``. A real Word sample then
+    arrived, ``docx`` left ``DELIBERATELY_ABSENT`` and gained a real adapter, so the old
+    body would have asserted that a format WITH an adapter has none. ``html`` carries the
+    identical property and still has no sample, so the invariant is unchanged and only its
+    witness moved. Argued in docs/v69_M67A1_REAL_LEGACY_CORPUS_QUALIFICATION.md.
+    """
     with pytest.raises(AdapterNotImplemented) as excinfo:
-        adapters.parse(filename="chat.docx", content=b"PK\x03\x04")
+        adapters.parse(filename="chat.html", content=b"<html><body>hi</body></html>")
     message = str(excinfo.value)
     assert "CORPUS_INPUT_REQUIRED" in message
     assert "sample" in message
+
+
+def test_docx_is_no_longer_deliberately_absent_now_that_a_sample_exists():
+    """The other half of the rescoping: the list must not still claim docx is absent."""
+    assert "docx" not in adapters.base.DELIBERATELY_ABSENT
+    assert "docx_export" in {a.name for a in adapters.registry()}
+    assert "html" in adapters.base.DELIBERATELY_ABSENT
 
 
 def test_no_adapter_claims_an_unrecognised_format_rather_than_best_effort_parsing():

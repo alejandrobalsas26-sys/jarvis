@@ -24,8 +24,9 @@ from .base import (
     decode,
     refuse_absent_format,
 )
+from .docx_export import DOCX_ADAPTER_VERSION, DocxExportAdapter
 from .json_export import CONVERSATION_SCHEMA, JsonExportAdapter, contract_description
-from .transcript import TranscriptAdapter, known_labels
+from .transcript import TranscriptAdapter, known_labels, role_for_label
 
 
 def registry() -> "tuple[SourceAdapter, ...]":
@@ -33,9 +34,12 @@ def registry() -> "tuple[SourceAdapter, ...]":
 
     JSON first: its ``sniff`` is exact (it requires the declared schema string), so putting
     it first costs nothing and means a conforming file is never examined by the heuristic
-    transcript parser.
+    transcript parser. DOCX second: its ``sniff`` is also exact (ZIP magic plus the
+    ``word/document.xml`` member), and it must precede the transcript adapter because a
+    ``.docx`` is a binary ZIP that ``decode`` would render as mojibake - the heuristic
+    parser could then match a label inside compressed bytes and claim a Word file.
     """
-    return (JsonExportAdapter(), TranscriptAdapter())
+    return (JsonExportAdapter(), DocxExportAdapter(), TranscriptAdapter())
 
 
 def select(*, filename: str, content: bytes) -> "SourceAdapter":
@@ -61,6 +65,7 @@ def supported() -> dict:
         "implemented": [
             {"name": a.name, "source_type": a.source_type.value} for a in registry()],
         "deliberately_absent": dict(sorted(DELIBERATELY_ABSENT.items())),
+        "docx_adapter_version": DOCX_ADAPTER_VERSION,
         "json_contract": contract_description(),
         "transcript_labels": known_labels(),
     }
@@ -68,7 +73,8 @@ def supported() -> dict:
 
 __all__ = [
     "ADAPTER_VERSION", "CONVERSATION_SCHEMA", "AdapterError", "AdapterNotImplemented",
-    "AdapterResult", "JsonExportAdapter", "RawSegment", "SourceAdapter", "SourceType",
-    "TranscriptAdapter", "contract_description", "decode", "known_labels", "parse",
-    "refuse_absent_format", "registry", "select", "supported",
+    "DOCX_ADAPTER_VERSION", "AdapterResult", "DocxExportAdapter", "JsonExportAdapter",
+    "RawSegment", "SourceAdapter", "SourceType", "TranscriptAdapter",
+    "contract_description", "decode", "known_labels", "parse", "refuse_absent_format",
+    "registry", "role_for_label", "select", "supported",
 ]
