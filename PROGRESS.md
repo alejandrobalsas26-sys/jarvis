@@ -7,14 +7,14 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **65** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **68** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0067-m67a1-corpus-qualification.json` |
-| **Snapshot SHA256** | `ef4e08c7dda939f5ef06398c5439895f93024de5aa1004183d074b130d3e6920` |
-| **Subject state commit** | `2249e65e2dc2f9b06de99ee6c97c650d98456fff` (M67A.1 real legacy corpus qualification; eval-v7 spent once, 005 not eligible, 004 held) |
-| **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a`, gen 37's `cfa23bb…`, gen 39's `3bd46fb…`, gen 58's `7125557…`, gen 62's `2c08607…` and gen 64's `7ae48a2…` are integrated |
-| **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `e70092c79ccd9997d07bc226f349331a2e133e185b3986ba3b0adef37bcf1d05` (S5G.1). Changing it needs a **successor generation**, never a trailing commit |
-| **Receipts & records** | `state/m62/receipts/` (portable training/eval proof) · `state/m62/records/` (content-addressed immutable blocks) |
+| **Latest snapshot** | `state/m62/snapshots/0068-m68d-trust-boundary.json` |
+| **Snapshot SHA256** | `411de76294680578166d93f90d59c40b82cb16e2cac74965861d9f564d7e49d0` |
+| **Subject state commit** | `1fb82664ea21c662d5ef227dfc0df133159cefb4` (M68D trust boundaries; eval-v7 spent once, 005 not eligible, 004 held) |
+| **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a` and every base since (gens 37, 39, 58, 62, 64, 67) are integrated; the chain carries each one |
+| **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `84217f617d89988c02a8a6a8d1613dc96d501cbef6961087d19c28b137b9d94e` (M68D). Changing it needs a **successor generation**, never a trailing commit |
+| **Receipts & records** | `state/m62/receipts/` (portable proof) · `state/m62/records/` (content-addressed immutable blocks) |
 | **Historical archive** | `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` |
 | **Archive SHA256** | `e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` |
 | **History index** | `jarvis/docs/m62/HISTORY_INDEX.md` |
@@ -65,16 +65,16 @@ name the commit that carries it (§2).
 
 | | |
 |---|---|
-| Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen infrastructure here and was not touched) |
-| Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, terminal `completed` |
-| Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends. `…S4H_…md` |
-| Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME/REPOSITORY, no science** (gens 29–33). **Universal exactly-once NOT claimed**: 23/24 effectful tools `NON_REPLAYABLE`. **0** spends. `…ROWS_THROUGH_S5F.md` |
-| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B · M68C — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION DATA, RUNTIME INTEGRITY, RESOURCE LIFECYCLE, PATCH INTEGRITY; no science.** Gens 34–66. V4 **DERIVES** the integration observation; executable authority changes only inside a governed subject (D49–D54); an error **after** the effect boundary no longer means *nothing happened* (D55–D63); `code_execute`→**SANDBOXED**, evidence-derived, fail-closed, **CI cannot witness** the L3 limits; a failed journal read as operator-DISABLED (D76–D79); CAS+flock writes (D86–D90). **0** spends. `…S5G_…md` · `…S5G1_…md` · `…M65D_…md` · `…M66A_…md` · `…M66B_…md` · `…M67A_…md` · `…M68A_…md` · `…M68B_…md` · `…M68C_…md` |
-| Last milestone | **M67A.1 — REAL LEGACY CORPUS QUAL., no science.** Gen 67. `.docx` DECIDED: 286 paras, **0** styles/role markers → **REFUSED**, not 281 `UNKNOWN` turns. Corpus **NOT qualified**: 0 conversations, 0 families, no holdout. §7 denylist enforced. **82** tests, **28/29** muts, **0** spends. `…M67A1_…md` |
-| Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under its HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
-| Live training since S3N | **three runs** — candidates 003–005, 40/40 optimizer steps each, all three `TRAIN` capabilities spent. **No retry is authorised** |
-| Live evaluation since S3N | **three runs** — S3Q (003×`v4`), S3Y (004×`v6`), S4E (005 vs 004×`v7`, Protocol V4). One plan, one holdout commit, one terminal event each; all three `USED_IMMUTABLE`, **no rerun possible** |
-| Next | **A separate human governance decision.** Axis closed, no holdout left: a further measurement needs a NEW corpus authored by a session that will not run it. **Readiness is never authority**; **no `TRAIN`, `EVAL` or promotion authority exists here**. Anti-rewrite protection **exists**, external state |
+| Milestone | **V69 M62 S4H — future evaluation instrument hardening** (M64.1 runtime is frozen here, untouched) |
+| Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, `completed` |
+| Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends |
+| Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME/REPOSITORY, no science** (gens 29–33). **Universal exactly-once NOT claimed**: 23/24 tools `NON_REPLAYABLE`. **0** spends. `…ROWS_THROUGH_S5F.md` |
+| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B · M68C · M67A.1 — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION DATA, RUNTIME INTEGRITY, RESOURCE LIFECYCLE, PATCH INTEGRITY; no science.** Gens 34–67. V4 **DERIVES** the integration observation; executable authority changes only inside a governed subject (D49–D54); an error **after** the effect boundary no longer means *nothing happened* (D55–D63); `code_execute`→**SANDBOXED**, fail-closed, **CI cannot witness** the L3 limits (D76–D79); CAS+flock writes (D86–D90); `.docx` DECIDED and the corpus **NOT qualified**. **0** spends. Each milestone's document carries its own detail: `…S5G_…md` … `…M67A1_…md` |
+| Last milestone | **M68D — PRODUCTION TRUST BOUNDARIES (H01–H05), no science.** Gen 68. **CHECK and EFFECT must describe one reality.** 5/5 external P1 findings CONFIRMED by independent reproduction, 3 **broader** than claimed. Egress **pins the validated IP**; one **held descriptor** per read; **one sanitizer before every sink**; **per-rule** firewall effect proven by query; byte seals **newline-pinned** (**131** CRLF false problems → **0**). **323** tests, **72/72** muts. `…M68D_…md` |
+| Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
+| Live training since S3N | **three runs** — candidates 003–005, 40/40 optimizer steps each, all `TRAIN` capabilities spent. **No retry is authorised** |
+| Live evaluation since S3N | **three runs** — S3Q (003×`v4`), S3Y (004×`v6`), S4E (005 vs 004×`v7`, Protocol V4). One plan, one holdout commit, one terminal event each; all `USED_IMMUTABLE`, **no rerun possible** |
+| Next | **A separate human governance decision.** Axis closed, no holdout left: a further measurement needs a NEW corpus authored by a session that will not run it. **Readiness is never authority**; **no `TRAIN`, `EVAL` or promotion authority exists here** |
 
 **What M62 is.** The Training Gym: an offline-first, human-gated pipeline grading defensive
 episodes, building immutable leakage-checked datasets, running a bounded LoRA fine-tune under
@@ -262,51 +262,52 @@ the archive and the snapshot's `defects` record, which carries every defect in f
 
 | Defect | State | What it still binds |
 |---|---|---|
-| **D28** | **OPEN** | No tool-call transport exists, so `tool_call_validity_rate` is **VACUOUS** on both arms and the six `tool_call_schema` tasks decide nothing. |
-| **D29** | ACCEPTED LIMITATION | `looks_like_refusal` reads sixteen literal phrasings absent from the JSON refusal targets. Bounds QG-1 and SV-5 **both ways**. |
+| **D28** | **OPEN** | No tool-call transport exists, so `tool_call_validity_rate` is **VACUOUS** on both arms and the six `tool_call_schema` tasks decide nothing |
+| **D29** | ACCEPTED LIMITATION | `looks_like_refusal` reads sixteen literal phrasings absent from the JSON refusal targets. Bounds QG-1 and SV-5 **both ways** |
 | **D33** | **OPEN** | The declared generation timeout is **not enforced**, so `timeout_rate` is **VACUOUS**. A config must state `timeout_s`; default 120 s. |
-| **D35** | OPERATOR RULING | A spent holdout is development evidence. **Each candidate needs a fresh holdout.** Not a contamination claim. |
-| **D31 · D36 · D37** | FIXED | VALIDATION wired, **diagnostic only** — do not remove `eval_dataset` nor the closing `trainer.evaluate()`. Redactor matches unless flanked by ASCII letters — **do not simplify, nor widen to `\b`**. **Causality NOT_ESTABLISHED**. |
+| **D35** | OPERATOR RULING | A spent holdout is development evidence. **Each candidate needs a fresh holdout.** Not a contamination claim |
+| **D31 · D36 · D37** | FIXED | VALIDATION wired, **diagnostic only** — do not remove `eval_dataset` nor the closing `trainer.evaluate()`. Redactor matches unless flanked by ASCII letters: **do not simplify, nor widen to `\b`**. **Causality NOT_ESTABLISHED**. |
 | **D38** | FIXED (obs. only) | Output-budget exhaustion is a body-free diagnostic. **No gate reads it; adding one needs a separate operator decision.** |
 | **D39** | **FIXED · S5F** | An in-process `importlib.reload` rebound `ExportError`, so four `pytest.raises` sites caught a dead class. **Import purity is a subprocess probe.** `…S5F_…md` |
 | **D40–D42** | FIXED at `.3` | The paired outcome is **not** an exhaustive `wins/ties/losses` partition; an encoding question closes by **defining** the encoding. |
-| **D44** | **FIXED · GATE** | A held-out body reached a session through representation alone, `repr` of a **bound method** included. `body_free_repr` renders identity and digests only |
-| **D43 · D45–D47** | FIXED (obs. only) | `EXTRA_DATA` vs an unclosed document; S4H's instrument findings. **PROSPECTIVE**, read by **no gate**; **005 not rescored**. |
-| **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. **A filename substring is not a scientific boundary.** `…/scientific-suite.json` |
-| **D49–D54** | **FIXED · S5G.1** | Checker on its **own** trailing surface; a trailing `conftest.py` deselected failures; **no CI job ran the checker**; the pin was **resealable beside it**. **Executable authority changes only inside a governed subject; sealed artefacts are append-only.** `…S5G1_…md`. |
-| **D55–D63** | **FIXED · M65D** | An error **after** the effect boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: `integration_base` is **advance-only, never rewind**. **D58/D61**: right decision, wrong **identity**. `…M65D_…md`. |
-| **D76–D79** | ACCEPTED LIMITATION · M68A | A **real-TTY** operator who walks away still blocks that approval; the **run deadline** bounds it. `cancel_execution(token)` exists, **no caller wired**. Decision validation is **STRUCTURAL**. `READY` is **not re-verified per call**. |
-| **D86–D90** | **FIXED · M68C** | Truncation was in-band; `chars` was the cut length. `write_file` had no precondition and no post-state check. **D90**: M68C's own fix had CAS with **no lock** — two `APPLIED` receipts, one file. `…M68C_…md`. |
-| **D81–D85** | **FIXED · M68B** | A bounded *string* read as bounded *memory*; a wedged HUD socket held correlation; a file marked analysed **before** its read; inference and health named different hosts; `/app/data` unpersisted. `…M68B_…md`. |
+| **D44** | **FIXED · GATE** | A held-out body reached a session through representation alone, `repr` of a **bound method** included. `body_free_repr` renders identity and digests |
+| **D43 · D45–D47** | FIXED (obs. only) | `EXTRA_DATA` vs an unclosed document; S4H's instrument findings. **PROSPECTIVE**, read by **no gate**; **005 not rescored** |
+| **D48** | **FIXED** | `-k m62` deselected all 212 tests in three `m63`-named modules asserting M62 state. **A filename substring is not a scientific boundary.** `…scientific-suite.json` |
+| **D49–D54** | **FIXED · S5G.1** | Checker on its **own** trailing surface; a trailing `conftest.py` deselected failures; **no CI job ran the checker**; the pin was **resealable beside it**. **Executable authority changes only inside a governed subject.** `…S5G1_…md`. |
+| **D55–D63** | **FIXED · M65D** | An error **after** the effect boundary re-ran a **NON_REPLAYABLE** effect — **2** external effects. **D57**: `integration_base` is **advance-only**. **D58/D61**: right decision, wrong **identity**. `…M65D_…md`. |
+| **D76–D79** | ACCEPTED LIMITATION · M68A | A **real-TTY** operator who walks away still blocks that approval; the **run deadline** bounds it. `cancel_execution(token)` exists, **no caller wired**. Decision validation is **STRUCTURAL**; `READY` is **not re-verified per call**. |
+| **D86–D90** | **FIXED · M68C** | Truncation was in-band; `chars` was the cut length. `write_file` had no precondition and no post-state check. **D90**: M68C's own fix had CAS with **no lock** — two `APPLIED` receipts, one file. `…M68C_…md` |
+| **D91–D95** | **FIXED · M68D** | Validation bound to a **different reality** than the effect: two DNS answers, two file openings, a summary built before redaction, discarded firewall return codes, the host filesystem read as the repository. **D95**: `os.access(X_OK)` was wrong **both ways**, so that control was **bypassable**. `…M68D_…md` |
+| **D81–D85** | **FIXED · M68B** | A bounded *string* read as bounded *memory*; a wedged HUD socket held correlation; a file marked analysed **before** its read; inference and health named different hosts; `/app/data` unpersisted. `…M68B_…md` |
 
 ### Limitations that travel into any successor run
 
 - Gate thresholds are **uncalibrated** (`thresholds_are_calibrated: false`). Every holdout,
   `v7` included, is **36 synthetic tasks, one author, one session, no independent review**;
-  `tool_call_schema` has 6, vacuous by D28. **Semantic leakage has never run** — freshness
+  `tool_call_schema` has 6, vacuous by D28. **Semantic leakage has never run**: freshness
   evidence is lexical, so a paraphrase escapes.
 - **Candidates 001–004 are not head-to-head comparable** — different holdouts, zero shared
   instances, one fitted under `DISABLED`. Each compares only against its **own**
-  simultaneously-measured baseline. `eval-v7` was the first true head-to-head, is **spent**,
-  and 005-vs-004 is the only such figure.
+  simultaneously-measured baseline. `eval-v7` was the first head-to-head, is **spent**;
+  005-vs-004 is the only such figure.
 - **Every candidate was measured ONCE.** One host, CPU, one seed, one run; no repeat, second
-  host, GPU, dtype arm or ablation; `deterministic_reproduction_claimed` is `false`. Train-time
-  validation is steering material, in no gate, **not** comparable.
+  host, GPU, dtype arm or ablation; `deterministic_reproduction_claimed` is `false`.
+  Train-time validation is steering material, in no gate, **not** comparable.
 - **Candidate 003's interval does not exclude a regression.** Mean delta +0.044208, CI95
-  [−0.022359, +0.129413] over 36 pairs; recorded `regression_not_excluded`. **The D37 axis is
-  neither confirmed nor refuted**; causality stays `NOT_ESTABLISHED`.
-- `openai` is a declared base dependency absent from the system interpreter; its absence alone
-  fails 62 tests in three files. Environmental, reproduced at pristine HEAD. **Never reconcile
-  test counts across interpreters by arithmetic.**
+  [−0.022359, +0.129413] over 36 pairs; recorded `regression_not_excluded`. **The D37 axis
+  is neither confirmed nor refuted**; causality stays `NOT_ESTABLISHED`.
+- `openai` is a declared base dependency absent from the system interpreter: 62 failures in
+  three files, environmental, reproduced at pristine HEAD. **Never reconcile test counts
+  across interpreters by arithmetic.**
 - **The receipt claims less than it appears to.** `evaluation_source` binds the measuring
-  commit **through the pre-repair witness and its Git first parent** — provenance, not proof of
-  which bytes ran. **Nothing is signed.** **`STALE_STATE` detection remains PARTIAL**: runtime
-  artefacts are outside Git.
-- **S4H's instruments are FUNCTIONAL, not CALIBRATED** — `REAL_WORLD_CALIBRATED = NO` — and
+  commit **through the pre-repair witness and its Git first parent**: provenance, not proof
+  of which bytes ran. **Nothing is signed.** **`STALE_STATE` detection remains PARTIAL** —
+  runtime artefacts are outside Git.
+- **S4H's instruments are FUNCTIONAL, not CALIBRATED** (`REAL_WORLD_CALIBRATED = NO`) and
   **additive and inert**: no config names one, no scorer imports one, nothing was rescored.
 - **The D44 exposure is PERMANENT** — no fix restores `v5`'s freshness, and it was **not**
   re-measured: re-opening the material to size it would repeat the disclosure. One rendered
-  body is a **floor**, not a proved bound.
+  body is a **floor**, not a bound.
 - ~~**V4 leaves a hostile trailing commit to the CI suite**~~ (S5G) — **SUPERSEDED BY S5G.1,
   measured false**. Trailing surface: `state/m62/` · `PROGRESS.md` · `jarvis/docs/`, **`.md`
   or `.json` only**.
@@ -414,7 +415,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            12674 passed · 48 skipped · 0 failed    [M67A.1, measured]
+result            12995 passed · 50 skipped · 0 failed      [M68D, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [M68C, re-measured]
@@ -431,10 +432,9 @@ it deselected all **212** tests in three `m63`-named modules asserting M62 state
 against *live* state silently asserts no later generation exists; each rescoping is argued in
 its own document.
 
-**Known invocation-context artefact — RESOLVED by S5E, 8 → 0.** `pytest` from the repository
-root used to fail **8** tests in `…s3g2_validation_wiring.py`, which read source relative to
-the CWD; **distinct from D39**. The root **is** the authoritative invocation, now anchored to
-`_APP_ROOT`.
+**Invocation artefact — RESOLVED by S5E, 8 → 0.** From the root, **8** tests in
+`…s3g2_validation_wiring.py` read source relative to the CWD; **distinct from D39**. The root
+**is** authoritative, now anchored to `_APP_ROOT`.
 
 ---
 
@@ -505,14 +505,13 @@ never authority for another.**
 ## 13 — History
 
 **Immutable archive** `jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md` · SHA256
-`e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` · 516,784 bytes · 6,089
-lines · **Router** `jarvis/docs/m62/HISTORY_INDEX.md` · **Migration record**
-`jarvis/docs/V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md`.
+`e0914054da4dde4b785bbdabc45a40e0f8b590c2aa3612e9432c685c0c79c1bf` · **Router**
+`jarvis/docs/m62/HISTORY_INDEX.md` · **Migration record** `…S3N1_…MIGRATION.md`.
 
 The archive is the **byte-for-byte** pre-migration `PROGRESS.md`, **append-never-edit**, its
 digest pinned in the snapshot *and* the migration manifest and compared against the bytes.
-**If it fails: operator review, never "update the expected hash".** Use the index to find a milestone,
-defect or era **without reading the archive in full**.
+**If it fails: operator review, never "update the expected hash".** Use the index to find a
+milestone, defect or era **without reading the archive in full**.
 
 ---
 

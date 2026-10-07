@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0067-m67a1-corpus-qualification.json",
-  "latest_snapshot_sha256": "ef4e08c7dda939f5ef06398c5439895f93024de5aa1004183d074b130d3e6920",
+  "latest_snapshot_path": "state/m62/snapshots/0068-m68d-trust-boundary.json",
+  "latest_snapshot_sha256": "411de76294680578166d93f90d59c40b82cb16e2cac74965861d9f564d7e49d0",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 67,
-  "subject_state_commit": "2249e65e2dc2f9b06de99ee6c97c650d98456fff",
+  "state_generation": 68,
+  "subject_state_commit": "1fb82664ea21c662d5ef227dfc0df133159cefb4",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
