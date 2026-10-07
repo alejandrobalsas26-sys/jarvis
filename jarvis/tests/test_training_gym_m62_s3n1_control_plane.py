@@ -1736,8 +1736,12 @@ def test_the_verifier_only_shells_out_to_read_only_git():
     ONLY without `-w`. With `-w` it writes into the object database, so a verifier is not
     permitted to pass it — and "we did not mean to" is not a control.
     """
+    # V69 M68D (H05-C) adds `check-attr`: it reports the attributes Git would
+    # apply to a path and writes nothing, which is what NEWLINE_POLICY needs to
+    # prove every byte-sealed artifact is declared `-text`. Read-only in the
+    # same sense as the rest of this set.
     read_only = {"rev-parse", "cat-file", "merge-base", "ls-files", "diff", "grep",
-                 "show", "rev-list", "hash-object"}
+                 "show", "rev-list", "hash-object", "check-attr"}
     for node in ast.walk(VERIFIER_TREE):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id == "_git":

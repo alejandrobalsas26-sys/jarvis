@@ -6,6 +6,15 @@ asyncio event loop is never stalled by disk I/O.
 
 Schema: timestamp, tool, command, resolved_path, binary_status,
         auth_audit (OTP details), thinking, result.
+
+V69 M68D (H03): this is a PERSISTENT sink. Every string field it writes passes
+through the one governed sanitizer (`core.safe_observability`) HERE, at the sink,
+in addition to the executor sanitizing before it builds a summary. Two
+enforcement points, one definition — so a future caller that forgets to sanitize
+cannot make this file leak, and a sanitizer failure writes a refusal marker
+rather than a body. MEASURED before the fix: synthetic password and Bearer-token
+canaries reached this JSONL on both the sync and the async execution path, and
+the `thinking` field carried its canary to disk as well.
 """
 
 import json
@@ -15,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
+
+from core import safe_observability
 
 _LOG_DIR = Path(__file__).parent.parent / "logs"
 _LOG_FILE = _LOG_DIR / "tactic_audit.jsonl"
@@ -67,16 +78,21 @@ class TacticAuditLogger:
             resolved_path: Canonicalized path from Layer 2 check.
             binary_status: "allowlist_ok" | "blocked" | "" (shell tools only).
         """
+        # V69 M68D (H03): sink-local redaction. `safe_reasoning` MINIMISES rather
+        # than preserves (§21) — forensics wants the decision, not the prose —
+        # and every other free-text field is sanitized before it can be written.
+        # `safe_summary`/`safe_reasoning` never raise; on an internal failure they
+        # return a refusal marker, so this path has no raw fallback at all.
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "user": "Alejandro",
-            "tool": tool_name,
-            "command": command,
-            "resolved_path": resolved_path,
-            "binary_status": binary_status,
-            "auth_audit": auth_audit,
-            "thinking": reasoning,
-            "result": result[:200] if result else "",
+            "tool": safe_observability.sanitize_text(str(tool_name or "")),
+            "command": safe_observability.sanitize_text(str(command or "")),
+            "resolved_path": safe_observability.sanitize_text(str(resolved_path or "")),
+            "binary_status": safe_observability.sanitize_text(str(binary_status or "")),
+            "auth_audit": safe_observability.sanitize_text(str(auth_audit or "")),
+            "thinking": safe_observability.safe_reasoning(reasoning),
+            "result": safe_observability.safe_reasoning(result) if result else "",
         }
         self._queue.put_nowait(record)
 

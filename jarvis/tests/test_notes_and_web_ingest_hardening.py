@@ -55,13 +55,24 @@ def _mock_requests_get(monkeypatch, text: str):
             return f"<html><body>{text}</body></html>"
 
     # V69 M66A.1: estudiar_tema/fetch_webpage now route through the canonical
-    # validated egress path `_safe_http_fetch` (§F2), which uses `requests.request`
-    # and re-validates the target with `_http_target_blocked`. Patch the request
-    # primitive it actually calls and allow the synthetic target so the test
-    # exercises INGESTION, not DNS/SSRF (covered by the four-layer suite).
+    # validated egress path `_safe_http_fetch` (§F2). V69 M68D (H01): that path's
+    # transport primitive is `_pinned_transport_request`, which takes the governed
+    # destination rather than a hostname. Patch the primitive it actually calls
+    # and hand it an already-approved synthetic destination, so the test exercises
+    # INGESTION, not DNS/SSRF (covered by the four-layer and M68D H01 suites).
+    import tools.executor as _ex
+
     monkeypatch.setattr("requests.get", lambda *a, **k: _Resp())
     monkeypatch.setattr("requests.request", lambda *a, **k: _Resp())
-    monkeypatch.setattr("tools.executor._http_target_blocked", lambda url: None)
+    monkeypatch.setattr(
+        "tools.executor.govern_destination",
+        lambda url: _ex.EgressDestination(
+            scheme="http", host="synthetic.test", port=80,
+            authority="synthetic.test", candidates=("93.184.216.34",),
+            pinned="93.184.216.34", error=None),
+    )
+    monkeypatch.setattr("tools.executor._pinned_transport_request",
+                        lambda *a, **k: _Resp())
 
 
 def test_estudiar_tema_rejects_prompt_injection(monkeypatch):

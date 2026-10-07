@@ -15,6 +15,7 @@ Security layers:
 """
 
 import asyncio
+import dataclasses
 import inspect
 import ipaddress
 import json
@@ -142,6 +143,9 @@ _PYTHON_EXECUTABLES: frozenset[str] = frozenset({"python", "python3"})
 # routed to code_execute → the SANDBOX_REQUIRED ContainmentBroker. See
 # core/command_policy.py. `_forbidden_interpreter_exec` is kept as a thin shim.
 from core import command_policy as _command_policy
+# V69 M68D (H03): THE sink-safe view of a tool result. One definition,
+# reused by every sink reachable from an executed tool (§18).
+from core import safe_observability
 
 # V69 M68C: ONE source-identity / atomic-CAS-write / transport-identity
 # definition, shared by read_file, write_file and git_query. Deliberately not a
@@ -150,9 +154,16 @@ from core import command_policy as _command_policy
 from core.source_integrity import (
     WriteStatus,
     cas_write_text,
-    identify_source,
+    identify_snapshot,
     identify_transport,
+    source_snapshot,
 )
+# V69 M68D (H02): `identify_source` is deliberately NOT imported here any more.
+# It describes whatever is at a path NOW, which is the right answer for a caller
+# that only wants to know the current state and the WRONG one for a read whose
+# content a caller will derive a write from. Every mutation-authoritative read in
+# this module goes through `source_snapshot` + `identify_snapshot`, and leaving
+# the name out means the old composition cannot be reached from here by accident.
 
 
 def _forbidden_interpreter_exec(argv: list[str]) -> str | None:
@@ -551,6 +562,9 @@ ERR_PATH_NOT_ALLOWED = "PATH_NOT_ALLOWED"
 ERR_FILE_NOT_FOUND = "FILE_NOT_FOUND"
 ERR_UNSUPPORTED_EXTENSION = "UNSUPPORTED_EXTENSION"
 ERR_READ_FAILED = "READ_FAILED"
+#: V69 M68D (H02): the source changed while it was being observed, so no single
+#: coherent (content, digest) pair exists. Refused rather than reported as whole.
+ERR_SOURCE_UNSTABLE = "SOURCE_UNSTABLE"
 ERR_INVALID_MODE = "INVALID_MODE"
 ERR_WRITE_FAILED = "WRITE_FAILED"
 # V69 M68C. Two states the old codes could not express. A stale precondition is
@@ -569,6 +583,20 @@ _TEXT_SOURCE_EXTENSIONS = frozenset({
     ".json", ".xml", ".html", ".css", ".log", ".c",
     ".cpp", ".h", ".java", ".go", ".rs", ".env", ".csv",
 })
+
+#: V69 M68D (H02): formats whose TEXT is EXTRACTED by a parser rather than being
+#: the file's own bytes. For these the digest identifies the SOURCE FILE and the
+#: rendering does not, so "I read this" and "this is what the file says" stay two
+#: different claims — and the parser reads the snapshot's descriptor, never a
+#: fresh opening of the mutable path.
+_DERIVED_SOURCE_EXTENSIONS = frozenset({
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".rtf",
+    ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp",
+})
+
+#: Everything `read_file` accepts. The membership test happens BEFORE the file is
+#: opened, so an unsupported extension is still refused without a read.
+_READABLE_EXTENSIONS = _TEXT_SOURCE_EXTENSIONS | _DERIVED_SOURCE_EXTENSIONS
 
 
 # ── V69 M66A.1 (L2): typed, CENTRALIZED file-access decision ──────────────────
@@ -734,54 +762,152 @@ def _trusted_lab_enabled() -> bool:
     }
 
 
-def _http_target_blocked(url: str) -> str | None:
-    """SSRF guard for outbound HTTP tools.
+#: V69 M68D (H01). The egress decision, as ONE immutable object.
+#:
+#: Before M68D the guard resolved the hostname, approved the addresses it got,
+#: and then handed the HOSTNAME to `requests`, which resolved it AGAIN. Two
+#: independent resolutions, and nothing bound the second to the first. MEASURED:
+#: a fake resolver answering a public address once and loopback thereafter made
+#: the policy approve 93.184.216.34 and the socket connect to 127.0.0.1, which
+#: returned the loopback server's body to the caller with `error = None`. The
+#: approved destination and the contacted destination were different machines.
+#:
+#: So the decision now CARRIES the address the socket must use. There is exactly
+#: one resolution per hop, every address it returned is validated, and the
+#: transport consumes `pinned` — never the hostname. A second DNS answer has
+#: nothing left to redirect.
+@dataclasses.dataclass(frozen=True)
+class EgressDestination:
+    """A governed egress decision: what was resolved, what was approved, where we connect."""
 
-    Resolves the URL host and rejects loopback, RFC1918 private, link-local
-    (incl. 169.254.169.254 cloud metadata), unique-local, multicast, and other
-    reserved ranges — unless trusted-lab mode is explicitly enabled. Returns a
-    human-readable block reason, or None if the target is permitted.
+    #: Lower-cased URL scheme.
+    scheme: str
+    #: The hostname exactly as it appeared in the URL (or an IP literal).
+    host: str
+    #: Effective port.
+    port: int
+    #: ``host[:port]`` as the HTTP ``Host`` header must state it.
+    authority: str
+    #: EVERY address the single governed resolution returned, in resolver order.
+    candidates: "tuple[str, ...]"
+    #: The address the socket connects to. ``None`` only when the decision is a
+    #: block, or in trusted-lab mode where resolution is deliberately not required.
+    pinned: "str | None"
+    #: Block reason, or ``None`` when the destination is permitted.
+    error: "str | None"
+    #: ``True`` when trusted-lab mode waived the internal-range policy.
+    trusted_lab: bool = False
+
+    @property
+    def blocked(self) -> bool:
+        return self.error is not None
+
+
+def _internal_address_reason(host: str, raw_ip: str) -> "str | None":
+    """Why *raw_ip* is not an allowed public destination, or ``None`` if it is."""
+    try:
+        ip = ipaddress.ip_address(raw_ip.split("%")[0])  # strip zone id
+    except ValueError:
+        return f"Dirección IP no válida resuelta para '{host}'."
+    if (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    ):
+        return (
+            f"Destino interno bloqueado (SSRF): {host} → {ip}. "
+            "Habilita JARVIS_TRUSTED_LAB=true para permitir rangos internos en lab aislado."
+        )
+    return None
+
+
+def govern_destination(url: str) -> EgressDestination:
+    """Resolve *url* ONCE, validate every answer, and pin the connection target.
+
+    The whole point is the word ONCE. `candidates` is the complete answer of a
+    single resolution; every one of them is validated, so a hostname that aliases
+    a mix of public and internal addresses is refused rather than raced; and
+    `pinned` is the address the transport is then REQUIRED to use. Nothing
+    downstream resolves `host` again.
+
+    Trusted-lab mode waives the internal-range policy — that is its documented
+    purpose — but it does NOT waive pinning: the lab destination is still
+    resolved once and still pinned when resolvable. It is the only path that may
+    leave `pinned` unset, and only when the host does not resolve at all, which
+    is exactly the pre-M68D behaviour for that mode and nothing more.
     """
     import socket
     import urllib.parse
 
-    if _trusted_lab_enabled():
-        return None
+    trusted = _trusted_lab_enabled()
 
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return f"Esquema no permitido: {parsed.scheme or '(vacío)'} (usa http/https)."
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return EgressDestination(
+            scheme=scheme, host="", port=0, authority="", candidates=(), pinned=None,
+            error=f"Esquema no permitido: {parsed.scheme or '(vacío)'} (usa http/https).",
+            trusted_lab=trusted)
     host = parsed.hostname
     if not host:
-        return "URL inválida: host vacío."
+        return EgressDestination(
+            scheme=scheme, host="", port=0, authority="", candidates=(), pinned=None,
+            error="URL inválida: host vacío.", trusted_lab=trusted)
+    try:
+        explicit_port = parsed.port
+    except ValueError:
+        return EgressDestination(
+            scheme=scheme, host=host, port=0, authority="", candidates=(), pinned=None,
+            error="URL inválida: puerto no numérico.", trusted_lab=trusted)
+    port = explicit_port if explicit_port is not None else (443 if scheme == "https" else 80)
+    authority = parsed.netloc.split("@")[-1] or host
 
-    # Resolve every address the host maps to; block if ANY is internal — this
-    # defeats DNS-rebinding and hostnames that alias a private/metadata IP.
-    candidates: set[str] = set()
+    def _decide(candidates, pinned, error):
+        return EgressDestination(scheme=scheme, host=host, port=port,
+                                 authority=authority, candidates=tuple(candidates),
+                                 pinned=pinned, error=error, trusted_lab=trusted)
+
+    # ── the ONE resolution ───────────────────────────────────────────────────
+    candidates: list[str] = []
     try:
         ipaddress.ip_address(host)
-        candidates.add(host)
+        candidates.append(host)
     except ValueError:
         try:
-            for fam, _, _, _, sockaddr in socket.getaddrinfo(host, None):
-                candidates.add(sockaddr[0])
+            seen: set[str] = set()
+            for _fam, _t, _p, _c, sockaddr in socket.getaddrinfo(host, port):
+                addr = sockaddr[0]
+                if addr not in seen:
+                    seen.add(addr)
+                    candidates.append(addr)
         except Exception:
-            return f"No se pudo resolver el host '{host}'."
+            if trusted:
+                # Documented trusted-lab semantics: an unresolvable lab name is
+                # not refused here. Nothing is pinned, so nothing is claimed.
+                return _decide((), None, None)
+            return _decide((), None, f"No se pudo resolver el host '{host}'.")
+    if not candidates:
+        if trusted:
+            return _decide((), None, None)
+        return _decide((), None, f"No se pudo resolver el host '{host}'.")
 
-    for raw_ip in candidates:
-        try:
-            ip = ipaddress.ip_address(raw_ip.split("%")[0])  # strip zone id
-        except ValueError:
-            return f"Dirección IP no válida resuelta para '{host}'."
-        if (
-            ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-        ):
-            return (
-                f"Destino interno bloqueado (SSRF): {host} → {ip}. "
-                "Habilita JARVIS_TRUSTED_LAB=true para permitir rangos internos en lab aislado."
-            )
-    return None
+    # ── validate EVERY answer, not just the one we would have used ───────────
+    if not trusted:
+        for raw_ip in candidates:
+            reason = _internal_address_reason(host, raw_ip)
+            if reason is not None:
+                return _decide(candidates, None, reason)
+
+    return _decide(candidates, candidates[0], None)
+
+
+def _http_target_blocked(url: str) -> str | None:
+    """SSRF guard for outbound HTTP tools — the block reason, or ``None``.
+
+    Compatibility surface over :func:`govern_destination`. It answers the policy
+    question only; it cannot express WHERE the connection must go, which is why
+    `_safe_http_fetch` consumes the full decision instead of calling this.
+    """
+    return govern_destination(url).error
 
 
 # ── V69 M66A.1 (L2): ONE validated HTTP egress path for arbitrary destinations ─
@@ -841,6 +967,73 @@ def _headers_for_hop(headers: dict, from_url: str, to_url: str) -> "tuple[dict, 
     return kept, stripped
 
 
+class _PinnedDestinationAdapter(requests.adapters.HTTPAdapter):
+    """A ``requests`` adapter that connects ONLY to one pre-validated address.
+
+    The pool's host becomes the pinned IP, so urllib3 opens the socket there and
+    never resolves the name. ``server_hostname`` keeps the ORIGINAL hostname, so
+    HTTPS still performs SNI with it and still validates the certificate against
+    it — pinning the address must not become "trust any certificate", which is
+    the obvious wrong way to make this test pass (§7).
+    """
+
+    def __init__(self, pinned_ip: str, **kwargs) -> None:
+        self._pinned_ip = pinned_ip
+        super().__init__(**kwargs)
+
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request, verify, cert)
+        pool_kwargs = dict(pool_kwargs)
+        # Read the hostname BEFORE overwriting it; this is what TLS verifies.
+        pool_kwargs["server_hostname"] = host_params["host"]
+        host_params = dict(host_params, host=self._pinned_ip)
+        return host_params, pool_kwargs
+
+
+def _pinned_transport_request(dest: EgressDestination, method: str, url: str, *,
+                              headers: "dict | None" = None, body: str = "",
+                              timeout: int = 10):
+    """THE one transport primitive for arbitrary model-supplied destinations.
+
+    Three properties, all of them load-bearing:
+
+      * the socket goes to ``dest.pinned`` — the address policy validated — and
+        the hostname is never resolved a second time;
+      * ``Host`` is set from ``dest.authority`` explicitly, because with the pool
+        keyed on an IP ``requests`` would otherwise send the IP as the Host and
+        silently break virtual hosting (measured);
+      * environment proxies are NOT inherited. ``HTTP_PROXY`` reaching this path
+        made a validated public destination arrive at a loopback listener while
+        the result was reported as a success (measured). There is no governed
+        proxy architecture here, so the policy is default-deny rather than
+        "whatever the environment says".
+
+    When trusted-lab mode left the destination unpinned (an unresolvable lab
+    name) the request goes out by hostname, which is that mode's documented
+    pre-M68D behaviour and is never reachable in normal mode.
+    """
+    send_headers = dict(headers or {})
+    if dest.pinned is not None and dest.authority:
+        send_headers["Host"] = dest.authority
+    session = requests.Session()
+    session.trust_env = False
+    session.proxies = {}
+    if dest.pinned is not None:
+        adapter = _PinnedDestinationAdapter(dest.pinned)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+    try:
+        return session.request(
+            method, url,
+            headers=send_headers,
+            data=body.encode("utf-8") if body else None,
+            timeout=timeout, allow_redirects=False, proxies={},
+        )
+    finally:
+        session.close()
+
+
 def _safe_http_fetch(method: str, url: str, *, headers: "dict | None" = None,
                      body: str = "", timeout: int = 10, max_redirects: int = 5):
     """Perform a validated HTTP request, following redirects MANUALLY so that
@@ -861,25 +1054,39 @@ def _safe_http_fetch(method: str, url: str, *, headers: "dict | None" = None,
     cur_body = body
     cur_headers = dict(headers or {})
     total_stripped = 0
-    meta = {"error": None, "final_url": current_url, "sensitive_headers_stripped": 0}
+    meta = {"error": None, "final_url": current_url, "sensitive_headers_stripped": 0,
+            # V69 M68D (H01): the addresses the sockets actually used, one per hop,
+            # so a caller (and a test) can assert destination identity rather than
+            # infer it from a URL string.
+            "pinned_destinations": [], "validated_candidates": []}
 
     for _hop in range(max_redirects + 1):
-        block = _http_target_blocked(current_url)
-        if block:
+        dest = govern_destination(current_url)
+        if dest.blocked:
             security_metrics.incr("http_target_denials")
             if _hop > 0:
                 security_metrics.incr("redirect_blocks")
-            logger.warning(f"HTTP egress blocked: {current_url!r} — {block}")
-            meta["error"] = block
+            logger.warning(f"HTTP egress blocked: {current_url!r} — {dest.error}")
+            meta["error"] = dest.error
             meta["final_url"] = current_url
             return None, meta
         security_metrics.incr("http_target_allows")
+        # V69 M68D (H01): the transport gets the DECISION, so the socket lands on
+        # the address policy approved. In normal mode an unpinned decision cannot
+        # exist — `govern_destination` either pins or blocks — so this is a
+        # structural assertion, not a recoverable condition.
+        if dest.pinned is None and not dest.trusted_lab:
+            meta["error"] = "Destino no fijado: la decisión de egreso no tiene IP validada."
+            meta["final_url"] = current_url
+            return None, meta
+        meta["pinned_destinations"].append(dest.pinned)
+        meta["validated_candidates"].append(list(dest.candidates))
 
-        resp = requests.request(
-            cur_method, current_url,
+        resp = _pinned_transport_request(
+            dest, cur_method, current_url,
             headers=cur_headers,
-            data=cur_body.encode("utf-8") if cur_body else None,
-            timeout=timeout, allow_redirects=False,
+            body=cur_body,
+            timeout=timeout,
         )
         if resp.status_code not in _REDIRECT_CODES:
             meta["final_url"] = str(resp.url)
@@ -1061,10 +1268,21 @@ async def _aura_broadcast(event: dict) -> None:
 
     Imported lazily so executor.py has no hard dependency on the AURA module —
     Jarvis works in text mode even when FastAPI/uvicorn are not installed.
+
+    V69 M68D (H03): the event is sanitized HERE, at the sink, so EVERY broadcast
+    — the result summaries, the error messages, and any payload a later milestone
+    adds — is covered by the one governed sanitizer without each call site having
+    to remember. MEASURED before the fix: a synthetic password and Bearer token
+    reached this payload. An exception message is just as much a carrier as a
+    result is: a failed connection string arrives as `str(e)`.
+
+    Sanitization happens BEFORE the lazy import, so a host without AURA installed
+    still cannot be the reason a payload went out unredacted on some other path.
     """
+    safe_event = safe_observability.sanitize(event)
     try:
         from aura.server import broadcast
-        await broadcast(event)
+        await broadcast(safe_event)
     except Exception:
         pass
 
@@ -1772,15 +1990,20 @@ class ToolExecutor:
         try:
             result = handler(**tool_input)
         except Exception as e:
-            logger.error(f"Error en tool '{tool_name}': {e}")
+            # V69 M68D (H03): Loguru is a persistent sink too, and an
+            # exception message is as much a carrier as a result — a failed
+            # connection string arrives as `str(e)`.
+            logger.error(f"Error en tool '{tool_name}': "
+                         f"{safe_observability.safe_reasoning(str(e))}")
             self._audit.log_action(tool_name, reasoning, "sync", "error", str(e)[:200])
             return {"error": str(e)}
 
         status = "error" if isinstance(result, dict) and "error" in result else "success"
         result = self._check_pii_output(result)
+        # V69 M68D (H03): the sync path leaked the same canaries as the async one.
         self._audit.log_action(
             tool_name, reasoning, "sync", status,
-            json.dumps(result, ensure_ascii=False, default=str)[:200],
+            safe_observability.safe_summary(result),
         )
         return result
 
@@ -2611,7 +2834,11 @@ class ToolExecutor:
             # Layer 4: run synchronous tool handler in thread pool
             result = await loop.run_in_executor(None, lambda: handler(**tool_input))
             status = "error" if isinstance(result, dict) and "error" in result else "success"
-            output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
+            # V69 M68D (H03): SANITIZE, then summarise, then truncate. This line
+            # used to be `json.dumps(result)[:200]` over the RAW result and that
+            # string went straight to the audit JSONL and the AURA broadcast, so
+            # whether a secret leaked came down to how far into the JSON it sat.
+            output_summary = safe_observability.safe_summary(result)
             result = self._check_pii_output(result)
             self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
 
@@ -2675,7 +2902,8 @@ class ToolExecutor:
             # a tool fault cannot contaminate the conversation into an unrelated task.
             from core.tool_result import classify_exception, make_failure
 
-            logger.error(f"Error en tool '{tool_name}': {e}")
+            logger.error(f"Error en tool '{tool_name}': "
+                         f"{safe_observability.safe_reasoning(str(e))}")
             error_class, safe_message = classify_exception(e)
             self._audit.log_action(tool_name, reasoning, auth_audit, "error", str(e)[:200])
             await _aura_broadcast({
@@ -2946,7 +3174,8 @@ class ToolExecutor:
                              f"{declared.safe_message or 'declared outcome'}",
                     "error_class": "declared_effect_outcome"}
         except Exception as e:
-            logger.error(f"Error en tool MCP '{tool_name}': {e}")
+            logger.error(f"Error en tool MCP '{tool_name}': "
+                         f"{safe_observability.safe_reasoning(str(e))}")
             self._audit.log_action(tool_name, reasoning, "mcp", "error", str(e)[:200])
             await _aura_broadcast({
                 "type": "error",
@@ -2958,7 +3187,8 @@ class ToolExecutor:
 
         status = "error" if isinstance(result, dict) and "error" in result else "success"
         result = self._check_pii_output(result)
-        output_summary = json.dumps(result, ensure_ascii=False, default=str)[:200]
+        # V69 M68D (H03): one governed sanitizer, same ordering as the local path.
+        output_summary = safe_observability.safe_summary(result)
         self._audit.log_action(tool_name, reasoning, auth_audit, status, output_summary)
 
         # V69 M64.1 §17 — same ledger, same epoch, one keyspace. An MCP effect
@@ -3124,66 +3354,104 @@ class ToolExecutor:
             }
 
         ext = p.suffix.lower()
-        try:
-            if ext == ".pdf":
-                content = self._read_pdf(p)
-            elif ext in (".docx", ".doc"):
-                content = self._read_docx(p)
-            elif ext in (".xlsx", ".xls"):
-                content = self._read_xlsx(p)
-            elif ext in (".pptx", ".ppt"):
-                content = self._read_pptx(p)
-            elif ext in (
-                ".txt", ".md", ".py", ".js", ".sh", ".yaml", ".yml",
-                ".json", ".xml", ".html", ".css", ".log", ".c",
-                ".cpp", ".h", ".java", ".go", ".rs", ".env", ".csv",
-            ):
-                content = p.read_text(encoding="utf-8", errors="ignore")
-            elif ext == ".rtf":
-                content = self._read_rtf(p)
-            elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"):
-                content = self._read_image_ocr(p)
-            else:
-                return {
-                    "error": f"Extensión '{ext}' no soportada.",
-                    "error_code": ERR_UNSUPPORTED_EXTENSION,
-                }
-
-            # V69 M68C (Finding A): a truncated read is not a complete one.
-            # The marker below is DISPLAY: it lives inside `content`, so a
-            # complete file whose last line happens to say the same thing is
-            # byte-indistinguishable from a cut one (measured). The authority is
-            # the out-of-band `truncated` flag and the `source` identity, whose
-            # digest is over the COMPLETE file either way — so truncating the
-            # rendering never costs a caller its ability to state a write
-            # precondition, and never lets it claim it saw the whole file.
-            full_chars = len(content)
-            if full_chars > max_chars:
-                content = content[:max_chars] + f"\n\n[...truncado a {max_chars} chars]"
-            identity = identify_source(
-                p,
-                content_chars_total=full_chars,
-                content_chars_returned=min(full_chars, max_chars),
-                content_derived=ext not in _TEXT_SOURCE_EXTENSIONS,
-            )
-
+        if ext not in _READABLE_EXTENSIONS:
             return {
-                "file": str(p.name),
-                "extension": ext,
-                "size_kb": round(p.stat().st_size / 1024, 2),
-                "content": content,
-                "chars": len(content),
-                # Out of band, and the field a mutation path must branch on.
-                "truncated": identity.truncated,
-                "source": identity.to_dict(),
+                "error": f"Extensión '{ext}' no soportada.",
+                "error_code": ERR_UNSUPPORTED_EXTENSION,
             }
+        derived = ext not in _TEXT_SOURCE_EXTENSIONS
+        try:
+            # V69 M68D (H02): ONE source observation. The file is opened once and
+            # the descriptor is held for the whole read, so the text handed back
+            # and the digest that identifies it describe the same bytes. Before
+            # this, the rendering came from one opening and `identify_source`
+            # stat'd and hashed a LATER one: measured returning version one's
+            # text with version two's digest and `complete: true`, which
+            # `cas_write_text` then accepted as a precondition for an edit
+            # derived from bytes nobody had read.
+            with source_snapshot(p, capture_bytes=not derived) as snapshot:
+                if not snapshot.stable:
+                    return {
+                        "error": (f"La fuente cambió durante la lectura: {path}. "
+                                  "Reintenta; no se devuelve una observación mixta."),
+                        "error_code": ERR_SOURCE_UNSTABLE,
+                    }
+                if derived:
+                    content = self._read_derived(ext, snapshot)
+                    # The digest pass and the parser's pass are two reads of one
+                    # descriptor, so the window between them has to be checked
+                    # rather than assumed away.
+                    if not snapshot.recheck():
+                        return {
+                            "error": (f"La fuente cambió durante la extracción: {path}. "
+                                      "El render y el digest describirían bytes distintos."),
+                            "error_code": ERR_SOURCE_UNSTABLE,
+                        }
+                else:
+                    content = snapshot.text(encoding="utf-8", errors="ignore")
+
+                # V69 M68C (Finding A): a truncated read is not a complete one.
+                # The marker below is DISPLAY: it lives inside `content`, so a
+                # complete file whose last line happens to say the same thing is
+                # byte-indistinguishable from a cut one (measured). The authority is
+                # the out-of-band `truncated` flag and the `source` identity, whose
+                # digest is over the COMPLETE file either way — so truncating the
+                # rendering never costs a caller its ability to state a write
+                # precondition, and never lets it claim it saw the whole file.
+                full_chars = len(content)
+                if full_chars > max_chars:
+                    content = content[:max_chars] + f"\n\n[...truncado a {max_chars} chars]"
+                identity = identify_snapshot(
+                    snapshot,
+                    content_chars_total=full_chars,
+                    content_chars_returned=min(full_chars, max_chars),
+                    content_derived=derived,
+                )
+
+                return {
+                    "file": str(p.name),
+                    "extension": ext,
+                    # From the snapshot, not a third independent stat() of a
+                    # mutable path.
+                    "size_kb": round(snapshot.size_bytes / 1024, 2),
+                    "content": content,
+                    "chars": len(content),
+                    # Out of band, and the field a mutation path must branch on.
+                    "truncated": identity.truncated,
+                    "source": identity.to_dict(),
+                }
         except Exception as e:
             return {"error": f"Error leyendo {path}: {e}", "error_code": ERR_READ_FAILED}
 
-    def _read_pdf(self, path: Path) -> str:
+    #: Derived-format readers, by extension. An EXHAUSTIVE table rather than an
+    #: if/elif chain with a fall-through: the chain's final `return
+    #: self._read_image_ocr(snapshot)` meant any newly declared derived
+    #: extension silently became an OCR attempt. Every reader here takes a
+    #: :class:`~core.source_integrity.SourceSnapshot`, so a new format cannot be
+    #: added with a path-reopening reader by accident either.
+    _DERIVED_READERS: "dict[str, str]" = {
+        ".pdf": "_read_pdf",
+        ".docx": "_read_docx", ".doc": "_read_docx",
+        ".xlsx": "_read_xlsx", ".xls": "_read_xlsx",
+        ".pptx": "_read_pptx", ".ppt": "_read_pptx",
+        ".rtf": "_read_rtf",
+        ".png": "_read_image_ocr", ".jpg": "_read_image_ocr",
+        ".jpeg": "_read_image_ocr", ".bmp": "_read_image_ocr",
+        ".tiff": "_read_image_ocr", ".webp": "_read_image_ocr",
+    }
+
+    def _read_derived(self, ext: str, snapshot) -> str:
+        reader = self._DERIVED_READERS.get(ext)
+        if reader is None:
+            # Fail closed. A derived extension with no reader is a configuration
+            # error, not an invitation to guess which parser to try.
+            raise ValueError(f"no derived reader declared for '{ext}'")
+        return getattr(self, reader)(snapshot)
+
+    def _read_pdf(self, snapshot) -> str:
         import pdfplumber
         parts = []
-        with pdfplumber.open(path) as pdf:
+        with snapshot.stream() as handle, pdfplumber.open(handle) as pdf:
             for i, page in enumerate(pdf.pages, 1):
                 text = page.extract_text() or ""
                 if text:
@@ -3193,55 +3461,70 @@ class ToolExecutor:
                     parts.append("[Tabla]\n" + "\n".join(rows))
         return "\n\n".join(parts)
 
-    def _read_docx(self, path: Path) -> str:
+    def _read_docx(self, snapshot) -> str:
         from docx import Document
-        doc = Document(str(path))
-        parts = [p.text for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:
-                parts.append(" | ".join(c.text for c in row.cells))
+        with snapshot.stream() as handle:
+            doc = Document(handle)
+            parts = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(c.text for c in row.cells))
         return "\n".join(parts)
 
-    def _read_xlsx(self, path: Path) -> str:
+    def _read_xlsx(self, snapshot) -> str:
         import openpyxl
-        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
         parts = []
-        for name in wb.sheetnames:
-            parts.append(f"[Hoja: {name}]")
-            for row in wb[name].iter_rows(values_only=True):
-                if any(c is not None for c in row):
-                    parts.append(" | ".join(str(c) if c is not None else "" for c in row))
+        with snapshot.stream() as handle:
+            wb = openpyxl.load_workbook(handle, read_only=True, data_only=True)
+            try:
+                for name in wb.sheetnames:
+                    parts.append(f"[Hoja: {name}]")
+                    for row in wb[name].iter_rows(values_only=True):
+                        if any(c is not None for c in row):
+                            parts.append(" | ".join(
+                                str(c) if c is not None else "" for c in row))
+            finally:
+                wb.close()
         return "\n".join(parts)
 
-    def _read_pptx(self, path: Path) -> str:
+    def _read_pptx(self, snapshot) -> str:
         from pptx import Presentation
-        prs = Presentation(str(path))
         parts = []
-        for i, slide in enumerate(prs.slides, 1):
-            texts = [
-                s.text.strip()
-                for s in slide.shapes
-                if hasattr(s, "text") and s.text.strip()
-            ]
-            if texts:
-                parts.append(f"[Slide {i}]\n" + "\n".join(texts))
+        with snapshot.stream() as handle:
+            prs = Presentation(handle)
+            for i, slide in enumerate(prs.slides, 1):
+                texts = [
+                    s.text.strip()
+                    for s in slide.shapes
+                    if hasattr(s, "text") and s.text.strip()
+                ]
+                if texts:
+                    parts.append(f"[Slide {i}]\n" + "\n".join(texts))
         return "\n\n".join(parts)
 
-    def _read_rtf(self, path: Path) -> str:
+    def _read_rtf(self, snapshot) -> str:
         from striprtf.striprtf import rtf_to_text
-        return rtf_to_text(path.read_text(errors="ignore"))
+        with snapshot.stream() as handle:
+            return rtf_to_text(handle.read().decode("utf-8", errors="ignore"))
 
-    def _read_image_ocr(self, path: Path) -> str:
+    def _read_image_ocr(self, snapshot) -> str:
+        # The bytes come from the snapshot, so the OCR text and the digest
+        # describe one observation even though the backends differ.
+        with snapshot.stream() as handle:
+            raw = handle.read()
         try:
+            import io as _io
+
             import pytesseract
             from PIL import Image
-            return pytesseract.image_to_string(Image.open(str(path)), lang="spa+eng")
+            return pytesseract.image_to_string(Image.open(_io.BytesIO(raw)),
+                                               lang="spa+eng")
         except Exception:
             pass
         try:
             import easyocr
             reader = easyocr.Reader(["es", "en"], gpu=False)
-            return " ".join(reader.readtext(str(path), detail=0))
+            return " ".join(reader.readtext(raw, detail=0))
         except Exception as e:
             return f"OCR no disponible: {e}"
 
@@ -4519,6 +4802,11 @@ class ToolExecutor:
                 "body": resp.text[:4000],
                 "encoding": resp.encoding,
                 "sensitive_headers_stripped": meta["sensitive_headers_stripped"],
+                # V69 M68D (H01): the address the socket actually used, so the
+                # claim "I fetched this URL" is auditable against a destination
+                # rather than against a hostname that may have moved.
+                "destination": (meta["pinned_destinations"][-1]
+                                if meta["pinned_destinations"] else None),
             }
         except Exception as e:
             return {"error": str(e)}

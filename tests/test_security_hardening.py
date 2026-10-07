@@ -152,21 +152,30 @@ class _FakeResp:
 
 
 class _FakeRequests:
-    """Route-table stand-in for the `requests` module used by the executor.
+    """Route-table stand-in for the executor's ONE transport primitive.
 
     Records every fetched URL and refuses any URL not explicitly routed, so a
     test fails loudly if the handler ever fetches an unchecked redirect target.
-    All targets are IP literals — _http_target_blocked never performs DNS.
+    All targets are IP literals — the egress guard never performs DNS for them.
+
+    V69 M68D (H01): the executor no longer hands a hostname to
+    ``requests.request``; it hands the governed :class:`EgressDestination` to
+    ``_pinned_transport_request``, which connects to the validated address. So
+    this double now stands in for THAT seam, and records the pinned destination
+    alongside the URL — a strictly stronger witness than the URL alone, because
+    a URL string cannot tell you which machine was contacted.
     """
 
     def __init__(self, routes):
         self.routes = routes
         self.fetched: list[str] = []
+        self.pinned: list[str] = []
 
-    def request(self, method, url, headers=None, data=None, timeout=None,
-                allow_redirects=True, **kw):
-        assert allow_redirects is False, "handler must follow redirects manually"
+    def __call__(self, dest, method, url, headers=None, body="", timeout=None, **kw):
+        assert dest.error is None, "the transport must never run on a blocked decision"
+        assert dest.pinned is not None, "the transport must receive a pinned address"
         self.fetched.append(url)
+        self.pinned.append(dest.pinned)
         if url not in self.routes:
             raise AssertionError(f"unexpected (unchecked) fetch to {url!r}")
         return self.routes[url]
@@ -175,7 +184,7 @@ class _FakeRequests:
 class TestSSRFRedirect:
     def _run(self, executor, routes, monkeypatch, url="http://1.1.1.1/"):
         fake = _FakeRequests(routes)
-        monkeypatch.setattr(_executor_mod, "requests", fake)
+        monkeypatch.setattr(_executor_mod, "_pinned_transport_request", fake)
         result = executor.execute("http_request", {"url": url})
         return result, fake
 

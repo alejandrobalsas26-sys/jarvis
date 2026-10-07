@@ -3978,12 +3978,19 @@ class LLM:
 
                 result_str = json.dumps(result, ensure_ascii=False)
                 # v58.0 — redact secrets from tool output before it enters the
-                # prompt history (token-safe, fail-open if ContextManager absent).
-                if self._context_mgr is not None:
-                    try:
-                        result_str = self._context_mgr.redact_secrets(result_str)
-                    except Exception:
-                        pass
+                # prompt history.
+                #
+                # V69 M68D (H03): this used to be conditional on a ContextManager
+                # existing and `except Exception: pass` around the call, so the
+                # two ways it could not run — absent manager, raising redactor —
+                # both ended in RAW tool output entering the history. The one
+                # governed sanitizer has no optional dependency and does not
+                # raise: on an internal failure it returns a refusal marker. §19
+                # says an observability failure must not become a disclosure, and
+                # the prompt history is where a disclosure persists longest.
+                from core import safe_observability as _safe_obs
+
+                result_str = _safe_obs.sanitize_text(result_str)
                 # V61 Phase 5 — wrap with trust labels (untrusted envelope for
                 # web/file/RAG/screen/clipboard sources) and truncate. This is the
                 # prompt-injection boundary: tool output is DATA, never policy.

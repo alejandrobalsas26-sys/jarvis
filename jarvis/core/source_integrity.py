@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import io
 import os
 import tempfile
 import uuid
@@ -95,6 +96,7 @@ __all__ = [
     "PATCH_VALIDATION_SCOPES",
     "PatchValidationScope",
     "SourceIdentity",
+    "SourceSnapshot",
     "TransportArtifactClass",
     "TransportIdentity",
     "WriteReceipt",
@@ -103,8 +105,10 @@ __all__ = [
     "digest_bytes",
     "digest_file",
     "external_outcome_of_write",
+    "identify_snapshot",
     "identify_source",
     "identify_transport",
+    "source_snapshot",
 ]
 
 #: The one digest this module speaks. Named so a receipt never has to be guessed
@@ -373,6 +377,215 @@ class SourceIdentity:
             "unsupported_reason": self.unsupported_reason,
             "complete": self.complete,
         }
+
+
+# ── V69 M68D (H02): ONE source observation, not two ──────────────────────────
+# Before M68D, `_tool_read_file` read the rendered content from one opening of
+# the path and then called `identify_source(p)`, which STAT'd and DIGESTED a
+# LATER, INDEPENDENT opening of the same mutable path. Two observations, one
+# result, and nothing bound them together.
+#
+# MEASURED: a reader took `AAAA-version-one-AAAA\n`; a concurrent writer replaced
+# the file atomically with a SAME-SIZE `BBBB-version-two-BBBB\n`; the returned
+# dict carried version one's text with version TWO's digest and `complete: true`.
+# `cas_write_text` then accepted that digest as the precondition for an edit
+# derived from text it had never read, and the human's version two was gone with
+# an APPLIED receipt on top of it. Same size, so `size_bytes` could not notice.
+#
+# A snapshot fixes the cause rather than narrowing the window: the file is opened
+# ONCE and the descriptor is held, so an `os.replace` underneath cannot change
+# the bytes we are looking at — the fd keeps the original inode. Everything the
+# result claims (bytes, digest, size, rendering) comes from that one descriptor.
+#
+# WHAT THIS DOES NOT CLAIM (§13): it is not H12. There is no bound on how much a
+# caller may ask to read here; `capture_bytes` holds one text file in memory,
+# which is exactly what `read_text` already did, and the derived path streams
+# instead of buffering. Bounded consumption remains a later milestone.
+
+
+class SourceSnapshotError(OSError):
+    """The source could not be observed coherently."""
+
+
+@dataclass
+class SourceSnapshot:
+    """One immutable observation of a source file, held open.
+
+    The invariant: :attr:`sha256`, :attr:`size_bytes` and whatever
+    :meth:`text`/:meth:`stream` return all describe THE SAME bytes. Nothing here
+    reopens the path.
+
+    :attr:`stable` is the honest answer to "did the file change while I was
+    looking at it". An atomic replacement cannot make it ``False`` — the held
+    descriptor is immune to that by construction — but an IN-PLACE rewrite can,
+    and then the snapshot says so rather than presenting mixed bytes as whole
+    ones (§14).
+    """
+
+    #: Absolute, resolved, symlink-followed.
+    path: str
+    #: Bytes observed through the descriptor.
+    size_bytes: int
+    #: ``sha256`` of exactly those bytes.
+    sha256: str
+    #: ``False`` when the source changed underneath this observation.
+    stable: bool
+    _fd: int = -1
+    _stat: "os.stat_result | None" = None
+    _payload: "bytes | None" = None
+
+    def text(self, encoding: str = "utf-8", errors: str = "ignore") -> str:
+        """The captured bytes, decoded. Never a re-read of the path."""
+        if self._payload is None:
+            raise SourceSnapshotError(
+                "this snapshot did not capture bytes; use stream() instead")
+        return self._payload.decode(encoding, errors)
+
+    def payload(self) -> bytes:
+        """The captured bytes themselves."""
+        if self._payload is None:
+            raise SourceSnapshotError("this snapshot did not capture bytes")
+        return self._payload
+
+    def stream(self) -> "io.BufferedReader":
+        """A reader over THIS observation, positioned at 0.
+
+        A duplicate of the held descriptor, so a parser handed this object reads
+        the snapshot's inode and not whatever the path points at now. The caller
+        closes it; closing the duplicate never closes the snapshot's own fd.
+        """
+        if self._payload is not None:
+            return io.BufferedReader(io.BytesIO(self._payload))
+        dup = os.dup(self._fd)
+        handle = os.fdopen(dup, "rb")
+        handle.seek(0)
+        return handle
+
+    def recheck(self) -> bool:
+        """Re-verify stability against the SAME descriptor, and remember the answer.
+
+        Called after a derived parser has read the stream: the digest pass and
+        the parser's pass are two reads of one descriptor, so an in-place rewrite
+        between them has to be detectable or the rendering and the digest could
+        still disagree.
+        """
+        if self._fd < 0 or self._stat is None:
+            return self.stable
+        try:
+            now = os.fstat(self._fd)
+        except OSError:
+            self.stable = False
+            return False
+        if (now.st_size != self._stat.st_size
+                or now.st_mtime_ns != self._stat.st_mtime_ns
+                or now.st_ino != self._stat.st_ino
+                or now.st_dev != self._stat.st_dev):
+            self.stable = False
+        return self.stable
+
+
+@contextlib.contextmanager
+def source_snapshot(path: "Path | str", *, capture_bytes: bool = True):
+    """Open *path* once and yield a coherent :class:`SourceSnapshot`.
+
+    ``capture_bytes=True`` reads the whole file into memory and digests exactly
+    those bytes — one pass, so there is no window at all between the bytes a
+    caller sees and the bytes the digest covers. That is the right mode for text.
+
+    ``capture_bytes=False`` digests the descriptor in chunks and hands parsers a
+    duplicate of it through :meth:`SourceSnapshot.stream`. Two passes over one
+    inode, which an atomic replacement cannot disturb and an in-place rewrite
+    can — so that mode REQUIRES the caller to call :meth:`SourceSnapshot.recheck`
+    after parsing. It exists so identifying a large PDF does not mean holding it
+    in memory.
+
+    Raises :class:`SourceSnapshotError` (an ``OSError``) when the source cannot
+    be opened, because a caller that cannot observe the source must not proceed
+    as if it had.
+    """
+    target = Path(path)
+    try:
+        resolved = target.expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        resolved = target
+    try:
+        fd = os.open(str(resolved), os.O_RDONLY)
+    except OSError as exc:
+        raise SourceSnapshotError(f"cannot open {resolved}: {exc}") from exc
+    try:
+        before = os.fstat(fd)
+        digest = hashlib.sha256()
+        payload: "bytes | None" = None
+        total = 0
+        if capture_bytes:
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, _DIGEST_CHUNK)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            payload = b"".join(chunks)
+            digest.update(payload)
+            total = len(payload)
+        else:
+            while True:
+                chunk = os.read(fd, _DIGEST_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                total += len(chunk)
+        after = os.fstat(fd)
+        stable = (
+            before.st_ino == after.st_ino
+            and before.st_dev == after.st_dev
+            and before.st_mtime_ns == after.st_mtime_ns
+            and before.st_size == after.st_size == total
+        )
+        snapshot = SourceSnapshot(
+            path=str(resolved), size_bytes=total, sha256=digest.hexdigest(),
+            stable=stable, _fd=fd, _stat=after, _payload=payload)
+        yield snapshot
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def identify_snapshot(
+    snapshot: SourceSnapshot,
+    *,
+    content_chars_total: "int | None" = None,
+    content_chars_returned: "int | None" = None,
+    content_derived: bool = False,
+    unsupported_reason: "str | None" = None,
+) -> SourceIdentity:
+    """A :class:`SourceIdentity` built FROM *snapshot* — nothing is reopened.
+
+    An unstable snapshot yields no digest and :data:`DIGEST_COVERS_NOTHING`, so
+    it can never be ``complete`` and no precondition can match it. That is the
+    whole difference from :func:`identify_source`, which is free to describe a
+    file that has moved on since the caller read it.
+    """
+    resolved = Path(snapshot.path)
+    sha = snapshot.sha256 if snapshot.stable else None
+    covers = DIGEST_COVERS_COMPLETE if sha is not None else DIGEST_COVERS_NOTHING
+    truncated = bool(
+        content_chars_total is not None
+        and content_chars_returned is not None
+        and content_chars_returned < content_chars_total
+    )
+    return SourceIdentity(
+        path=snapshot.path,
+        repo_relative=_repo_relative(resolved),
+        exists=True,
+        size_bytes=snapshot.size_bytes,
+        sha256=sha,
+        digest_covers=covers,
+        content_chars_total=content_chars_total,
+        content_chars_returned=content_chars_returned,
+        truncated=truncated,
+        content_derived=content_derived,
+        unsupported_reason=unsupported_reason,
+    )
 
 
 def identify_source(

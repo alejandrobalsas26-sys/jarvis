@@ -399,3 +399,70 @@ jobs:
         if: always()
         run: |
           echo "pip-audit outcome: ${{ steps.pip_audit.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Gate 9: WINDOWS PORTABILITY. Blocking. ─────────────────────────────────
+  #
+  # V69 M68D (H05). An external Windows run on master reported 147 control-plane
+  # problems on an ordinary checkout (`core.autocrlf=true`, the Windows default),
+  # 16 with it off, and ten failures in the M68C source-integrity suite. None of
+  # it was repository corruption: three assumptions in the verifier and the tests
+  # were POSIX-only (native path separators compared against `git ls-files`,
+  # `os.access(X_OK)` used as a Git-mode oracle, and checkout newline conversion
+  # rewriting byte-sealed bytes). Reproduced locally with two clones of one
+  # commit: 0 problems with `autocrlf=false`, 131 with it true.
+  #
+  # The fixes are only as durable as a runner that would notice them regressing,
+  # and until M68D this workflow had no Windows runner at all. So this job exists,
+  # and it BLOCKS.
+  #
+  # It is deliberately FOCUSED rather than the whole 12k suite: the authoritative
+  # suite's cost and its Linux-measured skip baselines are not what this gate is
+  # for, and no repository evidence justifies paying for a second full run. It
+  # runs the control-plane verifier, the M68C source-integrity suite, the M68D
+  # portability suite, the dependency-authority checks and an import smoke test.
+  #
+  # `autocrlf` is left at the Windows DEFAULT on purpose. Setting it false here
+  # would make the job pass by avoiding the condition it is supposed to witness.
+  windows-portability:
+    name: Windows portability (3.11, blocking)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Full history: the control-plane verifier resolves subject_state_commit
+      # and requires ancestry, exactly as the `tests` job documents.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            jarvis/requirements/*.txt
+      - name: Report the checkout's newline configuration
+        run: |
+          git config --get core.autocrlf
+          git check-attr text -- PROGRESS.md state/m62/current.json
+      - name: Install dev profile (constrained)
+        working-directory: jarvis
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c requirements/constraints-ci.txt -r requirements/dev.txt
+      - name: Control Plane verifier (must be PASS / 0 on Windows)
+        run: python jarvis/scripts/verify_m62_control_plane.py
+      - name: Source-integrity and portability suites
+        run: |
+          python -m pytest -q --tb=short `
+            jarvis/tests/test_source_integrity_m68c.py `
+            jarvis/tests/test_trust_boundary_m68d_h02_source_identity.py `
+            jarvis/tests/test_trust_boundary_m68d_h05_portability.py
+      - name: Dependency authority and consistency checks
+        working-directory: jarvis
+        run: |
+          python scripts/check_release_consistency.py
+          python scripts/check_package_manifest.py
+      - name: Import smoke (no service, no model)
+        working-directory: jarvis
+        run: python -c "import core.source_integrity, core.safe_observability, core.redaction_policy; print('import ok')"

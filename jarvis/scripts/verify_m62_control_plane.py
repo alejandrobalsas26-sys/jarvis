@@ -64,7 +64,11 @@ import hashlib
 import inspect
 import json
 import math
-import os
+# V69 M68D (H05-B): `os` is deliberately NOT imported. Its only uses here were
+# the two `os.access(path, os.X_OK)` checks, which answered a FILESYSTEM
+# question about a REPOSITORY invariant and were wrong on POSIX in both
+# directions. The executable bit now comes from `git ls-files --stage`, and
+# leaving the name out means that composition cannot return by accident.
 import re
 import subprocess  # nosec B404 - read-only git plumbing only; argv is a fixed list
 import sys
@@ -255,6 +259,15 @@ MIGRATION_MANIFEST_PATH = f"{MIGRATION_DIR}/0001-control-plane-v2.json"
 
 PROGRESS_PATH = "PROGRESS.md"
 ARCHIVE_PATH = "jarvis/docs/m62/history/PROGRESS_THROUGH_S3N.md"
+#: V69 M68D (H05-C). Every tree and file whose exact WORKING-TREE bytes are
+#: load-bearing, and which must therefore be declared `-text` in
+#: `.gitattributes` so no platform's checkout rewrites them. Trees rather than
+#: file lists on purpose: a new snapshot, record or receipt is covered the moment
+#: it is added, instead of needing a second list to be remembered.
+BYTE_PINNED_TREES = ("state/m62",)
+BYTE_PINNED_FILES = ("PROGRESS.md", "jarvis/docs/m62",
+                     "jarvis/scripts/verify_m62_control_plane.py")
+GITATTRIBUTES_PATH = ".gitattributes"
 HISTORY_INDEX_PATH = "jarvis/docs/m62/HISTORY_INDEX.md"
 VERIFIER_PATH = "jarvis/scripts/verify_m62_control_plane.py"
 MIGRATION_DOC_PATH = "jarvis/docs/V69_M62_S3N1_CONTROL_PLANE_V2_ZERO_TRUST_MIGRATION.md"
@@ -2845,6 +2858,7 @@ CATEGORIES = (
     "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL", "PATH_INTEGRITY", "STALE_STATE",
     "RECORD_STORE",
     "INSTRUMENT_STACK",
+    "NEWLINE_POLICY",
     "CONTROL_PLANE_BUDGET",
 )
 
@@ -2882,6 +2896,7 @@ CHECK_DISPATCH = (
     ("check_holdout_retirement", ()),
     ("check_record_store", ("RECORD_STORE",)),
     ("check_instrument_stack", ("INSTRUMENT_STACK",)),
+    ("check_newline_policy", ("NEWLINE_POLICY",)),
     ("check_budgets", ("CONTROL_PLANE_BUDGET",)),
     ("check_next", ()),
 )
@@ -2942,6 +2957,107 @@ def _git(*args: str) -> "tuple[int, str]":
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
     return done.returncode, done.stdout.strip()
+
+
+# ── V69 M68D (H05): REPOSITORY truth, not host formatting ───────────────────────────
+# An external Windows run reported 147 control-plane problems on an ordinary
+# checkout with `core.autocrlf=true` and 16 with it false, plus ten failures in
+# the M68C source-integrity suite. Reproduced on Linux with two temporary clones
+# of the same commit: 0 problems with `autocrlf=false` and 131 with it true. The
+# repository is not corrupt on Windows; three platform assumptions in here are.
+#
+#   A. `str(Path.relative_to(...))` renders `state\m62\...` on Windows while
+#      `git ls-files` prints `state/m62/...`, so a membership test against the
+#      tracked set reports a TRACKED file as untracked. Measured directly.
+#   B. `os.access(path, os.X_OK)` answers a FILESYSTEM question. On Windows it
+#      is true for any readable file, so every data file "carries an executable
+#      bit". It is also wrong on POSIX in BOTH directions, which is worse than
+#      unportable: measured here, a file committed `100755` with its working-tree
+#      bit cleared passes the check while Git calls it executable, and a file
+#      committed `100644` with the bit set fails it. The invariant is about the
+#      repository, so it has to be read from the index.
+#   C. Checkout newline conversion rewrites the working-tree bytes of byte-pinned
+#      artifacts. That is handled by PINNING THE NEWLINES (`.gitattributes`
+#      `-text`) and then CHECKING that the pin covers every sealed artifact —
+#      never by recomputing a sealed digest from CRLF bytes, and never by
+#      normalising before comparison. A byte seal stays a byte seal.
+
+
+def repo_path(path: "Path | str") -> str:
+    """*path* as a REPOSITORY path: relative to the root, POSIX separators.
+
+    This is the only form that may be compared against `git ls-files`,
+    `git check-attr` or anything else that speaks Git. `as_posix()` is the whole
+    mechanism; the bug was calling `str()` instead.
+    """
+    candidate = Path(path)
+    if candidate.is_absolute():
+        # NOT `.resolve()` first. Resolving follows symlinks, so a SYMLINKED
+        # control-plane file would be rendered as its TARGET and the symlink
+        # check below would never see a symlink at all — measured: it silently
+        # disarmed `test_a_symlinked_snapshot_is_refused`. Relativise literally
+        # when the path is already under the root, and only fall back to
+        # resolving (for `..` segments or a different mount rendering) when the
+        # literal form does not sit under it.
+        try:
+            candidate = candidate.relative_to(REPO_ROOT)
+        except ValueError:
+            try:
+                candidate = candidate.resolve().relative_to(REPO_ROOT.resolve())
+            except (OSError, ValueError):
+                return candidate.as_posix()
+    return candidate.as_posix()
+
+
+def _git_index_modes(*rel_paths: str) -> "dict[str, str]":
+    """Git index mode per repository path, e.g. ``{"a.json": "100644"}``.
+
+    Read from `git ls-files --stage`, which is the repository's own answer about
+    the executable bit. Paths absent from the result are absent from the dict —
+    silence is not "100644".
+    """
+    if not rel_paths:
+        return {}
+    code, out = _git("ls-files", "--stage", "-z", "--", *rel_paths)
+    if code != 0:
+        return {}
+    modes: dict[str, str] = {}
+    for entry in out.split("\0"):
+        if not entry.strip():
+            continue
+        # "<mode> <object> <stage>\t<path>"
+        meta, _, name = entry.partition("\t")
+        parts = meta.split()
+        if parts and name:
+            modes[name] = parts[0]
+    return modes
+
+
+#: Git's mode for a file carrying the executable bit.
+GIT_MODE_EXECUTABLE = "100755"
+
+
+def _newline_pinned(*rel_paths: str) -> "dict[str, str]":
+    """`git check-attr text` per repository path.
+
+    ``"unset"`` means the path is declared ``-text``: Git performs no newline
+    conversion on it in either direction, so its working-tree bytes equal its
+    blob bytes on every platform. That is what makes a byte seal survive a
+    Windows checkout without anything being normalised at comparison time.
+    """
+    if not rel_paths:
+        return {}
+    code, out = _git("check-attr", "text", "--", *rel_paths)
+    if code != 0:
+        return {}
+    answers: dict[str, str] = {}
+    for line in out.splitlines():
+        # "<path>: text: <value>"
+        if ": text: " not in line:
+            continue
+        name, _, value = line.rpartition(": text: ")
+        answers[name.removesuffix(": text").strip()] = value.strip()
+    return answers
 
 
 # ── Loading ──────────────────────────────────────────────────────────────────────────
@@ -3414,9 +3530,13 @@ def check_archive(cp: ControlPlane, report: Report) -> None:
 def check_paths(cp: ControlPlane, report: Report) -> None:
     """V8, V9 — every control-plane file is a regular tracked file, never a symlink."""
     report.claim("PATH_INTEGRITY")
+    # V69 M68D (H05-A): REPOSITORY paths. `str(Path.relative_to(...))` renders
+    # `state\m62\...` on Windows while `git ls-files` prints `state/m62/...`, so
+    # the membership test below reported every tracked control-plane file as
+    # untracked. `repo_path` is the one rendering both sides agree on.
     required = [ARCHIVE_PATH, CURRENT_PATH, HISTORY_INDEX_PATH, PROGRESS_PATH,
                 CURRENT_SCHEMA_PATH, SNAPSHOT_SCHEMA_PATH, MIGRATION_MANIFEST_PATH,
-                VERIFIER_PATH, str(cp.snapshot_path.relative_to(REPO_ROOT))]
+                VERIFIER_PATH, repo_path(cp.snapshot_path)]
     code, tracked_out = _git("ls-files", "-z", "--", *required)
     tracked = set(tracked_out.split("\0")) if code == 0 else set()
     if code != 0:
@@ -3444,13 +3564,30 @@ def check_paths(cp: ControlPlane, report: Report) -> None:
         if path.is_symlink():
             report.fail("PATH_INTEGRITY", f"{rel} is a symlinked directory")
 
-    # Executable bits: a data file that is executable is a surprise waiting to happen.
-    for rel in (CURRENT_PATH, ARCHIVE_PATH, CURRENT_SCHEMA_PATH, SNAPSHOT_SCHEMA_PATH,
-                MIGRATION_MANIFEST_PATH, PROGRESS_PATH,
-                str(cp.snapshot_path.relative_to(REPO_ROOT))):
-        path = REPO_ROOT / rel
-        if path.is_file() and os.access(path, os.X_OK):
-            report.fail("PATH_INTEGRITY", f"{rel} carries an executable bit")
+    # Executable bits: a data file that is executable is a surprise waiting to
+    # happen. V69 M68D (H05-B): read from the GIT INDEX, not `os.access`.
+    # `os.access(path, os.X_OK)` answers a filesystem question and gets the
+    # repository one wrong in both directions — measured here: mode 100755 with
+    # the working-tree bit cleared PASSES it (a file Git calls executable slips
+    # through) and mode 100644 with the bit set FAILS it (a legitimate data file
+    # is rejected). On Windows it is true for every readable file, which is where
+    # the false "carries an executable bit" flood came from.
+    mode_targets = [CURRENT_PATH, ARCHIVE_PATH, CURRENT_SCHEMA_PATH,
+                    SNAPSHOT_SCHEMA_PATH, MIGRATION_MANIFEST_PATH, PROGRESS_PATH,
+                    repo_path(cp.snapshot_path)]
+    modes = _git_index_modes(*mode_targets)
+    if not modes:
+        report.fail("PATH_INTEGRITY",
+                    "git ls-files --stage failed; the repository executable-mode "
+                    "invariant cannot be verified")
+    for rel in mode_targets:
+        mode = modes.get(rel)
+        if mode is None:
+            continue          # tracking is reported separately, above
+        if mode == GIT_MODE_EXECUTABLE:
+            report.fail("PATH_INTEGRITY",
+                        f"{rel} is mode {mode} in the Git index; a control-plane "
+                        f"data file must not carry the executable bit")
 
 
 def _commit_exists(sha: str) -> bool:
@@ -6393,8 +6530,6 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
         if not path.is_file():
             report.fail("RECORD_STORE", f"{rel} is referenced but is not a file")
             continue
-        if os.access(path, os.X_OK):
-            report.fail("RECORD_STORE", f"{rel} carries an executable bit")
         raw = path.read_bytes()
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -6425,6 +6560,22 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
         report.fail("RECORD_STORE", "git ls-files failed; record tracking "
                                     "cannot be verified")
 
+    # V69 M68D (H05-B): the record store's executable-mode invariant, read from
+    # the index rather than from `os.access`. Records are content-addressed data;
+    # one of them being executable is as much a surprise as it is for any other
+    # control-plane file.
+    if rel_paths:
+        record_modes = _git_index_modes(*rel_paths)
+        if not record_modes:
+            report.fail("RECORD_STORE",
+                        "git ls-files --stage failed; record executable modes "
+                        "cannot be verified")
+        for rel, mode in sorted(record_modes.items()):
+            if mode == GIT_MODE_EXECUTABLE:
+                report.fail("RECORD_STORE",
+                            f"{rel} is mode {mode} in the Git index; a record is "
+                            f"data and must not be executable")
+
     # A round-trip proof, run live rather than trusted from migration time. The
     # dispatch matters: rehydrating a V4 container to the V2 shape would produce a
     # document that differs from the loaded one in exactly one field, and report it
@@ -6439,6 +6590,87 @@ def check_record_store(cp: ControlPlane, report: Report) -> None:
         report.note(f"content-addressed generation: {len(referenced)} records resolved, "
                     f"snapshot {len(cp.snapshot_bytes)} bytes on disk vs "
                     f"{len(canonical_bytes(cp.snapshot))} rehydrated")
+
+
+def check_newline_policy(cp: ControlPlane, report: Report) -> None:
+    """V69 M68D (H05-C) — every byte-sealed artifact has its newlines PINNED.
+
+    The control plane digests WORKING-TREE bytes, which is what makes it able to
+    notice a malicious edit. The cost of that choice is that Git's own
+    `core.autocrlf=true` rewrites those bytes at checkout: MEASURED on two
+    temporary clones of one commit, 0 problems with it false and 131 with it
+    true. An independent Windows run reported 147 against 16.
+
+    So the bytes are pinned (`.gitattributes`, `-text`) and THIS check makes the
+    pin load-bearing. Without it the fix would be a file somebody can delete a
+    line from, and the next Windows checkout would report the repository corrupt
+    again — or, far worse, a future artifact would be added outside the pin and
+    its seal would quietly mean something different on two platforms.
+
+    It deliberately does NOT normalise anything. A byte seal stays a byte seal;
+    what is verified is that no conversion is permitted to happen to it.
+    """
+    report.claim("NEWLINE_POLICY")
+
+    attributes = REPO_ROOT / GITATTRIBUTES_PATH
+    if not attributes.is_file():
+        report.fail("NEWLINE_POLICY",
+                    f"{GITATTRIBUTES_PATH} is missing; nothing stops a checkout "
+                    f"from rewriting the bytes every seal in here is over")
+        return
+    code, tracked_attr = _git("ls-files", "--error-unmatch", "--",
+                              GITATTRIBUTES_PATH)
+    if code != 0 or not tracked_attr:
+        report.fail("NEWLINE_POLICY",
+                    f"{GITATTRIBUTES_PATH} is untracked; a newline policy Git "
+                    f"does not carry does not apply to a fresh clone")
+
+    code, out = _git("ls-files", "-z", "--",
+                     *BYTE_PINNED_TREES, *BYTE_PINNED_FILES)
+    if code != 0:
+        report.fail("NEWLINE_POLICY",
+                    "git ls-files failed; the newline policy cannot be verified")
+        return
+    paths = sorted(entry for entry in out.split("\0") if entry.strip())
+    if not paths:
+        # NON-VACUITY. "no byte-sealed artifact is unpinned" is worthless if the
+        # set is empty, and an empty set is exactly what a renamed state tree or
+        # a broken ls-files would produce.
+        report.fail("NEWLINE_POLICY",
+                    "the byte-sealed artifact set is EMPTY; this check would "
+                    "pass vacuously and prove nothing")
+        return
+
+    answers = _newline_pinned(*paths)
+    if not answers:
+        report.fail("NEWLINE_POLICY",
+                    "git check-attr failed; the newline policy cannot be verified")
+        return
+    unpinned = [rel for rel in paths if answers.get(rel) != "unset"]
+    for rel in unpinned[:10]:
+        report.fail("NEWLINE_POLICY",
+                    f"{rel} is byte-sealed but its newlines are not pinned "
+                    f"(check-attr text: {answers.get(rel)!r}); a checkout with "
+                    f"core.autocrlf=true would rewrite the bytes its digest covers")
+    if len(unpinned) > 10:
+        report.fail("NEWLINE_POLICY",
+                    f"{len(unpinned) - 10} further byte-sealed path(s) are not "
+                    f"newline-pinned")
+
+    # The snapshot the live generation points at must be in the pinned set too —
+    # it is the one path that is named dynamically rather than by pattern.
+    snapshot_rel = repo_path(cp.snapshot_path)
+    if snapshot_rel not in answers:
+        report.fail("NEWLINE_POLICY",
+                    f"the live snapshot {snapshot_rel} is not in the byte-pinned "
+                    f"set; its seal is over bytes nothing protects")
+    elif answers.get(snapshot_rel) != "unset":
+        report.fail("NEWLINE_POLICY",
+                    f"the live snapshot {snapshot_rel} is not newline-pinned")
+
+    if not unpinned:
+        report.note(f"newline policy: {len(paths)} byte-sealed path(s) pinned "
+                    f"-text; working-tree bytes equal blob bytes on every platform")
 
 
 def check_budgets(cp: ControlPlane, report: Report) -> None:

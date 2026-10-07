@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# V69 M68D (H05-C): newline pinning for BYTE-SEALED artifacts.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The M62 control plane seals artifacts by the sha256 of their WORKING-TREE
+# bytes. That is deliberate: inspecting the bytes that are actually on disk is
+# what catches a malicious edit, which a blob-only check would miss.
+#
+# But Git's own `core.autocrlf=true` — the Windows default — rewrites those
+# bytes at checkout. MEASURED on two temporary clones of one commit: 0
+# control-plane problems with `autocrlf=false` and 131 with it true, across
+# SNAPSHOT_CHAIN, RECORD_STORE, SCHEMA, ARCHIVE_INTEGRITY, CURRENT_POINTER,
+# AUTHORITY_SEPARATION, VERIFIER_INTEGRITY and INSTRUMENT_STACK. An independent
+# Windows run reported the same shape: 147 problems with it on, 16 with it off.
+# None of that is corruption; it is a legitimate checkout reporting as one.
+#
+# The fix is to stop the conversion, NOT to normalise before comparison and NOT
+# to recompute a sealed digest from CRLF bytes. `-text` tells Git to perform no
+# newline conversion in either direction, so the working-tree bytes equal the
+# blob bytes on every platform and a byte seal stays a byte seal.
+#
+# `jarvis/scripts/verify_m62_control_plane.py` ENFORCES this: its NEWLINE_POLICY
+# check requires `git check-attr text` to report `unset` for every byte-sealed
+# artifact, so a new snapshot, record or receipt cannot be added outside the
+# pin, and a pattern cannot be deleted from here without the control plane
+# failing closed.
+#
+# Do NOT add `text=auto` or `eol=` to anything listed below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The whole control-plane state tree: current pointer, snapshots, records,
+# schemas, migrations, receipts, rulings, witnesses, the scientific manifest.
+state/m62/**           -text
+
+# The governed narrative and its sealed historical archive. PROGRESS.md is both
+# byte-digested (as the archive's source) and byte-budgeted, so a CRLF checkout
+# moves its size as well as its digest.
+PROGRESS.md            -text
+jarvis/docs/m62/**     -text
+
+# The checker itself is pinned by digest in every generation it verifies.
+jarvis/scripts/verify_m62_control_plane.py  -text

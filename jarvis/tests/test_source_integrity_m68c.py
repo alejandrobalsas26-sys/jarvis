@@ -16,12 +16,36 @@ The reproductions these lock in were all MEASURED on the pristine branch first:
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 import threading
 from pathlib import Path
 
 import pytest
+
+# ── V69 M68D (H05): platform capabilities, declared rather than assumed ──────
+# An external Windows run reported ten failures in THIS file. None of them were
+# source-integrity defects: they were POSIX assumptions. `os.geteuid` does not
+# exist on Windows, `chmod` there does not remove read or write access, and
+# `fcntl.flock` — which `_serialised_on` needs — is absent, so the receipt
+# honestly reports `serialised=False` and an assertion of `True` fails.
+#
+# These are CAPABILITIES, not skips of the guarantee. The POSIX guarantees are
+# still asserted wherever they hold, the honest-degradation contract is asserted
+# everywhere (see the M68D H05 suite), and nothing here is weakened to make a
+# platform pass.
+
+#: `chmod` actually removes access for this process.
+POSIX_MODES_ENFORCED = (
+    os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0)
+
+#: `fcntl.flock` is importable, so `cas_write_text` can serialise writers.
+FLOCK_AVAILABLE = importlib.util.find_spec("fcntl") is not None
+
+#: A real path that is outside every sandbox root on THIS platform.
+OUTSIDE_SANDBOX = ("C:/Windows/System32/drivers/etc/hosts" if os.name == "nt"
+                   else "/etc/hostname")
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 if str(PACKAGE_ROOT) not in sys.path:  # pragma: no cover - import plumbing
@@ -153,13 +177,14 @@ class TestReadIdentity:
         assert payload["digest_algorithm"] == DIGEST_ALGORITHM == "sha256"
         assert len(payload["sha256"]) == 64
 
+    @pytest.mark.skipif(not POSIX_MODES_ENFORCED,
+                        reason="chmod does not remove read access here "
+                               "(Windows, or running as root)")
     def test_an_unreadable_file_yields_no_digest(self, tmp_path):
         target = tmp_path / "locked.py"
         target.write_text("secret = 1\n")
         target.chmod(0o000)
         try:
-            if os.geteuid() == 0:  # pragma: no cover - root ignores the mode
-                pytest.skip("running as root: the permission bit is not enforced")
             assert digest_file(target) is None
         finally:
             target.chmod(0o600)
@@ -311,14 +336,14 @@ class TestTruncationIsOutOfBand:
         assert ident.to_dict()["content_derived"] is True
 
     def test_a_path_outside_the_sandbox_is_refused_before_any_read(self):
-        result = _executor()._tool_read_file("/etc/hostname")
+        result = _executor()._tool_read_file(OUTSIDE_SANDBOX)
         assert result["error_code"] == "PATH_NOT_ALLOWED"
         assert "source" not in result and "content" not in result
 
     def test_a_symlink_escaping_the_sandbox_is_refused(self, tmp_path):
         link = Path.home() / "Downloads" / "m68c-escape-link"
         try:
-            link.symlink_to("/etc/hostname")
+            link.symlink_to(OUTSIDE_SANDBOX)
         except (OSError, FileExistsError):  # pragma: no cover
             pytest.skip("cannot create the symlink fixture")
         try:
@@ -866,6 +891,11 @@ class TestRaces:
         assert results["a"].status is WriteStatus.REJECTED_STALE
         assert target.read_text() == "Y\n", "the winning writer was overwritten"
 
+    @pytest.mark.skipif(
+        not FLOCK_AVAILABLE,
+        reason="no fcntl.flock on this platform: `_serialised_on` degrades to a "
+               "no-op and the receipt says serialised=False, which the M68D H05 "
+               "suite asserts as the honest contract instead")
     def test_two_cas_writers_from_one_read_produce_exactly_one_winner(self, tmp_path):
         """Both hold the same expected digest; exactly one may apply."""
         target = tmp_path / "both.py"
@@ -988,6 +1018,9 @@ class TestRaces:
 class TestFailureBoundaries:
     """Every failure mode, and what it must and must not claim."""
 
+    @pytest.mark.skipif(not POSIX_MODES_ENFORCED,
+                        reason="chmod does not remove directory write access here "
+                               "(Windows, or running as root)")
     def test_a_permission_failure_leaves_the_original_intact(self, tmp_path):
         directory = tmp_path / "ro"
         directory.mkdir()
@@ -995,8 +1028,6 @@ class TestFailureBoundaries:
         target.write_text("original\n")
         directory.chmod(0o500)                       # no write on the DIRECTORY
         try:
-            if os.geteuid() == 0:  # pragma: no cover - root ignores the mode
-                pytest.skip("running as root: the directory mode is not enforced")
             receipt = cas_write_text(target, "replacement\n")
             assert receipt.status is WriteStatus.FAILED_BEFORE_MUTATION
             assert receipt.external_outcome == "PROVEN_NOT_EXECUTED"
@@ -1004,6 +1035,9 @@ class TestFailureBoundaries:
         finally:
             directory.chmod(0o700)
 
+    @pytest.mark.skipif(not POSIX_MODES_ENFORCED,
+                        reason="chmod does not remove directory write access here "
+                               "(Windows, or running as root)")
     def test_a_failed_temp_write_leaks_no_temp_file(self, tmp_path):
         directory = tmp_path / "ro2"
         directory.mkdir()
@@ -1011,8 +1045,6 @@ class TestFailureBoundaries:
         target.write_text("keep\n")
         directory.chmod(0o500)
         try:
-            if os.geteuid() == 0:  # pragma: no cover
-                pytest.skip("running as root")
             cas_write_text(target, "no\n")
             directory.chmod(0o700)
             assert [p.name for p in directory.iterdir()] == ["x.py"]

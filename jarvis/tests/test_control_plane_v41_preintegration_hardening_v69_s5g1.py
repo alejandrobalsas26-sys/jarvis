@@ -652,6 +652,12 @@ def test_the_reported_categories_are_the_reviewed_ones():
         "DATASET_STATE", "CANDIDATE_STATE", "TRAINING_RECEIPT", "EVALUATION_RECEIPT",
         "POLICY_IDENTITIES", "AUTHORITY_SEPARATION", "HOLDOUT_FIREWALL",
         "PATH_INTEGRITY", "STALE_STATE", "RECORD_STORE", "INSTRUMENT_STACK",
+        # V69 M68D (H05-C). A byte seal whose newlines a checkout may rewrite is
+        # not a byte seal: measured 0 control-plane problems with
+        # core.autocrlf=false and 131 with it true, on two clones of one commit.
+        # NEWLINE_POLICY requires every byte-sealed path to be declared -text, so
+        # the pin that closes that is itself verified rather than merely present.
+        "NEWLINE_POLICY",
         "CONTROL_PLANE_BUDGET")
 
 
@@ -1442,14 +1448,26 @@ def test_the_verifier_says_out_loud_when_the_checker_changed():
 
 
 def test_the_checker_delta_note_is_not_vacuous():
-    """It must actually distinguish the two cases."""
+    """It must actually distinguish the cases it reports on.
+
+    V69 M68D generalised this. The original asserted that the LIVE generation's
+    sealed digest produces the ``UNCHANGED`` branch, which quietly required that
+    no live generation ever revise the checker — while the repository's own rule
+    is that revising it REQUIRES a successor generation, and M68D is one (H05
+    rewrote the path, mode and newline checks). So the live digest is asserted to
+    produce a branch that MATCHES it, whichever that is, and the non-vacuity
+    being protected — that the note is not a constant — is asserted directly.
+    """
     live = V.load(V.Report()).snapshot
     generation = live["state_generation"]
     actual = live["governed_implementation"]["verifier_sha256"]
-    assert "UNCHANGED" in V._checker_generation_delta(generation, actual) or \
-        "first to pin one" in V._checker_generation_delta(generation, actual)
+    matching = V._checker_generation_delta(generation, actual)
     changed = V._checker_generation_delta(generation, "0" * 64)
+    assert ("UNCHANGED" in matching or "THE CHECKER CHANGED" in matching
+            or "first to pin one" in matching), matching
     assert "THE CHECKER CHANGED" in changed or "first to pin one" in changed
+    assert matching != changed, \
+        "the note reads the same for the sealed digest and a bogus one"
 
 
 def test_d54_is_recorded_and_frozen():
