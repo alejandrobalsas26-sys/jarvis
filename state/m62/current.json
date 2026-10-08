@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0068-m68d-trust-boundary.json",
-  "latest_snapshot_sha256": "411de76294680578166d93f90d59c40b82cb16e2cac74965861d9f564d7e49d0",
+  "latest_snapshot_path": "state/m62/snapshots/0069-m68d1-win-closure.json",
+  "latest_snapshot_sha256": "1016673795acceb831f295733e557ecc93b4d6e9dc05cf9a4ecace63e841414e",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 68,
-  "subject_state_commit": "1fb82664ea21c662d5ef227dfc0df133159cefb4",
+  "state_generation": 69,
+  "subject_state_commit": "6ad1efee0cf7322bab80b9dddafce53a054e97df",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
