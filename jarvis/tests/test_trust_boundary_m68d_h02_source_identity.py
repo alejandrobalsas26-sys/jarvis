@@ -13,6 +13,39 @@ accepted that digest as the precondition for an edit derived from bytes nobody
 had read, and the human's version two was gone under an APPLIED receipt.
 
 Races here are driven by injected hooks at the real seams — no sleeps.
+
+V69 M68D.1 — WINDOWS PORTABILITY
+--------------------------------
+The first real Windows runner (CI run 37695660326, windows-2025-vs2026,
+CPython 3.11.9) failed 14 tests in this file. NONE of them was a
+source-identity defect. They were POSIX assumptions in the FIXTURES:
+
+* `os.replace` / `os.unlink` against a path whose descriptor this process
+  holds open. CPython opens without ``FILE_SHARE_DELETE``, so Windows
+  refuses the mutation (``WinError 5`` / ``WinError 32``) and the
+  rename-under-the-reader adversary cannot be STAGED at all;
+* ``chmod(0o000)``, which on Windows does not remove read access;
+* text-mode fixture writes, which on Windows emit CRLF — so a fixture
+  written as ``"x = 1\n"`` is SEVEN bytes and a digest over
+  ``b"x = 1\n"`` no longer describes it.
+
+The POSIX rename/unlink attack is the FIXTURE, not the property. Closing
+the descriptor before hashing would make it runnable on Windows and would
+restore the original TOCTOU bug, so it is not done. Instead:
+
+* every byte-identity fixture is byte explicit (``write_bytes`` / an
+  explicit ``newline``), so it is the same file on every platform;
+* the coherence invariant is asserted on EVERY platform through the one
+  adversary no supported platform refuses — an in-place rewrite of the
+  held inode, which is also the STRONGER attack, since an atomic
+  replacement cannot disturb a held descriptor at all;
+* only the impossible MECHANISM skips, against a MEASURED capability
+  (see ``_test_support.platform_capabilities``), never against
+  ``sys.platform``, and never by catching ``PermissionError``.
+
+Classification of every capability-gated test below, per M68D.1 §13:
+``POSIX_CAPABILITY_TEST`` — the attack mechanism does not exist elsewhere;
+``CROSS_PLATFORM_INVARIANT`` — the property itself, asserted everywhere.
 """
 from __future__ import annotations
 
@@ -37,6 +70,17 @@ from core.source_integrity import (
     digest_file,
     identify_snapshot,
     source_snapshot,
+)
+from _test_support.platform_capabilities import (
+    AVAILABLE_UNDER_OPEN_FD,
+    MODE_BITS_REMOVE_READ,
+    REPLACE_OVER_OPEN_PATH,
+    CONTINUOUS_MECHANISMS,
+    UNLINK_OPEN_PATH,
+    WHY_NO_MODE_BITS,
+    WHY_NO_REPLACE,
+    WHY_NO_UNLINK,
+    Mutation,
 )
 
 _SRC = Path(ex.__file__).read_text(encoding="utf-8")
@@ -92,11 +136,73 @@ def sandbox(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _write(target: Path, text: str) -> bytes:
+    """Write *text* BYTE-EXPLICITLY and return the bytes that landed.
+
+    BYTE_IDENTITY_TEST helper. ``Path.write_text`` writes in text mode with
+    ``newline=None``, which translates ``"\n"`` to ``os.linesep`` — so on
+    Windows a six-character fixture becomes a SEVEN-byte file and every
+    digest, size and CAS precondition taken over ``text.encode()`` stops
+    describing it (measured: 10 failures in the M68C suite and several
+    here). Callers assert against the RETURN VALUE rather than re-encoding
+    the literal, so the expectation cannot drift from the fixture.
+    """
+    payload = text.encode("utf-8")
+    target.write_bytes(payload)
+    return payload
+
+
 def _atomic_replace(target: Path, text: str) -> None:
+    """Rename a different file over *target*. BYTE-EXPLICIT: binary mode."""
     fd, tmp = tempfile.mkstemp(dir=str(target.parent))
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(text.encode("utf-8"))
     os.replace(tmp, target)
+
+
+def _in_place_rewrite(target: Path, payload: bytes) -> None:
+    """Overwrite the bytes of the HELD INODE itself, through a second handle.
+
+    CROSS_PLATFORM. ``source_snapshot`` opens with ``os.open(O_RDONLY)``,
+    which on Windows requests ``FILE_SHARE_WRITE``, so a second opening for
+    writing succeeds where a rename or an unlink does not. It is the
+    STRONGER adversary: an atomic replacement cannot disturb a held fd at
+    all, while this changes the very bytes the observation is reading.
+    """
+    with open(target, "r+b") as handle:
+        handle.seek(0)
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _stage(mechanism: Mutation, target: Path, replacement: bytes) -> None:
+    """Change what *target* means by *mechanism*, with its descriptor held.
+
+    One dispatch so a test can be parametrised over the mechanisms THIS
+    platform actually permits instead of skipping wholesale. It never
+    swallows an error: a mechanism listed as available and then refused is
+    a measurement failure and must surface.
+    """
+    if mechanism is Mutation.ATOMIC_REPLACE:
+        _atomic_replace(target, replacement.decode("utf-8"))
+    elif mechanism is Mutation.UNLINK:
+        target.unlink()
+    elif mechanism is Mutation.UNLINK_RECREATE:
+        target.unlink()
+        target.write_bytes(replacement)
+    elif mechanism is Mutation.IN_PLACE_REWRITE:
+        _in_place_rewrite(target, replacement)
+    else:                                        # pragma: no cover
+        raise AssertionError(f"unknown mechanism {mechanism!r}")
+
+
+#: Only the mechanism skips. The invariant never does.
+needs_replace = pytest.mark.skipif(not REPLACE_OVER_OPEN_PATH,
+                                   reason=WHY_NO_REPLACE)
+needs_unlink = pytest.mark.skipif(not UNLINK_OPEN_PATH, reason=WHY_NO_UNLINK)
+needs_mode_bits = pytest.mark.skipif(not MODE_BITS_REMOVE_READ,
+                                     reason=WHY_NO_MODE_BITS)
 
 
 # ── the snapshot itself ──────────────────────────────────────────────────────
@@ -121,37 +227,56 @@ class TestSnapshotCoherence:
             with source_snapshot(tmp_path / "missing.txt"):
                 pass
 
+    @needs_mode_bits
     def test_an_unreadable_file_raises(self, tmp_path):
+        """POSIX_CAPABILITY_TEST — CONSTRUCTING an unreadable file needs chmod.
+
+        The CONTRACT (a source that cannot be observed raises rather than being
+        described) is asserted on every platform by the M68D.1 closure suite,
+        which injects the `os.open` failure directly instead of building a file
+        the platform refuses to make unreadable. The root case is covered by the
+        same capability: as root, `chmod(0o000)` leaves the file readable, so
+        the probe measures the capability ABSENT and this skips — one measured
+        condition instead of a platform guess plus a euid guess.
+        """
         target = tmp_path / "locked.txt"
-        target.write_text("x\n")
+        _write(target, "x\n")
         target.chmod(0o000)
         try:
-            if hasattr(os, "geteuid") and os.geteuid() == 0:  # pragma: no cover
-                pytest.skip("running as root: the permission bit is not enforced")
             with pytest.raises(SourceSnapshotError):
                 with source_snapshot(target):
                     pass
         finally:
             target.chmod(0o600)
 
+    @needs_unlink
     def test_a_deletion_during_the_observation_does_not_corrupt_it(self, tmp_path):
-        """The descriptor outlives the directory entry; the observation stands."""
+        """POSIX_CAPABILITY_TEST — the descriptor outlives the directory entry.
+
+        Staging this needs `unlink` of an open path, which Windows refuses with
+        WinError 32. The PROPERTY — identity cannot change after acquisition —
+        runs on every platform in
+        `test_a_post_acquisition_mutation_cannot_alter_the_observation`.
+        """
         target = tmp_path / "doomed.txt"
-        target.write_text("still here\n")
+        payload = _write(target, "still here\n")
         with source_snapshot(target) as snap:
             target.unlink()
+            assert snap.payload() == payload
             assert snap.text() == "still here\n"
-            assert snap.sha256 == hashlib.sha256(b"still here\n").hexdigest()
+            assert snap.sha256 == hashlib.sha256(payload).hexdigest()
             assert snap.recheck() is True
 
+    @needs_unlink
     def test_recreating_the_path_does_not_change_the_observation(self, tmp_path):
+        """POSIX_CAPABILITY_TEST — unlink-then-recreate under a held descriptor."""
         target = tmp_path / "r.txt"
-        target.write_text("first\n")
+        payload = _write(target, "first\n")
         with source_snapshot(target) as snap:
             target.unlink()
-            target.write_text("second-but-longer\n")
-            assert snap.text() == "first\n"
-            assert snap.sha256 == hashlib.sha256(b"first\n").hexdigest()
+            _write(target, "second-but-longer\n")
+            assert snap.payload() == payload
+            assert snap.sha256 == hashlib.sha256(payload).hexdigest()
 
     def test_stream_mode_digests_the_same_bytes_it_serves(self, tmp_path):
         target = tmp_path / "s.bin"
@@ -183,19 +308,25 @@ class TestSnapshotCoherence:
 
 
 class TestSnapshotRaces:
+    @needs_replace
     def test_an_atomic_replacement_mid_read_cannot_split_content_from_digest(
             self, tmp_path, monkeypatch):
-        """THE regression, at the real seam.
+        """THE regression, at the real seam. POSIX_CAPABILITY_TEST.
 
         The replacement fires between two chunk reads of the snapshot's own
         descriptor. The held fd pins the original inode, so the remaining chunks
         are still version one's — and the digest is over those same bytes.
+
+        `os.replace` over a held path is the staging mechanism and Windows
+        refuses it (WinError 5). The same seam is attacked on every platform by
+        `test_an_in_place_rewrite_mid_read_cannot_split_content_from_digest`,
+        with the adversary Windows does permit.
         """
         target = tmp_path / "notes.txt"
         v1 = "AAAA-version-one-AAAA\n"
         v2 = "BBBB-version-two-BBBB\n"
         assert len(v1.encode()) == len(v2.encode()), "same-size replacement"
-        target.write_text(v1, encoding="utf-8")
+        _write(target, v1)
 
         monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
         real_read = os.read
@@ -222,18 +353,22 @@ class TestSnapshotRaces:
         assert stable is True, \
             "an atomic replacement does not make the held observation incoherent"
 
+    @needs_replace
     def test_the_digest_from_that_race_cannot_overwrite_the_unread_edit(
             self, tmp_path, monkeypatch):
-        """The consequence the finding was really about.
+        """The consequence the finding was really about. POSIX_CAPABILITY_TEST.
 
         A CAS write using the snapshot's digest must be REJECTED, because the
         file on disk is the version the reader never saw. Before M68D the digest
         described that unread version, so the write was APPLIED and the human's
         edit was destroyed.
+
+        The same consequence is proven on every platform by
+        `test_an_in_place_race_cannot_state_a_precondition_that_destroys_the_edit`.
         """
         target = tmp_path / "notes.txt"
         v1, v2 = "AAAA-version-one-AAAA\n", "BBBB-version-two-BBBB\n"
-        target.write_text(v1, encoding="utf-8")
+        _write(target, v1)
 
         monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
         real_read = os.read
@@ -322,7 +457,7 @@ class TestSnapshotRaces:
 
     def test_an_unstable_snapshot_can_never_state_a_precondition(self, tmp_path):
         target = tmp_path / "u.txt"
-        target.write_text("x\n")
+        _write(target, "x\n")
         with source_snapshot(target) as snap:
             snap.stable = False
             identity = identify_snapshot(snap)
@@ -344,23 +479,202 @@ class TestSnapshotRaces:
             assert snap.recheck() is False
             assert snap.stable is False
 
-    def test_two_concurrent_snapshots_of_one_file_agree(self, tmp_path):
-        """Deterministic, barrier-synchronised: no reader sees a torn pair."""
+    # ── V69 M68D.1: the same properties, on every platform ──────────────────
+
+    @pytest.mark.parametrize("mechanism", AVAILABLE_UNDER_OPEN_FD,
+                             ids=lambda m: m.value)
+    def test_a_post_acquisition_mutation_cannot_alter_the_observation(
+            self, tmp_path, mechanism):
+        """CROSS_PLATFORM_INVARIANT — §7 bullets 1, 2 and 3 in one test.
+
+        Once the snapshot exists, NOTHING done to the path may change the bytes
+        it returns or the digest that identifies them, and the two must keep
+        describing each other. Parametrised over the mechanisms this host
+        measured as available, so the proof is as strong as the platform allows
+        and never weaker than the one adversary every platform permits.
+        """
+        target = tmp_path / "post.txt"
+        original = _write(target, "ORIGINAL-OBSERVED-BYTES\n")
+        if mechanism is Mutation.IN_PLACE_REWRITE:
+            # DERIVED, not hand-counted. An in-place rewrite shorter than the
+            # original is a PARTIAL overwrite, which would leave a tail of the
+            # old bytes and hide a torn read behind the length difference. Two
+            # hand-counted literals here drifted on the first run and the
+            # non-vacuity guard caught it, so the length is computed.
+            replacement = b"R" * (len(original) - 1) + b"\n"
+            assert len(replacement) == len(original), "same-size rewrite"
+        else:
+            replacement = b"REPLACEMENT-NEVER-OBSERVED\n"
+        assert replacement != original, "non-vacuity: the mutation changes nothing"
+        with source_snapshot(target) as snap:
+            first_payload, first_sha, first_size = (
+                snap.payload(), snap.sha256, snap.size_bytes)
+            assert first_payload == original, "non-vacuity: wrong bytes captured"
+            _stage(mechanism, target, replacement)
+            assert snap.payload() == first_payload, \
+                "the observation changed after it was acquired"
+            assert snap.sha256 == first_sha
+            assert snap.size_bytes == first_size
+            assert snap.sha256 == hashlib.sha256(snap.payload()).hexdigest(), \
+                "content and digest stopped describing the same bytes"
+            with snap.stream() as handle:
+                assert handle.read() == first_payload, \
+                    "stream() served something other than the observation"
+        if mechanism in (Mutation.ATOMIC_REPLACE, Mutation.UNLINK_RECREATE,
+                         Mutation.IN_PLACE_REWRITE):
+            assert target.read_bytes() == replacement, \
+                "non-vacuity: the mutation did not actually land on disk"
+            assert digest_file(target) != first_sha, \
+                "non-vacuity: the mutation produced the same bytes"
+        else:
+            assert not target.exists(), "non-vacuity: the unlink did not happen"
+
+    def test_an_in_place_rewrite_mid_read_cannot_split_content_from_digest(
+            self, tmp_path, monkeypatch):
+        """CROSS_PLATFORM_INVARIANT — the Windows-capable form of THE regression.
+
+        The adversary Windows DOES permit, fired at the same seam: between two
+        chunk reads of the snapshot's own descriptor, through a second handle on
+        the SAME inode. It is strictly stronger than the rename, which a held fd
+        is immune to by construction. Two things must hold: the digest still
+        covers exactly the bytes handed back, and the mixture is reported as
+        UNSTABLE rather than presented as a whole observation.
+        """
+        target = tmp_path / "inplace-race.txt"
+        v1 = b"AAAA-version-one-AAAA\n"
+        v2 = b"BBBB-version-two-BBBB\n"
+        assert len(v1) == len(v2), "same-size rewrite"
+        target.write_bytes(v1)
+
+        monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
+        real_read = os.read
+        fired: list[int] = []
+
+        def racing_read(fd, size):
+            data = real_read(fd, size)
+            if not fired:
+                fired.append(1)
+                _in_place_rewrite(target, v2)
+            return data
+
+        monkeypatch.setattr(os, "read", racing_read)
+        with source_snapshot(target) as snap:
+            monkeypatch.setattr(os, "read", real_read)
+            observed, observed_sha, stable = snap.payload(), snap.sha256, snap.stable
+            identity = identify_snapshot(snap)
+        assert fired, "NON-VACUITY: the race never fired"
+        assert target.read_bytes() == v2, "the writer did not actually win on disk"
+        assert observed_sha == hashlib.sha256(observed).hexdigest(), \
+            "content and digest describe different bytes"
+        assert stable is False, \
+            "an in-place rewrite under the descriptor was reported as whole"
+        assert identity.sha256 is None and identity.complete is False, \
+            "an unstable observation still offered an identity"
+
+    def test_an_in_place_race_cannot_state_a_precondition_that_destroys_the_edit(
+            self, tmp_path, monkeypatch):
+        """CROSS_PLATFORM_INVARIANT — the CONSEQUENCE, on every platform.
+
+        The Windows-capable form of
+        `test_the_digest_from_that_race_cannot_overwrite_the_unread_edit`: a
+        reader raced by an in-place rewrite must not be able to produce a
+        precondition under which the unread edit is overwritten. It is refused
+        one step earlier than in the rename case — the observation has no
+        digest at all — and the human's bytes survive either way.
+        """
+        target = tmp_path / "unread-edit.txt"
+        v1 = b"AAAA-version-one-AAAA\n"
+        v2 = b"BBBB-human-wrote-this\n"
+        assert len(v1) == len(v2), "same-size rewrite"
+        target.write_bytes(v1)
+
+        monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
+        real_read = os.read
+        fired: list[int] = []
+
+        def racing_read(fd, size):
+            data = real_read(fd, size)
+            if not fired:
+                fired.append(1)
+                _in_place_rewrite(target, v2)
+            return data
+
+        monkeypatch.setattr(os, "read", racing_read)
+        with source_snapshot(target) as snap:
+            monkeypatch.setattr(os, "read", real_read)
+            precondition = identify_snapshot(snap).sha256
+        assert fired, "NON-VACUITY: the race never fired"
+        assert precondition is None, \
+            "a raced observation handed out a write precondition"
+        # And the digest it DID compute is refused as a precondition too: it
+        # describes a mixture, and the file on disk is the human's version.
+        receipt = cas_write_text(target, b"CCCC-derived-from-V1-CCCC\n".decode(),
+                                 expected_sha256=snap.sha256)
+        assert receipt.status is WriteStatus.REJECTED_STALE
+        assert receipt.applied is False
+        assert receipt.bytes_written == 0
+        assert target.read_bytes() == v2, "the unread human edit was destroyed"
+
+    @pytest.mark.parametrize("mechanism", CONTINUOUS_MECHANISMS,
+                             ids=lambda m: m.value)
+    def test_two_concurrent_snapshots_of_one_file_agree(self, tmp_path, mechanism):
+        """CROSS_PLATFORM_INVARIANT, staged by every mechanism this host permits.
+
+        No reader may return a TORN PAIR — bytes from one version with a digest
+        of another. That property holds under EVERY interleaving, which is what
+        makes the test sound even though the interleaving is sampled rather
+        than imposed: the barrier aligns the three threads' START, and nothing
+        can force the writer's mutation to land while a descriptor is held.
+
+        MEASURED, and not what was first assumed. Under the Windows
+        mandatory-locking simulation this test passed 3/3 with the simulator
+        reporting **0 denials** — the writer's `os.replace` consistently
+        completed before either reader opened its descriptor, so the refused
+        mutation never happened. That is consistent with it NOT being among the
+        14 H02 failures on the real runner.
+
+        The repair is still needed, for the reason the measurement exposes: if
+        the writer HAD been refused, nothing would have noticed. `threading`
+        turns a dead thread's exception into output and the joining test reads
+        `out`, which the readers filled from an untouched file. So the writer's
+        exception is now COLLECTED and asserted empty — a mechanism this
+        platform measured as available and then refused FAILS here instead of
+        certifying a race it never staged (M68D.1 §17).
+
+        `stable` stays mechanism-specific on purpose: an atomic replacement
+        leaves the held inode untouched and must report True, while an in-place
+        rewrite changes the bytes under the descriptor and must be free to
+        report False. Asserting True for both would make the honest answer red.
+        """
         target = tmp_path / "c.txt"
-        target.write_text("shared content\n")
+        original = _write(target, "shared content\n")
+        if mechanism is Mutation.IN_PLACE_REWRITE:
+            # Same size, or the rewrite is a partial overwrite and a torn pair
+            # would be hidden by the length difference rather than detected.
+            # DERIVED: see the sibling test — the hand-counted literal drifted.
+            replacement = b"R" * (len(original) - 1) + b"\n"
+            assert len(replacement) == len(original), "same-size rewrite"
+        else:
+            replacement = b"replaced content!\n"
+        assert replacement != original, "non-vacuity: the mutation changes nothing"
         barrier = threading.Barrier(3)
         out: list[tuple] = []
+        refused: list[BaseException] = []
         lock = threading.Lock()
 
         def reader():
             barrier.wait(timeout=10)
             with source_snapshot(target) as snap:
                 with lock:
-                    out.append((snap.text(), snap.sha256, snap.stable))
+                    out.append((snap.payload(), snap.sha256, snap.stable))
 
         def writer():
             barrier.wait(timeout=10)
-            _atomic_replace(target, "replaced content!\n")
+            try:
+                _stage(mechanism, target, replacement)
+            except OSError as exc:
+                with lock:
+                    refused.append(exc)
 
         threads = [threading.Thread(target=reader), threading.Thread(target=reader),
                    threading.Thread(target=writer)]
@@ -368,26 +682,37 @@ class TestSnapshotRaces:
             t.start()
         for t in threads:
             t.join(10)
+        assert refused == [], (
+            f"the {mechanism.value} writer was refused: {refused!r}. A measured "
+            "capability was claimed and then denied, so this run proves nothing")
         assert len(out) == 2
-        for text, sha, stable in out:
-            assert stable is True
-            assert sha == hashlib.sha256(text.encode()).hexdigest(), \
-                "a reader returned text and a digest of different bytes"
+        for payload, sha, stable in out:
+            assert sha == hashlib.sha256(payload).hexdigest(), \
+                "a reader returned bytes and a digest of different bytes"
+            assert payload in (original, replacement), \
+                f"a reader returned a mixture of the two versions: {payload!r}"
+            if mechanism is Mutation.ATOMIC_REPLACE:
+                assert stable is True, \
+                    "an atomic replacement made a held observation incoherent"
 
 
 # ── read_file end to end ─────────────────────────────────────────────────────
 
 class TestReadFileIdentity:
     def test_a_normal_text_read_is_coherent_and_complete(self, sandbox):
+        """BYTE_IDENTITY_TEST. MEASURED: with `write_text` this failed on the
+        real Windows runner — the fixture was seven bytes and the digest was
+        over six, because text mode translated the newline."""
         target = sandbox / "a.py"
-        target.write_text("x = 1\n")
+        payload = _write(target, "x = 1\n")
         result = _executor()._tool_read_file(str(target))
         assert result["content"] == "x = 1\n"
-        assert result["source"]["sha256"] == hashlib.sha256(b"x = 1\n").hexdigest()
+        assert result["source"]["sha256"] == hashlib.sha256(payload).hexdigest()
+        assert result["source"]["size_bytes"] == len(payload)
         assert result["source"]["complete"] is True
         assert result["source"]["digest_covers"] == DIGEST_COVERS_COMPLETE
         assert result["truncated"] is False
-        assert result["size_kb"] == round(6 / 1024, 2)
+        assert result["size_kb"] == round(len(payload) / 1024, 2)
 
     def test_an_empty_file_reads_as_empty_and_still_has_an_identity(self, sandbox):
         target = sandbox / "empty.txt"
@@ -405,7 +730,7 @@ class TestReadFileIdentity:
                                                   truncated):
         target = sandbox / "t.txt"
         body = "a" * total
-        target.write_text(body)
+        _write(target, body)
         result = _executor()._tool_read_file(str(target), max_chars=max_chars)
         assert result["truncated"] is truncated
         assert result["source"]["content_chars_total"] == total
@@ -454,19 +779,26 @@ class TestReadFileIdentity:
         assert result["error_code"] == ex.ERR_SOURCE_UNSTABLE
         assert "content" not in result and "source" not in result
 
+    @needs_replace
     def test_an_atomic_replacement_mid_read_keeps_the_result_coherent(
             self, sandbox, monkeypatch):
-        """The executor-level version of the race, at the real entry point.
+        """The executor-level version of the race. POSIX_CAPABILITY_TEST.
 
         The seam is inside the snapshot's own read loop, so this exercises the
         whole of `_tool_read_file` rather than the snapshot alone: the content it
         returns and the digest it reports must describe the same bytes even
         though the file on disk has moved on.
+
+        Windows refuses the staging rename (WinError 5), and the handler wraps
+        every exception into ERR_READ_FAILED, so there the failure arrived as a
+        missing "content" key rather than as a race. The executor is attacked on
+        every platform by `test_an_in_place_rewrite_mid_read_yields_source_unstable`
+        directly above.
         """
         target = sandbox / "race.txt"
         v1 = "AAAA-version-one-AAAA\n"
         v2 = "BBBB-version-two-BBBB\n"
-        target.write_text(v1, encoding="utf-8")
+        _write(target, v1)
         monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
         real_read = os.read
         fired: list[int] = []
@@ -498,11 +830,18 @@ class TestReadFileIdentity:
 
     def test_a_post_read_mutation_does_not_retroactively_change_the_identity(
             self, sandbox):
+        """BYTE_IDENTITY_TEST — `content` is the DECODED SOURCE BYTES.
+
+        `snapshot.text()` decodes what was captured and performs no newline
+        translation (correctly — that is what makes the digest describe the
+        content). So a CRLF fixture makes `content` CRLF too, and the measured
+        Windows failure here was `assert 'before\r\n' == 'before\n'`.
+        """
         target = sandbox / "after.txt"
-        target.write_text("before\n")
+        _write(target, "before\n")
         result = _executor()._tool_read_file(str(target))
         before_sha = result["source"]["sha256"]
-        target.write_text("after!!\n")
+        _write(target, "after!!\n")
         assert result["source"]["sha256"] == before_sha
         assert result["content"] == "before\n"
         # And the identity is now honestly STALE relative to disk, which is what
@@ -513,7 +852,7 @@ class TestReadFileIdentity:
 
     def test_a_read_then_write_round_trip_still_works_unraced(self, sandbox):
         target = sandbox / "rt.txt"
-        target.write_text("one\n")
+        _write(target, "one\n")
         result = _executor()._tool_read_file(str(target))
         receipt = cas_write_text(target, "two\n",
                                  expected_sha256=result["source"]["sha256"])
@@ -523,7 +862,7 @@ class TestReadFileIdentity:
     def test_a_truncated_read_can_still_state_a_write_precondition(self, sandbox):
         target = sandbox / "big.txt"
         body = "z" * 500
-        target.write_text(body)
+        _write(target, body)
         result = _executor()._tool_read_file(str(target), max_chars=10)
         assert result["truncated"] is True
         receipt = cas_write_text(target, "replacement\n",
@@ -549,10 +888,11 @@ class TestDerivedFormats:
             result["content"].encode()).hexdigest()
         assert result["source"]["size_bytes"] == len(raw)
 
+    @needs_replace
     def test_the_derived_parser_reads_the_snapshot_not_the_path(self, sandbox,
                                                                monkeypatch):
         """Replace the file on disk before the parser runs; the rendering must
-        still come from the observed bytes."""
+        still come from the observed bytes. POSIX_CAPABILITY_TEST (the swap)."""
         docx = pytest.importorskip("docx")
         target = sandbox / "swap.docx"
         first = docx.Document()
@@ -610,9 +950,14 @@ class TestDerivedFormats:
             result["content"].encode()).hexdigest()
         assert result["source"]["size_bytes"] == len(raw)
 
+    @needs_replace
     def test_a_derived_parser_cannot_see_a_post_observation_swap(
             self, sandbox, monkeypatch):
-        """Dependency-free version of the atomic-swap test."""
+        """Dependency-free version of the atomic-swap test. POSIX_CAPABILITY_TEST.
+
+        The in-place analogue, which runs everywhere, is
+        `test_a_derived_parser_cannot_see_a_post_observation_in_place_rewrite`.
+        """
         target = sandbox / "swap.pdf"
         other = sandbox / "other.pdf"
         target.write_bytes(b"ORIGINAL-SOURCE")
@@ -631,6 +976,118 @@ class TestDerivedFormats:
         assert target.read_bytes() == b"SWAPPED-SOURCE", "the swap did not happen"
         assert result["source"]["sha256"] == hashlib.sha256(
             b"ORIGINAL-SOURCE").hexdigest()
+
+    def test_a_derived_parse_over_changed_bytes_is_refused_not_returned(
+            self, sandbox, monkeypatch):
+        """CROSS_PLATFORM_INVARIANT — and a property worth stating plainly.
+
+        MEASURED WHILE WRITING THIS TEST. A derived read uses
+        `capture_bytes=False`, so `stream()` is a `dup` of the held descriptor
+        and NOT a byte copy: it addresses the same INODE. An in-place rewrite
+        therefore genuinely does change what the parser reads — the first
+        version of this test asserted the parser still saw the original bytes
+        and failed, correctly.
+
+        That is not a defect. It is exactly why `capture_bytes=False` REQUIRES
+        `recheck()`. The invariant is not "the parser cannot see the change";
+        it is "a rendering and a digest over different bytes are never returned
+        as one result". So: the parser sees the new bytes, the digest covers the
+        old ones, they provably disagree, and the whole read is REFUSED.
+
+        The stronger property — that the parser addresses the observation
+        rather than re-resolving the path — needs the path to MEAN something
+        else, which is the POSIX-only rename. It is asserted by the
+        capability-gated swap tests above and, behaviourally and on every
+        platform, by `test_a_derived_parser_never_reopens_the_source_path`.
+        """
+        target = sandbox / "shift-derived.pdf"
+        original = b"ORIGINAL-SOURCE-BYTES-0123456789"
+        rewritten = b"SWAPPED!-SOURCE-BYTES-0123456789"
+        assert len(original) == len(rewritten), "same-size rewrite"
+        target.write_bytes(original)
+        seen: list[bytes] = []
+
+        def rewriting_reader(self, snapshot):
+            _in_place_rewrite(target, rewritten)
+            with snapshot.stream() as handle:
+                seen.append(handle.read())
+            return "rendered"
+
+        monkeypatch.setattr(ex.ToolExecutor, "_read_pdf", rewriting_reader)
+        result = _executor()._tool_read_file(str(target))
+        assert target.read_bytes() == rewritten, "NON-VACUITY: no rewrite landed"
+        assert seen == [rewritten], \
+            "NON-VACUITY: the parser did not observe the rewrite at all"
+        assert hashlib.sha256(seen[0]).hexdigest() \
+            != hashlib.sha256(original).hexdigest(), \
+            "non-vacuity: the two versions hash the same"
+        assert result.get("error_code") == ex.ERR_SOURCE_UNSTABLE, \
+            "a rendering and a digest over different bytes were returned as one"
+        assert "content" not in result and "source" not in result
+
+    def test_a_derived_parser_never_reopens_the_source_path(self, sandbox,
+                                                            monkeypatch):
+        """CROSS_PLATFORM_INVARIANT — BEHAVIOURAL, where the siblings are structural.
+
+        Every other proof that a derived reader consumes the observation is
+        either a source-text scan (`TestAbsentControls`) or needs the POSIX
+        rename. This one watches the real openers: once the snapshot has been
+        acquired, any `open()` or `os.open()` of the source path during the
+        parse is recorded. A reader that re-resolved the path would be caught on
+        Windows exactly as on Linux.
+        """
+        import builtins
+
+        target = sandbox / "watched.pdf"
+        raw = b"%PDF-1.4 watched source bytes\n" * 4
+        target.write_bytes(raw)
+        resolved = os.path.realpath(str(target))
+        reopened: list[str] = []
+        seen: list[bytes] = []
+        real_builtin_open, real_os_open = builtins.open, os.open
+
+        def _is_source(candidate) -> bool:
+            if isinstance(candidate, int):
+                return False                 # a descriptor, not a path
+            try:
+                return os.path.realpath(os.fspath(candidate)) == resolved
+            except (TypeError, ValueError):
+                return False
+
+        def watching_reader(self, snapshot):
+            def guarded_builtin_open(file, *a, **kw):
+                if _is_source(file):
+                    reopened.append(f"open({file!r})")
+                return real_builtin_open(file, *a, **kw)
+
+            def guarded_os_open(path, *a, **kw):
+                if _is_source(path):
+                    reopened.append(f"os.open({path!r})")
+                return real_os_open(path, *a, **kw)
+
+            monkeypatch.setattr(builtins, "open", guarded_builtin_open)
+            monkeypatch.setattr(os, "open", guarded_os_open)
+            try:
+                # Non-vacuity: the bare name now resolves to the guard, so a
+                # path opening really is recorded. Without this the test would
+                # pass just as happily with both guards installed backwards.
+                with open(str(target), "rb") as handle:
+                    handle.read(1)
+                assert reopened, "non-vacuity: the open guard never fired"
+                reopened.clear()
+                with snapshot.stream() as handle:
+                    seen.append(handle.read())
+            finally:
+                monkeypatch.setattr(builtins, "open", real_builtin_open)
+                monkeypatch.setattr(os, "open", real_os_open)
+            return "rendered"
+
+        monkeypatch.setattr(ex.ToolExecutor, "_read_pdf", watching_reader)
+        result = _executor()._tool_read_file(str(target))
+        assert seen == [raw], "the stream did not serve the observed bytes"
+        assert reopened == [], \
+            f"the parse re-resolved the source path: {reopened}"
+        assert result["source"]["sha256"] == hashlib.sha256(raw).hexdigest()
 
     def test_an_in_place_rewrite_during_a_derived_parse_is_reported_unstable(
             self, sandbox, monkeypatch):

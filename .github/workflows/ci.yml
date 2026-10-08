@@ -423,6 +423,16 @@ jobs:
   #
   # `autocrlf` is left at the Windows DEFAULT on purpose. Setting it false here
   # would make the job pass by avoiding the condition it is supposed to witness.
+  #
+  # V69 M68D.1. The first REAL execution of this job was CI run 37695660326 on
+  # candidate cc8a7dd (windows-2025-vs2026, CPython 3.11.9): the Control Plane
+  # verifier printed PASS / NEWLINE_POLICY PASS / PROBLEMS 0 under
+  # `autocrlf=true`, and the suites returned 173 passed / 25 failed / 9 skipped.
+  # Every one of the 25 was a POSIX assumption in a TEST — mandatory
+  # open-handle semantics, runtime fixture newline translation, and the absent
+  # executable bit. M68D.1 closes them and adds the closure suite below. The
+  # job stays BLOCKING and keeps every suite: a portability repair this runner
+  # does not execute would be decorative.
   windows-portability:
     name: Windows portability (3.11, blocking)
     runs-on: windows-latest
@@ -457,12 +467,23 @@ jobs:
           python -m pytest -q --tb=short `
             jarvis/tests/test_source_integrity_m68c.py `
             jarvis/tests/test_trust_boundary_m68d_h02_source_identity.py `
-            jarvis/tests/test_trust_boundary_m68d_h05_portability.py
+            jarvis/tests/test_trust_boundary_m68d_h05_portability.py `
+            jarvis/tests/test_windows_portability_closure_m68d1.py
+      # V69 M68D.1. `check_package_manifest.py` takes `--dist` as a REQUIRED
+      # argument and exits 2 without it, so this step could never have
+      # succeeded — the real runner simply never reached it, because the suite
+      # step above failed first. Fixing the 25 test failures alone would have
+      # moved the red one step to the right. The dist is therefore built here,
+      # exactly as the packaging job does it, which also makes the manifest and
+      # secret scan a genuine WINDOWS check of the built artifacts rather than
+      # a command that aborts on its own argument parsing.
       - name: Dependency authority and consistency checks
         working-directory: jarvis
         run: |
           python scripts/check_release_consistency.py
-          python scripts/check_package_manifest.py
+          python -m pip install --upgrade build
+          python -m build --outdir "$env:RUNNER_TEMP/dist"
+          python scripts/check_package_manifest.py --dist "$env:RUNNER_TEMP/dist"
       - name: Import smoke (no service, no model)
         working-directory: jarvis
         run: python -c "import core.source_integrity, core.safe_observability, core.redaction_policy; print('import ok')"

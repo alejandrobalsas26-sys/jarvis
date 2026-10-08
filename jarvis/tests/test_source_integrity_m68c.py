@@ -72,6 +72,30 @@ from core.source_integrity import (  # noqa: E402
 READ_CAP = 8000
 
 
+def _write(target: Path, text: str) -> bytes:
+    """Write *text* BYTE-EXPLICITLY and return the bytes that landed.
+
+    V69 M68D.1 (BYTE_IDENTITY_TEST helper). `Path.write_text` writes in TEXT
+    mode with `newline=None`, which translates "\n" to `os.linesep` — so on
+    Windows a six-character fixture becomes a SEVEN-byte file. The real Windows
+    runner of CI run 37695660326 failed TEN tests in this file for exactly that
+    reason: `assert 7 == 6` on `size_bytes`, digests that no longer described
+    the fixture they were taken from, and CAS preconditions that came back
+    REJECTED_STALE where APPLIED or VALIDATED_NOT_APPLIED was expected.
+
+    This is a TEST-CONTRACT repair, not a production one. Nothing in
+    `core.source_integrity` normalises newlines and nothing here asks it to:
+    bytes are bytes, and a digest that converted them first would stop being a
+    byte seal. The fixtures simply have to name the bytes they mean.
+
+    Callers comparing against an exact digest or length use the RETURN VALUE,
+    so the expectation cannot drift from the fixture that produced it.
+    """
+    payload = text.encode("utf-8")
+    target.write_bytes(payload)
+    return payload
+
+
 def _executor():
     """A ToolExecutor with no __init__ side effects — the handlers are pure."""
     from tools.executor import ToolExecutor
@@ -107,7 +131,7 @@ class TestReadIdentity:
 
     def test_a_small_complete_file_is_identified_as_complete(self, tmp_path):
         target = tmp_path / "small.py"
-        target.write_text("x = 1\n")
+        _write(target, "x = 1\n")
         ident = identify_source(target, content_chars_total=6,
                                content_chars_returned=6)
         assert ident.exists
@@ -119,7 +143,7 @@ class TestReadIdentity:
 
     def test_an_empty_file_is_complete_and_has_the_empty_digest(self, tmp_path):
         target = tmp_path / "empty.py"
-        target.write_text("")
+        _write(target, "")
         ident = identify_source(target, content_chars_total=0,
                                content_chars_returned=0)
         # An empty file EXISTS and has an identity. Treating it as absent is the
@@ -137,7 +161,7 @@ class TestReadIdentity:
 
     def test_a_file_deleted_after_it_was_read_loses_its_identity(self, tmp_path):
         target = tmp_path / "gone.py"
-        target.write_text("y = 2\n")
+        _write(target, "y = 2\n")
         before = identify_source(target)
         target.unlink()
         after = identify_source(target)
@@ -147,9 +171,9 @@ class TestReadIdentity:
 
     def test_a_file_changed_after_it_was_read_changes_digest(self, tmp_path):
         target = tmp_path / "moved.py"
-        target.write_text("v = 1\n")
+        _write(target, "v = 1\n")
         first = identify_source(target)
-        target.write_text("v = 2\n")
+        _write(target, "v = 2\n")
         second = identify_source(target)
         assert first.sha256 != second.sha256
 
@@ -172,7 +196,7 @@ class TestReadIdentity:
 
     def test_the_digest_is_sha256_named_in_the_payload(self, tmp_path):
         target = tmp_path / "n.py"
-        target.write_text("q = 1\n")
+        _write(target, "q = 1\n")
         payload = identify_source(target).to_dict()
         assert payload["digest_algorithm"] == DIGEST_ALGORITHM == "sha256"
         assert len(payload["sha256"]) == 64
@@ -182,7 +206,7 @@ class TestReadIdentity:
                                "(Windows, or running as root)")
     def test_an_unreadable_file_yields_no_digest(self, tmp_path):
         target = tmp_path / "locked.py"
-        target.write_text("secret = 1\n")
+        _write(target, "secret = 1\n")
         target.chmod(0o000)
         try:
             assert digest_file(target) is None
@@ -239,7 +263,7 @@ class TestReadIdentity:
         inside = identify_source(PACKAGE_ROOT / "core" / "source_integrity.py")
         assert inside.repo_relative == "jarvis/core/source_integrity.py"
         outside = tmp_path / "outside.py"
-        outside.write_text("")
+        _write(outside, "")
         assert identify_source(outside).repo_relative is None
 
 
@@ -248,7 +272,7 @@ class TestTruncationIsOutOfBand:
 
     def test_truncation_is_derived_from_the_counts_not_declared(self, tmp_path):
         target = tmp_path / "t.py"
-        target.write_text("a" * 100)
+        _write(target, "a" * 100)
         cut = identify_source(target, content_chars_total=100,
                               content_chars_returned=40)
         whole = identify_source(target, content_chars_total=100,
@@ -260,7 +284,7 @@ class TestTruncationIsOutOfBand:
         """The property that lets a cut display still state a precondition."""
         target = tmp_path / "big.py"
         body = "b" * 50_000
-        target.write_text(body)
+        _write(target, body)
         cut = identify_source(target, content_chars_total=50_000,
                               content_chars_returned=READ_CAP)
         assert cut.truncated is True
@@ -269,14 +293,14 @@ class TestTruncationIsOutOfBand:
 
     def test_exactly_at_the_read_boundary_is_not_truncated(self, sandbox_dir):
         target = sandbox_dir / "edge.py"
-        target.write_text("c" * READ_CAP)
+        _write(target, "c" * READ_CAP)
         result = _executor()._tool_read_file(str(target), max_chars=READ_CAP)
         assert result["truncated"] is False
         assert result["source"]["complete"] is True
 
     def test_one_byte_over_the_boundary_is_truncated(self, sandbox_dir):
         target = sandbox_dir / "edge1.py"
-        target.write_text("c" * (READ_CAP + 1))
+        _write(target, "c" * (READ_CAP + 1))
         result = _executor()._tool_read_file(str(target), max_chars=READ_CAP)
         assert result["truncated"] is True
         assert result["source"]["complete"] is False
@@ -288,7 +312,7 @@ class TestTruncationIsOutOfBand:
         """An empty `source` key satisfies a key-presence check and tells a
         caller nothing. The CONTENTS are the control."""
         target = sandbox_dir / "payload.py"
-        target.write_text("value = 1\n")
+        _write(target, "value = 1\n")
         source = _executor()._tool_read_file(str(target))["source"]
         assert source["sha256"] == digest_bytes(b"value = 1\n")
         assert source["size_bytes"] == 10
@@ -304,7 +328,7 @@ class TestTruncationIsOutOfBand:
         """The measured defect: `chars: 8028` for a 22890-character file."""
         target = sandbox_dir / "huge.py"
         body = "".join(f"# line {i}\n" for i in range(2000))
-        target.write_text(body)
+        _write(target, body)
         result = _executor()._tool_read_file(str(target))
         assert result["chars"] < len(body)                 # the rendering is cut
         assert result["source"]["content_chars_total"] == len(body)
@@ -314,7 +338,7 @@ class TestTruncationIsOutOfBand:
             self, sandbox_dir):
         """The in-band marker is forgeable; the out-of-band flag is not."""
         target = sandbox_dir / "mimic.py"
-        target.write_text("x = 1\n\n[...truncado a 8000 chars]")
+        _write(target, "x = 1\n\n[...truncado a 8000 chars]")
         result = _executor()._tool_read_file(str(target))
         assert result["content"].rstrip().endswith("chars]")   # looks truncated
         assert result["truncated"] is False                    # and is not
@@ -369,7 +393,7 @@ class TestNormalWrites:
 
     def test_replace_existing(self, tmp_path):
         target = tmp_path / "old.py"
-        target.write_text("before\n")
+        _write(target, "before\n")
         receipt = cas_write_text(target, "after\n")
         assert receipt.status is WriteStatus.APPLIED
         assert target.read_text() == "after\n"
@@ -378,7 +402,7 @@ class TestNormalWrites:
 
     def test_an_identical_content_rewrite_still_applies(self, tmp_path):
         target = tmp_path / "same.py"
-        target.write_text("same\n")
+        _write(target, "same\n")
         receipt = cas_write_text(target, "same\n",
                                  expected_sha256=digest_bytes(b"same\n"))
         # A no-op write is still a write: the receipt must not claim a rejection
@@ -388,7 +412,7 @@ class TestNormalWrites:
 
     def test_a_zero_byte_write(self, tmp_path):
         target = tmp_path / "zero.py"
-        target.write_text("content\n")
+        _write(target, "content\n")
         receipt = cas_write_text(target, "")
         assert receipt.status is WriteStatus.APPLIED
         assert target.read_bytes() == b""
@@ -397,7 +421,7 @@ class TestNormalWrites:
 
     def test_append_is_declared_as_append_and_not_as_atomic(self, tmp_path):
         target = tmp_path / "log.txt"
-        target.write_text("one\n")
+        _write(target, "one\n")
         receipt = cas_write_text(target, "two\n", mode="a")
         assert receipt.status is WriteStatus.APPLIED
         assert target.read_text() == "one\ntwo\n"
@@ -419,7 +443,7 @@ class TestCompareAndSwap:
 
     def test_a_matching_precondition_applies(self, tmp_path):
         target = tmp_path / "cas.py"
-        target.write_text("v1\n")
+        _write(target, "v1\n")
         observed = identify_source(target).sha256
         receipt = cas_write_text(target, "v2\n", expected_sha256=observed)
         assert receipt.status is WriteStatus.APPLIED
@@ -428,9 +452,9 @@ class TestCompareAndSwap:
     def test_a_mismatched_precondition_writes_NOTHING(self, tmp_path):
         """The measured lost update, now refused."""
         target = tmp_path / "shared.py"
-        target.write_text("VERSION = 1\n")
+        _write(target, "VERSION = 1\n")
         observed = identify_source(target).sha256          # JARVIS reads v1
-        target.write_text("VERSION = 2  # a human edited it\n")   # someone else
+        _write(target, "VERSION = 2  # a human edited it\n")   # someone else
         receipt = cas_write_text(target, "VERSION = 1b\n",
                                  expected_sha256=observed)
         assert receipt.status is WriteStatus.REJECTED_STALE
@@ -440,7 +464,7 @@ class TestCompareAndSwap:
 
     def test_a_file_deleted_between_read_and_mutation_is_stale(self, tmp_path):
         target = tmp_path / "vanished.py"
-        target.write_text("here\n")
+        _write(target, "here\n")
         observed = identify_source(target).sha256
         target.unlink()
         receipt = cas_write_text(target, "back\n", expected_sha256=observed)
@@ -453,7 +477,7 @@ class TestCompareAndSwap:
     def test_an_unexpectedly_present_destination_loses(self, tmp_path):
         """create-vs-create: ABSENT is a precondition and it is enforced."""
         target = tmp_path / "raced.py"
-        target.write_text("someone got here first\n")
+        _write(target, "someone got here first\n")
         receipt = cas_write_text(target, "mine\n", expected_sha256=ABSENT)
         assert receipt.status is WriteStatus.REJECTED_STALE
         assert target.read_text() == "someone got here first\n"
@@ -466,7 +490,7 @@ class TestCompareAndSwap:
 
     def test_a_malformed_digest_is_invalid_not_stale(self, tmp_path):
         target = tmp_path / "m.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         for bad in ("", "x", "Z" * 64, "abc123", "A" * 64):
             receipt = cas_write_text(target, "b\n", expected_sha256=bad)
             assert receipt.status is WriteStatus.REJECTED_INVALID, bad
@@ -475,7 +499,7 @@ class TestCompareAndSwap:
     def test_no_precondition_preserves_last_writer_wins(self, tmp_path):
         """Additive: an existing caller that supplies nothing is unchanged."""
         target = tmp_path / "legacy.py"
-        target.write_text("old\n")
+        _write(target, "old\n")
         receipt = cas_write_text(target, "new\n")
         assert receipt.status is WriteStatus.APPLIED
         assert receipt.precondition["supplied"] is False
@@ -483,7 +507,7 @@ class TestCompareAndSwap:
 
     def test_a_supplied_precondition_is_recorded_as_boundary_checked(self, tmp_path):
         target = tmp_path / "rec.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         receipt = cas_write_text(target, "b\n",
                                  expected_sha256=digest_bytes(b"a\n"))
         assert receipt.precondition["checked_at_mutation_boundary"] is True
@@ -495,7 +519,7 @@ class TestAtomicity:
 
     def test_a_replace_leaves_no_temp_file_behind(self, tmp_path):
         target = tmp_path / "clean.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         cas_write_text(target, "b\n")
         leftovers = [p.name for p in tmp_path.iterdir() if p.name != "clean.py"]
         assert leftovers == [], f"leaked temp files: {leftovers}"
@@ -656,7 +680,7 @@ class TestReceiptTruth:
 
     def test_a_dry_run_is_validated_and_NOT_applied(self, tmp_path):
         target = tmp_path / "dry.py"
-        target.write_text("untouched\n")
+        _write(target, "untouched\n")
         receipt = cas_write_text(target, "would be this\n",
                                  expected_sha256=digest_bytes(b"untouched\n"),
                                  dry_run=True)
@@ -669,7 +693,7 @@ class TestReceiptTruth:
 
     def test_a_successful_write_carries_BOTH_before_and_after_identity(self, tmp_path):
         target = tmp_path / "ev.py"
-        target.write_text("pre\n")
+        _write(target, "pre\n")
         receipt = cas_write_text(target, "post\n")
         assert receipt.before is not None and receipt.after is not None
         assert receipt.before.sha256 == digest_bytes(b"pre\n")
@@ -685,7 +709,7 @@ class TestReceiptTruth:
 
     def test_a_stale_rejection_reports_no_effect(self, tmp_path):
         target = tmp_path / "st.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         receipt = cas_write_text(target, "b\n", expected_sha256=digest_bytes(b"ZZ"))
         assert receipt.status is WriteStatus.REJECTED_STALE
         assert receipt.bytes_written == 0
@@ -702,7 +726,7 @@ class TestReceiptTruth:
         def meddling(path, **kwargs):
             calls["n"] += 1
             if calls["n"] == 2:        # the POST-mutation identification
-                Path(path).write_text("something else entirely\n")
+                _write(Path(path), "something else entirely\n")
             return real(path, **kwargs)
 
         monkeypatch.setattr(si, "identify_source", meddling)
@@ -732,7 +756,7 @@ class TestReceiptTruth:
     def test_the_receipt_never_stores_the_source_body(self, tmp_path):
         """Hashes + metadata, never bodies (§8)."""
         target = tmp_path / "secret.py"
-        target.write_text("API_KEY = 'before-secret-value'\n")
+        _write(target, "API_KEY = 'before-secret-value'\n")
         payload = cas_write_text(
             target, "API_KEY = 'after-secret-value'\n").to_dict()
         blob = repr(payload)
@@ -779,7 +803,7 @@ class TestReceiptTruth:
     def test_the_receipt_serialises_to_a_json_safe_dict(self, tmp_path):
         import json
         target = tmp_path / "j.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         payload = cas_write_text(target, "b\n").to_dict()
         round_tripped = json.loads(json.dumps(payload))
         assert round_tripped["status"] == "APPLIED"
@@ -798,9 +822,9 @@ class TestHandlerSurfacesTheReceipt:
         root = self._in_sandbox(tmp_path)
         target = root / "staged.py"
         try:
-            target.write_text("VERSION = 1\n")
+            _write(target, "VERSION = 1\n")
             observed = _executor()._tool_read_file(str(target))["source"]["sha256"]
-            target.write_text("VERSION = 2  # human\n")
+            _write(target, "VERSION = 2  # human\n")
             result = _executor()._tool_write_file(
                 str(target), "VERSION = 1b\n", expected_sha256=observed)
             assert result["error_code"] == "PRECONDITION_STALE"
@@ -827,7 +851,7 @@ class TestHandlerSurfacesTheReceipt:
         root = self._in_sandbox(tmp_path)
         target = root / "dry.py"
         try:
-            target.write_text("keep\n")
+            _write(target, "keep\n")
             result = _executor()._tool_write_file(
                 str(target), "discard\n", dry_run=True)
             assert result["validated"] is True
@@ -842,7 +866,7 @@ class TestHandlerSurfacesTheReceipt:
         root = self._in_sandbox(tmp_path)
         target = root / "rt.py"
         try:
-            target.write_text("counter = 0\n")
+            _write(target, "counter = 0\n")
             read = _executor()._tool_read_file(str(target))
             result = _executor()._tool_write_file(
                 str(target), "counter = 1\n",
@@ -867,7 +891,7 @@ class TestRaces:
     def test_a_stale_writer_loses_and_the_winner_remains_intact(self, tmp_path):
         """Reader A observes X; writer B makes it Y; A's write must be refused."""
         target = tmp_path / "race.py"
-        target.write_text("X\n")
+        _write(target, "X\n")
         observed_by_a = identify_source(target).sha256
 
         b_done = threading.Event()
@@ -899,7 +923,7 @@ class TestRaces:
     def test_two_cas_writers_from_one_read_produce_exactly_one_winner(self, tmp_path):
         """Both hold the same expected digest; exactly one may apply."""
         target = tmp_path / "both.py"
-        target.write_text("start\n")
+        _write(target, "start\n")
         observed = identify_source(target).sha256
 
         barrier = threading.Barrier(2)
@@ -962,7 +986,7 @@ class TestRaces:
 
     def test_a_delete_vs_modify_race_refuses_the_modify(self, tmp_path):
         target = tmp_path / "dm.py"
-        target.write_text("live\n")
+        _write(target, "live\n")
         observed = identify_source(target).sha256
 
         deleted = threading.Event()
@@ -991,7 +1015,7 @@ class TestRaces:
         identical to one that passed because CAS worked.
         """
         target = tmp_path / "nocas.py"
-        target.write_text("start\n")
+        _write(target, "start\n")
         barrier = threading.Barrier(2)
         out: list = []
         lock = threading.Lock()
@@ -1025,7 +1049,7 @@ class TestFailureBoundaries:
         directory = tmp_path / "ro"
         directory.mkdir()
         target = directory / "guarded.py"
-        target.write_text("original\n")
+        _write(target, "original\n")
         directory.chmod(0o500)                       # no write on the DIRECTORY
         try:
             receipt = cas_write_text(target, "replacement\n")
@@ -1042,7 +1066,7 @@ class TestFailureBoundaries:
         directory = tmp_path / "ro2"
         directory.mkdir()
         target = directory / "x.py"
-        target.write_text("keep\n")
+        _write(target, "keep\n")
         directory.chmod(0o500)
         try:
             cas_write_text(target, "no\n")
@@ -1055,7 +1079,7 @@ class TestFailureBoundaries:
             self, tmp_path, monkeypatch):
         import core.source_integrity as si
         target = tmp_path / "boom.py"
-        target.write_text("before\n")
+        _write(target, "before\n")
 
         def exploding_replace(*_args, **_kwargs):
             raise OSError("synthetic replace failure")
@@ -1085,7 +1109,7 @@ class TestFailureBoundaries:
         """If the append raises AFTER bytes landed, the answer is UNKNOWN."""
         import core.source_integrity as si
         target = tmp_path / "ap.log"
-        target.write_text("one\n")
+        _write(target, "one\n")
         real_open = si.open if hasattr(si, "open") else open
 
         class HalfWriter:
@@ -1131,7 +1155,7 @@ class TestFailureBoundaries:
         if not Path("/proc/self/fd").exists():  # pragma: no cover
             pytest.skip("/proc/self/fd is needed to count descriptors")
         target = tmp_path / "refused.py"
-        target.write_text("a\n")
+        _write(target, "a\n")
         cas_write_text(target, "b\n", expected_sha256=digest_bytes(b"nope"))
         before = len(os.listdir("/proc/self/fd"))
         for _ in range(200):

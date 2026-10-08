@@ -44,6 +44,12 @@ if str(_SCRIPTS) not in sys.path:
 
 import verify_m62_control_plane as cpv  # noqa: E402
 
+from _test_support.platform_capabilities import (  # noqa: E402
+    EXEC_BIT_OBSERVABLE,
+    PROBE_DIAGNOSTIC,
+    WHY_NO_EXEC_BIT,
+)
+
 _SRC = Path(cpv.__file__).read_text(encoding="utf-8")
 _LINES = _SRC.splitlines()
 
@@ -229,6 +235,7 @@ class TestGitModeIsTheAuthority:
         assert os.access(target, os.X_OK) is True
         assert _index_mode(tiny_repo, "data.json") != cpv.GIT_MODE_EXECUTABLE
 
+    @pytest.mark.skipif(not EXEC_BIT_OBSERVABLE, reason=WHY_NO_EXEC_BIT)
     def test_os_access_disagrees_with_git_when_the_worktree_bit_is_cleared(self,
                                                                           tiny_repo):
         """FALSE NEGATIVE, measured — and this one is a BYPASS, not a nuisance.
@@ -237,6 +244,21 @@ class TestGitModeIsTheAuthority:
         `os.access` check while Git calls it executable. The invariant the
         control plane states is about the repository, so reading the filesystem
         made the control avoidable by anyone who could commit a mode.
+
+        POSIX_CAPABILITY_TEST (V69 M68D.1). Constructing the DISAGREEMENT needs
+        a clearable executable bit: `chmod(0o644)` must make `os.access(X_OK)`
+        false. Windows has no such bit — `chmod` there honours only the
+        read-only attribute — so on the real runner this test failed its OWN
+        non-vacuity guard ("the working-tree bit was not actually cleared"),
+        which is the test being HONEST rather than a defect in the control.
+
+        Nothing about the CONTROL is skipped. The control is the Git index mode
+        and every test of it above runs on every platform: `update-index
+        --chmod=+x` is an index operation, not a filesystem one. The sibling
+        test directly below proves the Git answer is independent of `os.access`
+        even when `os.access` says true for everything — which IS the Windows
+        case — and `test_no_repository_executable_invariant_uses_os_access`
+        proves the verifier never consults the filesystem at all.
         """
         target = tiny_repo / "data.json"
         target.write_text("{}\n")
@@ -454,10 +476,74 @@ class TestPlatformCapabilities:
 
     def test_fixture_newline_expectations_are_platform_neutral(self, tmp_path):
         """A fixture written with `write_text` and read with `read_text` agrees
-        on every platform; one written in binary and read as text does not."""
+        on every platform; one written in binary and read as text does not.
+
+        V69 M68D.1: this was the ONLY newline-fixture test M68D shipped, and it
+        is why the gap survived into the Windows runner. A text write followed
+        by a text read round-trips on every platform — so this test passes on
+        Windows — while the ten failures were all text write followed by a
+        BYTE assertion. The sibling below covers that case.
+        """
         target = tmp_path / "n.txt"
         target.write_text("a\nb\n")
         assert target.read_text() == "a\nb\n"
+
+    def test_a_translating_text_write_is_not_byte_equal_to_an_explicit_one(
+            self, tmp_path):
+        """BYTE_IDENTITY_TEST (M68D.1 §10) — why fixtures must be byte explicit.
+
+        The platform translation is SIMULATED deterministically rather than
+        waited for: `newline="\r\n"` emits byte-for-byte what Windows text mode
+        emits for `newline=None`, so the measured Windows symptom is reproduced
+        HERE, on Linux, in one test. The same logical text ends up with two
+        lengths, two digests and two different CAS outcomes.
+
+        This is the guard that fails if somebody later changes a byte-identity
+        fixture back from `write_bytes` to `write_text`: it keeps the reason
+        visible instead of leaving it to a Windows runner to rediscover.
+        """
+        import core.source_integrity as si
+
+        text = "x = 1\n"
+        explicit, translated = tmp_path / "lf.py", tmp_path / "crlf.py"
+        explicit.write_bytes(text.encode("utf-8"))
+        with open(translated, "w", encoding="utf-8", newline="\r\n") as handle:
+            handle.write(text)
+
+        assert explicit.read_bytes() == b"x = 1\n"
+        assert translated.read_bytes() == b"x = 1\r\n", \
+            "non-vacuity: the simulated translation did not happen"
+        # The exact shape of the measured failure: `assert 7 == 6`.
+        assert len(translated.read_bytes()) == len(explicit.read_bytes()) + 1
+        assert cpv.sha256_file(translated) != cpv.sha256_file(explicit), \
+            "a byte seal that cannot tell CRLF from LF is not a byte seal"
+        # And the CAS consequence: REJECTED_STALE where APPLIED was expected.
+        applied = si.cas_write_text(
+            explicit, "y = 2\n", expected_sha256=si.digest_bytes(text.encode()))
+        assert applied.status is si.WriteStatus.APPLIED
+        refused = si.cas_write_text(
+            translated, "y = 2\n",
+            expected_sha256=si.digest_bytes(text.encode()))
+        assert refused.status is si.WriteStatus.REJECTED_STALE, \
+            "the translated fixture was accepted under the LF precondition"
+        assert refused.bytes_written == 0
+
+    def test_this_suites_own_exec_bit_skip_cites_a_measurement(self):
+        """The Group C skip above is only honest if the probe actually RAN.
+
+        The byte-identity absent control and the full probe audit live in
+        `test_windows_portability_closure_m68d1.py`, which owns them: this
+        suite would have had to exempt ITSELF from the former, since its
+        sibling test deliberately performs a translating write.
+        """
+        assert PROBE_DIAGNOSTIC.get("exec_bit_observable", "").startswith(
+            ("PERMITTED", "REFUSED")), \
+            f"the exec-bit capability was never measured: {PROBE_DIAGNOSTIC}"
+        assert WHY_NO_EXEC_BIT.startswith("POSIX_CAPABILITY_TEST:")
+        assert "Measured:" in WHY_NO_EXEC_BIT, \
+            "a skip reason that cites no measurement is a platform guess"
+        assert (EXEC_BIT_OBSERVABLE is True) == (
+            PROBE_DIAGNOSTIC["exec_bit_observable"] == "PERMITTED")
 
 
 # ── the control plane is not weakened ────────────────────────────────────────
@@ -549,6 +635,9 @@ class TestWindowsCiJob:
         "test_source_integrity_m68c.py",
         "test_trust_boundary_m68d_h05_portability.py",
         "test_trust_boundary_m68d_h02_source_identity.py",
+        # V69 M68D.1: the closure suite. A portability repair the Windows
+        # runner does not execute is decorative.
+        "test_windows_portability_closure_m68d1.py",
     ])
     def test_it_runs_the_portability_relevant_suites(self, workflow, suite):
         joined = "\n".join(str(s.get("run", ""))

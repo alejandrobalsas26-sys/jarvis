@@ -74,11 +74,19 @@ MUTATIONS: list[dict] = []
 MUTATIONS += [
     # "hide truncation": the flag stops telling the truth.
     _mut("A_truncated_always_false", "A_TRUTH", SI,
+         # V69 M68D.1: same duplication as `A_absent_gets_a_digest`. In
+         # `identify_source` this block follows a BLANK line; in
+         # `identify_snapshot` it follows `covers = ...` directly. That blank
+         # line is the discriminator.
+         "    covers = DIGEST_COVERS_COMPLETE if sha is not None else DIGEST_COVERS_NOTHING\n"
+         "\n"
          "    truncated = bool(\n"
          "        content_chars_total is not None\n"
          "        and content_chars_returned is not None\n"
          "        and content_chars_returned < content_chars_total\n"
          "    )",
+         "    covers = DIGEST_COVERS_COMPLETE if sha is not None else DIGEST_COVERS_NOTHING\n"
+         "\n"
          "    truncated = False", A_TRUNC),
     # "mark truncated source complete": the two halves of `complete` decoupled.
     _mut("A_complete_ignores_truncation", "A_TRUTH", SI,
@@ -97,7 +105,14 @@ MUTATIONS += [
          "    sha = None", A_READ),
     # An absent file acquires an identity a precondition could match.
     _mut("A_absent_gets_a_digest", "A_DIGEST", SI,
+         # V69 M68D.1: anchored onto `identify_source` by its preceding line.
+         # M68D's H02 work added `identify_snapshot`, which repeats this
+         # statement verbatim, so the bare line began matching TWICE and this
+         # campaign exited FAIL with 2 anchor errors at cc8a7dd. The mapped
+         # test exercises `identify_source`, so that is the intended target.
+         "    sha = digest_file(resolved) if exists else None\n"
          "    covers = DIGEST_COVERS_COMPLETE if sha is not None else DIGEST_COVERS_NOTHING",
+         "    sha = digest_file(resolved) if exists else None\n"
          "    covers = DIGEST_COVERS_COMPLETE", A_READ),
     # The digest stops covering the whole file.
     _mut("A_digest_first_chunk_only", "A_DIGEST", SI,
