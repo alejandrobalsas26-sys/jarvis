@@ -12,8 +12,13 @@ operation once, in a temporary directory, and recording what the kernel said.
 THE PROBE MODELS PRODUCTION (M68D.1 §8)
 =======================================
 ``core.source_integrity.source_snapshot`` observes a source with
-``os.open(path, os.O_RDONLY)`` — plain CPython, no Win32 sharing mode of its
-own. The probe holds its descriptor exactly the same way. It deliberately does
+``os.open(path, _source_open_flags())`` — read-only plus ``O_BINARY`` where the
+platform has a text mode (M68D.2 §5), and no Win32 sharing mode of its own. The
+probe holds its descriptor exactly the same way, binary flag included: the
+sharing semantics these capabilities measure are a property of the SHARE MODE
+CPython requests, which binary mode does not change, but the probe asks for the
+same flags production does so that it cannot drift into measuring a handle
+production never opens. It deliberately does
 NOT request ``FILE_SHARE_DELETE``: doing so would let the POSIX-shaped attack
 run on Windows against a handle production never opens, and the test would then
 be evidence about the probe instead of about JARVIS.
@@ -98,8 +103,8 @@ def _probe() -> None:
         with open(other, "wb") as handle:
             handle.write(b"OTHR" * 8)
 
-        # Exactly production's opening: read-only, no sharing mode requested.
-        fd = os.open(held, os.O_RDONLY)
+        # Exactly production's opening: read-only and binary, no sharing mode.
+        fd = os.open(held, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         try:
             try:
                 with open(held, "r+b") as handle:

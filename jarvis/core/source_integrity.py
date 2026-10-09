@@ -136,6 +136,32 @@ _REPO_ROOT = _APP_ROOT.parent
 #: that and nothing else: the bytes are never retained.
 _DIGEST_CHUNK = 1 << 20
 
+#: Windows' C runtime hands back a TEXT-mode descriptor unless ``_O_BINARY`` is
+#: asked for, and `os.read` on one collapses ``\r\n`` to ``\n`` and stops dead at
+#: the first Ctrl-Z (0x1A). A source observation opened that way captures bytes
+#: that are not the bytes on disk and digests them anyway, so `sha256` names a
+#: file state that never existed. MEASURED on the real Windows runner of CI run
+#: 37994281455: ``b"a\r\nb\r\n"`` came back as ``b"a\nb\n"``, and
+#: ``bytes(range(256)) * 40`` came back 26 bytes long. Absent on POSIX, where
+#: this resolves to 0 and the flag set below is byte-for-byte what it was.
+#: M68D.2 §5. This is the ONLY correct repair: normalising newlines inside the
+#: digest instead would make every byte seal in the repository decorative.
+_O_BINARY_FLAG = "O_BINARY"
+
+
+def _source_open_flags() -> int:
+    """How a source is opened for identity: read-only, and explicitly BINARY.
+
+    Derived per call rather than frozen at import, for one reason that is worth
+    the `getattr`: ``os.O_BINARY`` is the ONLY thing that differs between the
+    platform where this is a no-op and the platform where omitting it corrupts
+    every observation. A test can therefore exercise THIS function — production's
+    own derivation, not a copy of it — and prove the Windows flag set is right
+    from a POSIX host. A constant computed at import time would be unreachable
+    from there, and the Windows branch would stay unexercised until CI.
+    """
+    return os.O_RDONLY | getattr(os, _O_BINARY_FLAG, 0)
+
 
 class PatchValidationScope(str, Enum):
     """What a diff/patch check actually proves. §9.
@@ -299,6 +325,31 @@ def digest_file(path: "Path | str") -> "str | None":
         return None
 
 
+def _descriptor_content(fd: int) -> "tuple[str, int]":
+    """``(sha256, length)`` of the WHOLE content of *fd*, read from offset 0.
+
+    Reads the HELD descriptor and never the path, which is what makes it a
+    witness rather than a second guess: it observes the same inode the snapshot
+    was built on, so an atomic replacement underneath cannot be mistaken for a
+    mutation of the bytes we are looking at, and no mutable path is reopened to
+    establish identity (§7).
+
+    Chunked, so verifying a large source never holds it in memory. Leaves the
+    descriptor at end-of-file — the shared offset every consumer here already
+    rewinds before use, exactly as the capture pass left it.
+    """
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = os.read(fd, _DIGEST_CHUNK)
+        if not chunk:
+            break
+        digest.update(chunk)
+        total += len(chunk)
+    return digest.hexdigest(), total
+
+
 def _repo_relative(path: Path) -> "str | None":
     """*path* rendered relative to the repository root, or ``None`` if outside.
 
@@ -420,6 +471,15 @@ class SourceSnapshot:
     descriptor is immune to that by construction — but an IN-PLACE rewrite can,
     and then the snapshot says so rather than presenting mixed bytes as whole
     ones (§14).
+
+    That answer is witnessed at the BYTE level, not by metadata (M68D.2 §10):
+    the descriptor's content is re-read and compared with what was captured,
+    because a same-size in-place rewrite leaves ``st_ino``, ``st_dev``,
+    ``st_size`` and — within one coarse filesystem clock tick — ``st_mtime_ns``
+    all unchanged. What that detects, and the ABA and after-the-fact schedules
+    it provably cannot, is set out in
+    ``docs/v69_M68D2_CROSS_PLATFORM_SOURCE_INTEGRITY.md``. This is NOT a
+    transactional point-in-time snapshot of an arbitrary file.
     """
 
     #: Absolute, resolved, symlink-followed.
@@ -473,13 +533,20 @@ class SourceSnapshot:
             return self.stable
         try:
             now = os.fstat(self._fd)
+            # The same byte-level witness acquisition uses (M68D.2 §10). A
+            # metadata-only recheck is exactly the gap Group B came through,
+            # and this is the pass that has to see an in-place rewrite landing
+            # between the digest and a derived parser's read of one descriptor.
+            verified_sha, verified_total = _descriptor_content(self._fd)
         except OSError:
             self.stable = False
             return False
         if (now.st_size != self._stat.st_size
                 or now.st_mtime_ns != self._stat.st_mtime_ns
                 or now.st_ino != self._stat.st_ino
-                or now.st_dev != self._stat.st_dev):
+                or now.st_dev != self._stat.st_dev
+                or verified_sha != self.sha256
+                or verified_total != self.size_bytes):
             self.stable = False
         return self.stable
 
@@ -499,6 +566,10 @@ def source_snapshot(path: "Path | str", *, capture_bytes: bool = True):
     after parsing. It exists so identifying a large PDF does not mean holding it
     in memory.
 
+    Either way the observation costs TWO passes over the descriptor: the second
+    is the byte-level stability witness (§10), and it is unconditional because a
+    way to switch it off is a way to get an unwitnessed identity.
+
     Raises :class:`SourceSnapshotError` (an ``OSError``) when the source cannot
     be opened, because a caller that cannot observe the source must not proceed
     as if it had.
@@ -509,7 +580,7 @@ def source_snapshot(path: "Path | str", *, capture_bytes: bool = True):
     except (OSError, ValueError, RuntimeError):
         resolved = target
     try:
-        fd = os.open(str(resolved), os.O_RDONLY)
+        fd = os.open(str(resolved), _source_open_flags())
     except OSError as exc:
         raise SourceSnapshotError(f"cannot open {resolved}: {exc}") from exc
     try:
@@ -534,12 +605,33 @@ def source_snapshot(path: "Path | str", *, capture_bytes: bool = True):
                     break
                 digest.update(chunk)
                 total += len(chunk)
+        # BYTE-LEVEL stability witness (M68D.2 §10). Metadata alone cannot
+        # answer "did these bytes change". A same-size in-place rewrite of the
+        # held inode keeps `st_ino`, `st_dev` and `st_size`, and `st_mtime_ns`
+        # carries ns UNITS over roughly 15 ms of RESOLUTION on Windows,
+        # so a rewrite landing inside one clock tick is invisible to all four.
+        # MEASURED on the real runner of CI run 37994281455, and reproduced
+        # byte-for-byte on Linux by restoring the mtime: a payload torn across
+        # two versions was published `stable`, with a digest coherent with
+        # itself and describing a file state that never existed, and
+        # `identify_snapshot` issued it as a write precondition.
+        #
+        # So the descriptor's content is RE-READ and compared with what was
+        # captured. What that establishes and what it cannot is set out in
+        # `docs/v69_M68D2_CROSS_PLATFORM_SOURCE_INTEGRITY.md`: it detects any
+        # mutation still visible at verification time, and it is NOT a
+        # transactional snapshot — an ABA rewrite that restores the original
+        # bytes, or one that lands after this pass, remains undetectable
+        # without cooperating writers or OS-level locking.
+        verified_sha, verified_total = _descriptor_content(fd)
         after = os.fstat(fd)
         stable = (
             before.st_ino == after.st_ino
             and before.st_dev == after.st_dev
             and before.st_mtime_ns == after.st_mtime_ns
             and before.st_size == after.st_size == total
+            and verified_sha == digest.hexdigest()
+            and verified_total == total
         )
         snapshot = SourceSnapshot(
             path=str(resolved), size_bytes=total, sha256=digest.hexdigest(),

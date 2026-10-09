@@ -163,8 +163,9 @@ def _atomic_replace(target: Path, text: str) -> None:
 def _in_place_rewrite(target: Path, payload: bytes) -> None:
     """Overwrite the bytes of the HELD INODE itself, through a second handle.
 
-    CROSS_PLATFORM. ``source_snapshot`` opens with ``os.open(O_RDONLY)``,
-    which on Windows requests ``FILE_SHARE_WRITE``, so a second opening for
+    CROSS_PLATFORM. ``source_snapshot`` opens with ``os.open(O_RDONLY |
+    O_BINARY)``, which on Windows requests ``FILE_SHARE_WRITE``, so a second
+    opening for
     writing succeeds where a rename or an unlink does not. It is the
     STRONGER adversary: an atomic replacement cannot disturb a held fd at
     all, while this changes the very bytes the observation is reading.
@@ -425,6 +426,65 @@ class TestSnapshotRaces:
             assert identity.digest_covers == DIGEST_COVERS_NOTHING
             assert identity.complete is False
 
+    def test_an_aba_rewrite_that_restores_the_bytes_is_still_reported_unstable(
+            self, tmp_path, monkeypatch):
+        """CROSS_PLATFORM_INVARIANT — what the METADATA witness, and only it, sees.
+
+        M68D.2 added a byte-level witness because metadata cannot see a
+        same-size in-place rewrite. The reverse is also true, and it is why both
+        layers stay: an **ABA** rewrite — write B, then restore A — ends with
+        the descriptor's content byte-identical to what was captured, so
+        re-reading it agrees and the byte witness is blind. The filesystem
+        timestamp, however, has advanced, and that is the ONLY surviving trace
+        of the write.
+
+        So this is the test the `st_mtime_ns` comparison exists for, and the one
+        the published mutation `H02_single_fstat` (`after = before`) has to
+        fail. Neither witness subsumes the other; an observation is stable only
+        when both agree.
+
+        HONEST SCOPE: this detects ABA *because the mtime moved*. A platform
+        whose clock did not tick between the two writes would hide it from both
+        witnesses, which is exactly the residual M68D.2 §9 declines to claim
+        away — see `docs/v69_M68D2_CROSS_PLATFORM_SOURCE_INTEGRITY.md`.
+        """
+        target = tmp_path / "aba.txt"
+        v1 = b"AAAA-version-one-AAAA\n"
+        v2 = b"BBBB-human-wrote-this\n"
+        assert len(v1) == len(v2), "same-size rewrite"
+        target.write_bytes(v1)
+
+        monkeypatch.setattr(si, "_DIGEST_CHUNK", 8)
+        real_read = os.read
+        fired: list[int] = []
+        writer_errors: list[BaseException] = []
+
+        def racing_read(fd, size):
+            data = real_read(fd, size)
+            if not fired:
+                fired.append(1)
+                try:
+                    _in_place_rewrite(target, v2)   # A -> B
+                    _in_place_rewrite(target, v1)   # B -> A, bytes restored
+                except BaseException as exc:        # noqa: BLE001 - reported
+                    writer_errors.append(exc)
+            return data
+
+        monkeypatch.setattr(os, "read", racing_read)
+        with source_snapshot(target) as snap:
+            monkeypatch.setattr(os, "read", real_read)
+            assert fired, "NON-VACUITY: the ABA rewrite never fired"
+            assert not writer_errors, f"the adversary was refused: {writer_errors}"
+            # NON-VACUITY, the half that makes this test about metadata: the
+            # bytes really are back, so the byte witness really is blind here.
+            assert target.read_bytes() == v1, "the ABA did not restore A"
+            assert snap.payload() == v1, "the capture is not byte-identical to A"
+            assert snap.stable is False, \
+                "an ABA rewrite under the descriptor was reported as stable"
+            identity = identify_snapshot(snap)
+            assert identity.sha256 is None and identity.complete is False, \
+                "an ABA-raced observation still offered a write precondition"
+
     def test_a_short_read_is_not_reported_as_a_whole_observation(self, tmp_path,
                                                                    monkeypatch):
         """Failure injection: the read ends early and the stat still agrees.
@@ -449,6 +509,56 @@ class TestSnapshotRaces:
         with source_snapshot(target) as snap:
             monkeypatch.setattr(os, "read", real_read)
             assert snap.size_bytes == 16, "non-vacuity: the read was not short"
+            assert snap.stable is False, \
+                "a 16-byte observation of a 4096-byte file reported as whole"
+            identity = identify_snapshot(snap)
+            assert identity.sha256 is None
+            assert identity.complete is False
+
+    def test_a_CONSISTENTLY_short_read_is_not_a_whole_observation(self, tmp_path,
+                                                                   monkeypatch):
+        """Failure injection: the truncation is the SAME on every pass.
+
+        ADDED BY M68D.2, and the reason is mutation masking. The test above
+        injects a short read that returns nothing on its second call, so
+        M68D.2's byte-level witness re-reads ZERO bytes and rejects the
+        observation on the digest alone. That made
+        `H02_size_ignores_the_captured_length` — which deletes `== total` from
+        the stat comparison — survive: a second layer was answering, and the
+        layer the mutation targets was no longer load-bearing for any test.
+
+        A truncation that behaves IDENTICALLY on both passes separates them
+        exactly. Capture and verification then agree with each other — same
+        bytes, same length, same digest — and `st_size` is the ONLY witness
+        left that knows the file is 4096 bytes long. This is also a real
+        failure mode, not just a mutation target: a filesystem layer or an
+        interposed reader that consistently caps a read would otherwise have
+        its 16 bytes published as a complete observation of the file.
+        """
+        target = tmp_path / "consistently-short.txt"
+        target.write_bytes(b"X" * 4096)
+        real_read, real_lseek = os.read, os.lseek
+        cap = 16
+
+        def capped_read(fd, size):
+            """Truncate at *cap* bytes from the START of the file, every pass."""
+            where = real_lseek(fd, 0, os.SEEK_CUR)
+            if where >= cap:
+                return b""
+            return real_read(fd, min(size, cap - where))
+
+        monkeypatch.setattr(os, "read", capped_read)
+        with source_snapshot(target) as snap:
+            monkeypatch.setattr(os, "read", real_read)
+            # NON-VACUITY, and the half that makes this about `st_size`: both
+            # passes saw exactly the same 16 bytes, so every byte-level
+            # comparison AGREES and only the stat knows better.
+            assert snap.size_bytes == cap, "the read was not capped"
+            assert snap.payload() == b"X" * cap
+            assert snap.sha256 == hashlib.sha256(b"X" * cap).hexdigest(), \
+                "the digest does not describe the capture, so the byte " \
+                "witness would have rejected this on its own"
+            assert os.stat(target).st_size == 4096, "the file is not 4096 bytes"
             assert snap.stable is False, \
                 "a 16-byte observation of a 4096-byte file reported as whole"
             identity = identify_snapshot(snap)

@@ -57,9 +57,6 @@ import ast
 import hashlib
 import io
 import os
-import re
-import subprocess
-import sys
 import tokenize
 from pathlib import Path
 
@@ -74,6 +71,11 @@ from core.source_integrity import (
     digest_bytes,
     identify_snapshot,
     source_snapshot,
+)
+from _test_support.suite_census import (
+    census,
+    ratio_is_satisfiable,
+    skip_budget,
 )
 from _test_support.platform_capabilities import (
     AVAILABLE_UNDER_OPEN_FD,
@@ -100,6 +102,8 @@ WINDOWS_SUITES = (
     "tests/test_trust_boundary_m68d_h02_source_identity.py",
     "tests/test_trust_boundary_m68d_h05_portability.py",
     "tests/test_windows_portability_closure_m68d1.py",
+    # M68D.2: binary-exact source reads and byte-level race truth.
+    "tests/test_cross_platform_source_integrity_m68d2.py",
 )
 
 #: Suites whose fixtures ARE the byte contract. No newline-translating write
@@ -107,6 +111,9 @@ WINDOWS_SUITES = (
 BYTE_IDENTITY_SUITES = (
     "tests/test_source_integrity_m68c.py",
     "tests/test_trust_boundary_m68d_h02_source_identity.py",
+    # M68D.2 simulates text translation on the READ side; every write in it is
+    # byte-explicit, so the ban applies here in full.
+    "tests/test_cross_platform_source_integrity_m68d2.py",
 )
 
 #: Suites that must contain a translating write, because proving the repair
@@ -156,10 +163,19 @@ def _code(path: Path, *, strings: bool = True) -> str:
     return " ".join(out)
 
 
+#: Suites that SCAN for the very tokens they forbid, and so must be viewed
+#: without string literals or they match their own search patterns. Generalised
+#: by M68D.2, which added a second such detector; before that this was a single
+#: comparison against this module's own name.
+SELF_SCANNING_SUITES = frozenset({
+    "tests/test_windows_portability_closure_m68d1.py",
+    "tests/test_cross_platform_source_integrity_m68d2.py",
+})
+
+
 def _self_scan(rel: str) -> str:
     """The view a detector must use for a file that may be its own."""
-    return _code(_JARVIS_ROOT / rel,
-                 strings=rel != Path(__file__).relative_to(_JARVIS_ROOT).as_posix())
+    return _code(_JARVIS_ROOT / rel, strings=rel not in SELF_SCANNING_SUITES)
 
 
 def _code_of(source: str) -> str:
@@ -228,21 +244,38 @@ class TestTheCapabilityProbeIsHonest:
             assert inferred not in code, \
                 f"the probe infers a capability from {inferred}"
 
+    #: What production's source open renders to, and what the probe must match.
+    #: UPDATED BY M68D.2 §5: both now request `O_BINARY` where the platform has
+    #: one. The pinning is unchanged in intent — the probe must open the
+    #: descriptor production opens — and binary mode does not alter the SHARE
+    #: MODE these capabilities measure, so every M68D.1 measurement still holds.
+    PRODUCTION_SOURCE_OPEN = "os . open ( str ( resolved ) , _source_open_flags ( ) )"
+    PROBE_SOURCE_OPEN = \
+        'os . open ( held , os . O_RDONLY | getattr ( os , "O_BINARY" , 0 ) )'
+
     def test_the_probe_opens_the_path_exactly_as_production_does(self):
         """M68D.1 §8: the test environment must model production.
 
-        `source_snapshot` uses `os.open(path, os.O_RDONLY)` — plain CPython,
-        no sharing mode of its own. A probe that requested
-        `FILE_SHARE_DELETE` would measure a handle production never opens and
-        would let the POSIX attack shape run on Windows against nothing real.
+        `source_snapshot` uses `os.open(path, _source_open_flags())` — plain
+        CPython, read-only plus `O_BINARY` where there is a text mode, and no
+        sharing mode of its own. A probe that requested `FILE_SHARE_DELETE`
+        would measure a handle production never opens and would let the POSIX
+        attack shape run on Windows against nothing real.
         """
         probe = _code(_JARVIS_ROOT / "tests" / "_test_support"
                       / "platform_capabilities.py")
-        assert "os . open ( held , os . O_RDONLY )" in probe, \
+        assert self.PROBE_SOURCE_OPEN in probe, \
             "the probe no longer holds the descriptor production holds"
         production = _code(_JARVIS_ROOT / "core" / "source_integrity.py")
-        assert "os . open ( str ( resolved ) , os . O_RDONLY )" in production, \
+        assert self.PRODUCTION_SOURCE_OPEN in production, \
             "production stopped opening the source read-only with os.open"
+        # M68D.2: and the two really do agree about the FLAGS, not just about
+        # using `os.open` — the half that would otherwise drift silently.
+        assert "getattr ( os , \"O_BINARY\" , 0 )" in probe, \
+            "the probe stopped asking for binary mode, so on Windows it would "\
+            "measure a translating descriptor production no longer opens"
+        assert "_O_BINARY_FLAG" in production, \
+            "production stopped deriving its flags from the platform"
         for exotic in ("FILE_SHARE_DELETE", "msvcrt", "win32file", "ctypes",
                        "devnull"):
             assert exotic not in probe, \
@@ -253,7 +286,7 @@ class TestTheCapabilityProbeIsHonest:
         # every capability would be measured against a handle that is not the
         # source. Holding the descriptor WHILE staging is a property of the
         # text BETWEEN the two statements, so that is what is pinned.
-        marker = "os . open ( held , os . O_RDONLY )"
+        marker = self.PROBE_SOURCE_OPEN
         held_open = probe.index(marker)
         first_attempt = probe.index("os . replace ( other , held )")
         assert held_open < first_attempt, "the probe stages before it opens"
@@ -745,24 +778,9 @@ class TestByteIdentityIsExplicit:
 
 # ══ 4 · NO SKIP-WASHING ═════════════════════════════════════════════════════
 
-def _collect(target: str) -> "tuple[int, int, str]":
-    """Run one suite in a FRESH interpreter; return (passed, skipped, summary).
-
-    A fresh process because the capability probe runs at import time and the
-    counts have to be the ones a real runner would see, not ones this session
-    has already imported.
-    """
-    done = subprocess.run(  # nosec B603 - fixed argv, shell=False
-        [sys.executable, "-m", "pytest", "-q", "--tb=no",
-         "-p", "no:cacheprovider", target],
-        cwd=str(_JARVIS_ROOT), capture_output=True, text=True, check=False)
-    lines = (done.stdout or "").strip().splitlines()
-    summary = lines[-1] if lines else "<no output>"
-    passed = re.search(r"(\d+) passed", summary)
-    skipped = re.search(r"(\d+) skipped", summary)
-    return (int(passed.group(1)) if passed else 0,
-            int(skipped.group(1)) if skipped else 0,
-            summary)
+# M68D.2 §15: the local two-number collector was replaced by
+# `_test_support.suite_census`, which also reports FAILURES, the COLLECTION and
+# the skip REASONS. The contract below needed all four.
 
 
 class TestNoSkipWashing:
@@ -778,6 +796,11 @@ class TestNoSkipWashing:
         "tests/test_source_integrity_m68c.py": 3,
         "tests/test_trust_boundary_m68d_h05_portability.py": 1,
         "tests/test_windows_portability_closure_m68d1.py": 0,
+        # M68D.2 adds NO gate. Where a mechanism may be refused it stages the
+        # attempt and asserts the correct invariant in BOTH branches, so the
+        # declared budget below is unchanged and M68D.1's recorded trade still
+        # reads the way it was measured.
+        "tests/test_cross_platform_source_integrity_m68d2.py": 0,
     }
 
     #: Of those, the ones M68D.1 ADDED. M68C's three predate this milestone —
@@ -895,13 +918,59 @@ class TestNoSkipWashing:
             f"{rel} no longer contains {token}; drop the exemption"
 
     def test_most_of_the_h02_suite_still_runs_here(self):
-        """The invariants must RUN, not be declared portable."""
+        """The invariants must RUN, not be declared portable.
+
+        REWRITTEN BY M68D.2 §14–§15. This asserted ``passed >= 8 * skipped``,
+        which the real Windows runner of CI run 37994281455 could not satisfy
+        with ANY result: the H02 matrix is collected DYNAMICALLY from measured
+        capabilities, so Windows collected 55 cases where this host collects
+        60, and 9 of the 55 were the expected capability skips. The assertion
+        then demanded 72 passes out of 55 collected cases — unreachable even
+        with zero failures, which is how it was reported (41 passed).
+
+        The security standard did not move; the CONTRACT did. The skip budget
+        is now stated against the collection the runner actually produced, so
+        it is satisfiable at every collection size, and what the old form was
+        really reaching for — no failure may quietly become a skip — is now
+        asserted DIRECTLY as ``failed == 0`` plus a closed accounting of every
+        collected case.
+        """
         rel = "tests/test_trust_boundary_m68d_h02_source_identity.py"
-        passed, skipped, summary = _collect(rel)
-        assert passed > 0, f"nothing ran: {summary}"
-        assert passed >= 8 * skipped, (
-            f"{passed} passed against {skipped} skipped — too much of the "
-            f"suite is behind a capability gate: {summary}")
+        result = census(rel)
+        assert result.collected > 0, f"nothing was collected: {result.summary}"
+        assert result.passed > 0, f"nothing ran: {result.summary}"
+        assert result.failed == 0 and result.errors == 0, (
+            f"a failure must never be read as a skip: {result.summary}")
+        assert result.passed + result.skipped == result.collected, (
+            "the outcomes do not account for every collected case: "
+            f"{result.summary}")
+        budget = skip_budget(result.collected)
+        assert result.skipped <= budget, (
+            f"{result.skipped} of {result.collected} collected cases are "
+            f"behind a capability gate; the budget is {budget}: "
+            f"{result.summary}")
+        assert budget < result.collected, \
+            "a budget equal to the collection would permit skipping everything"
+
+    def test_the_old_skip_ratio_is_rejected_as_unsatisfiable(self):
+        """M68D.2 §15 — the non-vacuity proof for the contract above.
+
+        The replacement would be worth nothing if the arithmetic it replaced
+        had merely been unlucky. At the collection the Windows runner actually
+        measured, NO outcome satisfies ``passed >= 8 * skipped``, while the new
+        budget accommodates that same measurement.
+        """
+        collected, skipped = 55, 9          # measured, CI run 37994281455
+        assert not ratio_is_satisfiable(collected, 8, skipped), \
+            "the old arithmetic was satisfiable after all"
+        assert skip_budget(collected) >= skipped, \
+            "the replacement budget cannot accommodate the measured skips"
+        # It is not that every multiple is impossible — it is that THIS one was.
+        assert ratio_is_satisfiable(collected, 2, skipped)
+        # And the budget is satisfiable at EVERY collection size, which is the
+        # property a fixed multiple of the skip count cannot have.
+        for size in (0, 1, 2, 5, 13, 55, 60, 500):
+            assert 0 <= skip_budget(size) <= size or size == 0
 
     def test_the_closure_suite_has_no_platform_capability_gate(self):
         """Every test here is cross-platform by construction.

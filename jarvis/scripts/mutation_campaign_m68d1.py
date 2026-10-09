@@ -147,13 +147,24 @@ MUTATIONS += [
 ]
 
 # ══ B · THE CAPABILITY PROBE ════════════════════════════════════════════════
+#
+# M68D.2 COMPATIBILITY REPAIR (M68D.2 §23). The probe's own `os.open` now asks
+# for `O_BINARY` too, because it must keep opening the descriptor production
+# opens (M68D.2 §5) — so the TWO mutations below that quote that line were
+# RE-TARGETED to its new text, in the four places they quote it (each one's
+# `find` and the head of its `replace`). Nothing else changed: same mutations,
+# same mapped tests, same intended detection property. The `os.devnull` line in
+# `B_probe_does_not_hold_the_descriptor`'s replacement is synthetic and stayed
+# exactly as M68D.1 published it. The sharing semantics these
+# capabilities measure are a property of the share mode CPython requests, which
+# binary mode does not alter, so the measurements are unaffected.
 MUTATIONS += [
     # The probe INFERS instead of measuring — the single thing §13 forbids.
     _mut("B_probe_infers_from_the_platform_name", "B_PROBE", CAP,
-         "        fd = os.open(held, os.O_RDONLY)",
+         "        fd = os.open(held, os.O_RDONLY | getattr(os, \"O_BINARY\", 0))",
          "        if sys.platform == \"win32\":\n"
          "            return\n"
-         "        fd = os.open(held, os.O_RDONLY)", C_PROBE),
+         "        fd = os.open(held, os.O_RDONLY | getattr(os, \"O_BINARY\", 0))", C_PROBE),
     # An unmeasured capability defaults to AVAILABLE, so a POSIX-only fixture
     # runs on a platform that cannot stage it and fails for the wrong reason.
     _mut("B_unmeasured_capability_defaults_to_true", "B_PROBE", CAP,
@@ -170,9 +181,9 @@ MUTATIONS += [
     # The probe stops holding the descriptor production holds, so it measures
     # a question nobody asked.
     _mut("B_probe_does_not_hold_the_descriptor", "B_PROBE", CAP,
-         "        fd = os.open(held, os.O_RDONLY)\n"
+         "        fd = os.open(held, os.O_RDONLY | getattr(os, \"O_BINARY\", 0))\n"
          "        try:",
-         "        fd = os.open(held, os.O_RDONLY)\n"
+         "        fd = os.open(held, os.O_RDONLY | getattr(os, \"O_BINARY\", 0))\n"
          "        os.close(fd)\n"
          "        fd = os.open(os.devnull, os.O_RDONLY)\n"
          "        try:", C_PROBE),
@@ -289,10 +300,16 @@ MUTATIONS += [
 ]
 
 # ══ E · THE WINDOWS CI JOB ══════════════════════════════════════════════════
+#
+# M68D.2 COMPATIBILITY REPAIR (M68D.2 §23). The M68D.2 suite was appended to
+# the Windows job's pytest invocation, so the closure suite is no longer the
+# LAST continued line and now carries a trailing backtick. The anchor below was
+# RE-TARGETED to match, exactly as `E_h02_suite_removed_from_ci` already did.
+# Same mutation, same mapped test, same intended detection property.
 MUTATIONS += [
     # The closure suite is removed from the Windows runner.
     _mut("E_closure_suite_removed_from_ci", "E_CI", WORKFLOW,
-         "            jarvis/tests/test_windows_portability_closure_m68d1.py\n",
+         "            jarvis/tests/test_windows_portability_closure_m68d1.py `\n",
          "", C_CI),
     # The H02 suite is removed from the Windows runner.
     _mut("E_h02_suite_removed_from_ci", "E_CI", WORKFLOW,

@@ -468,7 +468,8 @@ jobs:
             jarvis/tests/test_source_integrity_m68c.py `
             jarvis/tests/test_trust_boundary_m68d_h02_source_identity.py `
             jarvis/tests/test_trust_boundary_m68d_h05_portability.py `
-            jarvis/tests/test_windows_portability_closure_m68d1.py
+            jarvis/tests/test_windows_portability_closure_m68d1.py `
+            jarvis/tests/test_cross_platform_source_integrity_m68d2.py
       # V69 M68D.1. `check_package_manifest.py` takes `--dist` as a REQUIRED
       # argument and exits 2 without it, so this step could never have
       # succeeded — the real runner simply never reached it, because the suite
