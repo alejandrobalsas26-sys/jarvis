@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0069-m68d1-win-closure.json",
-  "latest_snapshot_sha256": "1016673795acceb831f295733e557ecc93b4d6e9dc05cf9a4ecace63e841414e",
+  "latest_snapshot_path": "state/m62/snapshots/0070-m68d2-src-integrity.json",
+  "latest_snapshot_sha256": "639175474197eb4cfd7d64a512a647ba77c88bf66b1bdbcb2a942533c74eed40",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 69,
-  "subject_state_commit": "6ad1efee0cf7322bab80b9dddafce53a054e97df",
+  "state_generation": 70,
+  "subject_state_commit": "fdde65363034bf5953e2cebd9941870244cb44ca",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
