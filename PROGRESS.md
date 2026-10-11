@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **70** |
+| **Control plane** | **V4** · schema `m62.control_plane.4` · state generation **71** |
 | **Current state (machine-readable)** | `state/m62/current.json` |
-| **Latest snapshot** | `state/m62/snapshots/0070-m68d2-src-integrity.json` |
-| **Snapshot SHA256** | `639175474197eb4cfd7d64a512a647ba77c88bf66b1bdbcb2a942533c74eed40` |
-| **Subject state commit** | `fdde65363034bf5953e2cebd9941870244cb44ca` (M68D.2 source integrity; eval-v7 spent once, 005 not eligible, 004 held) |
+| **Latest snapshot** | `state/m62/snapshots/0071-m68d3-native-win-sim.json` |
+| **Snapshot SHA256** | `77ca2c85bd7a5af1792b124603aec07d45893be2ac8131c8ea13b7df6b0623f3` |
+| **Subject state commit** | `f20e9e564f7979fb2feb185ef605014c2b2a0037` (M68D.3 Windows simulator; eval-v7 spent once, 005 not eligible, 004 held) |
 | **Integration authority** | base → `refs/heads/master`, **FAST_FORWARD_ONLY**. The observation is DERIVED per run, never recorded here. Gen 34's base `3705114228edef2f665be349c5c4429b7b16777a` and every base since (gens 37, 39, 58, 62, 64, 67) are integrated; the chain carries each one |
 | **Governed checker** | `jarvis/scripts/verify_m62_control_plane.py` sealed at `84217f617d89988c02a8a6a8d1613dc96d501cbef6961087d19c28b137b9d94e` (M68D). Changing it needs a **successor generation**, never a trailing commit |
 | **Receipts & records** | `state/m62/receipts/` (portable proof) · `state/m62/records/` (content-addressed immutable blocks) |
@@ -69,8 +69,8 @@ name the commit that carries it (§2).
 | Last state-bearing milestone | **S4E** — one paired attempt on `eval-v7` under ONE human `EVAL` authority (plan `54488fb3…`): 36+36 generations, ONE spend, `completed` |
 | Last state-bearing M62 | **S4H** — gen 28 `def4b272…`. **FUTURE instruments only** (D45–D48, §7): 005 **not rescored**, `eval-v7` **not reopened**, **0** spends |
 | Earlier milestones | **M65A · M65B · M65C · S5E · S5F — RUNTIME/REPOSITORY, no science** (gens 29–33). **Universal exactly-once NOT claimed**: 23/24 tools `NON_REPLAYABLE`. **0** spends. `…ROWS_THROUGH_S5F.md` |
-| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B · M68C · M67A.1 · M68D · M68D.1 — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION, RUNTIME, LIFECYCLE, PATCH, TRUST BOUNDARIES, PORTABILITY; no science.** Gens 34–69. Every defect is carried in full by §7 (D49–D95) and every claim by its own document: `…S5G_…md` … `…M68D1_…md`. **0** spends |
-| Last milestone | **M68D.2 — CROSS-PLATFORM SOURCE INTEGRITY, no science.** Gen 70. Exact-SHA CI **37994281455** gave **6** Windows failures and **TWO were PRODUCTION defects**: `os.open` without `O_BINARY` gave a TEXT-mode descriptor, so CRLF collapsed and Ctrl-Z cut a 10240-byte read to **26**; and a metadata-only witness published a **torn** payload as `stable` with a write precondition. Reads are now BINARY and stability is witnessed at the **BYTE** level, with metadata kept for ABA. **NOT** a transactional snapshot. The no-skip-washing assert demanded **72** passes from **55** cases; the budget is now bounded by the collection. **36/37** muts. `WINDOWS_REAL_CI=PENDING`. `…M68D2_…md` |
+| Earlier milestones | **S5G · S5G.1 · M65D · M66A · M66B · M67A · M68A · M68B · M68C · M67A.1 · M68D · M68D.1 · M68D.2 — CONTROL PLANE, EFFECTS, CONTAINMENT, DISTILLATION, RUNTIME, LIFECYCLE, PATCH, TRUST BOUNDARIES, PORTABILITY, SOURCE INTEGRITY; no science.** Gens 34–70. Every defect is carried in full by §7 (D49–D95) and every claim by its own document: `…S5G_…md` … `…M68D2_…md`. **0** spends |
+| Last milestone | **M68D.3 — NATIVE-AWARE WINDOWS SIMULATOR CLOSURE, no science.** Gen 71. Exact-SHA CI **38007992655** on `a0c6f08` gave **20** Windows failures and **ALL 20 were the TEST HARNESS**, disjoint from M68D.2's six: the simulator stripped `O_BINARY`, so a native CRT gave it a TEXT descriptor and a correct 10240-byte production read was observed as **26**. The rule is now *simulate only what the host does not already provide*, and the branch is chosen by **MEASURED** capability, fail-closed on an unmeasured host. Four proofs; **A/B are EMULATED** until real Windows. **65/65** muts in two campaigns, 0 survivors — M68D.2's lone survivor is DETECTED and its explanation was WRONG. Production **byte-identical**. `WINDOWS_REAL_CI=PENDING`. `…M68D3_…md` |
 | Phase | **MEASURED, NOT ELIGIBLE, NO EXAM LEFT.** 001–003 and **005** `EVALUATED_NOT_ELIGIBLE`; **004 stays `EVALUATED_ELIGIBLE_FOR_HUMAN_REVIEW` under HOLD, not promoted**; `eval-v4/v6/v7` `USED_IMMUTABLE`; `eval-v5` frozen, retired |
 | Live training since S3N | **three runs** — candidates 003–005, 40/40 optimizer steps each, all `TRAIN` capabilities spent. **No retry is authorised** |
 | Live evaluation since S3N | **three runs** — S3Q (003×`v4`), S3Y (004×`v6`), S4E (005 vs 004×`v7`, Protocol V4). One plan, one holdout commit, one terminal event each; all `USED_IMMUTABLE`, **no rerun possible** |
@@ -415,7 +415,7 @@ that none exists elsewhere. TRAIN, EVAL, promotion, registry mutation and releas
 ```
 CI-authoritative  python -m pytest -q --tb=short jarvis/tests tests    [ci.yml, BLOCKING]
 run from          repository ROOT · CPython 3.11.16 · pytest 8.4.2 (constraints-ci)
-result            13208 passed · 50 skipped · 0 failed    [M68D.2, measured]
+result            13246 passed · 50 skipped · 0 failed    [M68D.3, measured]
 scientific        verify_m62_scientific_suite.py --print-invocation -> pytest <54 modules>
 run from          jarvis/ (repository system interpreter)
 result            3179 passed · 2 skipped · 0 failed        [M68C, re-measured]
