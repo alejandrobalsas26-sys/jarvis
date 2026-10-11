@@ -24,14 +24,37 @@ GROUP B — the stability witness was metadata-only.
 
 HOW THE WINDOWS PATH IS TESTED FROM A POSIX HOST
 ================================================
-Group A cannot be reproduced natively: Linux has no text mode. So the C runtime
-is SIMULATED — and the simulation is driven by exactly ONE injected attribute,
-``os.O_BINARY``, from which production derives its own flags through
-``source_integrity._source_open_flags()``. Nothing here re-implements that
-derivation, so a passing result is a statement about production rather than
-about this harness. :class:`TestTheSimulatorIsFaithful` proves the simulator
-corrupts an unrepaired read, which is what makes the repaired result mean
-anything.
+Group A cannot be reproduced natively on a host with no text mode. So the C
+runtime is SIMULATED there — and the simulation is driven by exactly ONE
+injected attribute, ``os.O_BINARY``, from which production derives its own
+flags through ``source_integrity._source_open_flags()``. Nothing here
+re-implements that derivation, so a passing result is a statement about
+production rather than about this harness.
+:class:`TestTheTextRuntimeReallyTranslates` proves an unrepaired read IS
+corrupted, which is what makes the repaired result mean anything.
+
+M68D.3 — SIMULATE ONLY WHAT THE HOST DOES NOT ALREADY PROVIDE
+=============================================================
+The first version of that simulator was unconditional, and the real Windows
+runner of CI run **38007992655** on candidate ``a0c6f08`` returned
+376 passed / 20 failed / 17 skipped — **all 20 inside
+:class:`TestBinaryByteIdentity`, and not one of them a production defect.**
+The shim re-opened every descriptor with ``flags & ~O_BINARY`` and delegated to
+the real ``os.open``. On a host with no text mode that is bookkeeping. On
+Windows it handed the native CRT a TEXT-mode descriptor: the CRT collapsed
+CRLF and stopped at the first Ctrl-Z, and a production read that had correctly
+asked for binary mode observed **26 of 10240 bytes**. The simulator corrupted
+the very property it was written to defend.
+
+So the branch is now chosen by MEASUREMENT — see
+:func:`measure_native_text_runtime`, which probes a disposable fixture through
+the host's own low-level descriptors and never consults a platform name. On a
+host that translates, ``binary_available=True`` is a **no-op** and the host
+supplies both behaviours; on one that does not, the shim supplies them. Four
+proofs, two per host kind, each with a non-vacuity assertion, and
+:class:`TestTheRuntimeIsNotDoubleSimulated` RUNS the defective shim on an
+emulated translating host and shows it reproducing the real runner's 26-byte
+observation and its ``b858da80d8a5…`` digest.
 
 Group B needs no simulation. The Windows condition — a same-size rewrite whose
 mtime does not visibly advance — is staged deterministically on any platform by
@@ -62,6 +85,9 @@ import contextlib
 import hashlib
 import io
 import os
+import shutil
+import sys
+import tempfile
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,9 +122,10 @@ from _test_support.suite_census import (
 _JARVIS_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _JARVIS_ROOT.parent
 
-#: The real Windows value of ``_O_BINARY``. Used ONLY to simulate the platform
-#: that has one; production reads it off ``os`` and never sees this constant.
-WIN_O_BINARY = 0x8000
+#: Captured at import, BEFORE any test, any fixture or any probe can patch
+#: them. Every measurement below goes through THESE, so a shim installed by an
+#: earlier test can never become the thing a capability probe measures.
+_REAL_OPEN, _REAL_READ, _REAL_CLOSE = os.open, os.read, os.close
 
 #: Byte fixtures the snapshot must reproduce EXACTLY. Each one targets a
 #: specific way a text-mode descriptor loses or invents bytes.
@@ -130,59 +157,437 @@ BYTE_FIXTURES: "dict[str, bytes]" = {
 }
 
 
+#: The union of every ``O_*`` flag bit this host publishes. Measured, because
+#: the synthetic binary-mode bit injected below is passed to the host's own
+#: ``open`` by production and must not ALIAS a flag the host acts on (§10).
+_HOST_FLAG_BITS = 0
+for _name, _value in vars(os).items():
+    if _name.startswith("O_") and isinstance(_value, int):
+        _HOST_FLAG_BITS |= _value
+
+
+def _free_flag_bit(start: int = 0x8000) -> int:
+    """The lowest bit at or above *start* that this host uses for no ``O_*``."""
+    bit = start
+    while bit & _HOST_FLAG_BITS:
+        bit <<= 1
+    return bit
+
+
+#: The value injected as ``os.O_BINARY`` where the host publishes none. On
+#: Windows ``_O_BINARY`` really is ``0x8000``; on a host that already spends
+#: that bit the probe moves up rather than aliasing it.
+SIMULATED_O_BINARY = _free_flag_bit()
+
+#: The binary-mode bit IN FORCE for this run: the host's real ``O_BINARY``
+#: where there is one, and the synthetic stand-in where there is not. Tests
+#: inspect production's derived flags against THIS, so the flag assertions
+#: mean the same thing on both kinds of host.
+WIN_O_BINARY = getattr(os, "O_BINARY", SIMULATED_O_BINARY)
+
+#: The disposable fixture the capability probe measures with: one CRLF to
+#: collapse and one Ctrl-Z to stop at — the two behaviours M68D.2 measured on
+#: the real runner of CI 37994281455.
+NATIVE_PROBE_BYTES = b"A\r\nB\r\n\x1aC"
+
+#: Probe verdicts. ``BYTE_EXACT`` and ``NATIVE_TEXT`` are measurements;
+#: anything beginning ``FAILED`` is the fail-closed answer and is never
+#: resolved into either of the other two (§8).
+BYTE_EXACT = "BYTE_EXACT"
+NATIVE_TEXT = "NATIVE_TEXT"
+
+
+@dataclass(frozen=True)
+class NativeTextRuntime:
+    """What the HOST's own low-level descriptors were measured to do.
+
+    Produced by :func:`measure_native_text_runtime`, never by a platform name:
+    ``os.name``, ``sys.platform`` and ``platform.system()`` are labels, and
+    `TestTheGovernanceControlsThemselvesAreIntact` proves this file contains
+    none of them. The question that matters is behavioural — *does an unflagged
+    descriptor on this host return the bytes that are on the disk?* — and a
+    label cannot answer it for a future runtime, an emulator, or a mount.
+    """
+
+    #: ``BYTE_EXACT``, ``NATIVE_TEXT``, or ``FAILED: <reason>``.
+    outcome: str
+    #: What the unflagged descriptor actually returned.
+    unflagged: "bytes | None" = None
+    #: What the explicitly-binary descriptor returned, where one was asked for.
+    binary: "bytes | None" = None
+
+    @property
+    def translates(self) -> bool:
+        """The host itself collapses CRLF / stops at Ctrl-Z. MEASURED."""
+        return self.outcome == NATIVE_TEXT
+
+    @property
+    def measured(self) -> bool:
+        return self.outcome in (BYTE_EXACT, NATIVE_TEXT)
+
+
+def _read_whole(path: Path, flags: int) -> bytes:
+    """Everything *path* yields through the host's REAL ``os.open``/``os.read``.
+
+    Deliberately low level and deliberately unshimmed: this is the only thing
+    in the file that is allowed to answer "what does this host do", so it must
+    not be able to measure a simulator.
+    """
+    fd = _REAL_OPEN(str(path), flags)
+    try:
+        out: "list[bytes]" = []
+        while True:
+            chunk = _REAL_READ(fd, 4096)
+            if not chunk:
+                break
+            out.append(chunk)
+        return b"".join(out)
+    finally:
+        os.close(fd)
+
+
+def measure_native_text_runtime() -> NativeTextRuntime:
+    """Measure, right now, whether unflagged descriptors here translate (§8).
+
+    A function and not a frozen constant, so the measurement can be re-taken
+    against an emulated host — which is what proves it IS a measurement rather
+    than a value that happens to be right on two platforms
+    (:meth:`TestTheRuntimeIsNotDoubleSimulated.test_the_probe_is_a_measurement_and_not_a_constant`).
+
+    FAIL-CLOSED. A probe that cannot complete yields ``FAILED: ...``, which is
+    neither "native" nor "byte-exact": :func:`windows_text_runtime` refuses to
+    run at all on one, so an unmeasured host can never produce a pass. The
+    optimistic reading — "no exception, assume POSIX" — is exactly how the
+    M68D.2 shim came to strip ``O_BINARY`` on a host that has one.
+    """
+    root = tempfile.mkdtemp(prefix="m68d3-crt-")
+    try:
+        target = Path(root) / "probe.bin"
+        target.write_bytes(NATIVE_PROBE_BYTES)
+        if target.read_bytes() != NATIVE_PROBE_BYTES:
+            return NativeTextRuntime(
+                "FAILED: the probe fixture itself could not be written "
+                "byte-exactly, so nothing measured through it would mean "
+                "anything")
+        unflagged = _read_whole(target, os.O_RDONLY)
+        if unflagged == NATIVE_PROBE_BYTES:
+            return NativeTextRuntime(BYTE_EXACT, unflagged=unflagged)
+        # Translation observed. The host must then ALSO offer the explicit
+        # binary descriptor production depends on, and that descriptor must be
+        # exact — otherwise this is some third runtime M68D.2 never repaired
+        # and no amount of simulation would make the result honest.
+        bit = getattr(os, "O_BINARY", None)
+        if bit is None:
+            return NativeTextRuntime(
+                "FAILED: unflagged reads translate but the host publishes no "
+                "O_BINARY, so production has no binary mode to ask for",
+                unflagged=unflagged)
+        binary = _read_whole(target, os.O_RDONLY | bit)
+        if binary != NATIVE_PROBE_BYTES:
+            return NativeTextRuntime(
+                "FAILED: the explicitly-binary descriptor is not byte-exact "
+                f"either ({len(binary)} of {len(NATIVE_PROBE_BYTES)} bytes)",
+                unflagged=unflagged, binary=binary)
+        return NativeTextRuntime(NATIVE_TEXT, unflagged=unflagged,
+                                 binary=binary)
+    except OSError as exc:
+        # EXPLICIT (§8). Not a quiet `except Exception: pass` that would hand
+        # back an optimistic default.
+        return NativeTextRuntime(
+            f"FAILED: {type(exc).__name__} errno={getattr(exc, 'errno', None)}"
+            f" winerror={getattr(exc, 'winerror', None)}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+#: The host this run is on, measured once at import in its own temporary
+#: directory, before any fixture exists and before anything can be patched.
+NATIVE = measure_native_text_runtime()
+
+#: The §27 report line. A bool derived from the measurement, never from a name.
+NATIVE_TEXT_TRANSLATION_OBSERVED = NATIVE.translates
+
+
+@dataclass
+class TextRuntime:
+    """What :func:`windows_text_runtime` ACTUALLY did. The non-vacuity record.
+
+    §11 — "a test that does not actually exercise its selected branch does not
+    count". A runtime that silently became a no-op on the wrong host is the
+    M68D.2 defect seen from the other side, so every test below asserts which
+    branch it got before it asserts anything about production.
+    """
+
+    #: The host's own C runtime supplied the text behaviour. Nothing patched.
+    native: bool
+    #: A shim supplied it, because the host has no text mode to borrow.
+    synthetic: bool
+    #: Whether ``os.O_BINARY`` was in force inside the block.
+    binary_available: bool
+    #: Descriptors the shim opened. Zero in native mode, by construction.
+    opens: int = 0
+    #: How many of those were translating descriptors.
+    text_descriptors: int = 0
+    #: Shim reads that CHANGED the bytes. The proof a simulation did work.
+    translations: int = 0
+
+    def assert_the_branch_is_live(self) -> None:
+        """NON-VACUITY: the branch this test selected really is the one running."""
+        assert self.native != self.synthetic, \
+            "the runtime is neither native nor synthetic, or claims to be both"
+        if self.native:
+            assert NATIVE.translates, \
+                "the native branch ran on a host measured as byte-exact"
+            assert self.opens == 0 and self.translations == 0, \
+                "the native branch installed a shim, which is double simulation"
+            assert os.open is _REAL_OPEN and os.read is _REAL_READ, \
+                "the native branch patched the os module"
+        else:
+            assert not NATIVE.translates, \
+                "the synthetic branch ran on a host with its own text mode"
+            assert os.open is not _REAL_OPEN, "the shim is not installed"
+            assert os.read is not _REAL_READ, "the shim is not installed"
+        if self.binary_available:
+            assert getattr(os, "O_BINARY", None) == WIN_O_BINARY, \
+                "binary mode was requested but no O_BINARY is in force"
+        else:
+            assert not hasattr(os, "O_BINARY"), \
+                "the no-binary-mode branch left os.O_BINARY in place"
+        # Either way, production must be deriving its flags from what is in
+        # force — never from a copy of the derivation kept in this file.
+        expected = os.O_RDONLY | (WIN_O_BINARY if self.binary_available else 0)
+        assert si._source_open_flags() == expected, \
+            "production is not deriving its flags from the runtime in force"
+
+    def assert_a_translation_happened(self) -> None:
+        """NON-VACUITY for a NEGATIVE control: something really was corrupted."""
+        if self.synthetic:
+            assert self.translations >= 1, \
+                "the shim never changed a byte, so it proves nothing"
+            assert self.text_descriptors >= 1, \
+                "the shim never opened a translating descriptor"
+
+
 @contextlib.contextmanager
 def windows_text_runtime(*, binary_available: bool):
-    """Simulate the Windows C runtime's TEXT-mode descriptors.
+    """The Windows C runtime's TEXT-mode descriptors — natively or simulated.
 
-    A descriptor opened WITHOUT ``_O_BINARY`` translates ``\\r\\n`` to ``\\n`` on
-    read and treats Ctrl-Z as end-of-file — the two behaviours measured on the
-    real runner. Everything else is left alone.
+    THE CENTRAL RULE (§7): **simulate only what the host does not already
+    provide.** CI run 38007992655 is what happens when that rule is broken.
+    The M68D.2 shim unconditionally re-opened every descriptor with
+    ``flags & ~O_BINARY`` and delegated to the real ``os.open``. On Linux that
+    is harmless bookkeeping. On the real Windows runner it opened an ACTUAL
+    text-mode descriptor, the native CRT collapsed CRLF and stopped at Ctrl-Z,
+    and a correct 10240-byte binary production read was observed as **26
+    bytes** — the simulator corrupting the very property it was written to
+    defend. 20 tests in :class:`TestBinaryByteIdentity` failed for that one
+    reason, and none of them was a production defect.
 
-    ``binary_available`` is the whole experiment. ``True`` gives ``os`` the
-    attribute a Windows CPython has, so production's own
-    ``_source_open_flags()`` asks for binary mode and the translation never
-    applies to it. ``False`` removes the attribute, which is both the POSIX
-    reality and the exact shape of the regression this suite guards: production
-    then opens a translating descriptor, and the simulator corrupts it.
+    So the branch is chosen by MEASUREMENT (:data:`NATIVE`):
+
+    NATIVE host (its descriptors translate on their own)
+        ``binary_available=True`` is a **no-op**. Production's own
+        ``_source_open_flags()`` reads the real ``os.O_BINARY`` and asks for
+        binary mode; the host honours it; nothing here is allowed to
+        intervene. ``binary_available=False`` removes the attribute so
+        production derives a text-mode flag set and the **real** CRT does the
+        corrupting. No synthetic transform in either case, so nothing is
+        modelled twice.
+
+    BYTE-EXACT host (POSIX: no text mode to borrow)
+        A shim supplies both behaviours, driven by exactly ONE injected
+        attribute — ``os.O_BINARY`` — from which production derives its own
+        flags. Nothing here re-implements that derivation, so a pass is a
+        statement about production rather than about this harness.
+
+    Either way ``binary_available`` is the experiment: ``True`` is the
+    repaired platform, ``False`` is the regression.
     """
-    real_open, real_read = os.open, os.read
+    if not NATIVE.measured:
+        # FAIL-CLOSED (§8). An unmeasured host gets no simulator and no pass.
+        raise RuntimeError(
+            "the native text-mode capability was not measured, so neither "
+            f"branch can be entered honestly: {NATIVE.outcome}")
+
+    if NATIVE.translates:
+        mode = TextRuntime(native=True, synthetic=False,
+                           binary_available=binary_available)
+        had = hasattr(os, "O_BINARY")
+        previous = getattr(os, "O_BINARY", None)
+        try:
+            if not binary_available and had:
+                # The NEGATIVE control, taken natively: production derives
+                # `O_RDONLY` alone and the host's own runtime translates.
+                del os.O_BINARY
+            yield mode
+        finally:
+            if had:
+                os.O_BINARY = previous
+            elif hasattr(os, "O_BINARY"):
+                del os.O_BINARY
+        return
+
+    mode = TextRuntime(native=False, synthetic=True,
+                       binary_available=binary_available)
+    real_open, real_read, real_close = os.open, os.read, os.close
     text_fds: "set[int]" = set()
     had = hasattr(os, "O_BINARY")
     previous = getattr(os, "O_BINARY", None)
 
     def win_open(path, flags, *args, **kwargs):
+        mode.opens += 1
+        # Stripping is safe here and ONLY here: this branch runs on a host
+        # measured to spend no `O_*` flag on this bit (`SIMULATED_O_BINARY` is
+        # derived from `_HOST_FLAG_BITS`), so the bit removed is one the host
+        # would ignore. On a native host this line is never reached.
         fd = real_open(path, flags & ~WIN_O_BINARY, *args, **kwargs)
         if not flags & WIN_O_BINARY:
             text_fds.add(fd)
+            mode.text_descriptors += 1
         return fd
 
     def win_read(fd, size):
-        data = real_read(fd, size)
+        raw = real_read(fd, size)
         if fd not in text_fds:
-            return data
+            return raw
+        data = raw
         cut = data.find(b"\x1a")
         if cut != -1:
             data = data[:cut]
-        return data.replace(b"\r\n", b"\n")
+        data = data.replace(b"\r\n", b"\n")
+        if data != raw:
+            mode.translations += 1
+        return data
 
-    if binary_available:
-        os.O_BINARY = WIN_O_BINARY
-    elif had:
-        del os.O_BINARY
-    os.open, os.read = win_open, win_read
+    def win_close(fd):
+        # DESCRIPTOR LIFECYCLE. The kernel reissues the LOWEST free descriptor
+        # number, so a text fd that is merely closed and forgotten leaves its
+        # number marked — and the very next open, whatever flags it asked for,
+        # inherits the translation. Measured while building this repair: the
+        # capability probe's unflagged read closed fd N, the explicit-binary
+        # read that followed got fd N back, and the probe reported its own
+        # binary descriptor as translating (4 of 8 bytes). The M68D.2 shim had
+        # the same hole; on Linux its two reads happened never to collide.
+        text_fds.discard(fd)
+        return real_close(fd)
+
     try:
-        yield
+        # Inside the `try`, so a failure part-way through SETUP still restores
+        # (§13): a half-installed simulator left behind would silently repair,
+        # or silently corrupt, every unrelated test that followed it.
+        if binary_available:
+            os.O_BINARY = WIN_O_BINARY
+        elif had:
+            del os.O_BINARY
+        os.open, os.read, os.close = win_open, win_read, win_close
+        yield mode
     finally:
-        os.open, os.read = real_open, real_read
+        os.open, os.read, os.close = real_open, real_read, real_close
         if had:
             os.O_BINARY = previous
         elif hasattr(os, "O_BINARY"):
             del os.O_BINARY
 
 
-#: Captured at import, BEFORE any test can patch them, so the leak check below
-#: compares against the real thing rather than against whatever is installed.
-_REAL_OPEN, _REAL_READ = os.open, os.read
+@contextlib.contextmanager
+def host_with_a_text_crt():
+    """Give THIS process a host whose own descriptors translate (§14).
+
+    Not a second simulator: it replaces the **host**, at the layer
+    :func:`measure_native_text_runtime` measures, and then RE-MEASURES and
+    installs whatever that measurement says. So the capability stays measured
+    rather than asserted, and a Linux runner can exercise the native branch —
+    and the defective shims that branch exists to forbid — for real.
+
+    This is what reproduces CI 38007992655 off Windows. Verified: the M68D.2
+    shim, run inside this block, observes ``bytes(range(256)) * 40`` as 26
+    bytes with digest ``b858da80d8a5…`` — the digest the real runner reported.
+    """
+    global _REAL_OPEN, _REAL_READ, _REAL_CLOSE
+    global NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED
+    bit = getattr(os, "O_BINARY", SIMULATED_O_BINARY)
+    host_open, host_read, host_close = _REAL_OPEN, _REAL_READ, _REAL_CLOSE
+    crt_text_fds: "set[int]" = set()
+
+    def crt_open(path, flags, *args, **kwargs):
+        fd = host_open(path, flags & ~bit, *args, **kwargs)
+        if not flags & bit:
+            crt_text_fds.add(fd)
+        return fd
+
+    def crt_read(fd, size):
+        data = host_read(fd, size)
+        if fd not in crt_text_fds:
+            return data
+        cut = data.find(b"\x1a")
+        if cut != -1:
+            data = data[:cut]
+        return data.replace(b"\r\n", b"\n")
+
+    def crt_close(fd):
+        crt_text_fds.discard(fd)       # see `win_close`: numbers are reissued
+        return host_close(fd)
+
+    saved = (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ, _REAL_CLOSE,
+             NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED, hasattr(os, "O_BINARY"),
+             getattr(os, "O_BINARY", None))
+    try:
+        os.open, os.read, os.close = crt_open, crt_read, crt_close
+        _REAL_OPEN, _REAL_READ, _REAL_CLOSE = crt_open, crt_read, crt_close
+        os.O_BINARY = bit
+        # MEASURED, not asserted: the emulated host is put through the same
+        # probe as a real one, and whatever it answers is what gets installed.
+        NATIVE = measure_native_text_runtime()
+        NATIVE_TEXT_TRANSLATION_OBSERVED = NATIVE.translates
+        yield NATIVE
+    finally:
+        (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ, _REAL_CLOSE,
+         NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED, had, previous) = saved
+        if had:
+            os.O_BINARY = previous
+        elif hasattr(os, "O_BINARY"):
+            del os.O_BINARY
+
+
+@contextlib.contextmanager
+def defective_shim(kind: str):
+    """The M68D.2 shim and its neighbours, for the absent-controls of §14.
+
+    Each *kind* is one way a future edit breaks the central rule. None of them
+    is reachable from :func:`windows_text_runtime`; they exist so the detector
+    that forbids them has something real to catch, because "a textual grep by
+    itself is not enough to prove behaviour".
+    """
+    bit = getattr(os, "O_BINARY", SIMULATED_O_BINARY)
+    real_open, real_read = os.open, os.read
+
+    def strip_open(path, flags, *args, **kwargs):
+        # THE M68D.2 DEFECT, verbatim: the binary bit is removed before the
+        # host sees it, so a native CRT hands back a TEXT descriptor. Nothing
+        # else is done — the corruption comes from the HOST, which is the
+        # whole point.
+        return real_open(path, flags & ~bit, *args, **kwargs)
+
+    def double_read(fd, size):
+        # Transform bytes the host has ALREADY transformed.
+        data = real_read(fd, size)
+        cut = data.find(b"\x1a")
+        if cut != -1:
+            data = data[:cut]
+        return data.replace(b"\r\n", b"\n")
+
+    try:
+        if kind == "strips_the_binary_flag":
+            os.open = strip_open
+        elif kind == "double_transforms":
+            os.read = double_read
+        elif kind == "both_translations_active":
+            os.open, os.read = strip_open, double_read
+        else:  # pragma: no cover - a typo must never be a silent pass
+            raise AssertionError(f"unknown defective shim: {kind!r}")
+        yield
+    finally:
+        os.open, os.read = real_open, real_read
 
 
 def _no_strings_of(source: str) -> str:
@@ -208,6 +613,50 @@ def _no_strings(path: Path) -> str:
     return _no_strings_of(path.read_text(encoding="utf-8"))
 
 
+def _test_body(name: str) -> str:
+    """The STRINGS-DROPPED body of the test function called *name*, in THIS file.
+
+    Why per-test and not file-wide: many assertions here are written the same
+    way in several places — ``assert snap.payload() == body`` appears in half a
+    dozen tests. A file-wide scan for one of them stays green while the single
+    occurrence that carries the invariant is deleted, which is how four
+    assertion-deleting mutations survived the first run of the M68D.3 campaign.
+    Raises rather than returning empty: a renamed test must break the control
+    that guards it, not silently satisfy it.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name):
+            return _no_strings_of(ast.unparse(node))
+    raise AssertionError(f"no test named {name!r} in this file")
+
+
+def _handler_records_the_failure(handler: ast.ExceptHandler) -> bool:
+    """Does *handler* leave a trace a later assertion can see? §12.
+
+    Four ways count. Three are the original ones — appending to a witness
+    list, re-raising, and failing through ``pytest``. The fourth is M68D.3's
+    capability probe (§8), which converts an ``OSError`` into an explicit
+    ``FAILED``-tagged :class:`NativeTextRuntime`. That is the opposite of
+    swallowing: :func:`windows_text_runtime` REFUSES to enter either branch on
+    such a verdict, so no test can pass through an unmeasured host. The
+    exemption is deliberately narrow — the returned verdict must carry the
+    ``FAILED`` tag, so an ``except`` that hands back an optimistic capability
+    is still reported.
+    """
+    for statement in handler.body:
+        rendered = ast.unparse(statement)
+        if ("append" in rendered or "raise" in rendered
+                or "pytest" in rendered):
+            return True
+        if (isinstance(statement, ast.Return)
+                and "NativeTextRuntime" in rendered
+                and "FAILED" in rendered):
+            return True
+    return False
+
+
 def _stage(tmp_path: Path, name: str, body: bytes) -> Path:
     """Write *body* BYTE-EXPLICITLY. Never a translating handle (§6)."""
     target = tmp_path / f"{name}.bin"
@@ -219,15 +668,22 @@ def _stage(tmp_path: Path, name: str, body: bytes) -> Path:
 # ══ 1 · GROUP A — THE BYTES ON DISK ARE THE BYTES CAPTURED ══════════════════
 
 class TestBinaryByteIdentity:
-    """§5 — SOURCE_BYTES_ON_DISK == BYTES_CAPTURED_BY_SNAPSHOT."""
+    """§5 — SOURCE_BYTES_ON_DISK == BYTES_CAPTURED_BY_SNAPSHOT.
+
+    PROOF A on a host whose descriptors translate natively, PROOF C on one
+    whose do not (§11). The assertions are identical; only who supplies the
+    text-mode runtime differs, and :meth:`TextRuntime.assert_the_branch_is_live`
+    records which it was so neither result can be reported as the other.
+    """
 
     def test_production_asks_the_platform_for_binary_mode(self):
-        """The flag set, derived by production, on a platform that HAS the flag.
+        """The flag set, derived by production, with a binary mode in force.
 
         Calls ``_source_open_flags()`` itself rather than re-deriving it, so a
         future edit that stops consulting ``os.O_BINARY`` fails here.
         """
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             flags = si._source_open_flags()
             assert flags & WIN_O_BINARY, \
                 "the source open does not request binary mode on Windows"
@@ -239,10 +695,11 @@ class TestBinaryByteIdentity:
                         "identifying a source must never open it for writing"
 
     def test_the_flag_set_is_unchanged_where_there_is_no_text_mode(self):
-        """On POSIX the repair must be a byte-for-byte no-op."""
-        with windows_text_runtime(binary_available=False):
+        """With no binary mode in force the derivation must be a bare no-op."""
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
             assert si._source_open_flags() == os.O_RDONLY, \
-                "the repair changed the POSIX flag set"
+                "the repair changed the no-text-mode flag set"
 
     @pytest.mark.parametrize("name", list(BYTE_FIXTURES))
     def test_every_fixture_survives_a_text_translating_runtime(self, tmp_path,
@@ -250,7 +707,8 @@ class TestBinaryByteIdentity:
         """CROSS_PLATFORM_INVARIANT — payload, size and digest, all four ways."""
         body = BYTE_FIXTURES[name]
         target = _stage(tmp_path, name, body)
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
                 assert snap.payload() == body, "the snapshot changed the bytes"
                 assert snap.size_bytes == len(body), "the byte count was shortened"
@@ -262,10 +720,16 @@ class TestBinaryByteIdentity:
 
     @pytest.mark.parametrize("name", list(BYTE_FIXTURES))
     def test_stream_mode_digests_the_bytes_on_disk(self, tmp_path, name):
-        """The ``capture_bytes=False`` path, which failed on Ctrl-Z for real."""
+        """The ``capture_bytes=False`` path, which failed on Ctrl-Z for real.
+
+        ``stream()`` duplicates the HELD descriptor, so on a native host it
+        inherits that descriptor's binary mode and this covers the served
+        bytes too — the path that came back 26 bytes long on the real runner.
+        """
         body = BYTE_FIXTURES[name]
         target = _stage(tmp_path, name, body)
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target, capture_bytes=False) as snap:
                 assert snap.sha256 == hashlib.sha256(body).hexdigest()
                 assert snap.size_bytes == len(body)
@@ -278,16 +742,21 @@ class TestBinaryByteIdentity:
         """The measured stream-mode failure, isolated.
 
         ``bytes(range(256)) * 40`` is 10240 bytes with a 0x1A at offset 26. The
-        real runner digested 26 of them and reported success.
+        real runner of CI 37994281455 digested 26 of them and reported success,
+        and the M68D.2 SIMULATOR reproduced the same 26 on the real runner of
+        CI 38007992655 — from the other direction (§2).
         """
         body = bytes(range(256)) * 40
         target = _stage(tmp_path, "ctrlz", body)
         assert body.index(b"\x1a") == 26, "the fixture lost its Ctrl-Z"
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target, capture_bytes=False) as snap:
                 assert snap.size_bytes == 10240, \
                     f"the read stopped at a Ctrl-Z: {snap.size_bytes} bytes"
                 assert snap.sha256 == hashlib.sha256(body).hexdigest()
+                assert snap.size_bytes != 26, \
+                    "a 26-byte read was accepted as a complete 10240-byte source"
 
     def test_a_crlf_source_is_never_rejected_for_being_crlf(self, tmp_path):
         """POSITIVE CONTROL (§11) — and a second, quieter Group A symptom.
@@ -298,7 +767,8 @@ class TestBinaryByteIdentity:
         failures masked this by asserting the payload first.
         """
         target = _stage(tmp_path, "crlf_only", b"line one\r\nline two\r\n")
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
                 assert snap.stable is True, \
                     "a CRLF file was rejected purely for its line endings"
@@ -312,7 +782,8 @@ class TestBinaryByteIdentity:
         """§5 — transformation is allowed DOWNSTREAM of the byte observation."""
         body = b"x = 1\r\ny = 2\r\n"
         target = _stage(tmp_path, "render", body)
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
                 assert snap.payload() == body
                 assert snap.text() == "x = 1\r\ny = 2\r\n", \
@@ -326,7 +797,8 @@ class TestBinaryByteIdentity:
         """§7's forbidden fix, asserted behaviourally on both helpers."""
         crlf = _stage(tmp_path, "h_crlf", b"a\r\nb\r\n")
         lf = _stage(tmp_path, "h_lf", b"a\nb\n")
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             assert si.digest_file(crlf) != si.digest_file(lf), \
                 "digest_file normalises newlines"
             assert si.digest_file(crlf) == digest_bytes(b"a\r\nb\r\n")
@@ -337,7 +809,8 @@ class TestBinaryByteIdentity:
         """END TO END — observe, then write against the digest just observed."""
         body = b"first\r\nsecond\r\n"
         target = _stage(tmp_path, "cas", body)
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
                 precondition = identify_snapshot(snap).sha256
             assert precondition == digest_bytes(body)
@@ -349,55 +822,515 @@ class TestBinaryByteIdentity:
             "the CAS write rewrote the caller's line endings"
 
 
-class TestTheSimulatorIsFaithful:
-    """§12 — zero structural matches is never successful evidence."""
+class TestTheTextRuntimeReallyTranslates:
+    """PROOF B / PROOF D — the NEGATIVE controls (§11, §12).
 
-    @pytest.mark.parametrize("name", [
+    Zero structural matches is never successful evidence. Without a measured
+    demonstration that an unrepaired source open DOES corrupt the observation,
+    every assertion in :class:`TestBinaryByteIdentity` is satisfied by a
+    runtime that does nothing at all — which is exactly the failure mode
+    CI 38007992655 inverted.
+
+    ``binary_available=False`` is the regression itself: no binary mode is in
+    force, so production derives a translating flag set. On a native host the
+    host's own CRT corrupts the read (PROOF B); on a byte-exact host the shim
+    does (PROOF D). Same assertion, both ways.
+
+    WHAT THIS IS NOT (§9). A negative control is a statement about an
+    UNREPAIRED open, never a licence for ``source_snapshot`` to return
+    translated bytes. :class:`TestTheRuntimeIsNotDoubleSimulated` pins that
+    reading: no negative control may be entered with a binary mode in force.
+    """
+
+    #: The fixtures that have something for a text runtime to do. ``lone_cr``,
+    #: ``lf`` and friends are deliberately absent: they are the control that
+    #: proves the translation is surgical, asserted separately below.
+    TRANSLATABLE = [
         "crlf", "mixed_lf_crlf", "utf8_unicode", "nul_bytes", "ctrl_z_early",
         "binary_all_bytes", "crlf_on_chunk_boundary", "multibyte_on_boundary",
-    ])
-    def test_without_the_flag_the_simulator_really_does_corrupt(self, tmp_path,
-                                                                name):
-        """NON-VACUITY. If this passed clean, the suite above would prove nothing.
+    ]
 
-        ``binary_available=False`` is precisely the regression: the platform
-        offers no binary mode, so production opens a translating descriptor.
-        Every fixture here must then come back WRONG.
+    @pytest.mark.parametrize("name", TRANSLATABLE)
+    def test_without_a_binary_mode_the_observation_really_is_corrupted(
+            self, tmp_path, name):
+        """NON-VACUITY. If this passed clean, the suite above would prove nothing."""
+        body = BYTE_FIXTURES[name]
+        target = _stage(tmp_path, name, body)
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
+            with source_snapshot(target) as snap:
+                observed = snap.payload()
+                assert observed != body, \
+                    "the runtime did not translate, so it proves nothing"
+                assert snap.size_bytes < len(body), \
+                    "the runtime did not shorten the read"
+                assert snap.sha256 != hashlib.sha256(body).hexdigest()
+            runtime.assert_a_translation_happened()
+        # And the file on disk was never touched by any of it.
+        assert target.read_bytes() == body, \
+            "the negative control mutated the fixture"
+
+    @pytest.mark.parametrize("name", TRANSLATABLE)
+    def test_the_unrepaired_digest_does_not_describe_the_disk(self, tmp_path,
+                                                             name):
+        """The stream-mode half of the negative control.
+
+        Only the DIGEST is asserted. ``stream()`` hands back a duplicate of the
+        held descriptor and is read through ``io``, not through ``os.read``, so
+        a synthetic shim cannot reach it — and the digest is the authority
+        anyway: it is what ``identify_snapshot`` issues as a precondition.
         """
         body = BYTE_FIXTURES[name]
         target = _stage(tmp_path, name, body)
-        with windows_text_runtime(binary_available=False):
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
+            with source_snapshot(target, capture_bytes=False) as snap:
+                assert snap.sha256 != hashlib.sha256(body).hexdigest(), \
+                    "the unrepaired stream digest still described the disk"
+                assert snap.size_bytes < len(body)
+            runtime.assert_a_translation_happened()
+
+    def test_the_ctrl_z_fixture_really_is_truncated_at_twenty_six(self,
+                                                                  tmp_path):
+        """CTRL_Z_PROOF, negative half. The measured number, both ways.
+
+        10240 bytes in, a Ctrl-Z at offset 26, and ``sha256`` of the first 26
+        bytes is ``b858da80d8a5…`` — the digest the real runner reported in
+        CI 37994281455 *and* in CI 38007992655.
+        """
+        body = bytes(range(256)) * 40
+        target = _stage(tmp_path, "ctrlz_neg", body)
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
+            with source_snapshot(target, capture_bytes=False) as snap:
+                assert snap.size_bytes == 26, \
+                    f"the text runtime did not stop at the Ctrl-Z: {snap.size_bytes}"
+                assert snap.sha256 == hashlib.sha256(body[:26]).hexdigest()
+                assert snap.sha256.startswith("b858da80d8a5"), \
+                    "this is not the digest the real runner measured"
+            runtime.assert_a_translation_happened()
+
+    def test_a_crlf_source_is_the_crlf_proof_in_both_directions(self, tmp_path):
+        """CRLF_PROOF — collapsed without a binary mode, intact with one."""
+        body = b"line one\r\nline two\r\n"
+        target = _stage(tmp_path, "crlf_both", body)
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
-                assert snap.payload() != body, \
-                    "the simulator did not translate, so it proves nothing"
-                assert snap.size_bytes < len(body), \
-                    "the simulator did not shorten the read"
-                assert snap.sha256 != hashlib.sha256(body).hexdigest()
+                assert snap.payload() == b"line one\nline two\n", \
+                    "the CRLF was not collapsed by the text runtime"
+            runtime.assert_a_translation_happened()
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
+            with source_snapshot(target) as snap:
+                assert snap.payload() == body, "the repaired read lost the CRLF"
 
     def test_the_untranslatable_fixtures_are_unaffected_either_way(self, tmp_path):
-        """The simulator must be surgical: no \\r\\n and no Ctrl-Z, no change."""
+        """The runtime must be surgical: no \\r\\n and no Ctrl-Z, no change."""
         for name in ("lf", "lone_cr", "cr_at_end", "empty", "bare_lf",
                      "no_final_newline"):
             body = BYTE_FIXTURES[name]
             target = _stage(tmp_path, f"quiet_{name}", body)
-            with windows_text_runtime(binary_available=False):
+            with windows_text_runtime(binary_available=False) as runtime:
+                runtime.assert_the_branch_is_live()
                 with source_snapshot(target) as snap:
                     assert snap.payload() == body, \
-                        f"the simulator corrupted {name}, which has nothing to translate"
+                        f"the runtime corrupted {name}, which has nothing to translate"
 
-    def test_the_simulator_leaves_the_os_module_as_it_found_it(self):
+    def test_the_runtime_leaves_the_os_module_as_it_found_it(self):
         """A leaked ``os.O_BINARY`` would silently repair every later test."""
         before = hasattr(os, "O_BINARY")
+        value = getattr(os, "O_BINARY", None)
         with windows_text_runtime(binary_available=True):
             assert hasattr(os, "O_BINARY")
         assert hasattr(os, "O_BINARY") is before, "os.O_BINARY leaked"
+        assert getattr(os, "O_BINARY", None) == value, "os.O_BINARY changed value"
         with windows_text_runtime(binary_available=False):
-            pass
+            assert not hasattr(os, "O_BINARY")
         assert hasattr(os, "O_BINARY") is before, "os.O_BINARY was lost"
+        assert getattr(os, "O_BINARY", None) == value, "os.O_BINARY changed value"
         # And `os.open`/`os.read` themselves are back, or every test after this
-        # one would be reading through the simulator without knowing it.
+        # one would be reading through a simulator without knowing it.
         assert os.open is _REAL_OPEN, "os.open was left patched"
         assert os.read is _REAL_READ, "os.read was left patched"
+
+
+class TestTheRuntimeIsNotDoubleSimulated:
+    """§14 — the ABSENT CONTROLS for the failure that produced CI 38007992655.
+
+    THE DEFECT. The M68D.2 shim replaced ``os.open`` unconditionally and
+    re-opened every descriptor with ``flags & ~O_BINARY`` before delegating to
+    the real one. On a host with no text mode that is bookkeeping. On the real
+    Windows runner it handed the native CRT a TEXT-mode descriptor, the CRT
+    collapsed CRLF and stopped at the first Ctrl-Z, and a production read that
+    had explicitly asked for binary mode — correctly, and verified correct by
+    the same runner — observed 26 of 10240 bytes.
+
+    THE RULE. Simulate only what the host does not already provide (§7).
+
+    Every test here measures rather than greps: :func:`host_with_a_text_crt`
+    installs a real translating runtime at the layer the probe measures, so
+    this Linux host can exercise the native branch, and each defective shim is
+    RUN and shown to break something a passing suite must not tolerate.
+    """
+
+    FIXTURE = bytes(range(256)) * 40
+
+    def test_the_probe_is_a_measurement_and_not_a_constant(self, tmp_path):
+        """§8 — behaviour decides, never a platform name.
+
+        The same probe, on the same process, returns different answers for
+        different hosts. A constant — or a name check — could not.
+        """
+        here = measure_native_text_runtime()
+        assert here.measured, f"the probe could not measure this host: {here.outcome}"
+        with host_with_a_text_crt() as emulated:
+            assert emulated.outcome == NATIVE_TEXT, \
+                f"the probe did not see the emulated CRT: {emulated.outcome}"
+            assert emulated.translates is True
+            assert emulated.unflagged != NATIVE_PROBE_BYTES, \
+                "the probe recorded an unflagged read it did not actually see"
+            assert emulated.binary == NATIVE_PROBE_BYTES, \
+                "the probe did not verify the explicit-binary descriptor"
+        after = measure_native_text_runtime()
+        assert after.outcome == here.outcome, \
+            "the emulated host leaked into the real measurement"
+
+    def test_a_probe_that_cannot_run_reports_failure_and_not_a_capability(
+            self, monkeypatch):
+        """§8 — an OSError during measurement must not become an answer.
+
+        FOUND BY THE M68D.3 CAMPAIGN (``E_probe_failure_becomes_byte_exact``).
+        Asserting the refusal from a hand-built ``FAILED`` verdict left the
+        handler that PRODUCES one untested, so replacing it with an optimistic
+        ``BYTE_EXACT`` survived.
+        """
+        def refuse(path, flags, *args, **kwargs):
+            raise OSError(13, "injected EACCES")
+
+        monkeypatch.setattr(os, "open", refuse)
+        monkeypatch.setattr(sys.modules[__name__], "_REAL_OPEN", refuse)
+        verdict = measure_native_text_runtime()
+        assert verdict.outcome.startswith("FAILED"), (
+            "a probe that could not open its own fixture reported "
+            f"{verdict.outcome}")
+        assert verdict.measured is False and verdict.translates is False
+        # `OSError(13, ...)` is raised as its `PermissionError` subclass, so
+        # the verdict records the CONCRETE type and the errno rather than the
+        # name of the clause that caught it.
+        assert "PermissionError" in verdict.outcome, \
+            "the fail-closed verdict does not name what was raised"
+        assert "errno=13" in verdict.outcome, \
+            "the fail-closed verdict does not carry the errno"
+
+    def test_a_host_whose_binary_mode_is_also_broken_is_refused(self):
+        """§8 — translation observed is not enough; binary must be EXACT.
+
+        FOUND BY THE M68D.3 CAMPAIGN (``E_probe_skips_the_binary_descriptor_check``).
+        A host that translates even with ``O_BINARY`` set is not the runtime
+        M68D.2 repaired, and simulating against it would produce a result about
+        the harness. It must be refused, not accommodated.
+        """
+        with host_with_a_text_crt() as healthy:
+            assert healthy.outcome == NATIVE_TEXT, "the emulated host is not sane"
+            # Now break the binary descriptor too: translate unconditionally.
+            broken_open, broken_read = os.open, os.read
+            monkey = sys.modules[__name__]
+            saved = (monkey._REAL_OPEN, monkey._REAL_READ, os.open, os.read)
+            try:
+                def always_text_read(fd, size):
+                    data = broken_read(fd, size)
+                    cut = data.find(b"\x1a")
+                    if cut != -1:
+                        data = data[:cut]
+                    return data.replace(b"\r\n", b"\n")
+
+                def always_text_open(path, flags, *a, **k):
+                    return broken_open(path, flags & ~WIN_O_BINARY, *a, **k)
+
+                monkey._REAL_OPEN = os.open = always_text_open
+                monkey._REAL_READ = os.read = always_text_read
+                verdict = measure_native_text_runtime()
+            finally:
+                (monkey._REAL_OPEN, monkey._REAL_READ,
+                 os.open, os.read) = saved
+            assert verdict.outcome.startswith("FAILED"), (
+                "a host whose explicit-binary descriptor also translates was "
+                f"reported as {verdict.outcome}")
+            assert verdict.translates is False and verdict.measured is False
+            assert "binary" in verdict.outcome, \
+                "the verdict does not name the binary descriptor as the problem"
+
+    def test_a_host_that_cannot_write_the_fixture_exactly_is_refused(self,
+                                                                     monkeypatch):
+        """§8 — an unusable fixture invalidates everything measured through it.
+
+        FOUND BY THE M68D.3 CAMPAIGN (``E_probe_fixture_is_not_verified``).
+        """
+        real_write_bytes = Path.write_bytes
+
+        def translating_write(self, data):
+            return real_write_bytes(self, data.replace(b"\r\n", b"\n"))
+
+        monkeypatch.setattr(Path, "write_bytes", translating_write)
+        verdict = measure_native_text_runtime()
+        assert verdict.outcome.startswith("FAILED"), (
+            "a host whose write path translated the probe fixture was "
+            f"reported as {verdict.outcome}")
+        assert "fixture" in verdict.outcome
+        assert verdict.measured is False
+
+    def test_a_reissued_descriptor_number_does_not_inherit_translation(self,
+                                                                       tmp_path):
+        """The descriptor-lifecycle hole, on the SYNTHETIC branch.
+
+        FOUND BY THE M68D.3 CAMPAIGN (``F_leak_the_text_descriptor_marking``) —
+        and MEASURED once for real while building this repair: the capability
+        probe's unflagged read closed fd N, the explicit-binary read that
+        followed was given fd N back, and the probe reported its own binary
+        descriptor as translating (4 of 8 bytes). The kernel reissues the
+        lowest free number, so forgetting to unmark a closed descriptor
+        corrupts whatever opens next, whatever flags it asked for.
+
+        Staged by opening a TEXT descriptor and a BINARY one in sequence inside
+        one runtime, which is exactly the sequence the probe performs.
+        """
+        body = b"reuse\r\nme\r\n" + b"q" * 32
+        target = _stage(tmp_path, "reuse", body)
+        if NATIVE.translates:
+            # The native branch keeps no marking of its own; the host owns the
+            # descriptor's mode and a reissued number comes back clean.
+            observed = _read_whole(target, os.O_RDONLY)
+            assert observed != body, "NON-VACUITY: this host does not translate"
+            assert _read_whole(target, os.O_RDONLY | WIN_O_BINARY) == body, \
+                "a reissued descriptor number inherited the host's text mode"
+            return
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
+            # A text descriptor first, so its number is marked and then freed.
+            fd = os.open(str(target), os.O_RDONLY)
+            try:
+                first = os.read(fd, len(body))
+            finally:
+                os.close(fd)
+            assert first != body, \
+                "NON-VACUITY: the shim did not translate the text descriptor"
+            assert runtime.text_descriptors >= 1
+            # Now the binary read, which will very likely be given fd back.
+            with source_snapshot(target) as snap:
+                assert snap.payload() == body, (
+                    "a reissued descriptor number inherited the previous "
+                    "descriptor's text marking")
+                assert snap.size_bytes == len(body)
+
+    def test_the_native_branch_keeps_the_production_read_byte_exact(self,
+                                                                    tmp_path):
+        """PROOF A, exercised off Windows. THE regression test for the 20.
+
+        On a host whose descriptors translate, ``binary_available=True`` must
+        be a NO-OP: production's own flags select binary mode and the host
+        honours them. 10240 bytes in, 10240 bytes out.
+        """
+        target = _stage(tmp_path, "native_pos", self.FIXTURE)
+        with host_with_a_text_crt():
+            with windows_text_runtime(binary_available=True) as runtime:
+                assert runtime.native is True and runtime.synthetic is False, \
+                    "a shim was installed on a host that has its own text mode"
+                runtime.assert_the_branch_is_live()
+                with source_snapshot(target) as snap:
+                    assert snap.size_bytes == 10240, \
+                        f"the native branch truncated the read: {snap.size_bytes}"
+                    assert snap.payload() == self.FIXTURE
+                    assert snap.sha256 == hashlib.sha256(self.FIXTURE).hexdigest()
+                    assert snap.stable is True
+                with source_snapshot(target, capture_bytes=False) as snap:
+                    assert snap.size_bytes == 10240
+                    assert snap.sha256 == hashlib.sha256(self.FIXTURE).hexdigest()
+
+    def test_the_native_branch_still_shows_the_text_mode_behaviour(self,
+                                                                   tmp_path):
+        """PROOF B, exercised off Windows — and its NON-VACUITY.
+
+        The negative control on a native host must come from the HOST, not from
+        a transform layered on top of it. So the shim counters must stay at
+        zero while the observation is still corrupted.
+        """
+        target = _stage(tmp_path, "native_neg", self.FIXTURE)
+        with host_with_a_text_crt():
+            with windows_text_runtime(binary_available=False) as runtime:
+                runtime.assert_the_branch_is_live()
+                with source_snapshot(target) as snap:
+                    assert snap.size_bytes == 26, \
+                        f"the native CRT did not truncate: {snap.size_bytes}"
+                    assert snap.sha256.startswith("b858da80d8a5")
+                assert runtime.translations == 0 and runtime.opens == 0, \
+                    "the native negative control layered a synthetic transform"
+
+    def test_a_shim_that_strips_the_binary_flag_is_caught(self, tmp_path):
+        """NON-VACUITY FOR THIS WHOLE CLASS — the M68D.2 defect, run and caught.
+
+        This is CI 38007992655 reproduced off Windows: the exact shim, on a
+        host that translates natively, observing 26 bytes and the digest
+        ``b858da80d8a5…`` that the real runner printed.
+        """
+        target = _stage(tmp_path, "defect", self.FIXTURE)
+        with host_with_a_text_crt():
+            with defective_shim("strips_the_binary_flag"):
+                with source_snapshot(target, capture_bytes=False) as snap:
+                    assert snap.size_bytes == 26, (
+                        "the defective shim did NOT corrupt the read, so this "
+                        "detector proves nothing")
+                    assert snap.sha256.startswith("b858da80d8a5"), \
+                        "this is not the digest CI 38007992655 reported"
+            # The repaired runtime, same host, same fixture, same block.
+            with windows_text_runtime(binary_available=True):
+                with source_snapshot(target, capture_bytes=False) as snap:
+                    assert snap.size_bytes == 10240, \
+                        "the repaired runtime corrupts what the defect corrupts"
+
+    @pytest.mark.parametrize("kind", ["double_transforms",
+                                      "both_translations_active"])
+    def test_double_modelling_the_host_is_caught(self, tmp_path, kind):
+        """A synthetic transform on bytes the host already transformed."""
+        body = b"keep\r\nthis\r\n" + b"z" * 64
+        target = _stage(tmp_path, f"double_{kind}", body)
+        with host_with_a_text_crt():
+            with defective_shim(kind):
+                with source_snapshot(target) as snap:
+                    assert snap.payload() != body, (
+                        f"the {kind} shim changed nothing, so this detector "
+                        "proves nothing")
+            with windows_text_runtime(binary_available=True):
+                with source_snapshot(target) as snap:
+                    assert snap.payload() == body, \
+                        "the repaired runtime double-models the host"
+
+    def test_a_leaked_patch_is_caught_by_the_next_measurement(self, tmp_path):
+        """A shim left installed must not survive into an unrelated test."""
+        target = _stage(tmp_path, "leak", self.FIXTURE)
+        with host_with_a_text_crt():
+            with defective_shim("strips_the_binary_flag"):
+                leaked = os.open
+            assert os.open is not leaked, "the defective shim leaked os.open"
+            with source_snapshot(target, capture_bytes=False) as snap:
+                assert snap.size_bytes == 10240, \
+                    "a leaked shim is still corrupting reads after its block"
+        assert os.open is _REAL_OPEN, "os.open was left patched"
+        assert os.read is _REAL_READ, "os.read was left patched"
+
+    def test_the_runtime_restores_itself_through_an_exception(self, tmp_path):
+        """§13 — restoration on EVERY exit, not just the clean one."""
+        sentinel = RuntimeError("staged")
+        for binary in (True, False):
+            for host in (contextlib.nullcontext, host_with_a_text_crt):
+                with host():
+                    before = (os.open, os.read, hasattr(os, "O_BINARY"),
+                              getattr(os, "O_BINARY", None))
+                    with pytest.raises(RuntimeError) as caught:
+                        with windows_text_runtime(binary_available=binary):
+                            raise sentinel
+                    assert caught.value is sentinel
+                    assert (os.open, os.read, hasattr(os, "O_BINARY"),
+                            getattr(os, "O_BINARY", None)) == before, \
+                        "an exception inside the runtime leaked global state"
+
+    def test_a_nested_runtime_unwinds_in_order(self):
+        """A nested block must restore the OUTER runtime, not the pristine one."""
+        with windows_text_runtime(binary_available=True):
+            outer = (os.open, os.read, getattr(os, "O_BINARY", None))
+            with windows_text_runtime(binary_available=False):
+                pass
+            assert (os.open, os.read, getattr(os, "O_BINARY", None)) == outer, \
+                "the inner runtime did not restore the outer one"
+        assert os.open is _REAL_OPEN and os.read is _REAL_READ
+
+    def test_an_unmeasured_host_refuses_to_run_at_all(self):
+        """§8 — a probe failure is never resolved into an optimistic default."""
+        global NATIVE
+        saved = NATIVE
+        try:
+            NATIVE = NativeTextRuntime("FAILED: staged for this test")
+            assert NATIVE.measured is False and NATIVE.translates is False
+            for binary in (True, False):
+                with pytest.raises(RuntimeError, match="not measured"):
+                    with windows_text_runtime(binary_available=binary):
+                        pytest.fail("an unmeasured host produced a runtime")
+        finally:
+            NATIVE = saved
+        assert NATIVE.measured, "the real measurement was not restored"
+
+    def test_the_simulated_binary_bit_cannot_alias_a_host_flag(self):
+        """§10 — the injected bit must be one the host spends on nothing."""
+        assert SIMULATED_O_BINARY & _HOST_FLAG_BITS == 0, (
+            f"the simulated O_BINARY 0x{SIMULATED_O_BINARY:x} aliases a real "
+            f"host flag (host bits 0x{_HOST_FLAG_BITS:x})")
+        assert SIMULATED_O_BINARY >= 0x8000
+        # NON-VACUITY: the derivation really does move off an occupied bit.
+        occupied = _HOST_FLAG_BITS & -_HOST_FLAG_BITS  # lowest bit in use
+        assert occupied and _free_flag_bit(occupied) != occupied, \
+            "the free-bit search returns bits the host is already using"
+
+    def test_the_binary_bit_in_force_is_the_hosts_own_where_there_is_one(self):
+        """WIN_O_BINARY is the REAL flag on a host that publishes one."""
+        published = getattr(os, "O_BINARY", None)
+        if published is None:
+            assert WIN_O_BINARY == SIMULATED_O_BINARY, \
+                "a host with no O_BINARY is not using the simulated bit"
+        else:
+            assert WIN_O_BINARY == published, \
+                "the suite is inspecting a synthetic bit on a host that has a real one"
+
+    def test_the_positive_binary_proof_is_never_skipped_for_being_native(self):
+        """§14 — "skips the positive binary test when the native capability is
+        detected". Every positive case must be COLLECTED unconditionally."""
+        collected = collected_node_ids(
+            "tests/test_cross_platform_source_integrity_m68d2.py")
+        positives = [n for n in collected
+                     if "TestBinaryByteIdentity::test_every_fixture_survives" in n]
+        assert len(positives) == len(BYTE_FIXTURES), (
+            f"{len(positives)} of {len(BYTE_FIXTURES)} binary positive controls "
+            "are collected on this host")
+        assert any("TestTheRuntimeIsNotDoubleSimulated::"
+                   "test_the_native_branch_keeps_the_production_read_byte_exact" in n
+                   for n in collected), "the native positive proof is not collected"
+
+    def test_no_negative_control_is_taken_with_a_binary_mode_in_force(self):
+        """§9 — a negative control must never become a positive requirement.
+
+        Structural, over the parsed tree: every ``binary_available=False``
+        block in this file must assert INEQUALITY against the fixture, and no
+        ``binary_available=True`` block may assert that a payload differs.
+        """
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        offenders: "list[str]" = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            opened = {kw.arg: kw.value for item in node.items
+                      if isinstance(item.context_expr, ast.Call)
+                      for kw in item.context_expr.keywords}
+            flag = opened.get("binary_available")
+            if not isinstance(flag, ast.Constant) or flag.value is not True:
+                continue
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Compare)
+                        and any(isinstance(op, ast.NotEq) for op in sub.ops)
+                        and "payload" in ast.unparse(sub.left)):
+                    offenders.append(ast.unparse(sub)[:70])
+        assert not offenders, (
+            "a repaired read is asserted to DIFFER from its fixture, which "
+            f"makes the negative control a requirement: {offenders}")
+        # NON-VACUITY: the scan sees a real offender.
+        bad = ast.parse(
+            "with windows_text_runtime(binary_available=True):\n"
+            "    assert snap.payload() != body\n")
+        found = [ast.unparse(sub) for node in ast.walk(bad)
+                 if isinstance(node, ast.With)
+                 for sub in ast.walk(node)
+                 if isinstance(sub, ast.Compare)
+                 and any(isinstance(op, ast.NotEq) for op in sub.ops)
+                 and "payload" in ast.unparse(sub.left)]
+        assert found, "the negative-control scan is blind"
 
 
 # ══ 2 · GROUP B — A STABILITY VERDICT WITNESSED AT THE BYTE LEVEL ═══════════
@@ -1144,6 +2077,92 @@ class TestFailureInjection:
             assert snap.stable is False
             assert identify_snapshot(snap).sha256 is None
 
+    def test_an_accounting_fault_in_the_witness_is_refused(self, tmp_path,
+                                                            monkeypatch):
+        """M68D.3 §17 — the LENGTH conjunct, rejecting on its own.
+
+        WHY THIS EXISTS. ``B_drop_the_verified_length`` survived the M68D.2
+        campaign, registered as explained: "the digest comparison strictly
+        implies the length comparison". That argument does not hold. SHA-256 is
+        a fixed-size mapping over variable-length inputs, so *digests agreeing*
+        does not entail *lengths agreeing* — and more to the point, the two
+        values are not independent observations of the file. They are two
+        fields of ONE return value from :func:`_descriptor_content`, and an
+        accounting fault in that helper can move the length while leaving the
+        digest correct. The M68D.2 comment named exactly that risk ("a future
+        bug in ``_descriptor_content``'s own accounting") and then had no test
+        for it.
+
+        So the fault is INJECTED rather than argued about: the witness returns
+        the right digest and a length that disagrees with the capture. No
+        filesystem bytes are touched and no hash collision is needed. With the
+        conjunct present the observation must be refused; with it dropped — the
+        mutation — ``stable`` goes true and this test is what says so.
+        """
+        body = b"accounting\r\nfault\r\n"
+        target = _stage(tmp_path, "acct", body)
+        real_descriptor_content = si._descriptor_content
+        #: What the patched witness actually HANDED BACK, which is the only
+        #: thing production saw. Recording the values computed before the
+        #: injection would let a corruption of the returned digest hide here —
+        #: MEASURED: the M68D.3 campaign's
+        #: ``G_accounting_fault_corrupts_the_digest_too`` survived the first
+        #: version of this test for exactly that reason.
+        returned: "list[tuple[str, int]]" = []
+
+        def miscounting_witness(fd: int) -> "tuple[str, int]":
+            digest, total = real_descriptor_content(fd)
+            assert total == len(body), \
+                "the real witness did not agree with the capture to begin with"
+            # The digest is UNTOUCHED and correct. Only the accounting moves.
+            answer = (digest, total + 1)
+            returned.append(answer)
+            return answer
+
+        monkeypatch.setattr(si, "_descriptor_content", miscounting_witness)
+        with source_snapshot(target) as snap:
+            # NON-VACUITY, in both directions.
+            assert returned, "the witness was never called, so nothing was injected"
+            assert returned[0][0] == hashlib.sha256(body).hexdigest(), \
+                "the injected digest is wrong, so the digest conjunct would " \
+                "have rejected this and the length conjunct proves nothing"
+            assert returned[0][1] == len(body) + 1, \
+                "the length handed back was not actually inconsistent"
+            assert snap.size_bytes == len(body), "the capture itself was damaged"
+            assert snap.sha256 == hashlib.sha256(body).hexdigest(), \
+                "the capture digest moved, so this is not a length-only fault"
+            # THE PROPERTY: a coherent digest plus an incoherent length is not
+            # a stable observation.
+            assert snap.stable is False, (
+                "a witness whose length disagreed with the capture was "
+                "accepted as stable; only the length conjunct can reject this")
+            assert identify_snapshot(snap).sha256 is None, \
+                "an incoherent observation still issued a write precondition"
+            assert identify_snapshot(snap).complete is False
+
+    def test_an_accounting_fault_is_also_refused_by_recheck(self, tmp_path,
+                                                            monkeypatch):
+        """The derived-reader path has the same conjunct and the same duty."""
+        body = b"recheck\r\naccounting\r\n"
+        target = _stage(tmp_path, "acct_recheck", body)
+        with source_snapshot(target) as snap:
+            assert snap.stable is True, "the clean observation was not stable"
+            real_descriptor_content = si._descriptor_content
+            calls: "list[int]" = []
+
+            def miscounting_witness(fd: int) -> "tuple[str, int]":
+                digest, total = real_descriptor_content(fd)
+                calls.append(total)
+                return digest, total - 1
+
+            monkeypatch.setattr(si, "_descriptor_content", miscounting_witness)
+            assert snap.recheck() is False, (
+                "recheck accepted a witness length that disagreed with the "
+                "size it had published")
+            assert calls == [len(body)], \
+                "NON-VACUITY: the injected witness was not the one consulted"
+            assert snap.stable is False, "the verdict was not remembered"
+
     def test_an_fstat_failure_is_not_stability(self, tmp_path, monkeypatch):
         target = _stage(tmp_path, "fstat_fails", b"f\n")
         with source_snapshot(target) as snap:
@@ -1165,7 +2184,8 @@ class TestFailureInjection:
     def test_the_binary_flag_being_unavailable_does_not_crash(self, tmp_path):
         """§21 — "binary-mode flag unavailable" is the POSIX case, and is fine."""
         target = _stage(tmp_path, "noflag", b"n\n")
-        with windows_text_runtime(binary_available=False):
+        with windows_text_runtime(binary_available=False) as runtime:
+            runtime.assert_the_branch_is_live()
             with source_snapshot(target) as snap:
                 assert snap.payload() == b"n\n"
                 assert snap.stable is True
@@ -1264,7 +2284,8 @@ class TestAbsentControls:
         """A "repair" that always yields 0 would pass every POSIX test."""
         for dead in ("_O_BINARY_FLAG = \"\"", "getattr ( os , _O_BINARY_FLAG , 0 ) * 0"):
             assert dead not in code
-        with windows_text_runtime(binary_available=True):
+        with windows_text_runtime(binary_available=True) as runtime:
+            runtime.assert_the_branch_is_live()
             assert si._source_open_flags() & WIN_O_BINARY, \
                 "the derivation ignores a platform that offers binary mode"
 
@@ -1347,12 +2368,21 @@ class TestAbsentControls:
         """
         tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
         handlers = [n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)]
-        swallowing = [
-            ast.unparse(h)[:70] for h in handlers
-            if not any("append" in ast.unparse(s) or "raise" in ast.unparse(s)
-                       or "pytest" in ast.unparse(s) for s in h.body)]
+        swallowing = [ast.unparse(h)[:70] for h in handlers
+                      if not _handler_records_the_failure(h)]
         assert not swallowing, f"an exception handler swallows: {swallowing}"
         assert handlers, "NON-VACUITY: the scan found no handlers at all"
+        # NON-VACUITY: the refined scan still catches a genuine swallow, and
+        # the FAILED-verdict exemption (M68D.3 §8) cannot excuse one. Both
+        # shapes below are rejected.
+        for gutted in ("try:\n    pass\nexcept OSError:\n    pass\n",
+                       "try:\n    pass\nexcept OSError:\n    return None\n",
+                       "try:\n    pass\nexcept OSError:\n"
+                       "    return NativeTextRuntime(BYTE_EXACT)\n"):
+            caught = [h for h in ast.walk(ast.parse(gutted))
+                      if isinstance(h, ast.ExceptHandler)
+                      and not _handler_records_the_failure(h)]
+            assert caught, f"the swallow scan accepts {gutted!r}"
         # The STRIPPED view, because this test names every literal it looks
         # for: scanned as raw text it matches its own search patterns and
         # passes on a file where the witness has been gutted. MEASURED — the
@@ -1406,6 +2436,15 @@ MANDATORY_CROSS_PLATFORM_INVARIANTS: "dict[str, tuple[str, ...]]" = {
         "TestBinaryByteIdentity::test_stream_mode_digests_the_bytes_on_disk",
         "TestBinaryByteIdentity::test_the_ctrl_z_truncation_is_closed",
         "TestBinaryByteIdentity::test_a_crlf_source_is_never_rejected_for_being_crlf",
+        # M68D.3 — the NEGATIVE controls. Without these the four above are
+        # satisfied by a runtime that translates nothing (§11, PROOF B/D).
+        "TestTheTextRuntimeReallyTranslates::test_without_a_binary_mode_the_observation_really_is_corrupted",
+        "TestTheTextRuntimeReallyTranslates::test_the_ctrl_z_fixture_really_is_truncated_at_twenty_six",
+        # M68D.3 — and the detector that forbids CI 38007992655 recurring: the
+        # native positive proof, plus the defective shim it is measured against.
+        "TestTheRuntimeIsNotDoubleSimulated::test_the_native_branch_keeps_the_production_read_byte_exact",
+        "TestTheRuntimeIsNotDoubleSimulated::test_a_shim_that_strips_the_binary_flag_is_caught",
+        "TestTheRuntimeIsNotDoubleSimulated::test_the_probe_is_a_measurement_and_not_a_constant",
         # in-place rewrite stability
         "TestByteLevelStability::test_the_measured_windows_race_is_reported_unstable",
         "TestByteLevelStability::test_a_mutation_during_multi_chunk_reading_is_caught",
@@ -1681,6 +2720,235 @@ class TestSkipGovernance:
             "import sys\nif sys.platform == 'win32':\n    pass\n"), \
             "the platform-name scan is blind"
 
+
+class TestTheSimulatorControlsThemselvesAreIntact:
+    """M68D.3 §14/§18 — absent-controls for the HARNESS's own assertions.
+
+    FOUND BY THE M68D.3 CAMPAIGN. Eleven mutations survived its first run, and
+    not one of them touched production: they deleted assertions and inventory
+    entries inside this very file. Removing ``assert snap.payload() == body``
+    makes nothing fail, because until now nothing checked that the assertion
+    was there. That is the same lesson
+    :class:`TestTheGovernanceControlsThemselvesAreIntact` records one milestone
+    earlier, and it applies with more force here: these are the controls that
+    decide whether a 26-byte observation can be called a 10240-byte source.
+
+    Every scan uses the STRINGS-DROPPED view (:func:`_no_strings`), because
+    this class names each literal it looks for. Read as raw text it matches its
+    own search patterns and passes on a file whose controls have been gutted.
+    """
+
+    @pytest.fixture(scope="class")
+    def code(self):
+        return _no_strings(Path(__file__))
+
+    def test_the_byte_equality_assertion_is_still_there(self):
+        """The whole of Group A, in one line. §12.
+
+        PER TEST, not file-wide. ``assert snap.payload() == body`` appears in
+        half a dozen places here, so a file-wide scan stays green while the
+        occurrence that matters is deleted — MEASURED: that is how
+        ``G_remove_the_byte_equality_assertion`` survived the first run of the
+        M68D.3 campaign.
+        """
+        body = _test_body(
+            "test_every_fixture_survives_a_text_translating_runtime")
+        assert "assert snap . payload ( ) == body" in body, \
+            "the binary positive control no longer compares the bytes"
+        assert "assert snap . size_bytes == len ( body )" in body, \
+            "the binary positive control no longer compares the byte count"
+        assert ("assert snap . sha256 == hashlib . sha256 ( body ) . hexdigest ( )"
+                in body), \
+            "the binary positive control no longer compares the digest"
+        stream = _test_body("test_stream_mode_digests_the_bytes_on_disk")
+        assert ("assert snap . sha256 == hashlib . sha256 ( body ) . hexdigest ( )"
+                in stream), "the stream-mode positive control lost its digest"
+        assert "assert served == body" in stream, \
+            "the stream-mode positive control no longer compares served bytes"
+
+    def test_twenty_six_is_still_refused_as_a_complete_source(self):
+        """§14 — "assumes a 26-byte truncated read is a valid complete snapshot"."""
+        positive = _test_body("test_the_ctrl_z_truncation_is_closed")
+        assert "assert snap . size_bytes == 10240" in positive, \
+            "the Ctrl-Z invariant no longer pins the full length"
+        assert "assert snap . size_bytes != 26" in positive, \
+            "a 26-byte read is no longer explicitly refused"
+        negative = _test_body(
+            "test_the_ctrl_z_fixture_really_is_truncated_at_twenty_six")
+        assert "assert snap . size_bytes == 26" in negative, (
+            "the NEGATIVE control no longer pins the measured truncation, so "
+            "the positive one could pass against a runtime that does nothing")
+        # Asserted against the RAW text: the digest is a string literal, so
+        # the stripped view this class otherwise uses cannot see it.
+        assert "b858da80d8a5" in Path(__file__).read_text(encoding="utf-8"), \
+            "the digest the real runner measured is no longer pinned anywhere"
+
+    def test_the_branch_liveness_record_still_asserts(self, code):
+        """A runtime that took no branch must not be able to report success."""
+        for needle, lost in (
+                ("assert self . native != self . synthetic",
+                 "a runtime may now be both native and synthetic, or neither"),
+                ("assert self . opens == 0 and self . translations == 0",
+                 "the native branch may now install a shim"),
+                ("assert self . translations >= 1",
+                 "a negative control need no longer translate anything"),
+                ("assert self . text_descriptors >= 1",
+                 "a negative control need no longer open a text descriptor"),
+                ("assert si . _source_open_flags ( ) == expected",
+                 "the runtime no longer checks production derives its own flags")):
+            assert needle in code, f"NON-VACUITY LOST: {lost}"
+
+    def test_every_proof_consults_the_branch_liveness_record(self):
+        """Each of the four proofs must say which branch it actually ran.
+
+        Structural and per-test, so deleting ONE call is caught. A proof that
+        does not consult the record is a proof that passes on a host where its
+        branch was never entered.
+        """
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        unwitnessed: "list[str]" = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test_"):
+                continue
+            # STRINGS-DROPPED, like every other scan in this file: the
+            # negative-control detector below NAMES this call inside its own
+            # non-vacuity literal without ever entering a runtime.
+            body = _no_strings_of(ast.unparse(node))
+            if "windows_text_runtime ( binary_available =" not in body:
+                continue
+            # Exempt by DESIGN, each for a stated reason: the restoration and
+            # nesting tests are about the context manager's own lifetime and
+            # deliberately assert on `os` rather than on a verdict, and the
+            # fail-closed test asserts the runtime REFUSES to produce one.
+            if node.name in ("test_the_runtime_leaves_the_os_module_as_it_found_it",
+                             "test_the_runtime_restores_itself_through_an_exception",
+                             "test_a_nested_runtime_unwinds_in_order",
+                             "test_an_unmeasured_host_refuses_to_run_at_all",
+                             "test_a_leaked_patch_is_caught_by_the_next_measurement",
+                             "test_a_shim_that_strips_the_binary_flag_is_caught",
+                             "test_double_modelling_the_host_is_caught",
+                             "test_a_reissued_descriptor_number_does_not_inherit_translation"):
+                continue
+            if ("assert_the_branch_is_live" not in body
+                    and "runtime . native is True" not in body):
+                unwitnessed.append(node.name)
+        assert not unwitnessed, (
+            "these tests enter a text runtime without recording which branch "
+            f"ran, so they pass vacuously on one of the two hosts: {unwitnessed}")
+        # NON-VACUITY: the scan sees a real offender.
+        offender = ast.parse(
+            "def test_x():\n"
+            "    with windows_text_runtime(binary_available=True):\n"
+            "        pass\n")
+        found = [n.name for n in ast.walk(offender)
+                 if isinstance(n, ast.FunctionDef)
+                 and "windows_text_runtime ( binary_available ="
+                 in _no_strings_of(ast.unparse(n))
+                 and "assert_the_branch_is_live"
+                 not in _no_strings_of(ast.unparse(n))]
+        assert found, "the branch-liveness scan is blind"
+
+    def test_the_negative_controls_still_assert_incoherence(self):
+        """A text-mode observation must be shown NOT to describe the disk.
+
+        PER TEST, for the reason given above: the capture-mode and stream-mode
+        negative controls assert the same inequality, so a file-wide scan lets
+        either one be deleted in silence.
+        """
+        capture = _test_body(
+            "test_without_a_binary_mode_the_observation_really_is_corrupted")
+        assert "assert observed != body" in capture, \
+            "the unrepaired payload is no longer required to differ"
+        assert "assert snap . size_bytes < len ( body )" in capture, \
+            "the unrepaired read is no longer required to be short"
+        assert ("assert snap . sha256 != hashlib . sha256 ( body ) . hexdigest ( )"
+                in capture), \
+            "the unrepaired capture digest no longer has to differ from the disk"
+        stream = _test_body("test_the_unrepaired_digest_does_not_describe_the_disk")
+        assert ("assert snap . sha256 != hashlib . sha256 ( body ) . hexdigest ( )"
+                in stream), \
+            "the unrepaired stream digest no longer has to differ from the disk"
+        assert "assert snap . size_bytes < len ( body )" in stream, \
+            "the unrepaired stream read is no longer required to be short"
+
+    def test_the_accounting_fault_injection_is_still_a_length_only_fault(self,
+                                                                         code):
+        """§17 — if the injected DIGEST moves too, the test proves nothing.
+
+        The length conjunct is only falsifiable while the digest handed back is
+        the correct one: otherwise the digest conjunct does the rejecting and
+        ``B_drop_the_verified_length`` survives again, this time invisibly.
+        """
+        del code
+        inject = _test_body("test_an_accounting_fault_in_the_witness_is_refused")
+        assert "answer = ( digest , total + 1 )" in inject, \
+            "the witness accounting fault is no longer injected"
+        assert "returned . append ( answer )" in inject, (
+            "the test no longer records what the witness HANDED BACK, so a "
+            "corruption of the returned digest would hide here")
+        assert ("assert returned [ 0 ] [ 0 ] == hashlib . sha256 ( body ) . hexdigest ( )"
+                in inject), (
+            "the RETURNED digest is no longer asserted CORRECT, so the digest "
+            "conjunct could be the thing doing the rejecting")
+        assert "assert returned [ 0 ] [ 1 ] == len ( body ) + 1" in inject, \
+            "the returned length is no longer required to be inconsistent"
+        assert "assert snap . stable is False" in inject, \
+            "the accounting fault is no longer required to be refused"
+        recheck = _test_body("test_an_accounting_fault_is_also_refused_by_recheck")
+        # `ast.unparse` parenthesises a tuple return, so this is the shape
+        # the stripped view actually sees.
+        assert "return ( digest , total - 1 )" in recheck, \
+            "the recheck half of the accounting fault is gone"
+        assert "assert snap . recheck ( ) is False" in recheck, \
+            "recheck is no longer required to refuse the accounting fault"
+
+    def test_the_probe_is_still_fail_closed(self, code):
+        """§8 — the three ways a measurement can fail, each still refused."""
+        assert "if not NATIVE . measured :" in code, \
+            "an unmeasured host is no longer refused a runtime"
+        assert "if target . read_bytes ( ) != NATIVE_PROBE_BYTES :" in code, \
+            "the probe no longer verifies its own fixture"
+        assert "if binary != NATIVE_PROBE_BYTES :" in code, \
+            "the probe no longer verifies the explicit-binary descriptor"
+        assert "if bit is None :" in code, \
+            "a translating host with no O_BINARY is no longer refused"
+        assert "text_fds . discard ( fd )" in code, \
+            "the shim no longer forgets a closed descriptor, so a reissued " \
+            "number inherits its text marking"
+
+    def test_the_m68d3_invariants_are_in_the_mandatory_inventory(self):
+        """§16 — the new proofs must RUN on Windows, not merely exist.
+
+        The inventory is what the Windows job's collection is checked against.
+        An entry removed here is a proof that stops being required on the only
+        platform where the native branch can be taken at all.
+        """
+        mine = MANDATORY_CROSS_PLATFORM_INVARIANTS[
+            "tests/test_cross_platform_source_integrity_m68d2.py"]
+        joined = " ".join(mine)
+        for category, needle in (
+                ("native positive proof (PROOF A)",
+                 "test_the_native_branch_keeps_the_production_read_byte_exact"),
+                ("defective-shim detector",
+                 "test_a_shim_that_strips_the_binary_flag_is_caught"),
+                ("capability measurement",
+                 "test_the_probe_is_a_measurement_and_not_a_constant"),
+                ("negative control (PROOF B/D)",
+                 "test_without_a_binary_mode_the_observation_really_is_corrupted"),
+                ("Ctrl-Z negative control",
+                 "test_the_ctrl_z_fixture_really_is_truncated_at_twenty_six")):
+            assert needle in joined, \
+                f"the mandatory inventory lost its {category}"
+        assert len(mine) >= 16, \
+            f"the M68D.2/M68D.3 mandatory inventory shrank to {len(mine)} entries"
+        # Every name in the inventory must be a test that EXISTS here, or the
+        # inventory could be satisfied by entries nothing can collect.
+        collected = " ".join(collected_node_ids(
+            "tests/test_cross_platform_source_integrity_m68d2.py"))
+        missing = [name for name in mine if name not in collected]
+        assert not missing, f"the inventory names uncollectable tests: {missing}"
 
 class TestTheGovernanceControlsThemselvesAreIntact:
     """§20 — the controls that live in TEST code need absent-controls too.

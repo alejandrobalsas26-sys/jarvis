@@ -67,12 +67,14 @@ WORKFLOW = "../.github/workflows/ci.yml"
 
 # ── mapped tests ─────────────────────────────────────────────────────────────
 A_BYTES = f"{T_M68D2}::TestBinaryByteIdentity"
-A_SIM = f"{T_M68D2}::TestTheSimulatorIsFaithful"
+A_SIM = f"{T_M68D2}::TestTheTextRuntimeReallyTranslates"
 B_STABLE = f"{T_M68D2}::TestByteLevelStability"
 B_CONTROLS = f"{T_M68D2}::TestPositiveControls"
 B_THREAT = f"{T_M68D2}::TestTheThreatModelIsStated"
 B_INJECT = f"{T_M68D2}::TestFailureInjection"
 B_ABSENT = f"{T_M68D2}::TestAbsentControls"
+#: M68D.3 — the native/synthetic branch detector (§14).
+A_DOUBLE = f"{T_M68D2}::TestTheRuntimeIsNotDoubleSimulated"
 C_SKIPGOV = f"{T_M68D2}::TestSkipGovernance"
 C_APPEND = f"{T_M68D2}::TestTheAppendDefectIsStillOpen"
 #: The absent-controls for the governance that lives in TEST code. Added after
@@ -86,22 +88,28 @@ CLOSE_SKIP = f"{T_CLOSE}::TestNoSkipWashing"
 CLOSE_CI = f"{T_CLOSE}::TestWindowsCiStillBlocks"
 
 #: Survivors with a MEASURED explanation. Empty is the preferred state.
-EXPLAINED_SURVIVORS: "dict[str, str]" = {
-    # MEASURED, and the explanation is arithmetic rather than opinion:
-    # `verified_sha == digest.hexdigest()` compares sha256 over the SAME byte
-    # stream, and two byte strings of different LENGTH cannot share a sha256
-    # digest short of a collision. So `verified_total == total` is strictly
-    # IMPLIED by the conjunct above it, and no behaviour exists that the
-    # length check alone can reject. It is kept as cheap defence in depth
-    # against a future bug in `_descriptor_content`'s own accounting — and the
-    # implication is itself pinned, by
-    # `TestFailureInjection::test_a_short_read_is_not_a_whole_observation`,
-    # which rejects a truncated read through the digest comparison.
-    "B_drop_the_verified_length":
-        "the digest comparison strictly implies the length comparison, so no "
-        "observable behaviour depends on the length conjunct alone; kept as "
-        "defence in depth and documented in the milestone's §3",
-}
+#: EMPTY at M68D.3, and the reason is worth keeping.
+#:
+#: M68D.2 ran 37 mutations and registered ONE survivor,
+#: ``B_drop_the_verified_length``, with this explanation: "the digest
+#: comparison strictly implies the length comparison, so no observable
+#: behaviour depends on the length conjunct alone".
+#:
+#: That argument does not hold, and M68D.3 §17 required it to be challenged
+#: rather than repeated. SHA-256 is a fixed-size mapping over variable-length
+#: inputs, so agreeing digests do not entail agreeing lengths. More
+#: decisively, ``verified_sha`` and ``verified_total`` are not two
+#: observations — they are two FIELDS OF ONE RETURN VALUE from
+#: ``_descriptor_content``, and an accounting fault inside that helper moves
+#: the length while leaving the digest correct. The M68D.2 comment named
+#: exactly that risk and then had no test for it.
+#:
+#: ``TestFailureInjection::test_an_accounting_fault_in_the_witness_is_refused``
+#: injects it: the witness returns the RIGHT digest and a length one byte off.
+#: No filesystem bytes are touched and no hash collision is needed. MEASURED
+#: with the mutation applied — ``stable`` goes true and the test fails. The
+#: mutation is now DETECTED, so 37/37.
+EXPLAINED_SURVIVORS: "dict[str, str]" = {}
 
 
 def _mut(mid, cat, file, find, replace, test):
@@ -158,13 +166,14 @@ MUTATIONS += [
     # The non-vacuity harness is neutered: the simulator always behaves as if
     # binary mode were available, so GROUP A would pass with the repair gone.
     _mut("A_bypass_the_binary_mode_test", "A_BINARY", T_M68D2,
-         "    if binary_available:\n        os.O_BINARY = WIN_O_BINARY",
-         "    if True:\n        os.O_BINARY = WIN_O_BINARY", A_SIM),
+         "        if binary_available:\n            os.O_BINARY = WIN_O_BINARY",
+         "        if True:\n            os.O_BINARY = WIN_O_BINARY", A_SIM),
     # The simulator stops translating at all, which would make every Group A
     # assertion vacuously true.
     _mut("A_simulator_stops_translating", "A_BINARY", T_M68D2,
-         '        return data.replace(b"\\r\\n", b"\\n")',
-         "        return data", A_SIM),
+         '        data = data.replace(b"\\r\\n", b"\\n")\n'
+         "        if data != raw:",
+         "        if data != raw:", A_SIM),
 ]
 
 # ══ B · STABILITY ═══════════════════════════════════════════════════════════
