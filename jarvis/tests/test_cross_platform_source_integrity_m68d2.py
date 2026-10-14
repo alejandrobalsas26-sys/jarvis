@@ -489,6 +489,37 @@ def windows_text_runtime(*, binary_available: bool):
             del os.O_BINARY
 
 
+@dataclass
+class CrtEmulatorLedger:
+    """What a host-level emulator ACTUALLY did. The §7 non-vacuity record.
+
+    :class:`TextRuntime` records the same thing one layer down, for
+    :func:`windows_text_runtime`. This records it for the layer that replaces
+    the **host** — and it exists because M68D.3 had no way to ask the question.
+    ``entries`` moves on every use; ``installs`` moves only when a shim was
+    really put in place. A measured no-op is therefore ``entries`` without
+    ``installs``, which is a BEHAVIOURAL fact a future edit cannot fake by
+    keeping the early-return branch and patching anyway.
+    """
+
+    #: Times the context manager was entered, whatever it then decided.
+    entries: int = 0
+    #: Times it installed a shim. Zero on a host that already has the
+    #: behaviour, by construction.
+    installs: int = 0
+    #: Times it stood down because the host already provides the behaviour.
+    noops: int = 0
+    #: Times it refused to run because the host could not be measured.
+    refusals: int = 0
+
+
+#: The ledger for :func:`host_with_a_text_crt`.
+CRT_EMULATOR = CrtEmulatorLedger()
+
+#: The ledger for :func:`host_with_a_byte_exact_crt`, its §10 inverse.
+BYTE_EXACT_EMULATOR = CrtEmulatorLedger()
+
+
 @contextlib.contextmanager
 def host_with_a_text_crt():
     """Give THIS process a host whose own descriptors translate (§14).
@@ -502,14 +533,93 @@ def host_with_a_text_crt():
     This is what reproduces CI 38007992655 off Windows. Verified: the M68D.2
     shim, run inside this block, observes ``bytes(range(256)) * 40`` as 26
     bytes with digest ``b858da80d8a5…`` — the digest the real runner reported.
+
+    M68D.4 — THE NO-OP RULE IS RECURSIVE
+    ====================================
+    M68D.3 repaired :func:`windows_text_runtime` by measurement and then broke
+    the real Windows runner with the SAME error one layer up. This function
+    unconditionally installed its own CRT, and its open did:
+
+        fd = host_open(path, flags & ~bit, *a, **kw)
+
+    On Linux ``host_open`` is POSIX and ``bit`` is a bit this host spends on no
+    ``O_*`` flag, so that line is bookkeeping. **On the real Windows runner
+    ``host_open`` IS the native ``os.open`` and ``bit`` IS the real
+    ``os.O_BINARY``**, so the emulator stripped it and the capability probe
+    measured its own explicitly-binary descriptor as translating:
+
+        FAILED: the explicitly-binary descriptor is not byte-exact either
+        (4 of 8 bytes)
+
+    The fail-closed refusal was CORRECT; the emulator was wrong. CI run
+    **38160730836** on candidate ``530d2ea`` failed 9 tests, all in
+    :class:`TestTheRuntimeIsNotDoubleSimulated`, for that one reason — and
+    5 of the 9 were the refusal itself, raised as
+    ``RuntimeError: ... was not measured``.
+
+    So the rule of §7 — *simulate only what the host does not already
+    provide* — applies to **every** layer that imitates a platform capability,
+    including the one that exists so another layer's branch can be tested.
+    Fixing layer 1 by measurement does not protect layer 2; layer 2 needs its
+    own measured guard. This function now MEASURES FIRST and:
+
+    the host already translates (real Windows)
+        **Stands down completely.** No shim, no ``os.open``/``os.read``/
+        ``os.close`` replacement, no ``_REAL_*`` replacement, and the host's
+        own ``O_BINARY`` is left exactly as it is. The native proofs below then
+        run against the REAL CRT — genuine PROOF A/B rather than an emulation
+        of it.
+
+    the host is byte-exact (POSIX)
+        Installs the controlled synthetic CRT, exactly as before, and requires
+        the re-probe to come back ``NATIVE_TEXT`` before yielding.
+
+    the host cannot be measured
+        **Refuses to enter.** Never a yielded optimistic verdict (§5).
+
+    Reproduce the M68D.3 defect in three lines by NESTING this function — the
+    inner one then runs on a host that already translates, which is what
+    Windows is. :meth:`TestTheRuntimeIsNotDoubleSimulated.test_a_nested_emulator_is_a_true_noop_on_a_translating_host`
+    is that reproduction, and it fails against the generation-71 body.
     """
     global _REAL_OPEN, _REAL_READ, _REAL_CLOSE
     global NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED
+
+    CRT_EMULATOR.entries += 1
+    # MEASURE FIRST (§5). Nothing is patched before the verdict is known, so
+    # the measurement can never be a measurement of this function's own shim.
+    before = measure_native_text_runtime()
+    if not before.measured:
+        # FAIL-CLOSED (§5). A host that cannot be measured gets no emulator
+        # and no yielded verdict — not an optimistic "assume POSIX", which is
+        # the family of mistake this whole milestone is about.
+        CRT_EMULATOR.refusals += 1
+        raise RuntimeError(
+            "the host's own text-mode capability was not measured, so no "
+            f"translating host can be presented honestly: {before.outcome}")
+
+    saved_verdict = (NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED)
+    if before.translates:
+        # THE NO-OP BRANCH (M68D.4). The host IS the translating host this
+        # function exists to provide. Imitating it here is what corrupted the
+        # probe's binary descriptor on the real runner.
+        CRT_EMULATOR.noops += 1
+        try:
+            NATIVE = before
+            NATIVE_TEXT_TRANSLATION_OBSERVED = before.translates
+            yield before
+        finally:
+            NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED = saved_verdict
+        return
+
     bit = getattr(os, "O_BINARY", SIMULATED_O_BINARY)
     host_open, host_read, host_close = _REAL_OPEN, _REAL_READ, _REAL_CLOSE
     crt_text_fds: "set[int]" = set()
 
     def crt_open(path, flags, *args, **kwargs):
+        # Reached ONLY on a host measured byte-exact, so the bit removed here
+        # is one this host was measured to act on in no way at all. On a
+        # translating host this function is never installed.
         fd = host_open(path, flags & ~bit, *args, **kwargs)
         if not flags & bit:
             crt_text_fds.add(fd)
@@ -529,9 +639,9 @@ def host_with_a_text_crt():
         return host_close(fd)
 
     saved = (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ, _REAL_CLOSE,
-             NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED, hasattr(os, "O_BINARY"),
-             getattr(os, "O_BINARY", None))
+             hasattr(os, "O_BINARY"), getattr(os, "O_BINARY", None))
     try:
+        CRT_EMULATOR.installs += 1
         os.open, os.read, os.close = crt_open, crt_read, crt_close
         _REAL_OPEN, _REAL_READ, _REAL_CLOSE = crt_open, crt_read, crt_close
         os.O_BINARY = bit
@@ -539,14 +649,105 @@ def host_with_a_text_crt():
         # probe as a real one, and whatever it answers is what gets installed.
         NATIVE = measure_native_text_runtime()
         NATIVE_TEXT_TRANSLATION_OBSERVED = NATIVE.translates
+        if not NATIVE.translates:
+            # The synthetic CRT did not produce the host it promised. Refusing
+            # is the only honest answer; yielding would hand every native
+            # proof below a host that is not the one it says it is.
+            raise RuntimeError(
+                "the synthetic CRT did not produce a host measured as "
+                f"translating: {NATIVE.outcome}")
         yield NATIVE
     finally:
         (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ, _REAL_CLOSE,
-         NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED, had, previous) = saved
+         had, previous) = saved
+        NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED = saved_verdict
         if had:
             os.O_BINARY = previous
         elif hasattr(os, "O_BINARY"):
             del os.O_BINARY
+
+
+@contextlib.contextmanager
+def host_with_a_byte_exact_crt():
+    """Present a BYTE-EXACT host to the same probe — the §10 inverse control.
+
+    WHY THIS EXISTS.
+    :meth:`TestTheRuntimeIsNotDoubleSimulated.test_the_probe_is_a_measurement_and_not_a_constant`
+    proves :func:`measure_native_text_runtime` MEASURES rather than returns a
+    value that happens to be right on two platforms. It did that by contrasting
+    the real host against :func:`host_with_a_text_crt`. Once that function
+    correctly becomes a no-op on a translating host, **both** readings on real
+    Windows are ``NATIVE_TEXT`` and the contrast is gone — the test would still
+    pass while proving nothing. So the contrast is restored from the other
+    side: this presents a host whose descriptors are byte-exact, and the SAME
+    probe must return ``BYTE_EXACT`` for it.
+
+    Exactly one of the two fixtures does real work on any given host, and the
+    other is a measured no-op: on POSIX the text fixture installs and this one
+    stands down; on Windows this one installs and the text fixture stands down.
+    Either way the probe answers ``NATIVE_TEXT`` for one and ``BYTE_EXACT``
+    for the other **in the same process**, which a constant cannot do.
+
+    DELIBERATELY NOT A GENERAL-PURPOSE OS EMULATOR (§10). It patches ``os.open``
+    and nothing else, it is used only to feed the capability probe, and
+    :func:`windows_text_runtime` is never entered inside it. One meaningful
+    negative control and a measured change of verdict — not a framework.
+
+    The no-op rule is recursive here too: on a host already measured
+    byte-exact this installs nothing.
+    """
+    global _REAL_OPEN
+    global NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED
+
+    BYTE_EXACT_EMULATOR.entries += 1
+    before = measure_native_text_runtime()
+    if not before.measured:
+        BYTE_EXACT_EMULATOR.refusals += 1
+        raise RuntimeError(
+            "the host's own text-mode capability was not measured, so no "
+            f"byte-exact host can be presented honestly: {before.outcome}")
+
+    saved_verdict = (NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED)
+    if not before.translates:
+        # THE NO-OP BRANCH. This host's descriptors are already byte-exact.
+        BYTE_EXACT_EMULATOR.noops += 1
+        try:
+            NATIVE = before
+            NATIVE_TEXT_TRANSLATION_OBSERVED = before.translates
+            yield before
+        finally:
+            NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED = saved_verdict
+        return
+
+    # A translating host that PASSED the probe necessarily publishes an
+    # `O_BINARY` whose descriptors were measured byte-exact — the probe
+    # returns `FAILED` otherwise, so this attribute access cannot be reached
+    # on a host that lacks it.
+    bit = os.O_BINARY
+    host_open = _REAL_OPEN
+
+    def exact_open(path, flags, *args, **kwargs):
+        # Every descriptor becomes a BINARY descriptor, so the host's own text
+        # translation never engages. Built out of the capability the probe just
+        # measured as exact, which is why this is a presentation of a real
+        # behaviour rather than a synthetic transform.
+        return host_open(path, flags | bit, *args, **kwargs)
+
+    saved = (os.open, _REAL_OPEN)
+    try:
+        BYTE_EXACT_EMULATOR.installs += 1
+        os.open = exact_open
+        _REAL_OPEN = exact_open
+        NATIVE = measure_native_text_runtime()
+        NATIVE_TEXT_TRANSLATION_OBSERVED = NATIVE.translates
+        if NATIVE.outcome != BYTE_EXACT:
+            raise RuntimeError(
+                "the byte-exact host fixture did not produce a host measured "
+                f"as byte-exact: {NATIVE.outcome}")
+        yield NATIVE
+    finally:
+        os.open, _REAL_OPEN = saved
+        NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED = saved_verdict
 
 
 @contextlib.contextmanager
@@ -981,9 +1182,24 @@ class TestTheRuntimeIsNotDoubleSimulated:
 
         The same probe, on the same process, returns different answers for
         different hosts. A constant — or a name check — could not.
+
+        M68D.4 — BOTH HOSTS ARE NOW PRESENTED (§10). The original contrast was
+        "the real host" against :func:`host_with_a_text_crt`. That was a real
+        contrast on POSIX, where the real host is byte-exact. On real Windows
+        it is not: the host already translates, the emulator correctly stands
+        down, and BOTH readings are ``NATIVE_TEXT`` — the test would keep
+        passing while distinguishing nothing. Weakening or deleting it would
+        lose the only proof that the verdict is measured, so the missing half
+        is supplied instead: :func:`host_with_a_byte_exact_crt` presents the
+        inverse capability to the SAME function, and the two verdicts must
+        differ. On either platform exactly one fixture does real work and the
+        other stands down, and both facts are asserted from the ledgers.
         """
+        del tmp_path
         here = measure_native_text_runtime()
         assert here.measured, f"the probe could not measure this host: {here.outcome}"
+        installs = (CRT_EMULATOR.installs, BYTE_EXACT_EMULATOR.installs)
+        noops = (CRT_EMULATOR.noops, BYTE_EXACT_EMULATOR.noops)
         with host_with_a_text_crt() as emulated:
             assert emulated.outcome == NATIVE_TEXT, \
                 f"the probe did not see the emulated CRT: {emulated.outcome}"
@@ -992,6 +1208,31 @@ class TestTheRuntimeIsNotDoubleSimulated:
                 "the probe recorded an unflagged read it did not actually see"
             assert emulated.binary == NATIVE_PROBE_BYTES, \
                 "the probe did not verify the explicit-binary descriptor"
+        with host_with_a_byte_exact_crt() as exact:
+            assert exact.outcome == BYTE_EXACT, \
+                f"the probe did not see the byte-exact host: {exact.outcome}"
+            assert exact.translates is False and exact.measured is True
+            assert exact.unflagged == NATIVE_PROBE_BYTES, (
+                "the probe called a host byte-exact without reading the "
+                "bytes back from it")
+        # THE CONTRAST, independent of which platform this is.
+        assert emulated.outcome != exact.outcome, (
+            "the SAME probe returned the SAME verdict for a translating host "
+            "and a byte-exact one, so it is measuring neither")
+        assert (emulated.outcome, exact.outcome) == (NATIVE_TEXT, BYTE_EXACT)
+        # NON-VACUITY FOR THE CONTRAST: a verdict that differs because one
+        # fixture quietly did nothing on BOTH sides would prove nothing, so
+        # exactly one install and exactly one stand-down are required.
+        installed = ((CRT_EMULATOR.installs - installs[0])
+                     + (BYTE_EXACT_EMULATOR.installs - installs[1]))
+        stood_down = ((CRT_EMULATOR.noops - noops[0])
+                      + (BYTE_EXACT_EMULATOR.noops - noops[1]))
+        assert installed == 1, (
+            f"{installed} of the two capability fixtures presented a host; "
+            "exactly one must, because the other is the host already")
+        assert stood_down == 1, (
+            f"{stood_down} of the two capability fixtures stood down; exactly "
+            "one must, or the recursive no-op rule is not exercised here")
         after = measure_native_text_runtime()
         assert after.outcome == here.outcome, \
             "the emulated host leaked into the real measurement"
@@ -1243,6 +1484,263 @@ class TestTheRuntimeIsNotDoubleSimulated:
             assert (os.open, os.read, getattr(os, "O_BINARY", None)) == outer, \
                 "the inner runtime did not restore the outer one"
         assert os.open is _REAL_OPEN and os.read is _REAL_READ
+
+    @staticmethod
+    def _lowest_free_descriptor(tmp_path) -> int:
+        """The lowest descriptor number this process can be given right now.
+
+        A portable descriptor-leak detector: the kernel hands back the lowest
+        free number, so if a context manager leaked descriptors this rises.
+        Avoids ``/proc/self/fd``, which does not exist on every host this
+        suite has to run on, and avoids naming a platform to decide that.
+        """
+        probe = tmp_path / "fd-probe"
+        probe.write_bytes(b"x")
+        fd = _REAL_OPEN(str(probe), os.O_RDONLY)
+        try:
+            return fd
+        finally:
+            os.close(fd)
+
+    def test_a_nested_emulator_is_a_true_noop_on_a_translating_host(self,
+                                                                    tmp_path):
+        """§7 — THE M68D.4 REGRESSION. The no-op rule is RECURSIVE.
+
+        This is the test that fails against the generation-71 body of
+        :func:`host_with_a_text_crt` and passes against the repair, on BOTH
+        platforms. It is the local reproduction of CI run **38160730836**.
+
+        M68D.3 taught :func:`windows_text_runtime` to stand down on a host that
+        already translates, and then shipped a HOST-level emulator that did
+        not. On Linux that emulator's ``flags & ~bit`` is bookkeeping against a
+        free bit. On real Windows it stripped the native ``os.O_BINARY``, so
+        the capability probe measured its own explicitly-binary descriptor as
+        translating and reported ``FAILED: the explicitly-binary descriptor is
+        not byte-exact either (4 of 8 bytes)``. Nine tests died on that one
+        line, five of them on the fail-closed refusal it correctly triggered.
+
+        NESTING is what reproduces it off Windows: the inner emulator then runs
+        on a host that already translates, which is exactly what Windows is.
+        Against generation 71 the inner verdict here is that ``FAILED`` string
+        verbatim; against the repair it is ``NATIVE_TEXT`` and nothing is
+        patched twice.
+
+        The same nesting is also a REAL case on Windows, where the OUTER
+        emulator is itself the no-op and the host supplies every behaviour,
+        so this runs unskipped on both and means something different on each.
+        """
+        target = _stage(tmp_path, "nested_noop", self.FIXTURE)
+        # A fixture no IDEMPOTENT transform can hide in: one pass of
+        # CRLF -> LF leaves `b"A\\r\\nB"`, two passes leave `b"A\\nB"`. This is
+        # what separates "the host translated once" from "something translated
+        # on top of the host", which the probe fixture cannot show because
+        # collapsing it twice gives the same answer as collapsing it once.
+        witness = _stage(tmp_path, "nested_once", b"A\r\r\nB")
+
+        # ── 1 · the pristine runtime, recorded before anything is entered ──
+        pristine = (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                    _REAL_CLOSE, NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED,
+                    hasattr(os, "O_BINARY"), getattr(os, "O_BINARY", None))
+        pristine_native = NATIVE
+        free_fd = self._lowest_free_descriptor(tmp_path)
+        entries, installs = CRT_EMULATOR.entries, CRT_EMULATOR.installs
+
+        # ── 2 · the OUTER translating host ──────────────────────────────────
+        with host_with_a_text_crt() as outer:
+            # ── 3 · it really does present a translating host ───────────────
+            assert outer.outcome == NATIVE_TEXT, \
+                f"the outer layer is not a translating host: {outer.outcome}"
+            assert outer.translates is True and outer.measured is True
+            assert outer.unflagged == b"A\nB\n", (
+                "the outer host did not collapse the probe's CRLF and stop at "
+                f"its Ctrl-Z: {outer.unflagged!r}")
+            assert outer.binary == NATIVE_PROBE_BYTES, (
+                "the outer host's explicitly-binary descriptor is not "
+                f"byte-exact: {outer.binary!r}")
+            assert NATIVE_TEXT_TRANSLATION_OBSERVED is True
+            outer_native = NATIVE
+            assert _read_whole(witness, os.O_RDONLY) == b"A\r\nB", (
+                "NON-VACUITY: the outer host is not translating exactly once "
+                f"before the inner layer is entered: "
+                f"{_read_whole(witness, os.O_RDONLY)!r}")
+            # Precisely the state the inner layer must leave untouched.
+            outer_state = (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                           _REAL_CLOSE, os.O_BINARY)
+            outer_installs, outer_noops = (CRT_EMULATOR.installs,
+                                           CRT_EMULATOR.noops)
+
+            # ── 4 · a SECOND emulator, on a host that already translates ────
+            with host_with_a_text_crt() as inner:
+                # ── 5 · a TRUE no-op: measured, and nothing installed ───────
+                assert inner.outcome == NATIVE_TEXT, (
+                    "the inner emulator re-modelled a host that already "
+                    f"translates: {inner.outcome}")
+                assert inner.measured is True and inner.translates is True
+                assert CRT_EMULATOR.installs == outer_installs, \
+                    "the inner emulator installed a second CRT shim"
+                assert CRT_EMULATOR.noops == outer_noops + 1, \
+                    "the inner emulator did not take the measured no-op branch"
+                assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                        _REAL_CLOSE, os.O_BINARY) == outer_state, (
+                    "the inner emulator replaced the runtime it was handed, "
+                    "which is the M68D.3 defect")
+                # ── 6 · binary reads stay byte-exact THROUGH the inner layer ─
+                assert _read_whole(target, os.O_RDONLY | WIN_O_BINARY) \
+                    == self.FIXTURE, (
+                    "the nested emulator corrupted an explicitly-binary "
+                    "descriptor — the 4-of-8-bytes defect")
+                with windows_text_runtime(binary_available=True) as runtime:
+                    runtime.assert_the_branch_is_live()
+                    with source_snapshot(target) as snap:
+                        assert snap.size_bytes == 10240, (
+                            "the nested emulator truncated a production read: "
+                            f"{snap.size_bytes}")
+                        assert snap.payload() == self.FIXTURE
+                        assert snap.sha256 == hashlib.sha256(
+                            self.FIXTURE).hexdigest()
+                        assert snap.stable is True
+                # ── 7 · ONE translation layer, not two ─────────────────────
+                assert _read_whole(witness, os.O_RDONLY) == b"A\r\nB", (
+                    "the nested emulator translated on top of the host: "
+                    f"{_read_whole(witness, os.O_RDONLY)!r} (a second pass "
+                    "would give b'A\\nB')")
+
+            # ── 8/9 · the outer layer survived the inner one ────────────────
+            assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                    _REAL_CLOSE, os.O_BINARY) == outer_state, \
+                "the inner context did not restore the outer one"
+            assert NATIVE.outcome == NATIVE_TEXT, \
+                "the outer measurement did not survive the inner context"
+            # IDENTITY, not equality. `NativeTextRuntime` is a frozen
+            # dataclass, so an inner context that restored NOTHING would leave
+            # its OWN measurement in place and compare EQUAL to the outer one
+            # — same verdict, same bytes, different object. Measured: the
+            # mutation that empties the stand-down's `finally` is invisible to
+            # `==` and caught only here.
+            assert NATIVE is outer_native, (
+                "the inner context did not hand back the OUTER measurement "
+                "object, so its restoration is only coincidentally correct")
+            assert _read_whole(witness, os.O_RDONLY) == b"A\r\nB", \
+                "the outer host stopped translating once the inner one exited"
+            assert _read_whole(target, os.O_RDONLY | WIN_O_BINARY) \
+                == self.FIXTURE
+            # And the outer host still corrupts an unflagged production read,
+            # so what survived is the translating host rather than a dead one.
+            with windows_text_runtime(binary_available=False) as runtime:
+                runtime.assert_the_branch_is_live()
+                with source_snapshot(target) as snap:
+                    assert snap.size_bytes == 26, (
+                        "the outer translating host no longer truncates: "
+                        f"{snap.size_bytes}")
+                    assert snap.sha256.startswith("b858da80d8a5")
+
+        # ── 10/11 · everything restored ────────────────────────────────────
+        assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                _REAL_CLOSE, NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED,
+                hasattr(os, "O_BINARY"),
+                getattr(os, "O_BINARY", None)) == pristine, \
+            "the nested emulators did not restore the pristine runtime"
+        assert NATIVE is pristine_native, \
+            "the pristine measurement object was replaced by an equal one"
+        assert self._lowest_free_descriptor(tmp_path) == free_fd, \
+            "a descriptor leaked out of the nested emulators"
+        assert CRT_EMULATOR.entries == entries + 2, \
+            "the ledger did not record both entries"
+        # The CRUX, stated as a number: two entries, and AT MOST one install.
+        # On a byte-exact host the outer installs and the inner stands down; on
+        # a translating host neither installs anything at all.
+        assert CRT_EMULATOR.installs - installs <= 1, (
+            f"{CRT_EMULATOR.installs - installs} CRT shims were installed by "
+            "two nested entries; the inner one must always stand down")
+
+    def test_the_host_emulator_refuses_a_host_it_cannot_measure(self,
+                                                                monkeypatch):
+        """§5/§9 — a failed capability measurement is never made optimistic.
+
+        The emulator must refuse to ENTER, so a host whose capability is
+        unknown cannot produce a native verdict, a synthetic verdict, or a
+        pass. Both fixtures, because both branch on the same measurement.
+        """
+        def refuse(path, flags, *args, **kwargs):
+            raise OSError(13, "injected EACCES")
+
+        here = sys.modules[__name__]
+        pristine = (os.read, os.close, NATIVE,
+                    NATIVE_TEXT_TRANSLATION_OBSERVED)
+        monkeypatch.setattr(os, "open", refuse)
+        monkeypatch.setattr(here, "_REAL_OPEN", refuse)
+        for fixture in (host_with_a_text_crt, host_with_a_byte_exact_crt):
+            refusals = (CRT_EMULATOR.refusals, BYTE_EXACT_EMULATOR.refusals)
+            with pytest.raises(RuntimeError, match="was not measured"):
+                with fixture():
+                    pytest.fail(
+                        f"{fixture.__name__} entered on a host it could not "
+                        "measure")
+            assert (CRT_EMULATOR.refusals, BYTE_EXACT_EMULATOR.refusals) \
+                != refusals, "the refusal was not recorded"
+            # NOT patched on the way out of a refusal, and the module's own
+            # verdict is untouched: a refusal leaves nothing behind.
+            assert os.open is refuse, \
+                "the refusing fixture replaced os.open anyway"
+            assert (os.read, os.close, NATIVE,
+                    NATIVE_TEXT_TRANSLATION_OBSERVED) == pristine, \
+                "a refused entry still moved global state"
+
+    def test_the_host_emulator_restores_itself_through_an_exception(self,
+                                                                    tmp_path):
+        """§9 — restoration on EVERY exit of the HOST layer, nested included.
+
+        The companion to
+        :meth:`test_the_runtime_restores_itself_through_an_exception`, one
+        layer up: an exception raised inside a host emulator — and inside a
+        NESTED one, where the no-op branch has nothing to restore and must
+        still restore the right thing — may not leak a patched runtime.
+        """
+        sentinel = RuntimeError("staged at the host layer")
+        for fixture in (host_with_a_text_crt, host_with_a_byte_exact_crt):
+            before = (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                      _REAL_CLOSE, NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED,
+                      hasattr(os, "O_BINARY"), getattr(os, "O_BINARY", None))
+            free_fd = self._lowest_free_descriptor(tmp_path)
+            with pytest.raises(RuntimeError) as caught:
+                with fixture():
+                    raise sentinel
+            assert caught.value is sentinel, \
+                "the host emulator did not propagate the exception unchanged"
+            assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                    _REAL_CLOSE, NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED,
+                    hasattr(os, "O_BINARY"),
+                    getattr(os, "O_BINARY", None)) == before, (
+                f"an exception inside {fixture.__name__} leaked global state")
+            assert self._lowest_free_descriptor(tmp_path) == free_fd, \
+                f"an exception inside {fixture.__name__} leaked a descriptor"
+            # And again NESTED, so the inner no-op branch's restore path is
+            # the thing under test rather than the installing one.
+            with host_with_a_text_crt():
+                nested_before = (os.open, os.read, os.close, _REAL_OPEN,
+                                 _REAL_READ, _REAL_CLOSE, NATIVE,
+                                 NATIVE_TEXT_TRANSLATION_OBSERVED,
+                                 os.O_BINARY)
+                nested_native = NATIVE
+                with pytest.raises(RuntimeError) as caught:
+                    with fixture():
+                        raise sentinel
+                assert caught.value is sentinel
+                assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                        _REAL_CLOSE, NATIVE,
+                        NATIVE_TEXT_TRANSLATION_OBSERVED,
+                        os.O_BINARY) == nested_before, (
+                    f"a nested {fixture.__name__} did not restore the host "
+                    "emulator it was entered inside")
+                # IDENTITY: see the nested regression. An equal verdict left
+                # behind by a `finally` that restores nothing is not a restore.
+                assert NATIVE is nested_native, (
+                    f"a nested {fixture.__name__} left its OWN measurement in "
+                    "place; an equal verdict is not a restored one")
+            assert (os.open, os.read, os.close, _REAL_OPEN, _REAL_READ,
+                    _REAL_CLOSE, NATIVE, NATIVE_TEXT_TRANSLATION_OBSERVED,
+                    hasattr(os, "O_BINARY"),
+                    getattr(os, "O_BINARY", None)) == before
 
     def test_an_unmeasured_host_refuses_to_run_at_all(self):
         """§8 — a probe failure is never resolved into an optimistic default."""
@@ -2445,6 +2943,15 @@ MANDATORY_CROSS_PLATFORM_INVARIANTS: "dict[str, tuple[str, ...]]" = {
         "TestTheRuntimeIsNotDoubleSimulated::test_the_native_branch_keeps_the_production_read_byte_exact",
         "TestTheRuntimeIsNotDoubleSimulated::test_a_shim_that_strips_the_binary_flag_is_caught",
         "TestTheRuntimeIsNotDoubleSimulated::test_the_probe_is_a_measurement_and_not_a_constant",
+        # M68D.4 — the RECURSIVE no-op rule. CI 38160730836 proved that
+        # repairing the simulator does not protect the host emulator above it,
+        # and this is the proof that the inner layer stands down. It must run
+        # on Windows, where the OUTER layer is the no-op and the real CRT does
+        # the work, as well as on POSIX, where the nesting is the only way to
+        # put an emulator on a translating host at all.
+        "TestTheRuntimeIsNotDoubleSimulated::test_a_nested_emulator_is_a_true_noop_on_a_translating_host",
+        "TestTheRuntimeIsNotDoubleSimulated::test_the_host_emulator_refuses_a_host_it_cannot_measure",
+        "TestTheRuntimeIsNotDoubleSimulated::test_the_host_emulator_restores_itself_through_an_exception",
         # in-place rewrite stability
         "TestByteLevelStability::test_the_measured_windows_race_is_reported_unstable",
         "TestByteLevelStability::test_a_mutation_during_multi_chunk_reading_is_caught",
@@ -2949,6 +3456,234 @@ class TestTheSimulatorControlsThemselvesAreIntact:
             "tests/test_cross_platform_source_integrity_m68d2.py"))
         missing = [name for name in mine if name not in collected]
         assert not missing, f"the inventory names uncollectable tests: {missing}"
+
+    def test_the_host_emulator_is_still_native_aware(self):
+        """§11 — the M68D.4 absent-controls, over the HOST emulator.
+
+        The behavioural proof is
+        :meth:`TestTheRuntimeIsNotDoubleSimulated.test_a_nested_emulator_is_a_true_noop_on_a_translating_host`,
+        which FAILS against the generation-71 body with the real runner's
+        verdict string. These are the structural controls for the edits a
+        behavioural test on THIS host cannot see — on a byte-exact host the
+        native branch is the one that never runs, and on a translating host
+        the synthetic one is, so each platform is blind to half of it.
+        """
+        emulator = _test_body("host_with_a_text_crt")
+        # "makes a failed capability measurement optimistic".
+        assert "if not before . measured :" in emulator, \
+            "the host emulator no longer refuses a host it cannot measure"
+        assert "raise RuntimeError" in emulator, \
+            "the host emulator no longer refuses anything"
+        # "skips the second capability measurement": the host it was given,
+        # and the host it then presented.
+        assert emulator.count("measure_native_text_runtime ( )") >= 2, (
+            "the host emulator no longer measures BOTH the host it was given "
+            "and the host it then presented")
+        # "always installs the text CRT emulator": the stand-down, recorded.
+        assert "if before . translates :" in emulator, \
+            "the host emulator no longer branches on the measured host"
+        assert "CRT_EMULATOR . noops += 1" in emulator, \
+            "the host emulator's stand-down is no longer recorded"
+        assert "CRT_EMULATOR . installs += 1" in emulator, \
+            "an installed CRT shim is no longer recorded"
+        # "strips the host's real O_BINARY": the line that caused CI
+        # 38160730836 must stay BELOW the stand-down, never above it.
+        assert emulator.index("if before . translates :") \
+            < emulator.index("flags & ~ bit"), (
+            "the binary flag is stripped before the host is measured, which "
+            "is CI 38160730836 exactly")
+        # "removes the native-host early branch": the stand-down must RETURN,
+        # or control falls through into the shim it exists to avoid.
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                  and n.name == "host_with_a_text_crt")
+        stand_down = [n for n in fn.body if isinstance(n, ast.If)
+                      and ast.unparse(n.test) == "before.translates"]
+        assert len(stand_down) == 1, \
+            "the host emulator has no single measured stand-down branch"
+        assert any(isinstance(s, ast.Return) for s in stand_down[0].body), (
+            "the native stand-down does not return, so control falls through "
+            "into the shim construction below it")
+        # "ignores descriptor-number reuse", at the host layer too.
+        assert "crt_text_fds . discard ( fd )" in emulator, (
+            "the host emulator no longer forgets a closed descriptor, so a "
+            "reissued number inherits its text marking")
+        # The §10 inverse fixture stays measured, and stays SMALL: it may not
+        # grow into the general-purpose OS emulator §10 forbids.
+        inverse = _test_body("host_with_a_byte_exact_crt")
+        assert "if not before . translates :" in inverse, \
+            "the inverse fixture no longer stands down on a byte-exact host"
+        assert "flags | bit" in inverse, \
+            "the inverse fixture no longer presents a byte-exact descriptor"
+        assert "if NATIVE . outcome != BYTE_EXACT :" in inverse, \
+            "the inverse fixture no longer verifies the host it presented"
+        assert "if not before . measured :" in inverse, \
+            "the inverse fixture no longer refuses an unmeasurable host"
+        for overreach in ("os . read =", "os . close ="):
+            assert overreach not in inverse, (
+                f"the inverse capability fixture patches {overreach.strip()}, "
+                "which makes it an OS emulator rather than one control")
+        # NON-VACUITY: the SAME checks, against the generation-71 shape — an
+        # emulator that patches before it measures — must REJECT it.
+        gen71 = _no_strings_of(
+            "def host_with_a_text_crt():\n"
+            "    bit = getattr(os, 'O_BINARY', SIMULATED_O_BINARY)\n"
+            "    def crt_open(path, flags, *a, **k):\n"
+            "        return host_open(path, flags & ~bit, *a, **k)\n"
+            "    os.open = crt_open\n"
+            "    NATIVE = measure_native_text_runtime()\n"
+            "    yield NATIVE\n")
+        assert "flags & ~ bit" in gen71, "the sample is not the defective shape"
+        assert "if before . translates :" not in gen71, (
+            "the native-awareness check cannot tell the repaired emulator "
+            "from the generation-71 one")
+        assert gen71.count("measure_native_text_runtime ( )") < 2, \
+            "the second-measurement check is blind"
+
+    def test_the_nested_regression_still_asserts_byte_identity(self):
+        """§11 — "removes the nested emulator regression" / "removes binary
+        byte-equality assertions" / "negative control made vacuous".
+
+        PER TEST and per ASSERTION, because the nested proof is the only thing
+        between a future edit and a rerun of CI 38160730836, and a file-wide
+        scan would let any single conjunct go in silence.
+        """
+        name = "test_a_nested_emulator_is_a_true_noop_on_a_translating_host"
+        nested = _test_body(name)
+        # The inner layer is required to be a MEASURED no-op.
+        assert "assert inner . outcome == NATIVE_TEXT" in nested, \
+            "the nested regression no longer requires the inner verdict"
+        assert "assert CRT_EMULATOR . installs == outer_installs" in nested, \
+            "the nested regression no longer forbids a second CRT shim"
+        assert "assert CRT_EMULATOR . noops == outer_noops + 1" in nested, \
+            "the nested regression no longer requires the no-op branch"
+        assert "_REAL_CLOSE , os . O_BINARY ) == outer_state" in nested, (
+            "the nested regression no longer requires the inner layer to "
+            "leave the runtime it was handed untouched")
+        # Binary byte-equality through the nested layer: the raw descriptor
+        # read AND the production read.
+        binary_reads = nested.count(
+            "assert _read_whole ( target , os . O_RDONLY | WIN_O_BINARY ) "
+            "== self . FIXTURE")
+        assert binary_reads >= 2, (
+            "the byte-exact binary read must be required INSIDE the inner "
+            "context AND again after it; a single surviving copy satisfies a "
+            f"membership test while the load-bearing one is deleted, and only "
+            f"{binary_reads} remain")
+        assert "assert snap . size_bytes == 10240" in nested, \
+            "the nested regression no longer requires the full production read"
+        assert "assert snap . payload ( ) == self . FIXTURE" in nested, \
+            "the nested regression no longer compares the payload to the disk"
+        assert ("assert snap . sha256 == hashlib . sha256 ( self . FIXTURE ) "
+                ". hexdigest ( )" in nested), \
+            "the nested regression no longer pins the digest to the disk"
+        # The negative control that proves the outer host is still live.
+        assert "assert snap . size_bytes == 26" in nested, \
+            "the nested regression no longer shows the outer host translating"
+        # Restoration and descriptor hygiene (§9).
+        assert "== pristine" in nested, \
+            "the nested regression no longer requires the pristine runtime back"
+        assert "_lowest_free_descriptor ( tmp_path ) == free_fd" in nested, \
+            "the nested regression no longer detects a leaked descriptor"
+        # THE SINGLE-TRANSLATION WITNESS, over the parsed tree. The byte
+        # literal that carries this invariant is a STRING token, so the
+        # stripped view cannot see it — and a raw-text scan would match this
+        # detector's own copy. Comparing AST constant VALUES has neither
+        # problem: `b"A\r\r\nB"` collapses to `b"A\r\nB"` after ONE pass and
+        # to `b"A\nB"` after two, so the expected value IS the proof that the
+        # inner layer did not translate on top of the host.
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                  and n.name == name)
+        witnessed = [node.comparators[0].value for node in ast.walk(fn)
+                     if isinstance(node, ast.Compare)
+                     and any(isinstance(op, ast.Eq) for op in node.ops)
+                     and ast.unparse(node.left).startswith("_read_whole(witness")
+                     and isinstance(node.comparators[0], ast.Constant)]
+        assert len(witnessed) >= 3, (
+            "the host must be shown to translate exactly once BEFORE, INSIDE "
+            f"and AFTER the inner context: {len(witnessed)} witness reads")
+        assert set(witnessed) == {b"A\r\nB"}, (
+            "the single-translation witness no longer requires the one-pass "
+            f"result, so a second translation would pass: {witnessed}")
+        # And the fail-closed / restoration neighbours must still be there.
+        refuses = _test_body(
+            "test_the_host_emulator_refuses_a_host_it_cannot_measure")
+        assert "pytest . raises ( RuntimeError , match =" in refuses, \
+            "the host emulator is no longer required to refuse"
+        assert "host_with_a_byte_exact_crt" in refuses, \
+            "the inverse fixture is no longer required to refuse"
+        assert "assert os . open is refuse" in refuses, \
+            "a refusing fixture may now patch the runtime on its way out"
+        restores = _test_body(
+            "test_the_host_emulator_restores_itself_through_an_exception")
+        assert "caught . value is sentinel" in restores, \
+            "the host emulator may now swallow or replace the exception"
+        assert "== nested_before" in restores, \
+            "a nested host emulator need no longer restore the outer one"
+        assert "_lowest_free_descriptor ( tmp_path ) == free_fd" in restores, \
+            "an exception path may now leak a descriptor"
+
+    def test_the_probe_contrast_cannot_become_one_sided(self):
+        """§10 — the probe test must keep BOTH hosts and demand they differ.
+
+        The §10 hazard, stated exactly: on real Windows the host already
+        translates, so the original contrast — the real host against the
+        emulator — collapses into ``NATIVE_TEXT`` against ``NATIVE_TEXT`` and
+        the test would pass while distinguishing nothing. The repair is the
+        inverse fixture; this stops a future edit dropping it and restoring
+        the vacuous version.
+        """
+        probe = _test_body("test_the_probe_is_a_measurement_and_not_a_constant")
+        assert "host_with_a_text_crt" in probe, \
+            "the probe test no longer presents a translating host"
+        assert "host_with_a_byte_exact_crt" in probe, \
+            "the probe test no longer presents a byte-exact host"
+        assert "assert emulated . outcome != exact . outcome" in probe, (
+            "the probe test no longer requires the SAME probe to return "
+            "DIFFERENT verdicts for the two hosts")
+        assert ("assert ( emulated . outcome , exact . outcome ) == "
+                "( NATIVE_TEXT , BYTE_EXACT )" in probe), \
+            "the probe test no longer pins which verdict belongs to which host"
+        assert "assert exact . unflagged == NATIVE_PROBE_BYTES" in probe, \
+            "the byte-exact verdict is no longer backed by the bytes read"
+        # The contrast's own non-vacuity: one fixture really worked and one
+        # really stood down, whichever host this is.
+        assert "assert installed == 1" in probe, (
+            "the probe contrast no longer proves a host was actually "
+            "presented, so two no-ops would satisfy it")
+        assert "assert stood_down == 1" in probe, \
+            "the probe contrast no longer exercises the recursive no-op rule"
+
+    def test_the_m68d4_invariants_are_in_the_mandatory_inventory(self):
+        """§7 — "Register it as a required cross-platform invariant."
+
+        And §11's "removes the mandatory nested invariant from inventory" and
+        "changes required Windows tests into optional tests". An entry removed
+        here is a proof that stops being required on the only platform where
+        the native branch is real.
+        """
+        mine = MANDATORY_CROSS_PLATFORM_INVARIANTS[
+            "tests/test_cross_platform_source_integrity_m68d2.py"]
+        joined = " ".join(mine)
+        for category, needle in (
+                ("nested no-op regression",
+                 "test_a_nested_emulator_is_a_true_noop_on_a_translating_host"),
+                ("host-emulator fail-closed control",
+                 "test_the_host_emulator_refuses_a_host_it_cannot_measure"),
+                ("host-emulator restoration control",
+                 "test_the_host_emulator_restores_itself_through_an_exception")):
+            assert needle in joined, \
+                f"the mandatory inventory lost its {category}"
+        assert len(mine) >= 19, \
+            f"the mandatory inventory shrank to {len(mine)} entries"
+        # Not hidden behind a skip either (§7): the node has to be COLLECTED
+        # on whatever host is running right now.
+        collected = collected_node_ids(
+            "tests/test_cross_platform_source_integrity_m68d2.py")
+        assert any("test_a_nested_emulator_is_a_true_noop_on_a_translating_host"
+                   in node for node in collected), \
+            "the nested regression is not collected on this host"
 
 class TestTheGovernanceControlsThemselvesAreIntact:
     """§20 — the controls that live in TEST code need absent-controls too.

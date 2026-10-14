@@ -638,6 +638,12 @@ class TestWindowsCiJob:
         # V69 M68D.1: the closure suite. A portability repair the Windows
         # runner does not execute is decorative.
         "test_windows_portability_closure_m68d1.py",
+        # V69 M68D.4 (§11, "removes the source-integrity suite from CI"). The
+        # binary-exactness and byte-level-race suite is the ONLY place the
+        # native text-mode branch can be taken for real, and it was the suite
+        # the real runner was executing for CI 38007992655, 38160730836 and
+        # the two before them — yet nothing required it to stay in the job.
+        "test_cross_platform_source_integrity_m68d2.py",
     ])
     def test_it_runs_the_portability_relevant_suites(self, workflow, suite):
         joined = "\n".join(str(s.get("run", ""))
