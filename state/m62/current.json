@@ -1,8 +1,8 @@
 {
-  "latest_snapshot_path": "state/m62/snapshots/0071-m68d3-native-win-sim.json",
-  "latest_snapshot_sha256": "77ca2c85bd7a5af1792b124603aec07d45893be2ac8131c8ea13b7df6b0623f3",
+  "latest_snapshot_path": "state/m62/snapshots/0072-m68d4-nested-crt.json",
+  "latest_snapshot_sha256": "353fceda7db32c2b50abea3b3346ceb4467ed5b15a2da5e3d4d65614df3f3fe5",
   "schema_version": "m62.control_plane.4",
-  "state_generation": 71,
-  "subject_state_commit": "f20e9e564f7979fb2feb185ef605014c2b2a0037",
+  "state_generation": 72,
+  "subject_state_commit": "b78afb59c826436a89c514128628078cf675f459",
   "verify_command": "python jarvis/scripts/verify_m62_control_plane.py"
 }
